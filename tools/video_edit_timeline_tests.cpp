@@ -22,7 +22,8 @@ bool expect(bool condition, const char* message) {
 }  // namespace
 
 int main() {
-  using playback_video_edit::EditSession;
+  using playback_video_edit::Document;
+  using playback_video_edit::Selection;
   using playback_video_edit::SourceRange;
   using playback_video_edit::Timeline;
   using SequenceTimeline = playback_video_sequence::Timeline;
@@ -113,59 +114,65 @@ int main() {
                                             {6'000'000, 8'000'000}},
                "trim must never restore previously deleted media");
 
-  EditSession session;
-  session.activate(10'000'000);
-  session.deactivate();
-  ok &= expect(!session.snapshot().active,
-               "closing the editor must leave the edit list intact but inactive");
-  session.activate(10'000'000);
-  ok &= expect(session.snapshot().active,
-               "reopening must reactivate the retained edit list");
-  session.markIn(3'000'000);
-  session.markOut(5'000'000);
-  ok &= expect(session.rippleDeleteSelection(),
+  Document document;
+  document.load(10'000'000);
+  Selection selection;
+  ok &= expect(!playback_video_edit::buildSnapshot(document, selection, false)
+                    .active &&
+                   playback_video_edit::buildSnapshot(document, selection,
+                                                        true)
+                       .active,
+               "workspace activation must be projected without changing the document");
+  selection.markIn(document.timeline(), 3'000'000);
+  selection.markOut(document.timeline(), 5'000'000);
+  const auto initialRemoval = selection.range();
+  ok &= expect(initialRemoval && document.rippleDelete(*initialRemoval),
                "a valid marked range must commit as one decision");
-  ok &= expect(session.undo() && session.timeline().isUnmodified(),
+  selection.clear();
+  ok &= expect(document.undo() && document.timeline().isUnmodified(),
                "undo must restore the exact prior timeline snapshot");
-  ok &= expect(session.redo() && session.timeline().outputDurationUs() ==
-                                    8'000'000,
+  ok &= expect(document.redo() && document.timeline().outputDurationUs() ==
+                                     8'000'000,
                "redo must restore the exact removed range");
-  ok &= expect(session.resetEdits() && session.timeline().isUnmodified(),
+  ok &= expect(document.resetEdits() && document.timeline().isUnmodified(),
                "reset must itself be an undoable timeline revision");
-  ok &= expect(session.undo() && session.timeline().outputDurationUs() ==
-                                    8'000'000,
+  ok &= expect(document.undo() && document.timeline().outputDurationUs() ==
+                                     8'000'000,
                "reset must not discard edit history");
 
-  EditSession discarded;
-  discarded.activate(10'000'000);
-  discarded.markIn(3'000'000);
-  discarded.markOut(5'000'000);
-  ok &= expect(discarded.rippleDeleteSelection() &&
-                   discarded.snapshot().hasEdits &&
-                   discarded.snapshot().hasUnexportedChanges,
+  Document discarded;
+  discarded.load(10'000'000);
+  ok &= expect(discarded.rippleDelete({3'000'000, 5'000'000}) &&
+                   playback_video_edit::buildSnapshot(
+                       discarded, Selection{}, true)
+                       .hasEdits &&
+                   playback_video_edit::buildSnapshot(
+                       discarded, Selection{}, true)
+                       .hasUnexportedChanges,
                "committed edit decisions must expose edit and dirty state");
   ok &= expect(discarded.discardAllChanges() &&
                    discarded.timeline().isUnmodified() &&
-                   !discarded.snapshot().hasEdits && !discarded.canUndo() &&
+                   !playback_video_edit::buildSnapshot(
+                        discarded, Selection{}, true)
+                        .hasEdits &&
+                   !discarded.canUndo() &&
                    !discarded.canRedo(),
                "discard must restore the source sequence and clear its history");
 
-  EditSession exported;
-  exported.activate(10'000'000);
-  exported.markIn(2'000'000);
-  exported.markOut(3'000'000);
-  ok &= expect(exported.rippleDeleteSelection() &&
+  Document exported;
+  exported.load(10'000'000);
+  ok &= expect(exported.rippleDelete({2'000'000, 3'000'000}) &&
                    exported.hasUnexportedChanges(),
                "a committed decision must make its document dirty");
   const std::vector<SourceRange> exportedRevision =
       exported.timeline().keptRanges();
   exported.markExported(exportedRevision);
-  ok &= expect(exported.snapshot().hasEdits &&
-                   !exported.snapshot().hasUnexportedChanges,
+  const auto exportedSnapshot = playback_video_edit::buildSnapshot(
+      exported, Selection{}, true);
+  ok &= expect(exportedSnapshot.hasEdits &&
+                   !exportedSnapshot.hasUnexportedChanges,
                "a successful export must mark its exact document revision clean");
-  exported.markIn(6'000'000);
-  exported.markOut(7'000'000);
-  ok &= expect(exported.rippleDeleteSelection() &&
+  ok &= expect(exported.rippleDelete({6'000'000, 7'000'000}) &&
                    exported.hasUnexportedChanges(),
                "editing after export must create a new dirty revision");
   ok &= expect(exported.undo() &&
@@ -175,17 +182,13 @@ int main() {
   ok &= expect(exported.redo() && exported.hasUnexportedChanges(),
                "redoing past the exported revision must restore dirty state");
 
-  EditSession asynchronousExport;
-  asynchronousExport.activate(10'000'000);
-  asynchronousExport.markIn(2'000'000);
-  asynchronousExport.markOut(3'000'000);
-  ok &= expect(asynchronousExport.rippleDeleteSelection(),
+  Document asynchronousExport;
+  asynchronousExport.load(10'000'000);
+  ok &= expect(asynchronousExport.rippleDelete({2'000'000, 3'000'000}),
                "asynchronous export setup must create its first revision");
   const std::vector<SourceRange> queuedExportRevision =
       asynchronousExport.timeline().keptRanges();
-  asynchronousExport.markIn(6'000'000);
-  asynchronousExport.markOut(7'000'000);
-  ok &= expect(asynchronousExport.rippleDeleteSelection(),
+  ok &= expect(asynchronousExport.rippleDelete({6'000'000, 7'000'000}),
                "editing may continue while an older revision exports");
   asynchronousExport.markExported(queuedExportRevision);
   ok &= expect(asynchronousExport.hasUnexportedChanges(),
@@ -194,62 +197,64 @@ int main() {
                    !asynchronousExport.hasUnexportedChanges(),
                "the exported asynchronous revision must remain the clean baseline");
 
-  session.markIn(1'000'000);
-  session.markOut(2'000'000);
-  ok &= expect(session.rippleDeleteSelection(),
+  ok &= expect(document.rippleDelete({1'000'000, 2'000'000}),
                "a new decision after undo must commit normally");
-  ok &= expect(!session.redo(),
+  ok &= expect(!document.redo(),
                "a new decision must invalidate the abandoned redo branch");
-  ok &= expect(session.undo(),
+  ok &= expect(document.undo(),
                "the branch-invalidation setup must remain undoable");
 
-  session.markIn(2'000'000);
-  session.markOut(8'000'000);
-  ok &= expect(session.trimToSelection(),
+  ok &= expect(document.trimTo({2'000'000, 8'000'000}),
                "explicit trim must share the marked-range interaction");
-  ok &= expect(session.timeline().keptRanges() ==
+  ok &= expect(document.timeline().keptRanges() ==
                    std::vector<SourceRange>{{2'000'000, 3'000'000},
                                             {5'000'000, 8'000'000}},
                "trim must retain earlier middle deletions");
 
-  session.markIn(2'000'000);
-  ok &= expect(session.snapshot().inSourceUs ==
+  selection.markIn(document.timeline(), 2'000'000);
+  ok &= expect(playback_video_edit::buildSnapshot(document, selection, true)
+                       .inSourceUs ==
                    std::optional<int64_t>(2'000'000),
                 "setting an In mark must publish its source position");
-  session.markIn(2'000'000);
-  ok &= expect(session.snapshot().inSourceUs ==
+  selection.markIn(document.timeline(), 2'000'000);
+  ok &= expect(playback_video_edit::buildSnapshot(document, selection, true)
+                       .inSourceUs ==
                    std::optional<int64_t>(2'000'000),
                 "setting an identical mark must preserve the selection");
 
-  EditSession draggedIn;
-  draggedIn.activate(10'000'000);
-  draggedIn.markIn(2'000'000);
-  draggedIn.markOut(4'000'000);
-  ok &= expect(draggedIn.rippleDeleteSelection(),
+  Document draggedDocument;
+  draggedDocument.load(10'000'000);
+  ok &= expect(draggedDocument.rippleDelete({2'000'000, 4'000'000}),
                "drag mapping setup must create a source gap");
-  ok &= expect(draggedIn.moveBoundary(playback_video_edit::EditBoundary::In,
-                                      2'000'000, 100'000) &&
-                   draggedIn.snapshot().inSourceUs ==
+  Selection draggedIn;
+  ok &= expect(draggedIn.moveBoundary(
+                   draggedDocument.timeline(),
+                   playback_video_edit::EditBoundary::In, 2'000'000,
+                   100'000) &&
+                   draggedIn.inSourceUs() ==
                        std::optional<int64_t>(4'000'000),
                "an In handle at a cut must bind to the following clip");
 
-  EditSession draggedOut;
-  draggedOut.activate(10'000'000);
-  draggedOut.markIn(2'000'000);
-  draggedOut.markOut(4'000'000);
-  ok &= expect(draggedOut.rippleDeleteSelection(),
-               "Out drag mapping setup must create a source gap");
-  ok &= expect(draggedOut.moveBoundary(playback_video_edit::EditBoundary::Out,
-                                       2'000'000, 100'000) &&
-                   draggedOut.snapshot().outSourceUs ==
+  Selection draggedOut;
+  ok &= expect(draggedOut.moveBoundary(
+                   draggedDocument.timeline(),
+                   playback_video_edit::EditBoundary::Out, 2'000'000,
+                   100'000) &&
+                   draggedOut.outSourceUs() ==
                        std::optional<int64_t>(2'000'000),
                "an Out handle at a cut must bind to the preceding clip edge");
-  draggedOut.markIn(1'000'000);
-  ok &= expect(draggedOut.moveBoundary(playback_video_edit::EditBoundary::In,
-                                       3'000'000, 100'000) &&
-                   draggedOut.snapshot().inTimelineUs ==
+  draggedOut.markIn(draggedDocument.timeline(), 1'000'000);
+  ok &= expect(draggedOut.moveBoundary(
+                   draggedDocument.timeline(),
+                   playback_video_edit::EditBoundary::In, 3'000'000,
+                   100'000) &&
+                   playback_video_edit::buildSnapshot(
+                       draggedDocument, draggedOut, true)
+                           .inTimelineUs ==
                        std::optional<int64_t>(1'900'000) &&
-                   draggedOut.snapshot().outTimelineUs ==
+                   playback_video_edit::buildSnapshot(
+                       draggedDocument, draggedOut, true)
+                           .outTimelineUs ==
                        std::optional<int64_t>(2'000'000),
                "dragged boundaries must clamp instead of crossing");
 

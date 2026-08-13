@@ -127,64 +127,54 @@ std::optional<int64_t> Timeline::previousKeptSourceTime(int64_t sourceUs) const 
   return std::nullopt;
 }
 
-void EditSession::activate(int64_t sourceDurationUs) {
+void Document::load(int64_t sourceDurationUs) {
   const int64_t duration = std::max<int64_t>(0, sourceDurationUs);
   if (timeline_.sourceDurationUs() != duration) {
     timeline_.reset(duration);
     undo_.clear();
     redo_.clear();
     exportedRanges_.reset();
-    inUs_.reset();
-    outUs_.reset();
   }
-  active_ = duration > 0;
 }
 
-void EditSession::deactivate() {
-  if (!active_ && !inUs_ && !outUs_) return;
-  active_ = false;
-  inUs_.reset();
-  outUs_.reset();
-}
-
-bool EditSession::discardAllChanges() {
+bool Document::discardAllChanges() {
   if (timeline_.isUnmodified()) return false;
   const int64_t duration = timeline_.sourceDurationUs();
   timeline_.reset(duration);
   undo_.clear();
   redo_.clear();
-  inUs_.reset();
-  outUs_.reset();
   return true;
 }
 
-int64_t EditSession::clampSourceTime(int64_t sourceUs) const {
-  return std::clamp(sourceUs, int64_t{0}, timeline_.sourceDurationUs());
+void Selection::clear() {
+  inUs_.reset();
+  outUs_.reset();
 }
 
-void EditSession::markIn(int64_t sourceUs) {
-  if (!active_) return;
-  const int64_t nextIn = clampSourceTime(sourceUs);
+void Selection::markIn(const Timeline& timeline, int64_t sourceUs) {
+  const int64_t nextIn = std::clamp(
+      sourceUs, int64_t{0}, timeline.sourceDurationUs());
   const bool clearsOut = outUs_ && *outUs_ <= nextIn;
   if (inUs_ == nextIn && !clearsOut) return;
   inUs_ = nextIn;
   if (clearsOut) outUs_.reset();
 }
 
-void EditSession::markOut(int64_t sourceUsExclusive) {
-  if (!active_) return;
-  const int64_t nextOut = clampSourceTime(sourceUsExclusive);
+void Selection::markOut(const Timeline& timeline,
+                        int64_t sourceUsExclusive) {
+  const int64_t nextOut = std::clamp(
+      sourceUsExclusive, int64_t{0}, timeline.sourceDurationUs());
   const bool clearsIn = inUs_ && *inUs_ >= nextOut;
   if (outUs_ == nextOut && !clearsIn) return;
   outUs_ = nextOut;
   if (clearsIn) inUs_.reset();
 }
 
-bool EditSession::moveBoundary(EditBoundary boundary, int64_t timelineUs,
-                               int64_t minimumSelectionDurationUs) {
-  if (!active_) return false;
+bool Selection::moveBoundary(const Timeline& timeline, EditBoundary boundary,
+                             int64_t timelineUs,
+                             int64_t minimumSelectionDurationUs) {
   const auto sequence = playback_video_sequence::Timeline::create(
-      timeline_.sourceDurationUs(), timeline_.keptRanges());
+      timeline.sourceDurationUs(), timeline.keptRanges());
   if (!sequence) return false;
 
   const int64_t durationUs = sequence->durationUs();
@@ -215,111 +205,107 @@ bool EditSession::moveBoundary(EditBoundary boundary, int64_t timelineUs,
   const std::optional<int64_t> previousIn = inUs_;
   const std::optional<int64_t> previousOut = outUs_;
   if (boundary == EditBoundary::In) {
-    markIn(sequence->pointAt(targetUs).sourceUs);
+    markIn(timeline, sequence->pointAt(targetUs).sourceUs);
   } else if (targetUs <= 0) {
-    markOut(sequence->pointAt(0).sourceUs);
+    markOut(timeline, sequence->pointAt(0).sourceUs);
   } else {
     const playback_video_sequence::Point beforeBoundary =
         sequence->pointAt(targetUs - 1);
-    markOut(std::min(timeline_.sourceDurationUs(),
-                     beforeBoundary.sourceUs + 1));
+    markOut(timeline, std::min(timeline.sourceDurationUs(),
+                               beforeBoundary.sourceUs + 1));
   }
   return inUs_ != previousIn || outUs_ != previousOut;
 }
 
-std::optional<SourceRange> EditSession::selection() const {
+std::optional<SourceRange> Selection::range() const {
   if (!inUs_ || !outUs_ || *outUs_ <= *inUs_) return std::nullopt;
   return SourceRange{*inUs_, *outUs_};
 }
 
-bool EditSession::commit(Timeline next) {
+bool Document::commit(Timeline next) {
   if (next.keptRanges() == timeline_.keptRanges()) return false;
   undo_.push_back(timeline_);
   timeline_ = std::move(next);
   redo_.clear();
-  inUs_.reset();
-  outUs_.reset();
   return true;
 }
 
-bool EditSession::trimToSelection() {
-  const std::optional<SourceRange> selected = selection();
-  if (!active_ || !selected) return false;
+bool Document::trimTo(SourceRange keep) {
   Timeline next = timeline_;
-  return next.trimTo(*selected) && commit(std::move(next));
+  return next.trimTo(keep) && commit(std::move(next));
 }
 
-bool EditSession::rippleDeleteSelection() {
-  const std::optional<SourceRange> selected = selection();
-  if (!active_ || !selected) return false;
+bool Document::rippleDelete(SourceRange remove) {
   Timeline next = timeline_;
-  return next.rippleDelete(*selected) && commit(std::move(next));
+  return next.rippleDelete(remove) && commit(std::move(next));
 }
 
-bool EditSession::undo() {
-  if (!active_ || undo_.empty()) return false;
+bool Document::undo() {
+  if (undo_.empty()) return false;
   redo_.push_back(timeline_);
   timeline_ = std::move(undo_.back());
   undo_.pop_back();
-  inUs_.reset();
-  outUs_.reset();
   return true;
 }
 
-bool EditSession::redo() {
-  if (!active_ || redo_.empty()) return false;
+bool Document::redo() {
+  if (redo_.empty()) return false;
   undo_.push_back(timeline_);
   timeline_ = std::move(redo_.back());
   redo_.pop_back();
-  inUs_.reset();
-  outUs_.reset();
   return true;
 }
 
-bool EditSession::resetEdits() {
-  if (!active_ || timeline_.isUnmodified()) return false;
+bool Document::resetEdits() {
+  if (timeline_.isUnmodified()) return false;
   Timeline next(timeline_.sourceDurationUs());
   return commit(std::move(next));
 }
 
-bool EditSession::hasUnexportedChanges() const {
+bool Document::hasUnexportedChanges() const {
   return !timeline_.isUnmodified() &&
          (!exportedRanges_ || timeline_.keptRanges() != *exportedRanges_);
 }
 
-void EditSession::markExported(const std::vector<SourceRange>& ranges) {
+void Document::markExported(const std::vector<SourceRange>& ranges) {
   exportedRanges_ = ranges;
 }
 
-EditSnapshot EditSession::snapshot() const {
+EditSnapshot buildSnapshot(const Document& document,
+                           const Selection& selection, bool active,
+                           std::optional<int64_t> playheadTimelineUs,
+                           int64_t frameDurationUs) {
+  const Timeline& timeline = document.timeline();
   EditSnapshot out;
-  out.active = active_;
-  out.hasEdits = !timeline_.isUnmodified();
-  out.hasUnexportedChanges = hasUnexportedChanges();
-  out.canUndo = canUndo();
-  out.canRedo = canRedo();
-  out.sourceDurationUs = timeline_.sourceDurationUs();
-  out.timelineDurationUs = timeline_.outputDurationUs();
-  out.keptRanges = timeline_.keptRanges();
-  out.inSourceUs = inUs_;
-  out.outSourceUs = outUs_;
+  out.active = active;
+  out.hasEdits = !timeline.isUnmodified();
+  out.hasUnexportedChanges = document.hasUnexportedChanges();
+  out.canUndo = document.canUndo();
+  out.canRedo = document.canRedo();
+  out.sourceDurationUs = timeline.sourceDurationUs();
+  out.timelineDurationUs = timeline.outputDurationUs();
+  out.frameDurationUs = std::max<int64_t>(0, frameDurationUs);
+  out.keptRanges = timeline.keptRanges();
+  out.inSourceUs = selection.inSourceUs();
+  out.outSourceUs = selection.outSourceUs();
+  out.playheadTimelineUs = active ? playheadTimelineUs : std::nullopt;
 
   const auto sequence = playback_video_sequence::Timeline::create(
-      timeline_.sourceDurationUs(), timeline_.keptRanges());
+      timeline.sourceDurationUs(), timeline.keptRanges());
   if (!sequence) return out;
   out.clips.reserve(sequence->clips().size());
   for (const playback_video_sequence::Clip& clip : sequence->clips()) {
     out.clips.push_back(EditClipSnapshot{clip.source,
                                          clip.presentationStartUs});
   }
-  if (inUs_) {
+  if (out.inSourceUs) {
     const auto point = sequence->pointForSource(
-        *inUs_, playback_video_sequence::SourceBias::Forward);
+        *out.inSourceUs, playback_video_sequence::SourceBias::Forward);
     if (point) out.inTimelineUs = point->presentationUs;
   }
-  if (outUs_) {
+  if (out.outSourceUs) {
     const auto point = sequence->pointForSource(
-        *outUs_, playback_video_sequence::SourceBias::Backward);
+        *out.outSourceUs, playback_video_sequence::SourceBias::Backward);
     if (point) out.outTimelineUs = point->presentationUs;
   }
   return out;

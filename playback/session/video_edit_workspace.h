@@ -45,11 +45,10 @@ class VideoEditWorkspace {
   bool moveBoundary(playback_video_edit::EditBoundary boundary,
                     int64_t timelineUs);
   bool poll(std::string* message);
-  void refreshPlayhead();
   void stop();
 
-  const playback_video_edit::EditSnapshot& edit() const;
-  const playback_video_edit::ExportProgress& exportProgress() const;
+  playback_video_edit::EditSnapshot edit() const;
+  playback_video_edit::ExportProgress exportProgress() const;
 
  private:
   struct Impl;

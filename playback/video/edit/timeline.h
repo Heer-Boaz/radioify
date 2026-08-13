@@ -40,21 +40,13 @@ class Timeline {
   std::vector<SourceRange> keptRanges_;
 };
 
-// Session-level editing state. Undo/redo stores exact timeline values instead
-// of reconstructing cuts heuristically.
-class EditSession {
+// Persistent edit decisions and their history. UI activation, selection, and
+// playhead state are deliberately not part of the document.
+class Document {
  public:
-  void activate(int64_t sourceDurationUs);
-  void deactivate();
-  bool active() const { return active_; }
-
-  void markIn(int64_t sourceUs);
-  void markOut(int64_t sourceUsExclusive);
-  bool moveBoundary(EditBoundary boundary, int64_t timelineUs,
-                    int64_t minimumSelectionDurationUs);
-
-  bool trimToSelection();
-  bool rippleDeleteSelection();
+  void load(int64_t sourceDurationUs);
+  bool trimTo(SourceRange keep);
+  bool rippleDelete(SourceRange remove);
   bool undo();
   bool redo();
   bool resetEdits();
@@ -68,20 +60,40 @@ class EditSession {
   void markExported(const std::vector<SourceRange>& ranges);
 
   const Timeline& timeline() const { return timeline_; }
-  EditSnapshot snapshot() const;
 
  private:
-  std::optional<SourceRange> selection() const;
   bool commit(Timeline next);
-  int64_t clampSourceTime(int64_t sourceUs) const;
 
-  bool active_ = false;
   Timeline timeline_;
-  std::optional<int64_t> inUs_;
-  std::optional<int64_t> outUs_;
   std::vector<Timeline> undo_;
   std::vector<Timeline> redo_;
   std::optional<std::vector<SourceRange>> exportedRanges_;
 };
+
+// Ephemeral timeline-controller state. Marks never affect document dirty
+// state and are cleared when a document operation consumes them.
+class Selection {
+ public:
+  void clear();
+  void markIn(const Timeline& timeline, int64_t sourceUs);
+  void markOut(const Timeline& timeline, int64_t sourceUsExclusive);
+  bool moveBoundary(const Timeline& timeline, EditBoundary boundary,
+                    int64_t timelineUs,
+                    int64_t minimumSelectionDurationUs);
+
+  std::optional<SourceRange> range() const;
+  std::optional<int64_t> inSourceUs() const { return inUs_; }
+  std::optional<int64_t> outSourceUs() const { return outUs_; }
+
+ private:
+  std::optional<int64_t> inUs_;
+  std::optional<int64_t> outUs_;
+};
+
+// Pure projection for renderers and menus. No caller maintains a shadow copy.
+EditSnapshot buildSnapshot(const Document& document,
+                           const Selection& selection, bool active,
+                           std::optional<int64_t> playheadTimelineUs = {},
+                           int64_t frameDurationUs = 0);
 
 }  // namespace playback_video_edit

@@ -1,6 +1,7 @@
 #include "playback/session/video_edit_workspace.h"
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -37,19 +38,18 @@ struct VideoEditWorkspace::Impl {
       : sourcePath(std::move(path)),
         player(playbackPlayer),
         timelinePreview(preview),
-        timelinePreviewProvider(previewProvider) {
-    refreshView();
-  }
+        timelinePreviewProvider(previewProvider) {}
 
   std::filesystem::path sourcePath;
   Player& player;
   playback_video_timeline_preview::HoverModel& timelinePreview;
   playback_video_timeline_preview::Provider& timelinePreviewProvider;
-  playback_video_edit::EditSession session;
+  playback_video_edit::Document document;
+  playback_video_edit::Selection selection;
+  bool active = false;
   playback_video_edit::Exporter exporter;
-  playback_video_edit::ExportSnapshot exportState;
-  playback_video_edit::EditSnapshot editView;
-  playback_video_edit::ExportProgress exportView;
+  playback_video_edit::ExportState observedExportState =
+      playback_video_edit::ExportState::Idle;
 
   CommandContext commandContext() const {
     CommandContext context;
@@ -65,20 +65,21 @@ struct VideoEditWorkspace::Impl {
     return context;
   }
 
-  void refreshPlayhead() {
-    editView.playheadTimelineUs.reset();
-    editView.frameDurationUs = 0;
-    if (!editView.active) return;
-    const PlayerTimelineSnapshot timeline = player.timelineSnapshot();
-    editView.playheadTimelineUs = timeline.positionUs;
-    editView.frameDurationUs = std::max<int64_t>(0, timeline.frameDurationUs);
+  playback_video_edit::EditSnapshot editSnapshot() const {
+    std::optional<int64_t> playheadTimelineUs;
+    int64_t frameDurationUs = 0;
+    if (active) {
+      const PlayerTimelineSnapshot timeline = player.timelineSnapshot();
+      playheadTimelineUs = timeline.positionUs;
+      frameDurationUs = timeline.frameDurationUs;
+    }
+    return playback_video_edit::buildSnapshot(
+        document, selection, active, playheadTimelineUs, frameDurationUs);
   }
 
-  void refreshView() {
-    editView = session.snapshot();
-    exportView.active = exportState.running();
-    exportView.fraction = exportState.progress;
-    refreshPlayhead();
+  playback_video_edit::ExportProgress exportProgressSnapshot() const {
+    const playback_video_edit::ExportSnapshot state = exporter.snapshot();
+    return {state.running(), state.progress};
   }
 
   void updateTimelinePreview(
@@ -88,7 +89,7 @@ struct VideoEditWorkspace::Impl {
   }
 
   bool applyEditPreview() {
-    const auto& ranges = session.timeline().keptRanges();
+    const auto& ranges = document.timeline().keptRanges();
     if (!player.setPlaybackSequence(ranges)) return false;
     updateTimelinePreview(ranges);
     return true;
@@ -104,13 +105,13 @@ struct VideoEditWorkspace::Impl {
   VideoEditActionResult startOrCancelExport(const CommandContext& context) {
     VideoEditActionResult result;
     result.handled = true;
-    exportState = exporter.snapshot();
-    if (exportState.running()) {
+    const playback_video_edit::ExportSnapshot state = exporter.snapshot();
+    if (state.running()) {
       exporter.cancel();
       result.message = "Cancelling edit export...";
       return result;
     }
-    const playback_video_edit::Timeline& timeline = session.timeline();
+    const playback_video_edit::Timeline& timeline = document.timeline();
     if (timeline.sourceDurationUs() <= 0) {
       result.message = "Open the video editor and make an edit first";
       return result;
@@ -136,7 +137,7 @@ struct VideoEditWorkspace::Impl {
       result.message = "Could not start edit export";
       return result;
     }
-    exportState = exporter.snapshot();
+    observedExportState = playback_video_edit::ExportState::Running;
     result.message =
         "Export started: " +
         toUtf8String(destination.filename());
@@ -155,22 +156,28 @@ VideoEditWorkspace::VideoEditWorkspace(
 VideoEditWorkspace::~VideoEditWorkspace() = default;
 
 bool VideoEditWorkspace::active() const {
-  return impl_ && impl_->session.active();
+  return impl_ && impl_->active;
 }
 
 bool VideoEditWorkspace::hasUnexportedChanges() const {
-  return impl_ && impl_->session.hasUnexportedChanges();
+  return impl_ && impl_->document.hasUnexportedChanges();
 }
 
 bool VideoEditWorkspace::needsExitConfirmation() const {
   return impl_ &&
-         (impl_->session.hasUnexportedChanges() || impl_->exportState.running());
+         (impl_->document.hasUnexportedChanges() ||
+          impl_->exporter.snapshot().running());
 }
 
 VideoEditActionResult VideoEditWorkspace::execute(
     playback_video_edit::Command command) {
   VideoEditActionResult result;
   if (!impl_) return result;
+  if (!impl_->active && command != playback_video_edit::Command::Open &&
+      command != playback_video_edit::Command::Export &&
+      command != playback_video_edit::Command::Discard) {
+    return result;
+  }
   result.handled = true;
 
   const CommandContext context = impl_->commandContext();
@@ -181,10 +188,12 @@ VideoEditActionResult VideoEditWorkspace::execute(
 
   switch (command) {
     case playback_video_edit::Command::Open:
-      if (impl_->session.active()) {
+      if (impl_->active) {
         result.handled = false;
       } else if (context.sourceDurationUs > 0) {
-        impl_->session.activate(context.sourceDurationUs);
+        impl_->document.load(context.sourceDurationUs);
+        impl_->selection.clear();
+        impl_->active = true;
         projection = PreviewProjection::ApplyEdit;
         deactivateIfOpenFails = true;
         result.message = "Video editor opened";
@@ -193,27 +202,15 @@ VideoEditActionResult VideoEditWorkspace::execute(
       }
       break;
     case playback_video_edit::Command::Close:
-      if (!impl_->session.active()) {
-        result.handled = false;
-        break;
-      }
       projection = PreviewProjection::ClearEdit;
       deactivateAfterClear = true;
       result.message = "Video editor closed (edits retained)";
       break;
     case playback_video_edit::Command::MarkIn:
-      if (!impl_->session.active()) {
-        result.handled = false;
-        break;
-      }
-      impl_->session.markIn(context.playheadUs);
+      impl_->selection.markIn(impl_->document.timeline(), context.playheadUs);
       result.message = "In point set";
       break;
     case playback_video_edit::Command::MarkOut:
-      if (!impl_->session.active()) {
-        result.handled = false;
-        break;
-      }
       {
         const int64_t duration =
             std::max<int64_t>(0, context.sourceDurationUs);
@@ -224,30 +221,34 @@ VideoEditActionResult VideoEditWorkspace::execute(
         const int64_t out = frameDuration >= duration - playhead
                                 ? duration
                                 : playhead + frameDuration;
-        impl_->session.markOut(out);
+        impl_->selection.markOut(impl_->document.timeline(), out);
       }
       result.message = "Out point set";
       break;
     case playback_video_edit::Command::RippleDelete:
-      timelineChanged = impl_->session.rippleDeleteSelection();
+      if (const auto selected = impl_->selection.range()) {
+        timelineChanged = impl_->document.rippleDelete(*selected);
+      }
       result.message = timelineChanged ? "Selection removed (ripple)"
                                        : "Set a non-empty In/Out range first";
       break;
     case playback_video_edit::Command::Trim:
-      timelineChanged = impl_->session.trimToSelection();
+      if (const auto selected = impl_->selection.range()) {
+        timelineChanged = impl_->document.trimTo(*selected);
+      }
       result.message = timelineChanged ? "Sequence trimmed to selection"
                                        : "Set a non-empty In/Out range first";
       break;
     case playback_video_edit::Command::Undo:
-      timelineChanged = impl_->session.undo();
+      timelineChanged = impl_->document.undo();
       result.message = timelineChanged ? "Edit undone" : "Nothing to undo";
       break;
     case playback_video_edit::Command::Redo:
-      timelineChanged = impl_->session.redo();
+      timelineChanged = impl_->document.redo();
       result.message = timelineChanged ? "Edit redone" : "Nothing to redo";
       break;
     case playback_video_edit::Command::Reset:
-      timelineChanged = impl_->session.resetEdits();
+      timelineChanged = impl_->document.resetEdits();
       result.message = timelineChanged ? "All cuts reset"
                                        : "Sequence is unchanged";
       break;
@@ -255,19 +256,19 @@ VideoEditActionResult VideoEditWorkspace::execute(
       result = impl_->startOrCancelExport(context);
       break;
     case playback_video_edit::Command::Discard:
-      impl_->exportState = impl_->exporter.snapshot();
-      if (impl_->exportState.running()) {
+      if (impl_->exporter.snapshot().running()) {
         result.message = "Cancel the active save before discarding changes";
         break;
       }
-      timelineChanged = impl_->session.discardAllChanges();
+      timelineChanged = impl_->document.discardAllChanges();
       result.message = timelineChanged ? "Edits discarded"
                                        : "There are no edits to discard";
       break;
   }
 
-  if (timelineChanged && impl_->session.active()) {
-    projection = PreviewProjection::ApplyEdit;
+  if (timelineChanged) {
+    impl_->selection.clear();
+    if (impl_->active) projection = PreviewProjection::ApplyEdit;
   }
 
   bool projectionAccepted = true;
@@ -279,7 +280,8 @@ VideoEditActionResult VideoEditWorkspace::execute(
 
   if (!projectionAccepted) {
     if (deactivateIfOpenFails) {
-      impl_->session.deactivate();
+      impl_->active = false;
+      impl_->selection.clear();
       result.message = "Video editor unavailable: preview could not start";
     } else if (deactivateAfterClear) {
       result.message = "Editor remains open: source preview unavailable";
@@ -287,50 +289,50 @@ VideoEditActionResult VideoEditWorkspace::execute(
       result.message = "Timeline changed; preview unavailable";
     }
   } else if (deactivateAfterClear) {
-    impl_->session.deactivate();
+    impl_->active = false;
+    impl_->selection.clear();
   }
 
   result.pausePlayback =
       command == playback_video_edit::Command::Open &&
-      projectionAccepted && impl_->session.active();
-  impl_->refreshView();
+      projectionAccepted && impl_->active;
   return result;
 }
 
 bool VideoEditWorkspace::moveBoundary(
     playback_video_edit::EditBoundary boundary, int64_t timelineUs) {
-  if (!impl_ || !impl_->session.active()) return false;
+  if (!impl_ || !impl_->active) return false;
   const int64_t minimumDurationUs = std::max<int64_t>(
       1, impl_->player.timelineSnapshot().frameDurationUs);
-  if (!impl_->session.moveBoundary(boundary, timelineUs,
-                                   minimumDurationUs)) {
+  if (!impl_->selection.moveBoundary(impl_->document.timeline(), boundary,
+                                     timelineUs, minimumDurationUs)) {
     return false;
   }
-  impl_->refreshView();
   return true;
 }
 
 bool VideoEditWorkspace::poll(std::string* message) {
   if (!impl_ || !impl_->exporter.consumeChanged()) return false;
-  const playback_video_edit::ExportState previous = impl_->exportState.state;
-  impl_->exportState = impl_->exporter.snapshot();
+  const playback_video_edit::ExportState previous =
+      impl_->observedExportState;
+  const playback_video_edit::ExportSnapshot state = impl_->exporter.snapshot();
+  impl_->observedExportState = state.state;
   if (message) message->clear();
   if (previous != playback_video_edit::ExportState::Running ||
-      !impl_->exportState.finished()) {
-    impl_->refreshView();
+      !state.finished()) {
     return true;
   }
-  switch (impl_->exportState.state) {
+  switch (state.state) {
     case playback_video_edit::ExportState::Succeeded:
-      impl_->session.markExported(impl_->exportState.keptRanges);
+      impl_->document.markExported(state.keptRanges);
       if (message) {
         *message =
             "Exported " +
-            toUtf8String(impl_->exportState.destinationPath.filename());
+            toUtf8String(state.destinationPath.filename());
       }
       break;
     case playback_video_edit::ExportState::Failed:
-      if (message) *message = "Export failed: " + impl_->exportState.error;
+      if (message) *message = "Export failed: " + state.error;
       break;
     case playback_video_edit::ExportState::Cancelled:
       if (message) *message = "Export cancelled";
@@ -338,28 +340,24 @@ bool VideoEditWorkspace::poll(std::string* message) {
     default:
       break;
   }
-  impl_->refreshView();
   return true;
-}
-
-void VideoEditWorkspace::refreshPlayhead() {
-  if (impl_) impl_->refreshPlayhead();
 }
 
 void VideoEditWorkspace::stop() {
   if (!impl_) return;
   impl_->exporter.stop();
-  impl_->exportState = impl_->exporter.snapshot();
-  impl_->refreshView();
+  impl_->observedExportState = impl_->exporter.snapshot().state;
 }
 
-const playback_video_edit::EditSnapshot& VideoEditWorkspace::edit() const {
-  return impl_->editView;
+playback_video_edit::EditSnapshot VideoEditWorkspace::edit() const {
+  return impl_ ? impl_->editSnapshot()
+               : playback_video_edit::EditSnapshot{};
 }
 
-const playback_video_edit::ExportProgress&
+playback_video_edit::ExportProgress
 VideoEditWorkspace::exportProgress() const {
-  return impl_->exportView;
+  return impl_ ? impl_->exportProgressSnapshot()
+               : playback_video_edit::ExportProgress{};
 }
 
 }  // namespace playback_session

@@ -343,7 +343,6 @@ struct PlaybackLoopRunner::Impl {
   }
 
   void syncVideoEditPresentation(bool requestPresent = true) {
-    videoEditWorkspace.refreshPlayhead();
     contextMenuController.refresh(videoEditWorkspace.edit(),
                                   videoEditWorkspace.exportProgress());
     if (pendingExit) contextMenuController.dismiss();
@@ -1150,7 +1149,6 @@ struct PlaybackLoopRunner::Impl {
 
   RefreshState refreshState() {
     RefreshState state;
-    videoEditWorkspace.refreshPlayhead();
     state.useWindowPresenter = output.windowActive();
     state.presented =
         core.refresh(state.useWindowPresenter, output.windowActive(), redraw);
