@@ -174,14 +174,13 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
   if (state.videoEdit.active) {
     // Keep command identity and placement stable. Availability is UI state;
     // it must not add or remove toolbar slots as the selection/history changes.
-    const bool hasSelection =
-        state.videoEdit.inTimelineUs && state.videoEdit.outTimelineUs &&
-        *state.videoEdit.outTimelineUs > *state.videoEdit.inTimelineUs;
     out.push_back(makePlayPauseSpec(state));
     add(OverlayControlId::EditMarkIn, "In", false);
     add(OverlayControlId::EditMarkOut, "Out", false);
-    add(OverlayControlId::EditRippleDelete, "Delete", false, hasSelection);
-    add(OverlayControlId::EditTrim, "Trim", false, hasSelection);
+    add(OverlayControlId::EditRippleDelete, "Delete", false,
+        state.videoEdit.canRippleDelete);
+    add(OverlayControlId::EditTrim, "Trim", false,
+        state.videoEdit.canTrim);
     add(OverlayControlId::EditUndo, "Undo", false, state.videoEdit.canUndo);
     add(OverlayControlId::EditRedo, "Redo", false, state.videoEdit.canRedo);
     add(OverlayControlId::EditReset, "Reset", false,

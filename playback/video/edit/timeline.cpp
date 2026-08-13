@@ -11,6 +11,12 @@ bool validRange(SourceRange range) {
   return range.startUs >= 0 && range.endUs > range.startUs;
 }
 
+SourceRange clampRange(SourceRange range, int64_t durationUs) {
+  range.startUs = std::clamp(range.startUs, int64_t{0}, durationUs);
+  range.endUs = std::clamp(range.endUs, int64_t{0}, durationUs);
+  return range;
+}
+
 int64_t saturatingAdd(int64_t lhs, int64_t rhs) {
   if (rhs > 0 && lhs > (std::numeric_limits<int64_t>::max)() - rhs) {
     return (std::numeric_limits<int64_t>::max)();
@@ -63,10 +69,24 @@ bool Timeline::replaceRanges(std::vector<SourceRange> ranges) {
   return true;
 }
 
-bool Timeline::trimTo(SourceRange keep) {
-  keep.startUs = std::clamp(keep.startUs, int64_t{0}, sourceDurationUs_);
-  keep.endUs = std::clamp(keep.endUs, int64_t{0}, sourceDurationUs_);
+bool Timeline::canTrimTo(SourceRange keep) const {
+  keep = clampRange(keep, sourceDurationUs_);
   if (!validRange(keep)) return false;
+
+  bool retainsVideo = false;
+  bool changesSequence = false;
+  for (const SourceRange& range : keptRanges_) {
+    const SourceRange intersection{std::max(range.startUs, keep.startUs),
+                                   std::min(range.endUs, keep.endUs)};
+    retainsVideo = retainsVideo || validRange(intersection);
+    changesSequence = changesSequence || intersection != range;
+  }
+  return retainsVideo && changesSequence;
+}
+
+bool Timeline::trimTo(SourceRange keep) {
+  if (!canTrimTo(keep)) return false;
+  keep = clampRange(keep, sourceDurationUs_);
 
   std::vector<SourceRange> next;
   next.reserve(keptRanges_.size());
@@ -79,10 +99,27 @@ bool Timeline::trimTo(SourceRange keep) {
   return replaceRanges(std::move(next));
 }
 
-bool Timeline::rippleDelete(SourceRange remove) {
-  remove.startUs = std::clamp(remove.startUs, int64_t{0}, sourceDurationUs_);
-  remove.endUs = std::clamp(remove.endUs, int64_t{0}, sourceDurationUs_);
+bool Timeline::canRippleDelete(SourceRange remove) const {
+  remove = clampRange(remove, sourceDurationUs_);
   if (!validRange(remove)) return false;
+
+  bool removesVideo = false;
+  bool retainsVideo = false;
+  for (const SourceRange& range : keptRanges_) {
+    if (remove.endUs <= range.startUs || remove.startUs >= range.endUs) {
+      retainsVideo = true;
+      continue;
+    }
+    removesVideo = true;
+    retainsVideo = retainsVideo || range.startUs < remove.startUs ||
+                   remove.endUs < range.endUs;
+  }
+  return removesVideo && retainsVideo;
+}
+
+bool Timeline::rippleDelete(SourceRange remove) {
+  if (!canRippleDelete(remove)) return false;
+  remove = clampRange(remove, sourceDurationUs_);
 
   std::vector<SourceRange> next;
   next.reserve(keptRanges_.size() + 1);
@@ -232,6 +269,18 @@ std::optional<SourceRange> Selection::range() const {
   return SourceRange{*inUs_, *outUs_};
 }
 
+std::optional<SourceRange> Selection::trimRange(
+    const Timeline& timeline) const {
+  if (!hasMarks()) return std::nullopt;
+  const int64_t startUs = std::clamp(
+      inUs_.value_or(0), int64_t{0}, timeline.sourceDurationUs());
+  const int64_t endUs = std::clamp(
+      outUs_.value_or(timeline.sourceDurationUs()), int64_t{0},
+      timeline.sourceDurationUs());
+  if (endUs <= startUs) return std::nullopt;
+  return SourceRange{startUs, endUs};
+}
+
 bool Document::commit(Timeline next) {
   if (next.keptRanges() == timeline_.keptRanges()) return false;
   undo_.push_back(timeline_);
@@ -290,6 +339,12 @@ EditSnapshot buildSnapshot(const Document& document,
   out.active = active;
   out.hasEdits = !timeline.isUnmodified();
   out.hasUnexportedChanges = document.hasUnexportedChanges();
+  if (const auto remove = selection.range()) {
+    out.canRippleDelete = timeline.canRippleDelete(*remove);
+  }
+  if (const auto keep = selection.trimRange(timeline)) {
+    out.canTrim = timeline.canTrimTo(*keep);
+  }
   out.canUndo = document.canUndo();
   out.canRedo = document.canRedo();
   out.sourceDurationUs = timeline.sourceDurationUs();

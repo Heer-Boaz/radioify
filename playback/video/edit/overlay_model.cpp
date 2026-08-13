@@ -138,6 +138,10 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
     return model;
   }
   if (edit.active && edit.timelineDurationUs > 0) {
+    const bool hasTrimRange = edit.inTimelineUs || edit.outTimelineUs;
+    const int64_t trimStartUs = edit.inTimelineUs.value_or(0);
+    const int64_t trimEndUs =
+        edit.outTimelineUs.value_or(edit.timelineDurationUs);
     model.cells.reserve(static_cast<size_t>(width));
     for (int cell = 0; cell < width; ++cell) {
       const long double ratio =
@@ -145,9 +149,8 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
           static_cast<long double>(2LL * width);
       const int64_t timelineUs = static_cast<int64_t>(
           ratio * static_cast<long double>(edit.timelineDurationUs));
-      const bool selected =
-          edit.inTimelineUs && edit.outTimelineUs &&
-          timelineUs >= *edit.inTimelineUs && timelineUs < *edit.outTimelineUs;
+      const bool selected = hasTrimRange && timelineUs >= trimStartUs &&
+                            timelineUs < trimEndUs;
       model.cells.push_back(selected ? TimelineCellKind::Selected
                                      : TimelineCellKind::Kept);
     }

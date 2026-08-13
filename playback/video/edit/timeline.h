@@ -21,12 +21,14 @@ class Timeline {
   bool isUnmodified() const;
 
   // Intersect the current sequence with keep. Returns false when the request
-  // is invalid or would create an empty sequence.
+  // is invalid, is a no-op, or would create an empty sequence.
+  bool canTrimTo(SourceRange keep) const;
   bool trimTo(SourceRange keep);
 
   // Subtract remove from every kept range and close the resulting timeline
   // gap (ripple delete). Returns false for an empty/no-op selection or when
   // the complete sequence would be removed.
+  bool canRippleDelete(SourceRange remove) const;
   bool rippleDelete(SourceRange remove);
 
   bool containsSourceTime(int64_t sourceUs) const;
@@ -83,7 +85,11 @@ class Selection {
                     int64_t timelineUs,
                     int64_t minimumSelectionDurationUs);
 
+  // Ripple delete consumes an explicit two-sided range. Trim accepts either
+  // boundary independently and uses the current sequence edge for the side
+  // the editor did not mark.
   std::optional<SourceRange> range() const;
+  std::optional<SourceRange> trimRange(const Timeline& timeline) const;
   std::optional<int64_t> inSourceUs() const { return inUs_; }
   std::optional<int64_t> outSourceUs() const { return outUs_; }
 

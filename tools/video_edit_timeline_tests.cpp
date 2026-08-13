@@ -124,6 +124,59 @@ int main() {
                                                         true)
                        .active,
                "workspace activation must be projected without changing the document");
+  const auto emptySelectionSnapshot = playback_video_edit::buildSnapshot(
+      document, selection, true);
+  ok &= expect(!selection.trimRange(document.timeline()) &&
+                   !emptySelectionSnapshot.canTrim &&
+                   !emptySelectionSnapshot.canRippleDelete,
+               "an unmarked timeline must not advertise an edit operation");
+
+  Selection inOnlySelection;
+  inOnlySelection.markIn(document.timeline(), 2'000'000);
+  const auto inOnlyRange = inOnlySelection.trimRange(document.timeline());
+  const auto inOnlySnapshot = playback_video_edit::buildSnapshot(
+      document, inOnlySelection, true);
+  ok &= expect(inOnlyRange == std::optional<SourceRange>{
+                                      SourceRange{2'000'000, 10'000'000}} &&
+                   !inOnlySelection.range() && inOnlySnapshot.canTrim &&
+                   !inOnlySnapshot.canRippleDelete,
+               "an In point must trim to the existing sequence end without "
+               "becoming a ripple-delete range");
+
+  Selection outOnlySelection;
+  outOnlySelection.markOut(document.timeline(), 8'000'000);
+  const auto outOnlyRange = outOnlySelection.trimRange(document.timeline());
+  const auto outOnlySnapshot = playback_video_edit::buildSnapshot(
+      document, outOnlySelection, true);
+  ok &= expect(outOnlyRange == std::optional<SourceRange>{
+                                       SourceRange{0, 8'000'000}} &&
+                   !outOnlySelection.range() && outOnlySnapshot.canTrim &&
+                   !outOnlySnapshot.canRippleDelete,
+               "an Out point must trim from the existing sequence start "
+               "without becoming a ripple-delete range");
+
+  Document oneSidedDocument;
+  oneSidedDocument.load(10'000'000);
+  ok &= expect(oneSidedDocument.trimTo({2'000'000, 10'000'000}) &&
+                   oneSidedDocument.timeline().keptRanges() ==
+                       std::vector<SourceRange>{{2'000'000, 10'000'000}},
+               "committing an In-only trim must preserve the unmarked end");
+  ok &= expect(oneSidedDocument.discardAllChanges() &&
+                   oneSidedDocument.trimTo({0, 8'000'000}) &&
+                   oneSidedDocument.timeline().keptRanges() ==
+                       std::vector<SourceRange>{{0, 8'000'000}},
+               "committing an Out-only trim must preserve the unmarked start");
+
+  Selection completeSelection;
+  completeSelection.markIn(document.timeline(), 0);
+  completeSelection.markOut(document.timeline(), 10'000'000);
+  const auto completeSnapshot = playback_video_edit::buildSnapshot(
+      document, completeSelection, true);
+  ok &= expect(!completeSnapshot.canTrim &&
+                   !completeSnapshot.canRippleDelete,
+               "the complete sequence must be neither a trim change nor a "
+               "valid emptying ripple delete");
+
   Selection clearableSelection;
   clearableSelection.markIn(document.timeline(), 1'000'000);
   clearableSelection.markOut(document.timeline(), 2'000'000);
@@ -319,6 +372,36 @@ int main() {
   ok &= expect(overlayModel.status == "EDIT MODE*" &&
                     overlayModel.status.size() <= 10,
                "narrow editor status must keep the active mode visible");
+  playback_video_edit::EditSnapshot inOnlyOverlay = overlayEdit;
+  inOnlyOverlay.outTimelineUs.reset();
+  const playback_video_edit::OverlayModel inOnlyOverlayModel =
+      playback_video_edit::buildOverlayModel(
+          inOnlyOverlay, nullptr, Prompt::None, 10, 0.5);
+  ok &= expect(inOnlyOverlayModel.cells[1] ==
+                       playback_video_edit::TimelineCellKind::Kept &&
+                   inOnlyOverlayModel.cells[2] ==
+                       playback_video_edit::TimelineCellKind::Selected &&
+                   inOnlyOverlayModel.cells[9] ==
+                       playback_video_edit::TimelineCellKind::Selected &&
+                   inOnlyOverlayModel.inCell == std::optional<int>(2) &&
+                   !inOnlyOverlayModel.outCell,
+               "an In-only trim must visualize its implicit sequence-end "
+               "boundary without inventing an Out handle");
+  playback_video_edit::EditSnapshot outOnlyOverlay = overlayEdit;
+  outOnlyOverlay.inTimelineUs.reset();
+  const playback_video_edit::OverlayModel outOnlyOverlayModel =
+      playback_video_edit::buildOverlayModel(
+          outOnlyOverlay, nullptr, Prompt::None, 10, 0.5);
+  ok &= expect(outOnlyOverlayModel.cells[0] ==
+                       playback_video_edit::TimelineCellKind::Selected &&
+                   outOnlyOverlayModel.cells[4] ==
+                       playback_video_edit::TimelineCellKind::Selected &&
+                   outOnlyOverlayModel.cells[5] ==
+                       playback_video_edit::TimelineCellKind::Kept &&
+                   !outOnlyOverlayModel.inCell &&
+                   outOnlyOverlayModel.outCell == std::optional<int>(5),
+               "an Out-only trim must visualize its implicit sequence-start "
+               "boundary without inventing an In handle");
   const playback_video_edit::OverlayModel tinyExportModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
                                               Prompt::None, 6, 0.5);
@@ -402,7 +485,24 @@ int main() {
   }
 
   editorControlState.videoEdit.inTimelineUs = 1'000'000;
+  editorControlState.videoEdit.canTrim = true;
+  const auto oneSidedEditControls =
+      playback_overlay::buildOverlayControlSpecs(editorControlState, -1);
+  const auto oneSidedDelete = controlFor(
+      oneSidedEditControls,
+      playback_overlay::OverlayControlId::EditRippleDelete);
+  const auto oneSidedTrimControl = controlFor(
+      oneSidedEditControls, playback_overlay::OverlayControlId::EditTrim);
+  ok &= expect(controlIds(oneSidedEditControls) == expectedEditControls &&
+                   oneSidedDelete != oneSidedEditControls.end() &&
+                   !oneSidedDelete->enabled &&
+                   oneSidedTrimControl != oneSidedEditControls.end() &&
+                   oneSidedTrimControl->enabled,
+               "one mark must enable trim in place while ripple delete still "
+               "requires an explicit range");
+
   editorControlState.videoEdit.outTimelineUs = 2'000'000;
+  editorControlState.videoEdit.canRippleDelete = true;
   editorControlState.videoEdit.canUndo = true;
   editorControlState.videoEdit.canRedo = true;
   editorControlState.videoEdit.hasEdits = true;

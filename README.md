@@ -180,7 +180,8 @@ The concrete implementation plan lives in
 - E: enter the non-destructive video editor; while editing, E requests leaving it
 - In the video editor: I/O set the inclusive frame selection; Alt+I/Alt+O clear a boundary; Alt+X clears both
 - Esc follows the edit back-stack: clear the current range, request leaving edit mode, or cancel that confirmation
-- Delete ripple-removes the selected range; T trims the sequence to it
+- Delete ripple-removes an explicit In/Out range; T trims at either mark and
+  keeps the unmarked side at the current sequence edge
 - Drag the visible I/O handles on the program timeline to adjust either boundary; handles clamp instead of crossing
 - In the video editor: Ctrl+Z/Ctrl+Y undo/redo; Ctrl+R resets all edits
 - While the editor is open, playback, seeking, timecode, and hover previews follow the compact edited sequence; cut markers identify removed ranges

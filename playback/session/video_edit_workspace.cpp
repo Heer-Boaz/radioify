@@ -287,18 +287,23 @@ VideoEditActionResult VideoEditWorkspace::execute(
                            : "No In/Out points to clear";
       break;
     case playback_video_edit::Command::RippleDelete:
-      if (const auto selected = impl_->selection.range()) {
-        timelineChanged = impl_->document.rippleDelete(*selected);
+      if (const auto remove = impl_->selection.range()) {
+        timelineChanged = impl_->document.rippleDelete(*remove);
+        result.message = timelineChanged ? "Range deleted (ripple)"
+                                         : "That range cannot be deleted";
+      } else {
+        result.message = "Set both In and Out points first";
       }
-      result.message = timelineChanged ? "Range deleted (ripple)"
-                                       : "Set a non-empty In/Out range first";
       break;
     case playback_video_edit::Command::Trim:
-      if (const auto selected = impl_->selection.range()) {
-        timelineChanged = impl_->document.trimTo(*selected);
+      if (const auto keep =
+              impl_->selection.trimRange(impl_->document.timeline())) {
+        timelineChanged = impl_->document.trimTo(*keep);
+        result.message = timelineChanged ? "Sequence trimmed"
+                                         : "Trim point does not change sequence";
+      } else {
+        result.message = "Set an In or Out point first";
       }
-      result.message = timelineChanged ? "Sequence trimmed to selection"
-                                       : "Set a non-empty In/Out range first";
       break;
     case playback_video_edit::Command::Undo:
       timelineChanged = impl_->document.undo();

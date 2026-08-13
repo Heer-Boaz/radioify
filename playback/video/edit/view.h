@@ -42,6 +42,8 @@ struct EditSnapshot {
   // rendered, while only newer decisions count as unexported.
   bool hasEdits = false;
   bool hasUnexportedChanges = false;
+  bool canRippleDelete = false;
+  bool canTrim = false;
   bool canUndo = false;
   bool canRedo = false;
   int64_t sourceDurationUs = 0;
