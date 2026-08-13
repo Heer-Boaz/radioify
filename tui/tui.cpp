@@ -1449,7 +1449,9 @@ int runTui(Options o) {
             case playback_overlay::OverlayControlId::AudioTrack:
             case playback_overlay::OverlayControlId::Subtitles:
             case playback_overlay::OverlayControlId::EditMarkIn:
+            case playback_overlay::OverlayControlId::EditClearIn:
             case playback_overlay::OverlayControlId::EditMarkOut:
+            case playback_overlay::OverlayControlId::EditClearOut:
             case playback_overlay::OverlayControlId::EditRippleDelete:
             case playback_overlay::OverlayControlId::EditTrim:
             case playback_overlay::OverlayControlId::EditUndo:
@@ -1457,6 +1459,8 @@ int runTui(Options o) {
             case playback_overlay::OverlayControlId::EditReset:
             case playback_overlay::OverlayControlId::EditExport:
             case playback_overlay::OverlayControlId::EditDone:
+            case playback_overlay::OverlayControlId::EditConfirmClose:
+            case playback_overlay::OverlayControlId::EditCancelClose:
             case playback_overlay::OverlayControlId::EditDiscardAndExit:
             case playback_overlay::OverlayControlId::EditCancelExit:
               return std::nullopt;

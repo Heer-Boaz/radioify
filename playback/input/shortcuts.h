@@ -31,8 +31,8 @@ videoEditCommandForShortcut(PlaybackShortcutAction action) {
   switch (action) {
     case PlaybackShortcutAction::OpenVideoEditor:
       return Command::Open;
-    case PlaybackShortcutAction::ExitVideoEditor:
-      return Command::Close;
+    case PlaybackShortcutAction::ConfirmVideoEditorClose:
+      return Command::ConfirmClose;
     case PlaybackShortcutAction::SetVideoEditIn:
       return Command::MarkIn;
     case PlaybackShortcutAction::SetVideoEditOut:
@@ -64,7 +64,7 @@ inline constexpr DWORD kPlaybackShortcutFrameStepForbiddenMask =
 
 // One shared shortcut table. Context masks let modes layer additional keys on
 // top of the shared map without owning separate per-mode tables.
-inline constexpr std::array<PlaybackShortcutBinding, 48>
+inline constexpr std::array<PlaybackShortcutBinding, 49>
     kPlaybackShortcutBindings = {{
         {PlaybackShortcutAction::Quit, 'Q', 'q', 'Q', kPlaybackShortcutCtrlMask,
          kPlaybackShortcutChordForbiddenMask, kPlaybackShortcutContextGlobal},
@@ -73,22 +73,27 @@ inline constexpr std::array<PlaybackShortcutBinding, 48>
          kPlaybackShortcutContextShared |
              kPlaybackShortcutContextPlaybackSession |
               kPlaybackShortcutContextPictureInPicture},
-        {PlaybackShortcutAction::CancelVideoEditExit, VK_ESCAPE, 0, 0, 0,
+        {PlaybackShortcutAction::CancelVideoEditPrompt, VK_ESCAPE, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
-         kPlaybackShortcutContextVideoEditExitConfirmation},
-        {PlaybackShortcutAction::CancelVideoEditExit, VK_BACK, 0, 0, 0,
+         kPlaybackShortcutContextVideoEditExitConfirmation |
+             kPlaybackShortcutContextVideoEditCloseConfirmation},
+        {PlaybackShortcutAction::CancelVideoEditPrompt, VK_BACK, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
-         kPlaybackShortcutContextVideoEditExitConfirmation},
+         kPlaybackShortcutContextVideoEditExitConfirmation |
+             kPlaybackShortcutContextVideoEditCloseConfirmation},
+        {PlaybackShortcutAction::ConfirmVideoEditorClose, VK_RETURN, 0, 0, 0,
+         kPlaybackShortcutTextForbiddenMask,
+         kPlaybackShortcutContextVideoEditCloseConfirmation},
         {PlaybackShortcutAction::DiscardVideoEditsAndExit, 'D', 'd', 'D', 0,
          kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
          kPlaybackShortcutContextVideoEditExitConfirmation},
         // Editing is an explicit modal layer. Conflicting bindings precede
         // shared playback so O and Back regain their normal meanings as soon
         // as the editor is closed.
-        {PlaybackShortcutAction::ExitVideoEditor, VK_ESCAPE, 0, 0, 0,
+        {PlaybackShortcutAction::NavigateBackInVideoEditor, VK_ESCAPE, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoEditing},
-        {PlaybackShortcutAction::ExitVideoEditor, VK_BACK, 0, 0, 0,
+        {PlaybackShortcutAction::NavigateBackInVideoEditor, VK_BACK, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoEditing},
         {PlaybackShortcutAction::ExportVideoEdits, 'E', 'e', 'E',
@@ -238,8 +243,16 @@ inline std::optional<PlaybackShortcutAction> resolvePlaybackShortcutAction(
                                                     kPlaybackShortcutContextShared) {
   switch (action) {
     case InputAction::Back:
+      if ((shortcutContexts &
+           kPlaybackShortcutContextVideoEditCloseConfirmation) != 0) {
+        return PlaybackShortcutAction::CancelVideoEditPrompt;
+      }
+      if ((shortcutContexts &
+           kPlaybackShortcutContextVideoEditExitConfirmation) != 0) {
+        return PlaybackShortcutAction::CancelVideoEditPrompt;
+      }
       if ((shortcutContexts & kPlaybackShortcutContextVideoEditing) != 0) {
-        return PlaybackShortcutAction::ExitVideoEditor;
+        return PlaybackShortcutAction::NavigateBackInVideoEditor;
       }
       if ((shortcutContexts & kPlaybackShortcutContextPlaybackSession) != 0) {
         return PlaybackShortcutAction::ExitPlaybackSession;

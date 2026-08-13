@@ -441,18 +441,17 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
       case PlaybackShortcutAction::TogglePictureInPicture:
         togglePictureInPicture(view, signals);
         break;
+      case PlaybackShortcutAction::NavigateBackInVideoEditor:
       case PlaybackShortcutAction::ExitPlaybackSession:
-        requestPlaybackExit(view, signals, false);
+        if (signals.navigateBack) signals.navigateBack();
         break;
       case PlaybackShortcutAction::DiscardVideoEditsAndExit:
         if (signals.confirmPendingExit) {
           signals.confirmPendingExit();
         }
         break;
-      case PlaybackShortcutAction::CancelVideoEditExit:
-        if (signals.cancelPendingExit) {
-          signals.cancelPendingExit();
-        }
+      case PlaybackShortcutAction::CancelVideoEditPrompt:
+        if (signals.navigateBack) signals.navigateBack();
         break;
       default:
         break;
@@ -473,9 +472,15 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
   cb.onCopyVideoFrame = signals.copyCurrentVideoFrameToClipboard;
   cb.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
 
+  const playback_video_edit::ExitPrompt editExitPrompt =
+      signals.videoEditExitPrompt
+          ? signals.videoEditExitPrompt()
+          : playback_video_edit::ExitPrompt::None;
   uint32_t shortcutContexts = 0;
-  if (signals.videoEditExitConfirmationActive &&
-      signals.videoEditExitConfirmationActive()) {
+  if (editExitPrompt == playback_video_edit::ExitPrompt::CloseEditor) {
+    shortcutContexts = kPlaybackShortcutContextVideoEditCloseConfirmation;
+  } else if (editExitPrompt ==
+             playback_video_edit::ExitPrompt::LeavePlayback) {
     shortcutContexts = kPlaybackShortcutContextVideoEditExitConfirmation;
   } else {
     shortcutContexts = kPlaybackShortcutContextShared |
@@ -505,8 +510,8 @@ void handlePlaybackControlCommand(const PlaybackInputView& view,
                                   PlaybackInputSignals& signals,
                                   PlaybackSeekGestureState& seekState,
                                   PlaybackControlCommand command) {
-  if (signals.videoEditExitConfirmationActive &&
-      signals.videoEditExitConfirmationActive()) {
+  if (signals.videoEditExitPrompt &&
+      signals.videoEditExitPrompt() != playback_video_edit::ExitPrompt::None) {
     return;
   }
   switch (command) {
@@ -563,15 +568,17 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     commitQueuedSeek(view, signals, seekState);
     *signals.redraw = true;
   }
-  const bool editExitConfirmation =
-      signals.videoEditExitConfirmationActive &&
-      signals.videoEditExitConfirmationActive();
+  const playback_video_edit::ExitPrompt editExitPrompt =
+      signals.videoEditExitPrompt
+          ? signals.videoEditExitPrompt()
+          : playback_video_edit::ExitPrompt::None;
 
   const double pointerX =
       windowEvent && mouse.hasPixelPosition ? mouse.pixelX : mouse.pos.X;
   const double pointerY =
       windowEvent && mouse.hasPixelPosition ? mouse.pixelY : mouse.pos.Y;
-  if (rightPressed && mouse.eventFlags == 0) {
+  if (rightPressed && mouse.eventFlags == 0 &&
+      editExitPrompt == playback_video_edit::ExitPrompt::None) {
     playback_session::ContextMenuInput request;
     request.kind = playback_session::ContextMenuInputKind::Open;
     request.surface =
@@ -587,10 +594,8 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
       playback_session::ContextMenuInput request;
       request.kind = playback_session::ContextMenuInputKind::Dismiss;
       dispatchContextMenuInput(signals, request);
-    } else if (editExitConfirmation && signals.cancelPendingExit) {
-      signals.cancelPendingExit();
-    } else {
-      requestPlaybackExit(view, signals, false);
+    } else if (signals.navigateBack) {
+      signals.navigateBack();
     }
     return;
   }

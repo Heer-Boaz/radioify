@@ -38,10 +38,12 @@ class VideoEditWorkspace {
   VideoEditWorkspace& operator=(const VideoEditWorkspace&) = delete;
 
   bool active() const;
+  bool closeConfirmationActive() const;
   bool hasUnexportedChanges() const;
   bool needsExitConfirmation() const;
 
   VideoEditActionResult execute(playback_video_edit::Command command);
+  VideoEditActionResult navigateBack();
   bool moveBoundary(playback_video_edit::EditBoundary boundary,
                     int64_t timelineUs);
   bool poll(std::string* message);

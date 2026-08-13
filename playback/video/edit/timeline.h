@@ -74,7 +74,8 @@ class Document {
 // state and are cleared when a document operation consumes them.
 class Selection {
  public:
-  void clear();
+  bool clear();
+  bool clear(EditBoundary boundary);
   void markIn(const Timeline& timeline, int64_t sourceUs);
   void markOut(const Timeline& timeline, int64_t sourceUsExclusive);
   bool moveBoundary(const Timeline& timeline, EditBoundary boundary,

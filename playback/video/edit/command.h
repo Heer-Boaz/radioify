@@ -8,9 +8,13 @@ namespace playback_video_edit {
 // Presentation identifiers never cross this boundary.
 enum class Command : uint8_t {
   Open,
-  Close,
+  RequestClose,
+  ConfirmClose,
+  CancelClose,
   MarkIn,
+  ClearIn,
   MarkOut,
+  ClearOut,
   RippleDelete,
   Trim,
   Undo,

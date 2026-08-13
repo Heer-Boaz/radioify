@@ -392,8 +392,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   overlayInputs.contextMenu = inputs.contextMenu;
   overlayInputs.videoEdit = inputs.videoEdit;
   overlayInputs.videoEditExport = inputs.videoEditExport;
-  overlayInputs.videoEditExitConfirmation =
-      inputs.videoEditExitConfirmation;
+  overlayInputs.videoEditExitPrompt = inputs.videoEditExitPrompt;
   playback_overlay::PlaybackOverlayState overlayState =
       playback_overlay::buildPlaybackOverlayState(overlayInputs);
   const int hoverIndex =
@@ -463,7 +462,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
       frameOutput.overlayInteractions =
           playback_overlay::buildOverlayInteractionMap(
               overlayLayout, &overlayState.videoEdit,
-              overlayState.videoEditExitConfirmation);
+              overlayState.videoEditExitPrompt);
     }
     if (showContextMenu && contextMenuLayout.drawable()) {
       frameOutput.overlayInteractions =
@@ -476,7 +475,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
       playback_overlay::renderOverlayToScreen(
           screen, overlayLayout, overlayStyles, ratio, &overlayState.videoEdit,
           &overlayState.videoEditExport,
-          overlayState.videoEditExitConfirmation, artTop, height);
+          overlayState.videoEditExitPrompt, artTop, height);
     }
   }
 

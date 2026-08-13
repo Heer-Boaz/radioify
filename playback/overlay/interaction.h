@@ -18,7 +18,9 @@ enum class OverlayControlId {
   Subtitles,
   PictureInPicture,
   EditMarkIn,
+  EditClearIn,
   EditMarkOut,
+  EditClearOut,
   EditRippleDelete,
   EditTrim,
   EditUndo,
@@ -26,6 +28,8 @@ enum class OverlayControlId {
   EditReset,
   EditExport,
   EditDone,
+  EditConfirmClose,
+  EditCancelClose,
   EditDiscardAndExit,
   EditCancelExit,
 };

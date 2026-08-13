@@ -49,7 +49,8 @@ void ContextMenuController::refresh(
                     "Discard changes"});
   }
   if (edit.active) {
-    next.push_back({playback_video_edit::Command::Close, "Finish editing"});
+    next.push_back(
+        {playback_video_edit::Command::RequestClose, "Finish editing"});
   }
   items_ = std::move(next);
   if (items_.empty()) {

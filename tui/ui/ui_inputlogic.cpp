@@ -1017,7 +1017,8 @@ PlaybackInputResult handlePlaybackInput(const InputEvent& ev,
         return PlaybackInputResult::Handled;
       case PlaybackShortcutAction::TogglePictureInPicture:
       case PlaybackShortcutAction::OpenVideoEditor:
-      case PlaybackShortcutAction::ExitVideoEditor:
+      case PlaybackShortcutAction::NavigateBackInVideoEditor:
+      case PlaybackShortcutAction::ConfirmVideoEditorClose:
       case PlaybackShortcutAction::SetVideoEditIn:
       case PlaybackShortcutAction::SetVideoEditOut:
       case PlaybackShortcutAction::RippleDeleteVideoEditSelection:
@@ -1027,7 +1028,7 @@ PlaybackInputResult handlePlaybackInput(const InputEvent& ev,
       case PlaybackShortcutAction::ResetVideoEdits:
       case PlaybackShortcutAction::ExportVideoEdits:
       case PlaybackShortcutAction::DiscardVideoEditsAndExit:
-      case PlaybackShortcutAction::CancelVideoEditExit:
+      case PlaybackShortcutAction::CancelVideoEditPrompt:
         if (callbacks.onPlaybackContextShortcut) {
           callbacks.onPlaybackContextShortcut(*action);
         }

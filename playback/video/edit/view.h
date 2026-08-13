@@ -15,6 +15,14 @@ enum class EditBoundary : uint8_t {
   Out,
 };
 
+// The two exit prompts represent different pending actions and therefore have
+// different controls. Renderers must never infer one from dirty state.
+enum class ExitPrompt : uint8_t {
+  None,
+  CloseEditor,
+  LeavePlayback,
+};
+
 struct EditClipSnapshot {
   SourceRange source;
   int64_t timelineStartUs = 0;

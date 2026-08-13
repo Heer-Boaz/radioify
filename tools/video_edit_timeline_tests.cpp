@@ -23,6 +23,7 @@ bool expect(bool condition, const char* message) {
 
 int main() {
   using playback_video_edit::Document;
+  using playback_video_edit::ExitPrompt;
   using playback_video_edit::Selection;
   using playback_video_edit::SourceRange;
   using playback_video_edit::Timeline;
@@ -123,6 +124,20 @@ int main() {
                                                         true)
                        .active,
                "workspace activation must be projected without changing the document");
+  Selection clearableSelection;
+  clearableSelection.markIn(document.timeline(), 1'000'000);
+  clearableSelection.markOut(document.timeline(), 2'000'000);
+  ok &= expect(
+      clearableSelection.clear(playback_video_edit::EditBoundary::In) &&
+          !clearableSelection.inSourceUs() &&
+          clearableSelection.outSourceUs() ==
+              std::optional<int64_t>(2'000'000),
+      "an active In control must clear only its own mark");
+  ok &= expect(clearableSelection.clear() &&
+                   !clearableSelection.inSourceUs() &&
+                   !clearableSelection.outSourceUs() &&
+                   !clearableSelection.clear(),
+               "Escape-style selection cancellation must clear all marks once");
   selection.markIn(document.timeline(), 3'000'000);
   selection.markOut(document.timeline(), 5'000'000);
   const auto initialRemoval = selection.range();
@@ -275,7 +290,7 @@ int main() {
   overlayExport.fraction = 0.42;
   const playback_video_edit::OverlayModel overlayModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
-                                              false, 10, 0.5);
+                                              ExitPrompt::None, 10, 0.5);
   ok &= expect(overlayModel.cells.size() == 10 &&
                     overlayModel.cells[0] ==
                         playback_video_edit::TimelineCellKind::Kept &&
@@ -294,17 +309,17 @@ int main() {
                "narrow editor status must keep the active mode visible");
   const playback_video_edit::OverlayModel tinyExportModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
-                                              false, 6, 0.5);
+                                              ExitPrompt::None, 6, 0.5);
   ok &= expect(tinyExportModel.status == "EDIT*",
                "tiny editor status must retain a compact mode indicator");
   const playback_video_edit::OverlayModel tinyDirtyModel =
-      playback_video_edit::buildOverlayModel(overlayEdit, nullptr, false, 1,
-                                              0.5);
+      playback_video_edit::buildOverlayModel(
+          overlayEdit, nullptr, ExitPrompt::None, 1, 0.5);
   ok &= expect(tinyDirtyModel.status == "*",
                "one-column editor status must retain the dirty indicator");
   const playback_video_edit::OverlayModel wideOverlayModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
-                                              false, 96, 0.5);
+                                              ExitPrompt::None, 96, 0.5);
   ok &= expect(wideOverlayModel.status.find("EXPORT 42%") !=
                         std::string::npos &&
                     wideOverlayModel.status.find("TC 00:00:04:00") !=
@@ -318,8 +333,8 @@ int main() {
   overlayEdit.inTimelineUs.reset();
   overlayEdit.outTimelineUs.reset();
   const playback_video_edit::OverlayModel unselectedOverlayModel =
-      playback_video_edit::buildOverlayModel(overlayEdit, nullptr, false, 10,
-                                              0.0);
+      playback_video_edit::buildOverlayModel(
+          overlayEdit, nullptr, ExitPrompt::None, 10, 0.0);
   ok &= expect(unselectedOverlayModel.cells[2] ==
                    playback_video_edit::TimelineCellKind::Kept &&
                    unselectedOverlayModel.cutCells == std::vector<int>{2},
@@ -327,18 +342,24 @@ int main() {
   overlayEdit.active = false;
   const playback_video_edit::OverlayModel backgroundExportModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
-                                              false, 10, 0.0);
+                                              ExitPrompt::None, 10, 0.0);
   ok &= expect(backgroundExportModel.cells.empty() &&
                     backgroundExportModel.status.find("EXPORT 42%") !=
                         std::string::npos,
                 "background export progress must remain visible after the editor closes");
 
   const playback_video_edit::OverlayModel exitModel =
-      playback_video_edit::buildOverlayModel(overlayEdit, nullptr, true, 10,
-                                              0.0);
+      playback_video_edit::buildOverlayModel(
+          overlayEdit, nullptr, ExitPrompt::LeavePlayback, 10, 0.0);
   ok &= expect(exitModel.status == "UNEXPORTED" &&
                    exitModel.status.size() <= 10,
                "exit confirmation must use a complete width-bounded state");
+
+  const playback_video_edit::OverlayModel closeEditorModel =
+      playback_video_edit::buildOverlayModel(
+          overlayEdit, nullptr, ExitPrompt::CloseEditor, 16, 0.0);
+  ok &= expect(closeEditorModel.status == "FINISH EDITING?",
+               "closing only the editor must have its own explicit prompt");
 
   playback_overlay::InteractionMap interactions;
   interactions.progressBar =

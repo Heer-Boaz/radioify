@@ -146,9 +146,19 @@ bool Document::discardAllChanges() {
   return true;
 }
 
-void Selection::clear() {
+bool Selection::clear() {
+  if (!inUs_ && !outUs_) return false;
   inUs_.reset();
   outUs_.reset();
+  return true;
+}
+
+bool Selection::clear(EditBoundary boundary) {
+  std::optional<int64_t>& mark =
+      boundary == EditBoundary::In ? inUs_ : outUs_;
+  if (!mark) return false;
+  mark.reset();
+  return true;
 }
 
 void Selection::markIn(const Timeline& timeline, int64_t sourceUs) {

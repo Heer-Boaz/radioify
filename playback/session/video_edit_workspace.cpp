@@ -47,6 +47,7 @@ struct VideoEditWorkspace::Impl {
   playback_video_edit::Document document;
   playback_video_edit::Selection selection;
   bool active = false;
+  bool closeConfirmation = false;
   playback_video_edit::Exporter exporter;
   playback_video_edit::ExportState observedExportState =
       playback_video_edit::ExportState::Idle;
@@ -159,6 +160,10 @@ bool VideoEditWorkspace::active() const {
   return impl_ && impl_->active;
 }
 
+bool VideoEditWorkspace::closeConfirmationActive() const {
+  return impl_ && impl_->closeConfirmation;
+}
+
 bool VideoEditWorkspace::hasUnexportedChanges() const {
   return impl_ && impl_->document.hasUnexportedChanges();
 }
@@ -173,6 +178,16 @@ VideoEditActionResult VideoEditWorkspace::execute(
     playback_video_edit::Command command) {
   VideoEditActionResult result;
   if (!impl_) return result;
+  if (!impl_->closeConfirmation &&
+      (command == playback_video_edit::Command::ConfirmClose ||
+       command == playback_video_edit::Command::CancelClose)) {
+    return result;
+  }
+  if (impl_->closeConfirmation &&
+      command != playback_video_edit::Command::ConfirmClose &&
+      command != playback_video_edit::Command::CancelClose) {
+    return result;
+  }
   if (!impl_->active && command != playback_video_edit::Command::Open &&
       command != playback_video_edit::Command::Export &&
       command != playback_video_edit::Command::Discard) {
@@ -194,6 +209,7 @@ VideoEditActionResult VideoEditWorkspace::execute(
         impl_->document.load(context.sourceDurationUs);
         impl_->selection.clear();
         impl_->active = true;
+        impl_->closeConfirmation = false;
         projection = PreviewProjection::ApplyEdit;
         deactivateIfOpenFails = true;
         result.message = "Video editor opened";
@@ -201,14 +217,26 @@ VideoEditActionResult VideoEditWorkspace::execute(
         result.message = "Video editor requires a known duration";
       }
       break;
-    case playback_video_edit::Command::Close:
+    case playback_video_edit::Command::RequestClose:
+      impl_->closeConfirmation = true;
+      result.message.clear();
+      break;
+    case playback_video_edit::Command::ConfirmClose:
       projection = PreviewProjection::ClearEdit;
       deactivateAfterClear = true;
       result.message = "Video editor closed (edits retained)";
       break;
+    case playback_video_edit::Command::CancelClose:
+      impl_->closeConfirmation = false;
+      result.message.clear();
+      break;
     case playback_video_edit::Command::MarkIn:
       impl_->selection.markIn(impl_->document.timeline(), context.playheadUs);
       result.message = "In point set";
+      break;
+    case playback_video_edit::Command::ClearIn:
+      impl_->selection.clear(playback_video_edit::EditBoundary::In);
+      result.message = "In point cleared";
       break;
     case playback_video_edit::Command::MarkOut:
       {
@@ -224,6 +252,10 @@ VideoEditActionResult VideoEditWorkspace::execute(
         impl_->selection.markOut(impl_->document.timeline(), out);
       }
       result.message = "Out point set";
+      break;
+    case playback_video_edit::Command::ClearOut:
+      impl_->selection.clear(playback_video_edit::EditBoundary::Out);
+      result.message = "Out point cleared";
       break;
     case playback_video_edit::Command::RippleDelete:
       if (const auto selected = impl_->selection.range()) {
@@ -281,6 +313,7 @@ VideoEditActionResult VideoEditWorkspace::execute(
   if (!projectionAccepted) {
     if (deactivateIfOpenFails) {
       impl_->active = false;
+      impl_->closeConfirmation = false;
       impl_->selection.clear();
       result.message = "Video editor unavailable: preview could not start";
     } else if (deactivateAfterClear) {
@@ -290,6 +323,7 @@ VideoEditActionResult VideoEditWorkspace::execute(
     }
   } else if (deactivateAfterClear) {
     impl_->active = false;
+    impl_->closeConfirmation = false;
     impl_->selection.clear();
   }
 
@@ -297,6 +331,20 @@ VideoEditActionResult VideoEditWorkspace::execute(
       command == playback_video_edit::Command::Open &&
       projectionAccepted && impl_->active;
   return result;
+}
+
+VideoEditActionResult VideoEditWorkspace::navigateBack() {
+  VideoEditActionResult result;
+  if (!impl_ || !impl_->active) return result;
+  if (impl_->closeConfirmation) {
+    return execute(playback_video_edit::Command::CancelClose);
+  }
+  if (impl_->selection.clear()) {
+    result.handled = true;
+    result.message = "Selection cleared";
+    return result;
+  }
+  return execute(playback_video_edit::Command::RequestClose);
 }
 
 bool VideoEditWorkspace::moveBoundary(

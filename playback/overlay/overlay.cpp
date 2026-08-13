@@ -192,10 +192,11 @@ PlaybackOverlayState buildPlaybackOverlayState(
   state.contextMenu = inputs.contextMenu;
   state.videoEdit = inputs.videoEdit;
   state.videoEditExport = inputs.videoEditExport;
-  state.videoEditExitConfirmation = inputs.videoEditExitConfirmation;
+  state.videoEditExitPrompt = inputs.videoEditExitPrompt;
   state.chromeVisible = state.overlayVisible || !state.debugLines.empty() ||
                         state.videoEdit.active ||
-                        state.videoEditExitConfirmation ||
+                        state.videoEditExitPrompt !=
+                            playback_video_edit::ExitPrompt::None ||
                         state.videoEditExport.running();
 
   if (inputs.subtitleManager) {
@@ -416,8 +417,12 @@ bool dispatchOverlayControl(OverlayControlId id,
       return invoke(actions.pictureInPicture);
     case OverlayControlId::EditMarkIn:
       return invokeEdit(playback_video_edit::Command::MarkIn);
+    case OverlayControlId::EditClearIn:
+      return invokeEdit(playback_video_edit::Command::ClearIn);
     case OverlayControlId::EditMarkOut:
       return invokeEdit(playback_video_edit::Command::MarkOut);
+    case OverlayControlId::EditClearOut:
+      return invokeEdit(playback_video_edit::Command::ClearOut);
     case OverlayControlId::EditRippleDelete:
       return invokeEdit(playback_video_edit::Command::RippleDelete);
     case OverlayControlId::EditTrim:
@@ -431,7 +436,11 @@ bool dispatchOverlayControl(OverlayControlId id,
     case OverlayControlId::EditExport:
       return invokeEdit(playback_video_edit::Command::Export);
     case OverlayControlId::EditDone:
-      return invokeEdit(playback_video_edit::Command::Close);
+      return invokeEdit(playback_video_edit::Command::RequestClose);
+    case OverlayControlId::EditConfirmClose:
+      return invokeEdit(playback_video_edit::Command::ConfirmClose);
+    case OverlayControlId::EditCancelClose:
+      return invokeEdit(playback_video_edit::Command::CancelClose);
     case OverlayControlId::EditDiscardAndExit:
       return invoke(actions.confirmPendingExit);
     case OverlayControlId::EditCancelExit:
@@ -462,7 +471,18 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     }
   };
 
-  if (state.videoEditExitConfirmation) {
+  if (state.videoEditExitPrompt ==
+      playback_video_edit::ExitPrompt::CloseEditor) {
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditConfirmClose,
+                                       "Finish", false));
+    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditCancelClose,
+                                       "Stay", true));
+    finishSpecs();
+    return out;
+  }
+
+  if (state.videoEditExitPrompt ==
+      playback_video_edit::ExitPrompt::LeavePlayback) {
     addSpec(makeOverlayTextControlSpec(
         OverlayControlId::EditExport,
         state.videoEditExport.running() ? "Wait" : "Export",
@@ -484,11 +504,16 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
                                          state.paused ? "Play" : "Pause",
                                          state.paused));
     }
-    addSpec(makeOverlayTextControlSpec(OverlayControlId::EditMarkIn, "In",
-                                       state.videoEdit.inTimelineUs.has_value()));
+    const bool hasIn = state.videoEdit.inTimelineUs.has_value();
+    const bool hasOut = state.videoEdit.outTimelineUs.has_value();
     addSpec(makeOverlayTextControlSpec(
-        OverlayControlId::EditMarkOut, "Out",
-        state.videoEdit.outTimelineUs.has_value()));
+        hasIn ? OverlayControlId::EditClearIn
+              : OverlayControlId::EditMarkIn,
+        "In", hasIn));
+    addSpec(makeOverlayTextControlSpec(
+        hasOut ? OverlayControlId::EditClearOut
+               : OverlayControlId::EditMarkOut,
+        "Out", hasOut));
     if (hasSelection) {
       addSpec(makeOverlayTextControlSpec(OverlayControlId::EditRippleDelete,
                                          "Cut", false));
@@ -760,7 +785,8 @@ OverlayCellLayout layoutPlaybackOverlayCells(
                                  buildWindowOverlayTopLine(state));
   input.suffix = buildWindowOverlayProgressSuffix(state);
   input.reservedRowsAboveProgress =
-      (state.videoEdit.active || state.videoEditExitConfirmation ||
+      (state.videoEdit.active ||
+       state.videoEditExitPrompt != playback_video_edit::ExitPrompt::None ||
        state.videoEditExport.running())
           ? 1
           : 0;
@@ -776,7 +802,8 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
   input.title = overlayTitleWithDebugLines(ui.debugLines, ui.title);
   input.suffix = ui.progressSuffix;
   input.reservedRowsAboveProgress =
-      (ui.videoEdit.active || ui.videoEditExitConfirmation ||
+      (ui.videoEdit.active ||
+       ui.videoEditExitPrompt != playback_video_edit::ExitPrompt::None ||
        ui.videoEditExport.running())
           ? 1
           : 0;
@@ -795,7 +822,7 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
 InteractionMap buildOverlayInteractionMap(
     const OverlayCellLayout& layout,
     const playback_video_edit::EditSnapshot* videoEdit,
-    bool videoEditExitConfirmation) {
+    playback_video_edit::ExitPrompt videoEditExitPrompt) {
   InteractionMap map;
   for (const OverlayCellControlLayoutItem& item : layout.controls) {
     if (item.width <= 0 || item.y < 0) continue;
@@ -808,7 +835,7 @@ InteractionMap buildOverlayInteractionMap(
 
   if (layout.progressBarX < 0 || layout.progressBarY < 0 ||
       layout.progressBarWidth <= 0 ||
-      videoEditExitConfirmation) {
+      videoEditExitPrompt != playback_video_edit::ExitPrompt::None) {
     return map;
   }
 
@@ -822,7 +849,8 @@ InteractionMap buildOverlayInteractionMap(
   if (!videoEdit || !videoEdit->active) return map;
   const playback_video_edit::OverlayModel model =
       playback_video_edit::buildOverlayModel(
-          *videoEdit, nullptr, false, layout.progressBarWidth, 0.0);
+          *videoEdit, nullptr, playback_video_edit::ExitPrompt::None,
+          layout.progressBarWidth, 0.0);
   const auto addBoundary = [&](std::optional<int> cell,
                                playback_video_edit::EditBoundary boundary) {
     if (!cell) return;
@@ -908,7 +936,7 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
   ui.contextMenu = state.contextMenu;
   ui.videoEdit = state.videoEdit;
   ui.videoEditExport = state.videoEditExport;
-  ui.videoEditExitConfirmation = state.videoEditExitConfirmation;
+  ui.videoEditExitPrompt = state.videoEditExitPrompt;
   return ui;
 }
 
@@ -1066,8 +1094,8 @@ void renderVideoEditTimelineToTarget(
     const OverlayRenderStyles& styles, double progress,
     const playback_video_edit::EditSnapshot& edit,
     const playback_video_edit::ExportProgress* editExport,
-    bool editExitConfirmation) {
-  if ((!edit.active && !editExitConfirmation &&
+    playback_video_edit::ExitPrompt editExitPrompt) {
+  if ((!edit.active && editExitPrompt == playback_video_edit::ExitPrompt::None &&
        !(editExport && editExport->running())) ||
       layout.progressBarY < 0 || layout.progressBarWidth <= 0 ||
       !target.rowVisible(layout.progressBarY)) {
@@ -1077,8 +1105,8 @@ void renderVideoEditTimelineToTarget(
   const int width = layout.progressBarWidth;
   const playback_video_edit::OverlayModel model =
       playback_video_edit::buildOverlayModel(edit, editExport,
-                                             editExitConfirmation, width,
-                                             progress);
+                                              editExitPrompt, width,
+                                              progress);
   const Style keptStyle{styles.progressStart, styles.progressEmptyStyle.bg};
   const Style selectedStyle{styles.accentStyle.bg, styles.accentStyle.fg};
   const Style cutStyle{{255, 145, 96}, styles.progressEmptyStyle.bg};
@@ -1168,7 +1196,7 @@ void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
                            const playback_video_edit::EditSnapshot* videoEdit,
                            const playback_video_edit::ExportProgress*
                                videoEditExport,
-                           bool videoEditExitConfirmation) {
+                           playback_video_edit::ExitPrompt videoEditExitPrompt) {
   if (!target.isDrawable()) return;
 
   for (const auto& item : layout.controls) {
@@ -1205,7 +1233,7 @@ void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
   if (videoEdit) {
     renderVideoEditTimelineToTarget(target, layout, styles, progress,
                                     *videoEdit, videoEditExport,
-                                    videoEditExitConfirmation);
+                                    videoEditExitPrompt);
   }
 
   target.writeText(layout.suffixX, layout.suffixY, layout.suffixText,
@@ -1264,12 +1292,12 @@ void renderOverlayToScreen(ConsoleScreen& screen,
                            const playback_video_edit::EditSnapshot* videoEdit,
                            const playback_video_edit::ExportProgress*
                                videoEditExport,
-                           bool videoEditExitConfirmation,
+                           playback_video_edit::ExitPrompt videoEditExitPrompt,
                            int minY,
                            int maxY) {
   ScreenOverlayTarget target(screen, minY, maxY);
   renderOverlayToTarget(target, layout, styles, progress, videoEdit,
-                        videoEditExport, videoEditExitConfirmation);
+                        videoEditExport, videoEditExitPrompt);
 }
 
 void renderTransientMessageToScreen(ConsoleScreen& screen,
@@ -1314,7 +1342,7 @@ bool renderWindowUiToGpuTextGrid(const WindowUiState& ui,
   if (ui.chromeVisible) {
     renderOverlayToTarget(target, overlayLayout, styles, ui.progress,
                           &ui.videoEdit, &ui.videoEditExport,
-                          ui.videoEditExitConfirmation);
+                          ui.videoEditExitPrompt);
     rendered = true;
   }
   if (ui.timelinePreview.hoverActive) {

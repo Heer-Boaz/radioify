@@ -11,6 +11,7 @@ enum class PlaybackShortcutContext : uint32_t {
   VideoPlayback = 1u << 5,
   VideoEditing = 1u << 6,
   VideoEditExitConfirmation = 1u << 7,
+  VideoEditCloseConfirmation = 1u << 8,
 };
 
 inline constexpr uint32_t kPlaybackShortcutContextGlobal =
@@ -30,14 +31,18 @@ inline constexpr uint32_t kPlaybackShortcutContextVideoEditing =
 inline constexpr uint32_t kPlaybackShortcutContextVideoEditExitConfirmation =
     static_cast<uint32_t>(
         PlaybackShortcutContext::VideoEditExitConfirmation);
+inline constexpr uint32_t kPlaybackShortcutContextVideoEditCloseConfirmation =
+    static_cast<uint32_t>(
+        PlaybackShortcutContext::VideoEditCloseConfirmation);
 inline constexpr uint32_t kPlaybackShortcutContextAll =
     kPlaybackShortcutContextGlobal | kPlaybackShortcutContextShared |
     kPlaybackShortcutContextPlaybackSession |
     kPlaybackShortcutContextPictureInPicture |
     kPlaybackShortcutContextImageViewer |
-    kPlaybackShortcutContextVideoPlayback |
-    kPlaybackShortcutContextVideoEditing |
-    kPlaybackShortcutContextVideoEditExitConfirmation;
+     kPlaybackShortcutContextVideoPlayback |
+     kPlaybackShortcutContextVideoEditing |
+     kPlaybackShortcutContextVideoEditExitConfirmation |
+     kPlaybackShortcutContextVideoEditCloseConfirmation;
 
 enum class PlaybackShortcutAction : uint8_t {
   Quit,
@@ -60,7 +65,8 @@ enum class PlaybackShortcutAction : uint8_t {
   NextFrame,
   CopyVideoFrame,
   OpenVideoEditor,
-  ExitVideoEditor,
+  NavigateBackInVideoEditor,
+  ConfirmVideoEditorClose,
   SetVideoEditIn,
   SetVideoEditOut,
   RippleDeleteVideoEditSelection,
@@ -70,7 +76,7 @@ enum class PlaybackShortcutAction : uint8_t {
   ResetVideoEdits,
   ExportVideoEdits,
   DiscardVideoEditsAndExit,
-  CancelVideoEditExit,
+  CancelVideoEditPrompt,
   VolumeUp,
   VolumeDown,
   TogglePictureInPicture,
