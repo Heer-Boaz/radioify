@@ -551,6 +551,7 @@ add_test(NAME timeline_preview_tests
 add_executable(video_edit_timeline_tests)
 target_sources(video_edit_timeline_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_video_edit_timeline_tests>
+  ${CMAKE_SOURCE_DIR}/playback/overlay/cell_layout.cpp
   ${CMAKE_SOURCE_DIR}/playback/overlay/context_menu.cpp
   ${CMAKE_SOURCE_DIR}/playback/overlay/interaction.cpp
   ${CMAKE_SOURCE_DIR}/playback/session/context_menu_controller.cpp

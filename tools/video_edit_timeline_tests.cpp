@@ -326,12 +326,62 @@ int main() {
                         std::string::npos &&
                     wideOverlayModel.status.find("TC 00:00:04:00") !=
                         std::string::npos &&
+                    wideOverlayModel.status.find("I 00:02:00") !=
+                        std::string::npos &&
+                    wideOverlayModel.status.find("O 00:03:29") !=
+                        std::string::npos &&
                     wideOverlayModel.status.find("EDIT MODE*") !=
                         std::string::npos &&
                     wideOverlayModel.status.find("Ctrl+") ==
                         std::string::npos &&
                     wideOverlayModel.status.size() <= 96,
-               "wide editor status must add state without duplicating controls");
+               "wide editor status must prioritize inclusive range marks "
+               "without duplicating controls");
+  const playback_video_edit::OverlayModel rangeOverlayModel =
+      playback_video_edit::buildOverlayModel(overlayEdit, nullptr,
+                                              Prompt::None, 34, 0.5);
+  ok &= expect(rangeOverlayModel.status ==
+                   "EDIT MODE*  I 00:02:00  O 00:03:29",
+               "compact editor status must retain both frame-accurate range "
+               "marks before general playhead time");
+
+  playback_overlay::OverlayCellLayoutInput shortSurface;
+  shortSurface.width = 24;
+  shortSurface.height = 4;
+  shortSurface.title = "example.mp4";
+  shortSurface.suffix = "00:04 / 00:08";
+  shortSurface.reservedRowsAboveProgress = 1;
+  shortSurface.controls = {
+      {playback_overlay::OverlayControlId::PlayPause, "[Play]", 6},
+      {playback_overlay::OverlayControlId::EditMarkIn, "[In]", 4},
+      {playback_overlay::OverlayControlId::EditMarkOut, "[Out]", 5},
+      {playback_overlay::OverlayControlId::EditRippleDelete, "[Delete]", 8},
+      {playback_overlay::OverlayControlId::EditTrim, "[Trim]", 6},
+      {playback_overlay::OverlayControlId::EditExport, "[Export]", 8},
+  };
+  const playback_overlay::OverlayCellLayout shortLayout =
+      playback_overlay::layoutOverlayCells(shortSurface);
+  ok &= expect(shortLayout.controls.size() == 3 &&
+                   shortLayout.controls[0].id ==
+                       playback_overlay::OverlayControlId::PlayPause &&
+                   shortLayout.controls[1].id ==
+                       playback_overlay::OverlayControlId::EditMarkIn &&
+                   shortLayout.controls[2].id ==
+                       playback_overlay::OverlayControlId::EditMarkOut &&
+                   std::all_of(shortLayout.controls.begin(),
+                               shortLayout.controls.end(),
+                               [](const auto& control) {
+                                 return control.y >= 0;
+                               }),
+               "a short ASCII or PiP surface must retain its leading primary "
+               "control row instead of exposing later commands");
+  shortSurface.height = 1;
+  const playback_overlay::OverlayCellLayout oneRowLayout =
+      playback_overlay::layoutOverlayCells(shortSurface);
+  ok &= expect(oneRowLayout.controls.empty() && oneRowLayout.suffixY == -1 &&
+                   oneRowLayout.topY == 0,
+               "an undersized overlay must omit content that has no row "
+               "instead of publishing negative geometry");
   overlayEdit.inTimelineUs.reset();
   overlayEdit.outTimelineUs.reset();
   const playback_video_edit::OverlayModel unselectedOverlayModel =

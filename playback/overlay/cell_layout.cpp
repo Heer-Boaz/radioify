@@ -1,0 +1,256 @@
+#include "playback/overlay/overlay.h"
+
+#include <algorithm>
+#include <string>
+#include <vector>
+
+#include "unicode_display_width.h"
+
+namespace playback_overlay {
+namespace {
+
+std::string fitLayoutText(const std::string& text, int width) {
+  if (width <= 0) return {};
+  if (utf8DisplayWidth(text) <= width) return text;
+  if (width == 1) return utf8TakeDisplayWidth(text, width);
+  return utf8TakeDisplayWidth(text, width - 1) + "~";
+}
+
+std::vector<std::string> wrapLayoutText(const std::string& text, int width) {
+  std::vector<std::string> lines;
+  if (width <= 0) return lines;
+  if (text.empty()) {
+    lines.emplace_back();
+    return lines;
+  }
+
+  size_t offset = 0;
+  size_t lineStart = 0;
+  size_t lineEnd = 0;
+  int lineWidth = 0;
+  while (offset < text.size()) {
+    char32_t codepoint = 0;
+    size_t startByte = 0;
+    size_t endByte = 0;
+    if (!utf8DecodeCodepoint(text, &offset, &codepoint, &startByte,
+                             &endByte)) {
+      break;
+    }
+    if (codepoint == U'\r') continue;
+    if (codepoint == U'\n') {
+      lines.emplace_back(text.substr(lineStart, lineEnd - lineStart));
+      lineStart = offset;
+      lineEnd = offset;
+      lineWidth = 0;
+      continue;
+    }
+    const int glyphWidth = unicodeDisplayWidth(codepoint);
+    if (glyphWidth > 0 && lineWidth > 0 &&
+        lineWidth + glyphWidth > width) {
+      lines.emplace_back(text.substr(lineStart, lineEnd - lineStart));
+      lineStart = startByte;
+      lineEnd = startByte;
+      lineWidth = 0;
+    }
+    lineEnd = endByte;
+    lineWidth += glyphWidth;
+  }
+  lines.emplace_back(text.substr(lineStart, lineEnd - lineStart));
+  return lines;
+}
+
+std::string fitControlText(const std::string& text, int width) {
+  if (width <= 0) return {};
+  std::string filtered;
+  filtered.reserve(text.size());
+  for (char c : text) {
+    if (c != '\r' && c != '\n') filtered.push_back(c);
+  }
+
+  const int displayWidth = utf8DisplayWidth(filtered);
+  if (displayWidth > width) {
+    return utf8TakeDisplayWidth(filtered, width);
+  }
+  if (displayWidth < width) {
+    filtered.append(static_cast<size_t>(width - displayWidth), ' ');
+  }
+  return filtered;
+}
+
+struct PendingControl {
+  OverlayControlId id = OverlayControlId::Radio;
+  std::string text;
+  int x = 0;
+  int line = 0;
+  int width = 0;
+  bool active = false;
+  bool hovered = false;
+};
+
+std::vector<PendingControl> wrapControls(
+    const std::vector<OverlayCellControlInput>& controls, int width,
+    int* outLineCount) {
+  const int contentInset = width > 2 ? 1 : 0;
+  const int maxLineWidth = std::max(1, width - contentInset * 2);
+  std::vector<PendingControl> out;
+  out.reserve(controls.size());
+
+  int cursor = 0;
+  int line = 0;
+  for (const OverlayCellControlInput& control : controls) {
+    const int controlWidth = std::min(
+        maxLineWidth,
+        std::max(1, control.width > 0 ? control.width
+                                      : utf8DisplayWidth(control.text)));
+    const int gap = cursor > 0 ? 2 : 0;
+    if (cursor > 0 && cursor + gap + controlWidth > maxLineWidth) {
+      ++line;
+      cursor = 0;
+    } else {
+      cursor += gap;
+    }
+
+    out.push_back(PendingControl{control.id,
+                                 fitControlText(control.text, controlWidth),
+                                 contentInset + cursor, line, controlWidth,
+                                 control.active, control.hovered});
+    cursor += controlWidth;
+  }
+
+  if (outLineCount) *outLineCount = out.empty() ? 0 : line + 1;
+  return out;
+}
+
+OverlayCellControlLayoutItem placeControl(const PendingControl& item, int y) {
+  return OverlayCellControlLayoutItem{item.id,    item.text,   item.x,      y,
+                                      item.width, item.active, item.hovered};
+}
+
+}  // namespace
+
+OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input) {
+  OverlayCellLayout layout;
+  layout.width = std::max(1, input.width);
+
+  int controlLineCount = 0;
+  const std::vector<PendingControl> pending =
+      wrapControls(input.controls, layout.width, &controlLineCount);
+  const bool hasSuffix = !input.suffix.empty();
+  const int contentInset = layout.width > 2 ? 1 : 0;
+  const int progressWidth = std::max(1, layout.width - contentInset * 2);
+  const int reservedRowsAboveProgress =
+      std::max(0, input.reservedRowsAboveProgress);
+  std::vector<std::string> titleLines =
+      wrapLayoutText(input.title, layout.width);
+  if (titleLines.empty()) titleLines.emplace_back();
+  auto placeTitleLines = [&](int topY, int firstLine, int lineCount) {
+    layout.titleLines.clear();
+    layout.titleX = 0;
+    layout.titleY = -1;
+    layout.titleText.clear();
+    if (lineCount <= 0) return;
+    layout.titleLines.reserve(static_cast<size_t>(lineCount));
+    for (int i = 0; i < lineCount; ++i) {
+      const int lineIndex = firstLine + i;
+      layout.titleLines.push_back(OverlayCellTextLine{
+          0, topY + i, titleLines[static_cast<size_t>(lineIndex)]});
+    }
+    layout.titleX = layout.titleLines.front().x;
+    layout.titleY = layout.titleLines.front().y;
+    layout.titleText = layout.titleLines.front().text;
+  };
+
+  if (input.height > 0) {
+    layout.height = input.height;
+    layout.progressBarX = contentInset;
+    layout.progressBarY = layout.height - 1;
+    layout.progressBarWidth = progressWidth;
+    const int firstContentYAboveFooter =
+        layout.progressBarY - reservedRowsAboveProgress;
+    if (hasSuffix && firstContentYAboveFooter > 0) {
+      layout.suffixText = fitLayoutText(input.suffix, layout.width);
+      layout.suffixY = firstContentYAboveFooter - 1;
+      layout.suffixX =
+          std::max(0, layout.width - utf8DisplayWidth(layout.suffixText));
+    }
+
+    const int controlsBottom =
+        (layout.suffixY >= 0 ? layout.suffixY : firstContentYAboveFooter) - 1;
+    const int visibleControlLines =
+        std::min(controlLineCount, std::max(0, controlsBottom + 1));
+    const int controlsTop = controlsBottom - visibleControlLines + 1;
+    for (const PendingControl& item : pending) {
+      // Controls are ordered by workflow priority. On a short surface retain
+      // complete leading rows instead of bottom-aligning later commands and
+      // pushing the primary transport/edit controls above the viewport.
+      if (item.line >= visibleControlLines) break;
+      layout.controls.push_back(placeControl(item, controlsTop + item.line));
+    }
+
+    const int titleBaseY =
+        visibleControlLines == 0
+            ? ((layout.suffixY >= 0 ? layout.suffixY
+                                    : firstContentYAboveFooter) -
+               1)
+            : (controlsTop - 1);
+    const int titleSlots = std::max(0, titleBaseY + 1);
+    const int titleLineCount =
+        std::min(static_cast<int>(titleLines.size()), titleSlots);
+    const int firstTitleLine =
+        static_cast<int>(titleLines.size()) - titleLineCount;
+    placeTitleLines(titleBaseY - titleLineCount + 1, firstTitleLine,
+                    titleLineCount);
+  } else {
+    const int titleLineCount = static_cast<int>(titleLines.size());
+    layout.height = titleLineCount + controlLineCount + (hasSuffix ? 1 : 0) +
+                    reservedRowsAboveProgress + 1;
+    placeTitleLines(0, 0, titleLineCount);
+
+    const int controlsTop = titleLineCount;
+    for (const PendingControl& item : pending) {
+      layout.controls.push_back(placeControl(item, controlsTop + item.line));
+    }
+
+    if (hasSuffix) {
+      layout.suffixText = fitLayoutText(input.suffix, layout.width);
+      layout.suffixY = controlsTop + controlLineCount;
+      layout.suffixX =
+          std::max(0, layout.width - utf8DisplayWidth(layout.suffixText));
+    }
+    layout.progressBarX = contentInset;
+    layout.progressBarY = layout.height - 1;
+    layout.progressBarWidth = progressWidth;
+  }
+
+  layout.topY = layout.progressBarY;
+  auto useTop = [&](int y) {
+    if (y >= 0) layout.topY = std::min(layout.topY, y);
+  };
+  for (const auto& line : layout.titleLines) useTop(line.y);
+  useTop(layout.suffixY);
+  for (const auto& item : layout.controls) useTop(item.y);
+  return layout;
+}
+
+OverlayCellLayout layoutOverlayControlCells(
+    const std::vector<OverlayCellControlInput>& controls, int width) {
+  OverlayCellLayout layout;
+  layout.width = std::max(1, width);
+
+  int controlLineCount = 0;
+  const std::vector<PendingControl> pending =
+      wrapControls(controls, layout.width, &controlLineCount);
+  layout.height = controlLineCount;
+  layout.progressBarX = -1;
+  layout.progressBarY = -1;
+  layout.progressBarWidth = 0;
+  layout.topY = pending.empty() ? -1 : 0;
+
+  layout.controls.reserve(pending.size());
+  for (const PendingControl& item : pending) {
+    layout.controls.push_back(placeControl(item, item.line));
+  }
+  return layout;
+}
+
+}  // namespace playback_overlay

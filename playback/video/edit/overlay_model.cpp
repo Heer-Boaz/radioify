@@ -8,8 +8,9 @@
 namespace playback_video_edit {
 namespace {
 
-std::string formatTimecode(int64_t timeUs, int64_t frameDurationUs) {
-  if (timeUs < 0) return "--:--:--:--";
+std::string formatTimecode(int64_t timeUs, int64_t frameDurationUs,
+                           bool compact = false) {
+  if (timeUs < 0) return compact ? "--:--:--" : "--:--:--:--";
   const int64_t totalSeconds = timeUs / 1000000;
   const int64_t hours = totalSeconds / 3600;
   const int64_t minutes = (totalSeconds % 3600) / 60;
@@ -21,20 +22,57 @@ std::string formatTimecode(int64_t timeUs, int64_t frameDurationUs) {
     const int64_t withinSecondUs = timeUs % 1000000;
     const int64_t frame = std::clamp<int64_t>(
         withinSecondUs * nominalFps / 1000000, 0, nominalFps - 1);
-    std::snprintf(buffer, sizeof(buffer), "%02lld:%02lld:%02lld:%02lld",
-                  static_cast<long long>(hours),
-                  static_cast<long long>(minutes),
-                  static_cast<long long>(seconds),
-                  static_cast<long long>(frame));
+    if (compact && hours == 0) {
+      std::snprintf(buffer, sizeof(buffer), "%02lld:%02lld:%02lld",
+                    static_cast<long long>(minutes),
+                    static_cast<long long>(seconds),
+                    static_cast<long long>(frame));
+    } else if (compact) {
+      std::snprintf(buffer, sizeof(buffer), "%lld:%02lld:%02lld:%02lld",
+                    static_cast<long long>(hours),
+                    static_cast<long long>(minutes),
+                    static_cast<long long>(seconds),
+                    static_cast<long long>(frame));
+    } else {
+      std::snprintf(buffer, sizeof(buffer), "%02lld:%02lld:%02lld:%02lld",
+                    static_cast<long long>(hours),
+                    static_cast<long long>(minutes),
+                    static_cast<long long>(seconds),
+                    static_cast<long long>(frame));
+    }
     return std::string(buffer);
   }
   const int64_t milliseconds = (timeUs % 1000000) / 1000;
-  std::snprintf(buffer, sizeof(buffer), "%02lld:%02lld:%02lld.%03lld",
-                static_cast<long long>(hours),
-                static_cast<long long>(minutes),
-                static_cast<long long>(seconds),
-                static_cast<long long>(milliseconds));
+  if (compact && hours == 0) {
+    std::snprintf(buffer, sizeof(buffer), "%02lld:%02lld.%03lld",
+                  static_cast<long long>(minutes),
+                  static_cast<long long>(seconds),
+                  static_cast<long long>(milliseconds));
+  } else if (compact) {
+    std::snprintf(buffer, sizeof(buffer), "%lld:%02lld:%02lld.%03lld",
+                  static_cast<long long>(hours),
+                  static_cast<long long>(minutes),
+                  static_cast<long long>(seconds),
+                  static_cast<long long>(milliseconds));
+  } else {
+    std::snprintf(buffer, sizeof(buffer), "%02lld:%02lld:%02lld.%03lld",
+                  static_cast<long long>(hours),
+                  static_cast<long long>(minutes),
+                  static_cast<long long>(seconds),
+                  static_cast<long long>(milliseconds));
+  }
   return std::string(buffer);
+}
+
+int64_t inclusiveOutDisplayUs(const EditSnapshot& edit) {
+  if (!edit.outTimelineUs) return 0;
+  // Edit ranges stay half-open so playback/export math remains unambiguous.
+  // The editor-facing Out mark is inclusive, so label the last selected frame
+  // instead of the exclusive boundary immediately after it.
+  const int64_t lowerBound = edit.inTimelineUs.value_or(0);
+  return std::max(
+      lowerBound,
+      *edit.outTimelineUs - std::max<int64_t>(1, edit.frameDurationUs));
 }
 
 int timelineCell(int64_t timelineUs, int64_t timelineDurationUs, int width) {
@@ -66,11 +104,6 @@ bool appendStatusPart(std::string* status, const std::string& part, int width) {
   if (separatorWidth != 0) *status += "  ";
   *status += part;
   return true;
-}
-
-int availableStatusPartWidth(const std::string& status, int width) {
-  const int separatorWidth = status.empty() ? 0 : 2;
-  return std::max(0, width - static_cast<int>(status.size()) - separatorWidth);
 }
 
 }  // namespace
@@ -145,13 +178,36 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
   }
 
   if (edit.active) {
-    const int available = availableStatusPartWidth(model.status, width);
-    appendStatusPart(
-        &model.status,
-        edit.hasUnexportedChanges
-            ? shortestFittingStatus({"EDIT MODE*", "EDIT*", "*"}, available)
-            : shortestFittingStatus({"EDIT MODE", "EDIT"}, available),
-        width);
+    std::vector<std::string> rangeParts;
+    if (edit.inTimelineUs) {
+      rangeParts.push_back(
+          "I " + formatTimecode(*edit.inTimelineUs, edit.frameDurationUs,
+                                  true));
+    }
+    if (edit.outTimelineUs) {
+      rangeParts.push_back(
+          "O " + formatTimecode(inclusiveOutDisplayUs(edit),
+                                  edit.frameDurationUs, true));
+    }
+    int rangeWidth = 0;
+    for (const std::string& part : rangeParts) {
+      if (rangeWidth != 0) rangeWidth += 2;
+      rangeWidth += static_cast<int>(part.size());
+    }
+    const int reservedModeWidth =
+        std::max(0, width - rangeWidth - (rangeWidth > 0 ? 2 : 0));
+    const auto fittingMode = [&](int available) {
+      return edit.hasUnexportedChanges
+                 ? shortestFittingStatus({"EDIT MODE*", "EDIT*", "*"},
+                                         available)
+                 : shortestFittingStatus({"EDIT MODE", "EDIT"}, available);
+    };
+    std::string mode = fittingMode(reservedModeWidth);
+    if (mode.empty()) mode = fittingMode(width);
+    appendStatusPart(&model.status, mode, width);
+    for (const std::string& part : rangeParts) {
+      appendStatusPart(&model.status, part, width);
+    }
   }
   if (exportRunning) {
     const int percentage = static_cast<int>(
@@ -172,18 +228,6 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
                                 edit.frameDurationUs) +
             " / " +
             formatTimecode(edit.timelineDurationUs, edit.frameDurationUs),
-        width);
-  }
-  if (edit.active && edit.inTimelineUs) {
-    appendStatusPart(
-        &model.status,
-        "IN " + formatTimecode(*edit.inTimelineUs, edit.frameDurationUs),
-        width);
-  }
-  if (edit.active && edit.outTimelineUs) {
-    appendStatusPart(
-        &model.status,
-        "OUT " + formatTimecode(*edit.outTimelineUs, edit.frameDurationUs),
         width);
   }
   if (edit.active && edit.clips.size() > 1) {
