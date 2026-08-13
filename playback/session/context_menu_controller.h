@@ -36,7 +36,7 @@ struct ContextMenuInput {
 };
 
 // Owns only popup presentation state. Edit decisions and command execution
-// stay with the edit controller and playback session respectively.
+// stay with the video-edit workspace.
 class ContextMenuController {
  public:
   bool visible() const { return visible_; }
