@@ -135,7 +135,7 @@ PlaybackOverlayState buildPlaybackOverlayState(
                         state.videoEdit.active ||
                         state.videoEditPrompt !=
                             playback_video_edit::Prompt::None ||
-                        state.videoEditExport.running();
+                        state.videoEditExport.visible();
 
   if (inputs.subtitleManager) {
     state.subtitleText = buildSubtitleText(*inputs.subtitleManager,
@@ -313,7 +313,7 @@ OverlayCellLayout layoutPlaybackOverlayCells(
   input.reservedRowsAboveProgress =
       (state.videoEdit.active ||
        state.videoEditPrompt != playback_video_edit::Prompt::None ||
-       state.videoEditExport.running())
+       state.videoEditExport.visible())
           ? 1
           : 0;
   input.controls = buildOverlayCellControlInputs(specs, hoverControlToken);
@@ -330,7 +330,7 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
   input.reservedRowsAboveProgress =
       (ui.videoEdit.active ||
        ui.videoEditPrompt != playback_video_edit::Prompt::None ||
-       ui.videoEditExport.running())
+       ui.videoEditExport.visible())
           ? 1
           : 0;
   input.controls.reserve(ui.controlButtons.size());
@@ -576,7 +576,7 @@ void renderVideoEditTimelineToTarget(
     const playback_video_edit::ExportProgress* editExport,
     playback_video_edit::Prompt editPrompt) {
   if ((!edit.active && editPrompt == playback_video_edit::Prompt::None &&
-       !(editExport && editExport->running())) ||
+       !(editExport && editExport->visible())) ||
       layout.progressBarY < 0 || layout.progressBarWidth <= 0 ||
       !target.rowVisible(layout.progressBarY)) {
     return;

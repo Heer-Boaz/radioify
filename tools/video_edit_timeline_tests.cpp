@@ -405,7 +405,7 @@ int main() {
   overlayEdit.outFrameTimelineUs = 3'966'667;
   overlayEdit.playheadTimelineUs = 4'000'000;
   playback_video_edit::ExportProgress overlayExport;
-  overlayExport.active = true;
+  overlayExport.status = playback_video_edit::ExportStatus::Running;
   overlayExport.fraction = 0.42;
   const playback_video_edit::OverlayModel overlayModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
@@ -512,9 +512,32 @@ int main() {
       playback_video_edit::buildOverlayModel(
           outOnlyOverlay, nullptr, Prompt::None, 64, 0.5);
   ok &= expect(outOnlyDurationModel.status.find("D 00:04:00") !=
-                   std::string::npos,
-               "an Out-only range duration must use the implicit program "
-               "start");
+                    std::string::npos,
+                "an Out-only range duration must use the implicit program "
+                "start");
+
+  playback_video_edit::ExportProgress failedExport;
+  failedExport.status = playback_video_edit::ExportStatus::Failed;
+  const playback_video_edit::OverlayModel failedExportModel =
+      playback_video_edit::buildOverlayModel(
+          playback_video_edit::EditSnapshot{}, &failedExport, Prompt::None,
+          20, 0.0);
+  const playback_video_edit::OverlayModel tinyFailedExportModel =
+      playback_video_edit::buildOverlayModel(
+          playback_video_edit::EditSnapshot{}, &failedExport, Prompt::None,
+          6, 0.0);
+  const playback_video_edit::OverlayModel failedExitModel =
+      playback_video_edit::buildOverlayModel(
+          playback_video_edit::EditSnapshot{}, &failedExport,
+          Prompt::LeavePlayback, 20, 0.0);
+  ok &= expect(failedExport.visible() && !failedExport.running() &&
+                   failedExport.failed() &&
+                   failedExportModel.status == "EXPORT FAILED" &&
+                   failedExportModel.cells.empty() &&
+                   tinyFailedExportModel.status == "FAILED" &&
+                   failedExitModel.status == "EXPORT FAILED",
+               "a failed current-revision export must remain compactly "
+               "visible, including while playback exit is pending");
 
   playback_video_edit::EditSnapshot retainedProgram;
   retainedProgram.hasEdits = true;
@@ -614,7 +637,8 @@ int main() {
   ok &= expect(!playingEditControls.empty() &&
                    playingEditControls.front().width == pausedControlWidth,
                "Play and Pause labels must reserve one stable toolbar slot");
-  editorControlState.videoEditExport.active = true;
+  editorControlState.videoEditExport.status =
+      playback_video_edit::ExportStatus::Running;
   const auto exportingEditControls =
       playback_overlay::buildOverlayControlSpecs(editorControlState, -1);
   ok &= expect(controlIds(exportingEditControls) == expectedEditControls,
@@ -635,7 +659,8 @@ int main() {
 
   playback_overlay::PlaybackOverlayState pendingExitControlState;
   pendingExitControlState.videoEditPrompt = Prompt::LeavePlayback;
-  pendingExitControlState.videoEditExport.active = true;
+  pendingExitControlState.videoEditExport.status =
+      playback_video_edit::ExportStatus::Running;
   const auto pendingExitControls = playback_overlay::buildOverlayControlSpecs(
       pendingExitControlState, -1);
   ok &= expect(!pendingExitControls.empty() &&
@@ -968,7 +993,7 @@ int main() {
   }
 
   playback_video_edit::ExportProgress runningExport;
-  runningExport.active = true;
+  runningExport.status = playback_video_edit::ExportStatus::Running;
   playbackMenu.refresh(cleanEdit, runningExport);
   ok &= expect(playbackMenu.open(
                    playback_session::ContextMenuSurface::Terminal, 0.25,
@@ -988,8 +1013,29 @@ int main() {
                    runningExportMenu.items.end(), [](const auto& item) {
                      return item.label == "Done and save";
                    }),
-               "a newer dirty revision must not be mislabeled as saved while "
-               "an older revision exports");
+                "a newer dirty revision must not be mislabeled as saved while "
+                "an older revision exports");
+
+  playbackMenu.dismiss();
+  playbackMenu.refresh(cleanEdit, failedExport);
+  ok &= expect(playbackMenu.open(
+                   playback_session::ContextMenuSurface::Terminal, 0.25,
+                   0.75),
+               "a failed current-revision export must remain actionable");
+  const auto failedExportMenu = playbackMenu.snapshotFor(
+      playback_session::ContextMenuSurface::Terminal);
+  ok &= expect(std::any_of(
+                   failedExportMenu.items.begin(), failedExportMenu.items.end(),
+                   [](const auto& item) {
+                     return item.label == "Retry export";
+                   }) &&
+                   std::none_of(
+                       failedExportMenu.items.begin(),
+                       failedExportMenu.items.end(), [](const auto& item) {
+                         return item.label == "Cancel export";
+                       }),
+               "a terminal export failure must offer retry rather than "
+               "pretending that a worker is still active");
 
   return ok ? 0 : 1;
 }

@@ -65,12 +65,22 @@ struct EditSnapshot {
 };
 
 // Presentation-only export state. Renderers must not depend on worker,
-// filesystem, encoder, or error-reporting types.
+// filesystem, encoder, or error-reporting types. A failed status represents
+// the current document revision only; stale job results are filtered by the
+// workspace before crossing this boundary.
+enum class ExportStatus : uint8_t {
+  Idle,
+  Running,
+  Failed,
+};
+
 struct ExportProgress {
-  bool active = false;
+  ExportStatus status = ExportStatus::Idle;
   double fraction = 0.0;
 
-  bool running() const { return active; }
+  bool running() const { return status == ExportStatus::Running; }
+  bool failed() const { return status == ExportStatus::Failed; }
+  bool visible() const { return status != ExportStatus::Idle; }
 };
 
 }  // namespace playback_video_edit

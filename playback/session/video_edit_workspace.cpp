@@ -76,8 +76,18 @@ struct VideoEditWorkspace::Impl {
   }
 
   playback_video_edit::ExportProgress exportProgressSnapshot() const {
-    const playback_video_edit::ExportSnapshot state = exporter.snapshot();
-    return {state.running(), state.progress};
+    const playback_video_edit::ExportSnapshot job = exporter.snapshot();
+    playback_video_edit::ExportProgress out;
+    out.fraction = job.progress;
+    if (job.running()) {
+      out.status = playback_video_edit::ExportStatus::Running;
+    } else if (job.state == playback_video_edit::ExportState::Failed &&
+               job.keptRanges == document.timeline().keptRanges()) {
+      // A terminal failure remains actionable only while its exact edit
+      // revision is still current. New edits must not inherit stale job state.
+      out.status = playback_video_edit::ExportStatus::Failed;
+    }
+    return out;
   }
 
   void finishEditing() {

@@ -132,8 +132,10 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
                                double timelineProgress) {
   OverlayModel model;
   const bool exportRunning = editExport && editExport->running();
+  const bool exportFailed = editExport && editExport->failed();
   if (width <= 0 ||
-      (!edit.active && prompt == Prompt::None && !exportRunning)) {
+      (!edit.active && prompt == Prompt::None && !exportRunning &&
+       !exportFailed)) {
     return model;
   }
   if (prompt == Prompt::LeaveEditMode) {
@@ -147,12 +149,16 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
     return model;
   }
   if (prompt == Prompt::LeavePlayback) {
-    model.status = exportRunning
-                       ? shortestFittingStatus(
-                             {"EXPORT RUNNING", "EXPORTING", "EXPORT"}, width)
-                       : shortestFittingStatus(
-                             {"UNEXPORTED EDITS", "UNEXPORTED", "EDIT*", "*"},
-                             width);
+    if (exportRunning) {
+      model.status = shortestFittingStatus(
+          {"EXPORT RUNNING", "EXPORTING", "EXPORT"}, width);
+    } else if (exportFailed) {
+      model.status =
+          shortestFittingStatus({"EXPORT FAILED", "FAILED", "!"}, width);
+    } else {
+      model.status = shortestFittingStatus(
+          {"UNEXPORTED EDITS", "UNEXPORTED", "EDIT*", "*"}, width);
+    }
     return model;
   }
   if (edit.active && edit.timelineDurationUs > 0) {
@@ -246,6 +252,11 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
           shortestFittingStatus({"EXPORTING", "EXPORT", "EXP"}, width),
           width);
     }
+  } else if (exportFailed) {
+    appendStatusPart(
+        &model.status,
+        shortestFittingStatus({"EXPORT FAILED", "FAILED", "!"}, width),
+        width);
   }
   if (edit.active && edit.playheadTimelineUs) {
     appendStatusPart(

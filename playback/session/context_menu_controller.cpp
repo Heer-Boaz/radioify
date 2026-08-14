@@ -66,8 +66,9 @@ void ContextMenuController::refresh(
   } else if (edit.hasEdits) {
     // Exporting establishes a clean revision; it does not consume the edit
     // document. The same revision may be exported again or discarded.
-    next.push_back({playback_video_edit::Command::Export,
-                    "Export edited copy"});
+    next.push_back(
+        {playback_video_edit::Command::Export,
+         editExport.failed() ? "Retry export" : "Export edited copy"});
     next.push_back({playback_video_edit::Command::RequestDiscard,
                     "Discard changes"});
   }

@@ -193,6 +193,8 @@ The concrete implementation plan lives in
 - Committed edits become the program playback immediately and remain active
   after leaving edit mode; reset or discard restores the unedited source
 - Ctrl+E: export edits to a new sibling `- edited.mp4` file (press again to cancel); the source is never overwritten
+- A failed export remains visible for that exact edit revision and can be
+  retried from the context menu; changing the edit never inherits stale job state
 - The playback context menu can resume, export, or discard an edit session;
   discarding always requires explicit confirmation
 - Leaving playback with unexported edits offers the explicit Export, Discard, and Stay actions; no edit is silently lost
