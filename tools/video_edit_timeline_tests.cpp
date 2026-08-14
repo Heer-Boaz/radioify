@@ -37,26 +37,21 @@ int main() {
                    FinishAction::Close,
                "Done on a clean revision must only close the edit tools");
   ok &= expect(playback_video_edit::finishAction(
-                   FinishContext{true, true, false, false}) ==
-                   FinishAction::ResolveSelection,
-               "Done must never guess whether an unapplied range means trim "
-               "or delete");
-  ok &= expect(playback_video_edit::finishAction(
-                   FinishContext{false, true, false, false}) ==
+                   FinishContext{true, false, false}) ==
                    FinishAction::StartExport,
                "Done must make an unexported revision durable before closing");
   ok &= expect(playback_video_edit::finishAction(
-                   FinishContext{false, true, true, true}) ==
+                   FinishContext{true, true, true}) ==
                    FinishAction::Close,
                "Done may close while the current revision is already being "
                "exported");
   ok &= expect(playback_video_edit::finishAction(
-                   FinishContext{false, true, false, true}) ==
+                   FinishContext{true, false, true}) ==
                    FinishAction::Close,
                "Done must not duplicate a completed export before its "
                "completion notification is consumed");
   ok &= expect(playback_video_edit::finishAction(
-                   FinishContext{false, true, true, false}) ==
+                   FinishContext{true, true, false}) ==
                    FinishAction::WaitForExport,
                "Done must not pretend an older in-flight export contains the "
                "current revision");
@@ -167,6 +162,18 @@ int main() {
                    !emptySelectionSnapshot.canTrim &&
                    !emptySelectionSnapshot.canRippleDelete,
                "an unmarked timeline must not advertise an edit operation");
+
+  Selection finishSelection;
+  finishSelection.markIn(document.timeline(), 1'000'000);
+  finishSelection.markOut(document.timeline(), 1'966'667, 2'000'000);
+  const auto finishSelectionSnapshot = playback_video_edit::buildSnapshot(
+      document, finishSelection, true);
+  ok &= expect(
+      !finishSelectionSnapshot.hasUnexportedChanges &&
+          playback_video_edit::finishAction(
+              FinishContext{finishSelectionSnapshot.hasUnexportedChanges,
+                            false, false}) == FinishAction::Close,
+      "an unapplied In/Out range must remain outside document completion");
 
   Selection inOnlySelection;
   inOnlySelection.markIn(document.timeline(), 2'000'000);
@@ -976,6 +983,13 @@ int main() {
                    }),
                "moving export off the monitor bar must keep cancellation "
                "available in the context menu");
+  ok &= expect(std::any_of(
+                   runningExportMenu.items.begin(),
+                   runningExportMenu.items.end(), [](const auto& item) {
+                     return item.label == "Done and save";
+                   }),
+               "a newer dirty revision must not be mislabeled as saved while "
+               "an older revision exports");
 
   return ok ? 0 : 1;
 }

@@ -29,15 +29,15 @@ enum class Command : uint8_t {
 // Finishing is a workflow boundary, not a synonym for closing the tools.
 // Radioify has no persistent project file, so an unexported revision must be
 // made durable before the editor can truthfully report that it is done.
+// Selection is intentionally absent: unapplied In/Out marks are transient UI
+// state, not document decisions that finishing may interpret or persist.
 enum class FinishAction : uint8_t {
   Close,
   StartExport,
-  ResolveSelection,
   WaitForExport,
 };
 
 struct FinishContext {
-  bool hasSelection = false;
   bool hasUnexportedChanges = false;
   bool exportRunning = false;
   // True only when an in-flight or successful output contains the exact
@@ -46,7 +46,6 @@ struct FinishContext {
 };
 
 constexpr FinishAction finishAction(const FinishContext& context) {
-  if (context.hasSelection) return FinishAction::ResolveSelection;
   if (!context.hasUnexportedChanges) return FinishAction::Close;
   if (context.exportCoversCurrentRevision) return FinishAction::Close;
   return context.exportRunning ? FinishAction::WaitForExport

@@ -170,15 +170,10 @@ struct VideoEditWorkspace::Impl {
          exportState.state == playback_video_edit::ExportState::Succeeded) &&
         exportState.keptRanges == document.timeline().keptRanges();
     switch (playback_video_edit::finishAction({
-        selection.hasMarks(),
         document.hasUnexportedChanges(),
         exportState.running(),
         exportCoversCurrentRevision,
     })) {
-      case playback_video_edit::FinishAction::ResolveSelection:
-        result.message =
-            "Apply Trim/Delete or press Esc to clear In/Out first";
-        return result;
       case playback_video_edit::FinishAction::WaitForExport:
         result.message =
             "An older edit is exporting; wait or cancel it before Done";
