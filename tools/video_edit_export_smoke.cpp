@@ -46,6 +46,8 @@ struct StreamSignature {
   int chromaWidthShift = 0;
   int chromaHeightShift = 0;
   uint64_t pixelFlags = 0;
+  AVRational frameRate{0, 1};
+  AVFieldOrder fieldOrder = AV_FIELD_UNKNOWN;
   AVRational sampleAspect{0, 1};
   AVColorRange colorRange = AVCOL_RANGE_UNSPECIFIED;
   AVColorPrimaries colorPrimaries = AVCOL_PRI_UNSPECIFIED;
@@ -106,7 +108,7 @@ bool inspectMedia(const std::filesystem::path& path, MediaSignature* signature,
   signature->streams.clear();
   signature->streams.reserve(format->nb_streams);
   for (unsigned index = 0; index < format->nb_streams; ++index) {
-    const AVStream* stream = format->streams[index];
+    AVStream* stream = format->streams[index];
     const AVCodecParameters* parameters = stream->codecpar;
     StreamSignature current;
     current.type = parameters->codec_type;
@@ -121,6 +123,8 @@ bool inspectMedia(const std::filesystem::path& path, MediaSignature* signature,
       current.width = parameters->width;
       current.height = parameters->height;
       current.sampleAspect = parameters->sample_aspect_ratio;
+      current.frameRate = av_guess_frame_rate(format, stream, nullptr);
+      current.fieldOrder = parameters->field_order;
       current.colorRange = parameters->color_range;
       current.colorPrimaries = parameters->color_primaries;
       current.colorTransfer = parameters->color_trc;
@@ -215,13 +219,20 @@ bool validateOutput(const MediaSignature& source,
           before.chromaWidthShift != after.chromaWidthShift ||
           before.chromaHeightShift != after.chromaHeightShift ||
           before.pixelFlags != after.pixelFlags ||
+          (before.frameRate.num > 0 && before.frameRate.den > 0 &&
+           (after.frameRate.num <= 0 || after.frameRate.den <= 0 ||
+            av_cmp_q(before.frameRate, after.frameRate) != 0)) ||
+          (before.fieldOrder != AV_FIELD_UNKNOWN &&
+           before.fieldOrder != after.fieldOrder) ||
           !sameAspect(before.sampleAspect, after.sampleAspect) ||
           before.colorRange != after.colorRange ||
           before.colorPrimaries != after.colorPrimaries ||
           before.colorTransfer != after.colorTransfer ||
           before.colorSpace != after.colorSpace ||
           before.chromaLocation != after.chromaLocation) {
-        if (error) *error = "video geometry, depth, or color changed";
+        if (error) {
+          *error = "video geometry, cadence, depth, or color changed";
+        }
         return false;
       }
     } else if (before.type == AVMEDIA_TYPE_AUDIO) {
@@ -296,7 +307,9 @@ std::set<std::filesystem::path> temporarySiblings(
 int wmain(int argc, wchar_t** argv) {
   if (argc < 4) {
     std::cerr << "usage: video_edit_export_smoke <input> <output> "
-                 "[--cancel|--expect-failure] <start_us:end_us> [range...]\n";
+                 "[--cancel|--expect-failure|--smooth-cut|"
+                 "--smooth-first-cut] "
+                 "<start_us:end_us> [range...]\n";
     return 2;
   }
   playback_video_edit::ExportRequest request;
@@ -309,7 +322,10 @@ int wmain(int argc, wchar_t** argv) {
   const std::wstring mode = argv[3];
   const bool cancelTest = mode == L"--cancel";
   const bool expectedFailure = mode == L"--expect-failure";
-  const int firstRange = cancelTest || expectedFailure ? 4 : 3;
+  const bool smoothCutTest = mode == L"--smooth-cut";
+  const bool mixedCutTest = mode == L"--smooth-first-cut";
+  const int firstRange =
+      cancelTest || expectedFailure || smoothCutTest || mixedCutTest ? 4 : 3;
   if (firstRange >= argc) {
     std::cerr << "at least one range is required\n";
     return 2;
@@ -320,9 +336,10 @@ int wmain(int argc, wchar_t** argv) {
       std::cerr << "invalid range\n";
       return 2;
     }
-    request.keptRanges.push_back(range);
+    request.decisions.keptRanges.push_back(range);
   }
-  if (!std::is_sorted(request.keptRanges.begin(), request.keptRanges.end(),
+  if (!std::is_sorted(request.decisions.keptRanges.begin(),
+                      request.decisions.keptRanges.end(),
                       [](const auto& lhs, const auto& rhs) {
                         return lhs.startUs < rhs.startUs;
                       })) {
@@ -330,7 +347,27 @@ int wmain(int argc, wchar_t** argv) {
     return 2;
   }
   int64_t expectedDurationUs = 0;
-  for (const playback_video_edit::SourceRange& range : request.keptRanges) {
+  request.decisions.cutTransitions.assign(
+      request.decisions.keptRanges.size() > 1
+          ? request.decisions.keptRanges.size() - 1
+          : 0,
+      playback_video_edit::CutTransition::hard());
+  if (smoothCutTest || mixedCutTest) {
+    if (request.decisions.cutTransitions.empty()) {
+      std::cerr << "smooth-cut modes require at least two ranges\n";
+      return 2;
+    }
+    if (smoothCutTest) {
+      std::fill(request.decisions.cutTransitions.begin(),
+                request.decisions.cutTransitions.end(),
+                playback_video_edit::CutTransition::smooth());
+    } else {
+      request.decisions.cutTransitions.front() =
+          playback_video_edit::CutTransition::smooth();
+    }
+  }
+  for (const playback_video_edit::SourceRange& range :
+       request.decisions.keptRanges) {
     expectedDurationUs += range.durationUs();
   }
   MediaSignature sourceSignature;

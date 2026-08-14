@@ -20,6 +20,7 @@ struct OverlayModel {
   std::optional<int> inCell;
   std::optional<int> outCell;
   std::vector<int> cutCells;
+  std::vector<int> smoothCutCells;
   std::string status;
 };
 

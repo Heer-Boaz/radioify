@@ -24,6 +24,7 @@ bool expect(bool condition, const char* message) {
 
 int main() {
   using playback_video_edit::Document;
+  using playback_video_edit::DecisionList;
   using playback_video_edit::ExitExportAction;
   using playback_video_edit::ExitContext;
   using playback_video_edit::Prompt;
@@ -33,6 +34,13 @@ int main() {
   using SequenceTimeline = playback_video_sequence::Timeline;
 
   bool ok = true;
+  ok &= expect(
+      playback_video_edit::CutTransition::smooth(1).durationFrames ==
+              playback_video_edit::kMinimumSmoothCutFrames &&
+          playback_video_edit::CutTransition::smooth(255).durationFrames ==
+              playback_video_edit::kMaximumSmoothCutFrames,
+      "smooth-cut duration must stay inside the editor's bounded handle "
+      "window");
   ok &= expect(playback_video_edit::exitExportAction(ExitContext{}) ==
                    ExitExportAction::None &&
                    playback_video_edit::exitExportAction(
@@ -62,7 +70,17 @@ int main() {
                                             {5'000'000, 10'000'000}},
                "middle removal must produce two source clips");
   ok &= expect(timeline.outputDurationUs() == 8'000'000,
-               "ripple deletion must close the sequence gap");
+                "ripple deletion must close the sequence gap");
+  ok &= expect(timeline.cutTransitions() ==
+                   std::vector<playback_video_edit::CutTransition>{
+                       playback_video_edit::CutTransition::hard()} &&
+                   timeline.nearestCutIndex(3'000'000, 1) ==
+                       std::optional<size_t>(0) &&
+                   timeline.setCutTransition(
+                       0, playback_video_edit::CutTransition::smooth()) &&
+                   timeline.cutTransitions()[0] ==
+                       playback_video_edit::CutTransition::smooth(),
+               "a cut must own its explicit hard/smooth transition");
   const auto sequence =
       SequenceTimeline::create(timeline.sourceDurationUs(),
                                timeline.keptRanges());
@@ -127,7 +145,10 @@ int main() {
   ok &= expect(timeline.keptRanges() ==
                    std::vector<SourceRange>{{1'000'000, 3'000'000},
                                             {5'000'000, 9'000'000}},
-               "outer trims must preserve all remaining source clips");
+                "outer trims must preserve all remaining source clips");
+  ok &= expect(timeline.cutTransitions()[0] ==
+                   playback_video_edit::CutTransition::smooth(),
+               "trimming clip edges must preserve an unchanged edit point");
   ok &= expect(!timeline.rippleDelete({0, 10'000'000}),
                "an edit must not publish an empty sequence");
 
@@ -274,8 +295,7 @@ int main() {
   ok &= expect(exported.rippleDelete({2'000'000, 3'000'000}) &&
                    exported.hasUnexportedChanges(),
                "a committed decision must make its document dirty");
-  const std::vector<SourceRange> exportedRevision =
-      exported.timeline().keptRanges();
+  const DecisionList exportedRevision = exported.timeline().decisionList();
   exported.markExported(exportedRevision);
   const auto exportedSnapshot = playback_video_edit::buildSnapshot(
       exported, Selection{}, true);
@@ -286,7 +306,7 @@ int main() {
   exportedDiscard.load(10'000'000);
   ok &= expect(exportedDiscard.rippleDelete({2'000'000, 3'000'000}),
                "exported discard setup must create an edit decision");
-  exportedDiscard.markExported(exportedDiscard.timeline().keptRanges());
+  exportedDiscard.markExported(exportedDiscard.timeline().decisionList());
   ok &= expect(!exportedDiscard.hasUnexportedChanges() &&
                    exportedDiscard.discardAllChanges() &&
                    exportedDiscard.timeline().isUnmodified(),
@@ -296,14 +316,14 @@ int main() {
                    exported.hasUnexportedChanges(),
                "editing after export must create a new dirty revision");
   ok &= expect(exported.undo() &&
-                   exported.timeline().keptRanges() == exportedRevision &&
+                    exported.timeline().decisionList() == exportedRevision &&
                    !exported.hasUnexportedChanges(),
                "undoing to the exported revision must restore clean state");
   ok &= expect(exported.redo() && exported.hasUnexportedChanges(),
                "redoing past the exported revision must restore dirty state");
 
-  const std::vector<SourceRange> secondExportedRevision =
-      exported.timeline().keptRanges();
+  const DecisionList secondExportedRevision =
+      exported.timeline().decisionList();
   exported.markExported(secondExportedRevision);
   ok &= expect(!exported.hasUnexportedChanges() && exported.undo() &&
                    !exported.hasUnexportedChanges() && exported.redo() &&
@@ -315,8 +335,8 @@ int main() {
   asynchronousExport.load(10'000'000);
   ok &= expect(asynchronousExport.rippleDelete({2'000'000, 3'000'000}),
                "asynchronous export setup must create its first revision");
-  const std::vector<SourceRange> queuedExportRevision =
-      asynchronousExport.timeline().keptRanges();
+  const DecisionList queuedExportRevision =
+      asynchronousExport.timeline().decisionList();
   ok &= expect(asynchronousExport.rippleDelete({6'000'000, 7'000'000}),
                "editing may continue while an older revision exports");
   asynchronousExport.markExported(queuedExportRevision);
@@ -325,6 +345,34 @@ int main() {
   ok &= expect(asynchronousExport.undo() &&
                    !asynchronousExport.hasUnexportedChanges(),
                "the exported asynchronous revision must remain the clean baseline");
+
+  Document transitionDocument;
+  transitionDocument.load(10'000'000);
+  ok &= expect(
+      transitionDocument.rippleDelete({3'000'000, 5'000'000}) &&
+          transitionDocument.setCutTransition(
+              0, playback_video_edit::CutTransition::smooth()),
+      "a smooth cut must commit as an undoable edit-point decision");
+  const DecisionList exportedTransitionRevision =
+      transitionDocument.timeline().decisionList();
+  transitionDocument.markExported(exportedTransitionRevision);
+  const auto selectedSmoothCutSnapshot = playback_video_edit::buildSnapshot(
+      transitionDocument, Selection{}, true, 3'000'000, 33'333);
+  ok &= expect(!transitionDocument.hasUnexportedChanges() &&
+                   selectedSmoothCutSnapshot.canToggleSmoothCut &&
+                   selectedSmoothCutSnapshot.selectedCutTransition ==
+                       std::optional<playback_video_edit::CutTransition>(
+                           playback_video_edit::CutTransition::smooth()),
+               "the playhead must select the transition owned by its cut");
+  ok &= expect(
+      transitionDocument.setCutTransition(
+          0, playback_video_edit::CutTransition::hard()) &&
+          transitionDocument.hasUnexportedChanges() &&
+          transitionDocument.undo() &&
+          transitionDocument.timeline().decisionList() ==
+              exportedTransitionRevision &&
+          !transitionDocument.hasUnexportedChanges(),
+      "transition changes must participate in dirty tracking and undo");
 
   ok &= expect(document.rippleDelete({1'000'000, 2'000'000}),
                "a new decision after undo must commit normally");
@@ -400,6 +448,8 @@ int main() {
   overlayEdit.keptRanges = {{0, 2'000'000}, {4'000'000, 10'000'000}};
   overlayEdit.clips = {{{0, 2'000'000}, 0},
                        {{4'000'000, 10'000'000}, 2'000'000}};
+  overlayEdit.cuts = {
+      {2'000'000, playback_video_edit::CutTransition::hard()}};
   overlayEdit.inTimelineUs = 2'000'000;
   overlayEdit.outTimelineUs = 4'000'000;
   overlayEdit.outFrameTimelineUs = 3'966'667;
@@ -422,8 +472,19 @@ int main() {
   ok &= expect(overlayModel.inCell == std::optional<int>(2) &&
                     overlayModel.outCell == std::optional<int>(5) &&
                     overlayModel.playheadCell == 5 &&
-                    overlayModel.cutCells == std::vector<int>{2},
+                    overlayModel.cutCells == std::vector<int>{2} &&
+                    overlayModel.smoothCutCells.empty(),
                 "marks, cuts, and playhead must share the program-time axis");
+  playback_video_edit::EditSnapshot smoothOverlay = overlayEdit;
+  smoothOverlay.cuts.front().transition =
+      playback_video_edit::CutTransition::smooth();
+  const playback_video_edit::OverlayModel smoothOverlayModel =
+      playback_video_edit::buildOverlayModel(
+          smoothOverlay, nullptr, Prompt::None, 10, 0.5);
+  ok &= expect(smoothOverlayModel.cutCells.empty() &&
+                   smoothOverlayModel.smoothCutCells == std::vector<int>{2},
+               "a smooth cut must remain distinct in the shared timeline "
+               "projection");
   ok &= expect(overlayModel.status == "EDIT MODE*" &&
                     overlayModel.status.size() <= 10,
                "narrow editor status must keep the active mode visible");
@@ -1025,6 +1086,9 @@ int main() {
   cleanEdit.outTimelineUs = 2'000'000;
   cleanEdit.canUndo = true;
   cleanEdit.canRedo = true;
+  cleanEdit.canToggleSmoothCut = true;
+  cleanEdit.selectedCutTransition =
+      playback_video_edit::CutTransition::hard();
   playbackMenu.refresh(cleanEdit, idleExport);
   const auto dirtyMenu = playbackMenu.snapshotFor(
       playback_session::ContextMenuSurface::Terminal);
@@ -1056,14 +1120,30 @@ int main() {
       dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
         return item.label == "Export edited copy";
       });
+  const auto smoothCutItem = std::find_if(
+      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
+        return item.label == "Smooth cut";
+      });
   ok &= expect(clearAllItem != dirtyMenu.items.end() &&
                    undoItem != dirtyMenu.items.end() &&
                    redoItem != dirtyMenu.items.end() &&
                    resetItem != dirtyMenu.items.end() &&
                    doneItem != dirtyMenu.items.end() &&
                    discardItem != dirtyMenu.items.end() &&
-                   exportItem != dirtyMenu.items.end(),
+                   exportItem != dirtyMenu.items.end() &&
+                   smoothCutItem != dirtyMenu.items.end(),
                "the context menu must own secondary edit commands");
+  cleanEdit.selectedCutTransition =
+      playback_video_edit::CutTransition::smooth();
+  playbackMenu.refresh(cleanEdit, idleExport);
+  const auto smoothEnabledMenu = playbackMenu.snapshotFor(
+      playback_session::ContextMenuSurface::Terminal);
+  ok &= expect(std::any_of(
+                   smoothEnabledMenu.items.begin(),
+                   smoothEnabledMenu.items.end(), [](const auto& item) {
+                     return item.label == "Hard cut";
+                   }),
+               "an enabled smooth transition must expose its inverse action");
   const auto staleStartExportToken =
       exportItem != dirtyMenu.items.end()
           ? std::optional<playback_overlay::ContextMenuItemToken>(

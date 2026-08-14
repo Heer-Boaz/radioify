@@ -210,12 +210,17 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
       model.outCell = timelineCell(*edit.outTimelineUs,
                                    edit.timelineDurationUs, width);
     }
-    model.cutCells.reserve(edit.clips.size() > 1 ? edit.clips.size() - 1 : 0);
-    for (size_t clip = 1; clip < edit.clips.size(); ++clip) {
-      const int cutCell = timelineCell(edit.clips[clip].timelineStartUs,
-                                       edit.timelineDurationUs, width);
-      if (model.cutCells.empty() || model.cutCells.back() != cutCell) {
-        model.cutCells.push_back(cutCell);
+    model.cutCells.reserve(edit.cuts.size());
+    model.smoothCutCells.reserve(edit.cuts.size());
+    for (const EditCutSnapshot& cut : edit.cuts) {
+      const int cutCell =
+          timelineCell(cut.timelineUs, edit.timelineDurationUs, width);
+      std::vector<int>& destination =
+          cut.transition.kind == CutTransitionKind::Smooth
+              ? model.smoothCutCells
+              : model.cutCells;
+      if (destination.empty() || destination.back() != cutCell) {
+        destination.push_back(cutCell);
       }
     }
   }
@@ -293,9 +298,9 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
                            edit.timecodeFrameDurationUs),
         width);
   }
-  if (edit.active && edit.clips.size() > 1) {
+  if (edit.active && !edit.cuts.empty()) {
     appendStatusPart(&model.status,
-                     "CUTS " + std::to_string(edit.clips.size() - 1), width);
+                     "CUTS " + std::to_string(edit.cuts.size()), width);
   }
   return model;
 }

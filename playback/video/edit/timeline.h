@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -18,6 +19,10 @@ class Timeline {
   int64_t sourceDurationUs() const { return sourceDurationUs_; }
   int64_t outputDurationUs() const;
   const std::vector<SourceRange>& keptRanges() const { return keptRanges_; }
+  const std::vector<CutTransition>& cutTransitions() const {
+    return cutTransitions_;
+  }
+  DecisionList decisionList() const { return {keptRanges_, cutTransitions_}; }
   bool isUnmodified() const;
 
   // Intersect the current sequence with keep. Returns false when the request
@@ -31,6 +36,10 @@ class Timeline {
   bool canRippleDelete(SourceRange remove) const;
   bool rippleDelete(SourceRange remove);
 
+  std::optional<size_t> nearestCutIndex(int64_t timelineUs,
+                                        int64_t toleranceUs) const;
+  bool setCutTransition(size_t cutIndex, CutTransition transition);
+
   bool containsSourceTime(int64_t sourceUs) const;
   std::optional<int64_t> nextKeptSourceTime(int64_t sourceUs) const;
   std::optional<int64_t> previousKeptSourceTime(int64_t sourceUs) const;
@@ -40,6 +49,7 @@ class Timeline {
 
   int64_t sourceDurationUs_ = 0;
   std::vector<SourceRange> keptRanges_;
+  std::vector<CutTransition> cutTransitions_;
 };
 
 // Persistent edit decisions and their history. UI activation, selection, and
@@ -49,6 +59,7 @@ class Document {
   void load(int64_t sourceDurationUs);
   bool trimTo(SourceRange keep);
   bool rippleDelete(SourceRange remove);
+  bool setCutTransition(size_t cutIndex, CutTransition transition);
   bool undo();
   bool redo();
   bool resetEdits();
@@ -59,7 +70,7 @@ class Document {
 
   // A completed export may represent an older revision when editing continued
   // in parallel. Keep that exact decision list as the clean baseline.
-  void markExported(const std::vector<SourceRange>& ranges);
+  void markExported(const DecisionList& decisions);
 
   const Timeline& timeline() const { return timeline_; }
 
@@ -71,7 +82,7 @@ class Document {
   std::vector<Timeline> redo_;
   // Successful outputs are immutable artifacts. Exporting a newer decision
   // list must not make an older, already exported revision dirty again.
-  std::vector<std::vector<SourceRange>> exportedRevisions_;
+  std::vector<DecisionList> exportedRevisions_;
 };
 
 // Ephemeral timeline-controller state. Marks never affect document dirty

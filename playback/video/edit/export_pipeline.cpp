@@ -40,6 +40,7 @@ extern "C" {
 #include "core/runtime_helpers.h"
 #include "playback/video/edit/export_codec_support.h"
 #include "playback/video/edit/export_metadata.h"
+#include "playback/video/edit/export_render_plan.h"
 
 namespace playback_video_edit::detail {
 namespace {
@@ -191,6 +192,7 @@ class ExportPipeline {
   bool tryAudioEncoder(EncodedStream* stream, const AVCodec* codec,
                        std::string* failure);
   bool createOutputStreams(std::string* error);
+  bool createVideoRenderPlan(std::string* error);
   bool createEncodedOutputStream(EncodedStream* stream, std::string* error);
   bool createCopiedOutputStream(CopiedStream* stream, std::string* error);
   bool copyChapters(std::string* error);
@@ -241,6 +243,7 @@ class ExportPipeline {
   StaticFrameMetadata staticMetadata_;
   MetadataFingerprint sourceMetadata_;
   MetadataFingerprint expectedMetadata_;
+  VideoRenderPlan videoRenderPlan_;
 };
 
 bool ExportPipeline::openInput(std::string* error) {
@@ -492,6 +495,15 @@ bool ExportPipeline::tryVideoEncoder(EncodedStream* stream,
   context->profile = source->profile;
   context->level = source->level;
   context->field_order = source->field_order;
+  if (source->field_order != AV_FIELD_UNKNOWN &&
+      source->field_order != AV_FIELD_PROGRESSIVE) {
+    // Advertising the field order alone is not an encoder capability request.
+    // The standard FFmpeg interlace flags make NVENC capability-check the
+    // hardware and let the candidate loop fall back to a software encoder
+    // when this GPU cannot retain field coding.
+    context->flags |=
+        AV_CODEC_FLAG_INTERLACED_DCT | AV_CODEC_FLAG_INTERLACED_ME;
+  }
   context->color_range = source->color_range;
   context->color_primaries = source->color_primaries;
   context->color_trc = source->color_trc;
@@ -610,8 +622,23 @@ bool ExportPipeline::openEncoder(EncodedStream* stream, std::string* error) {
                         av_get_media_type_string(stream->type) + " stream.");
     return false;
   }
+  std::vector<const AVCodec*> candidates = encoderCandidates(codecId);
+  const AVFieldOrder fieldOrder = stream->inputStream->codecpar->field_order;
+  if (stream->video() && fieldOrder != AV_FIELD_UNKNOWN &&
+      fieldOrder != AV_FIELD_PROGRESSIVE) {
+    // Field support varies by GPU generation and some hardware backends open
+    // successfully while emitting progressive/unspecified bitstreams. Prefer
+    // a software candidate whose field mode is driven by the AVCodec flags;
+    // final probing below remains the authority.
+    std::stable_partition(candidates.begin(), candidates.end(),
+                          [](const AVCodec* codec) {
+                            return codec &&
+                                   !(codec->capabilities &
+                                     AV_CODEC_CAP_HARDWARE);
+                          });
+  }
   std::string lastFailure;
-  for (const AVCodec* codec : encoderCandidates(codecId)) {
+  for (const AVCodec* codec : candidates) {
     const bool opened = stream->video()
                             ? tryVideoEncoder(stream, codec, &lastFailure)
                             : tryAudioEncoder(stream, codec, &lastFailure);
@@ -672,7 +699,8 @@ void ExportPipeline::captureStreamStaticMetadata() {
 bool ExportPipeline::probeStaticVideoMetadata(std::string* error) {
   if (selectedVideoIndex_ < 0 ||
       selectedVideoIndex_ >= static_cast<int>(encodedByInput_.size()) ||
-      !encodedByInput_[selectedVideoIndex_] || request_.keptRanges.empty()) {
+      !encodedByInput_[selectedVideoIndex_] ||
+      request_.decisions.keptRanges.empty()) {
     setError(error, "Could not inspect the retained video metadata.");
     return false;
   }
@@ -705,7 +733,7 @@ bool ExportPipeline::probeStaticVideoMetadata(std::string* error) {
     goto cleanup;
   }
   {
-    const SourceRange& firstRange = request_.keptRanges.front();
+    const SourceRange& firstRange = request_.decisions.keptRanges.front();
     const int64_t probeStartUs =
         format->start_time != AV_NOPTS_VALUE ? format->start_time : 0;
     if (firstRange.startUs > 0) {
@@ -904,10 +932,47 @@ bool ExportPipeline::createOutputStreams(std::string* error) {
   return true;
 }
 
+bool ExportPipeline::createVideoRenderPlan(std::string* error) {
+  if (selectedVideoIndex_ < 0 ||
+      selectedVideoIndex_ >= static_cast<int>(encodedByInput_.size())) {
+    setError(error, "The selected video stream is no longer available.");
+    return false;
+  }
+  EncodedStream* video = encodedByInput_[selectedVideoIndex_];
+  if (!video || !video->decoder) {
+    setError(error, "The selected video decoder is not ready.");
+    return false;
+  }
+  const bool hasSmoothCut = std::any_of(
+      request_.decisions.cutTransitions.begin(),
+      request_.decisions.cutTransitions.end(),
+      [](const CutTransition& transition) {
+        return transition.kind == CutTransitionKind::Smooth;
+      });
+  AVFieldOrder fieldOrder = video->inputStream->codecpar->field_order;
+  if (fieldOrder == AV_FIELD_UNKNOWN) {
+    fieldOrder = video->decoder->field_order;
+  }
+  if (hasSmoothCut && fieldOrder != AV_FIELD_UNKNOWN &&
+      fieldOrder != AV_FIELD_PROGRESSIVE) {
+    setError(error,
+             "Smooth cut cannot yet preserve interlaced field cadence; "
+             "use a hard cut for this source.");
+    return false;
+  }
+  AVRational sourceFrameRate =
+      av_guess_frame_rate(input_, video->inputStream, nullptr);
+  if (sourceFrameRate.num <= 0 || sourceFrameRate.den <= 0) {
+    sourceFrameRate = video->inputStream->codecpar->framerate;
+  }
+  return buildVideoRenderPlan(request_.decisions, sourceFrameRate,
+                              &videoRenderPlan_, error);
+}
+
 int64_t ExportPipeline::presentationStartForRange(size_t rangeIndex) const {
   int64_t start = 0;
   for (size_t index = 0; index < rangeIndex; ++index) {
-    start += request_.keptRanges[index].durationUs();
+    start += request_.decisions.keptRanges[index].durationUs();
   }
   return start;
 }
@@ -923,9 +988,10 @@ bool ExportPipeline::copyChapters(std::string* error) {
     const int64_t chapterEndUs =
         av_rescale_q(chapter->end, chapter->time_base, kMicrosecondTimeBase) -
         formatStartUs_;
-    for (size_t rangeIndex = 0; rangeIndex < request_.keptRanges.size();
+    for (size_t rangeIndex = 0;
+         rangeIndex < request_.decisions.keptRanges.size();
          ++rangeIndex) {
-      const SourceRange& range = request_.keptRanges[rangeIndex];
+      const SourceRange& range = request_.decisions.keptRanges[rangeIndex];
       const int64_t overlapStart = std::max(chapterStartUs, range.startUs);
       const int64_t overlapEnd = std::min(chapterEndUs, range.endUs);
       if (overlapEnd <= overlapStart) continue;
@@ -1004,76 +1070,68 @@ AVFilterInOut* makeEndpoint(const char* label, AVFilterContext* context) {
 
 std::string ExportPipeline::filterDescription(const EncodedStream& stream,
                                               std::string* error) const {
-  const std::string prefix = stream.video() ? "v" : "a";
+  if (stream.video()) {
+    return buildVideoFilterDescription(videoRenderPlan_,
+                                       stream.encoder->pix_fmt, error);
+  }
+  const std::string prefix = "a";
   std::string description =
-      "[src]" + std::string(stream.video() ? "split=" : "asplit=") +
-      std::to_string(request_.keptRanges.size());
-  for (size_t index = 0; index < request_.keptRanges.size(); ++index) {
+      "[src]asplit=" +
+      std::to_string(request_.decisions.keptRanges.size());
+  for (size_t index = 0; index < request_.decisions.keptRanges.size();
+       ++index) {
     description += "[" + prefix + std::to_string(index) + "]";
   }
   description += ";";
-  for (size_t index = 0; index < request_.keptRanges.size(); ++index) {
-    const SourceRange& range = request_.keptRanges[index];
+  for (size_t index = 0; index < request_.decisions.keptRanges.size();
+       ++index) {
+    const SourceRange& range = request_.decisions.keptRanges[index];
     const std::string number = std::to_string(index);
     description += "[" + prefix + number + "]";
-    if (stream.video()) {
-      description += "trim=start_pts=" + std::to_string(range.startUs) +
-                     ":end_pts=" + std::to_string(range.endUs) +
-                     ",setpts=PTS-STARTPTS[t" + number + "];";
-    } else {
-      const int inputRate = stream.decoder->sample_rate;
-      const int outputRate = stream.encoder->sample_rate;
-      const int64_t start = av_rescale_q(
-          range.startUs, kMicrosecondTimeBase, AVRational{1, inputRate});
-      const int64_t end = av_rescale_q(
-          range.endUs, kMicrosecondTimeBase, AVRational{1, inputRate});
-      const int64_t first = av_rescale_q(
-          range.startUs, kMicrosecondTimeBase, AVRational{1, outputRate});
-      description += "atrim=start_pts=" + std::to_string(start) +
-                     ":end_pts=" + std::to_string(end) + ",aresample=" +
-                     std::to_string(outputRate) + ":async=1:first_pts=" +
-                     std::to_string(first) + ",asetpts=PTS-" +
-                     std::to_string(first) + "[t" + number + "];";
-    }
+    const int inputRate = stream.decoder->sample_rate;
+    const int outputRate = stream.encoder->sample_rate;
+    const int64_t start = av_rescale_q(
+        range.startUs, kMicrosecondTimeBase, AVRational{1, inputRate});
+    const int64_t end = av_rescale_q(
+        range.endUs, kMicrosecondTimeBase, AVRational{1, inputRate});
+    const int64_t first = av_rescale_q(
+        range.startUs, kMicrosecondTimeBase, AVRational{1, outputRate});
+    description += "atrim=start_pts=" + std::to_string(start) +
+                   ":end_pts=" + std::to_string(end) + ",aresample=" +
+                   std::to_string(outputRate) + ":async=1:first_pts=" +
+                   std::to_string(first) + ",asetpts=PTS-" +
+                   std::to_string(first) + "[t" + number + "];";
   }
-  for (size_t index = 0; index < request_.keptRanges.size(); ++index) {
+  for (size_t index = 0; index < request_.decisions.keptRanges.size();
+       ++index) {
     description += "[t" + std::to_string(index) + "]";
   }
-  description += "concat=n=" + std::to_string(request_.keptRanges.size()) +
-                 (stream.video() ? ":v=1:a=0[cat];[cat]"
-                                 : ":v=0:a=1[cat];[cat]");
-  if (stream.video()) {
-    const char* pixelFormat = av_get_pix_fmt_name(stream.encoder->pix_fmt);
-    if (!pixelFormat) {
-      setError(error, "The preserving video pixel format is not named.");
-      return {};
-    }
-    description += "format=pix_fmts=" + std::string(pixelFormat) + "[out]";
-  } else {
-    const char* sampleFormat =
-        av_get_sample_fmt_name(stream.encoder->sample_fmt);
-    char layout[128]{};
-    av_channel_layout_describe(&stream.encoder->ch_layout, layout,
-                               sizeof(layout));
-    if (!sampleFormat || layout[0] == '\0') {
-      setError(error, "The preserving audio format cannot be described.");
-      return {};
-    }
-    const int64_t samples = av_rescale_q(
-        editedDurationUs(request_.keptRanges), kMicrosecondTimeBase,
-        AVRational{1, stream.encoder->sample_rate});
-    description += "apad=whole_len=" + std::to_string(samples) +
-                   ",atrim=end_sample=" + std::to_string(samples) +
-                   ",aformat=sample_fmts=" + sampleFormat +
-                   ":sample_rates=" +
-                   std::to_string(stream.encoder->sample_rate) +
-                   ":channel_layouts=" + layout;
-    if (stream.encoder->frame_size > 0) {
-      description += ",asetnsamples=n=" +
-                     std::to_string(stream.encoder->frame_size) + ":p=1";
-    }
-    description += "[out]";
+  description +=
+      "concat=n=" + std::to_string(request_.decisions.keptRanges.size()) +
+                 ":v=0:a=1[cat];[cat]";
+  const char* sampleFormat =
+      av_get_sample_fmt_name(stream.encoder->sample_fmt);
+  char layout[128]{};
+  av_channel_layout_describe(&stream.encoder->ch_layout, layout,
+                             sizeof(layout));
+  if (!sampleFormat || layout[0] == '\0') {
+    setError(error, "The preserving audio format cannot be described.");
+    return {};
   }
+  const int64_t samples = av_rescale_q(
+      editedDurationUs(request_.decisions.keptRanges), kMicrosecondTimeBase,
+      AVRational{1, stream.encoder->sample_rate});
+  description += "apad=whole_len=" + std::to_string(samples) +
+                 ",atrim=end_sample=" + std::to_string(samples) +
+                 ",aformat=sample_fmts=" + sampleFormat +
+                 ":sample_rates=" +
+                 std::to_string(stream.encoder->sample_rate) +
+                 ":channel_layouts=" + layout;
+  if (stream.encoder->frame_size > 0) {
+    description += ",asetnsamples=n=" +
+                   std::to_string(stream.encoder->frame_size) + ":p=1";
+  }
+  description += "[out]";
   return description;
 }
 
@@ -1180,8 +1238,9 @@ bool ExportPipeline::prepare(std::string* error) {
     return false;
   }
   captureStreamStaticMetadata();
-  if (!probeStaticVideoMetadata(error) || !allocateOutput(error) ||
-      !createOutputStreams(error) || !copyChapters(error)) {
+  if (!probeStaticVideoMetadata(error) || !createVideoRenderPlan(error) ||
+      !allocateOutput(error) || !createOutputStreams(error) ||
+      !copyChapters(error)) {
     return false;
   }
   for (const auto& stream : encoded_) {
@@ -1227,7 +1286,7 @@ bool ExportPipeline::submitFrame(
   const int64_t ptsUs = relativeFramePtsUs(*stream, frame);
   if (stream->video()) {
     staticMetadata_.capture(frame);
-    if (frameFallsInRanges(ptsUs, request_.keptRanges)) {
+    if (frameFallsInRanges(ptsUs, request_.decisions.keptRanges)) {
       sourceMetadata_.observe(frame);
     }
     frame->pts = ptsUs;
@@ -1444,9 +1503,10 @@ bool ExportPipeline::copyPacket(const CopiedStream& stream,
   const int64_t sourceEndUs =
       sourceDurationUs > 0 ? sourceStartUs + sourceDurationUs
                            : sourceStartUs + 1;
-  for (size_t rangeIndex = 0; rangeIndex < request_.keptRanges.size();
+  for (size_t rangeIndex = 0;
+       rangeIndex < request_.decisions.keptRanges.size();
        ++rangeIndex) {
-    const SourceRange& range = request_.keptRanges[rangeIndex];
+    const SourceRange& range = request_.decisions.keptRanges[rangeIndex];
     const int64_t overlapStart = std::max(sourceStartUs, range.startUs);
     const int64_t overlapEnd = std::min(sourceEndUs, range.endUs);
     if (overlapEnd <= overlapStart) continue;
@@ -1665,11 +1725,23 @@ bool ExportPipeline::validate(std::string* error) {
       }
       const AVPixelFormat actualPixelFormat =
           static_cast<AVPixelFormat>(actual->format);
+      AVRational sourceFrameRate =
+          av_guess_frame_rate(input_, stream->inputStream, nullptr);
+      if (sourceFrameRate.num <= 0 || sourceFrameRate.den <= 0) {
+        sourceFrameRate = stream->encoder->framerate;
+      }
+      AVRational actualFrameRate = av_guess_frame_rate(
+          probe, probe->streams[outputIndex], nullptr);
       if (source->width != actual->width || source->height != actual->height ||
           (actualPixelFormat != AV_PIX_FMT_NONE &&
            !samePixelGeometry(sourcePixelFormat, actualPixelFormat)) ||
           !sameDisplayAspect(source->sample_aspect_ratio,
                              actual->sample_aspect_ratio) ||
+          (sourceFrameRate.num > 0 && sourceFrameRate.den > 0 &&
+           (actualFrameRate.num <= 0 || actualFrameRate.den <= 0 ||
+            av_cmp_q(sourceFrameRate, actualFrameRate) != 0)) ||
+          (source->field_order != AV_FIELD_UNKNOWN &&
+           source->field_order != actual->field_order) ||
           source->color_range != actual->color_range ||
           source->color_primaries != actual->color_primaries ||
           source->color_trc != actual->color_trc ||
@@ -1677,8 +1749,8 @@ bool ExportPipeline::validate(std::string* error) {
           source->chroma_location != actual->chroma_location) {
         avformat_close_input(&probe);
         setError(error,
-                 "Video geometry, bit depth, or HDR color signalling changed; "
-                 "the completed file was rejected.");
+                 "Video geometry, frame cadence, bit depth, or HDR color "
+                 "signalling changed; the completed file was rejected.");
         return false;
       }
     } else {
@@ -1740,7 +1812,8 @@ bool ExportPipeline::validate(std::string* error) {
       return false;
     }
   }
-  const int64_t expectedDuration = editedDurationUs(request_.keptRanges);
+  const int64_t expectedDuration =
+      editedDurationUs(request_.decisions.keptRanges);
   const int64_t durationDifference =
       probe->duration >= expectedDuration ? probe->duration - expectedDuration
                                           : expectedDuration - probe->duration;
@@ -1794,7 +1867,8 @@ PipelineResult runExportPipeline(
     const std::function<void(double)>& reportProgress) {
   PipelineResult result;
   if (request.sourcePath.empty() || request.destinationPath.empty() ||
-      !validRanges(request.keptRanges)) {
+      !validRanges(request.decisions.keptRanges) ||
+      !request.decisions.hasValidShape()) {
     result.error = "The export request is incomplete.";
     return result;
   }
@@ -1820,7 +1894,7 @@ PipelineResult runExportPipeline(
     return result;
   }
   result.videoEncoder = pipeline.videoEncoderName();
-  const int64_t progressEndUs = request.keptRanges.back().endUs;
+  const int64_t progressEndUs = request.decisions.keptRanges.back().endUs;
   const auto progress = [&](int64_t sourceUs) {
     if (!reportProgress || progressEndUs <= 0) return;
     reportProgress(std::clamp(static_cast<double>(sourceUs) /

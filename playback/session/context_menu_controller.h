@@ -33,6 +33,10 @@ struct ContextMenuInput {
   double y = 0.0;
   int selectionDelta = 0;
   std::optional<playback_overlay::ContextMenuItemToken> item;
+  // Present only when the menu was opened on the program progress bar.
+  // This lets the editor select an edit point without moving the playhead.
+  std::optional<int64_t> timelineUs;
+  int64_t timelineToleranceUs = 0;
 };
 
 // Owns only popup presentation state. Edit decisions and command execution

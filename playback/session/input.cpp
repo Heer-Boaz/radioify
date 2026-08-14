@@ -602,18 +602,6 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
       windowEvent && mouse.hasPixelPosition ? mouse.pixelX : mouse.pos.X;
   const double pointerY =
       windowEvent && mouse.hasPixelPosition ? mouse.pixelY : mouse.pos.Y;
-  if (rightPressed && mouse.eventFlags == 0 &&
-      editPrompt == playback_video_edit::Prompt::None) {
-    playback_session::ContextMenuInput request;
-    request.kind = playback_session::ContextMenuInputKind::Open;
-    request.surface =
-        windowEvent ? playback_session::ContextMenuSurface::VideoWindow
-                    : playback_session::ContextMenuSurface::Terminal;
-    request.x = pointerX;
-    request.y = pointerY;
-    if (dispatchContextMenuInput(signals, request)) return;
-  }
-
   if (isBackMousePressed(mouse)) {
     if (signals.contextMenuVisible && signals.contextMenuVisible()) {
       playback_session::ContextMenuInput request;
@@ -652,6 +640,26 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   const auto& boundaryHit = interactionHit.editBoundary;
   const auto& controlHit = interactionHit.control;
   const auto& contextMenuItemHit = interactionHit.contextMenuItem;
+  if (rightPressed && mouse.eventFlags == 0 &&
+      editPrompt == playback_video_edit::Prompt::None) {
+    playback_session::ContextMenuInput request;
+    request.kind = playback_session::ContextMenuInputKind::Open;
+    request.surface =
+        windowEvent ? playback_session::ContextMenuSurface::VideoWindow
+                    : playback_session::ContextMenuSurface::Terminal;
+    request.x = pointerX;
+    request.y = pointerY;
+    if (progressHit) {
+      request.timelineUs =
+          playbackTimelineTargetForRatio(view, progressHit->ratio);
+      const int64_t durationUs = view.player->durationUs();
+      if (durationUs > 0) {
+        request.timelineToleranceUs = std::max<int64_t>(
+            1, durationUs / std::max(1, progressHit->units - 1));
+      }
+    }
+    if (dispatchContextMenuInput(signals, request)) return;
+  }
   if (signals.contextMenuVisible && signals.contextMenuVisible()) {
     playback_session::ContextMenuInput request;
     request.surface =

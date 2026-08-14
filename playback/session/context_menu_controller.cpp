@@ -50,6 +50,12 @@ void ContextMenuController::refresh(
       next.push_back({playback_video_edit::Command::ClearInAndOut,
                       "Clear In and Out"});
     }
+    if (edit.canToggleSmoothCut && edit.selectedCutTransition) {
+      const bool smooth = edit.selectedCutTransition->kind ==
+                          playback_video_edit::CutTransitionKind::Smooth;
+      next.push_back({playback_video_edit::Command::ToggleSmoothCut,
+                      smooth ? "Hard cut" : "Smooth cut"});
+    }
     if (edit.canUndo) {
       next.push_back({playback_video_edit::Command::Undo, "Undo"});
     }

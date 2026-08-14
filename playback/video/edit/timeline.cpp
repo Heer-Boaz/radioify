@@ -1,6 +1,7 @@
 #include "playback/video/edit/timeline.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 #include <utility>
 
@@ -31,6 +32,7 @@ Timeline::Timeline(int64_t sourceDurationUs) { reset(sourceDurationUs); }
 void Timeline::reset(int64_t sourceDurationUs) {
   sourceDurationUs_ = std::max<int64_t>(0, sourceDurationUs);
   keptRanges_.clear();
+  cutTransitions_.clear();
   if (sourceDurationUs_ > 0) {
     keptRanges_.push_back(SourceRange{0, sourceDurationUs_});
   }
@@ -46,11 +48,13 @@ int64_t Timeline::outputDurationUs() const {
 
 bool Timeline::isUnmodified() const {
   if (sourceDurationUs_ <= 0) return keptRanges_.empty();
-  return keptRanges_.size() == 1 &&
+  return cutTransitions_.empty() && keptRanges_.size() == 1 &&
          keptRanges_.front() == SourceRange{0, sourceDurationUs_};
 }
 
 bool Timeline::replaceRanges(std::vector<SourceRange> ranges) {
+  const std::vector<SourceRange> previousRanges = keptRanges_;
+  const std::vector<CutTransition> previousTransitions = cutTransitions_;
   std::vector<SourceRange> normalized;
   normalized.reserve(ranges.size());
   for (SourceRange range : ranges) {
@@ -65,7 +69,22 @@ bool Timeline::replaceRanges(std::vector<SourceRange> ranges) {
     }
   }
   if (normalized.empty()) return false;
+  std::vector<CutTransition> transitions(
+      normalized.size() > 1 ? normalized.size() - 1 : 0,
+      CutTransition::hard());
+  for (size_t next = 0; next < transitions.size(); ++next) {
+    for (size_t previous = 0; previous < previousTransitions.size();
+         ++previous) {
+      if (previousRanges[previous].endUs == normalized[next].endUs &&
+          previousRanges[previous + 1].startUs ==
+              normalized[next + 1].startUs) {
+        transitions[next] = previousTransitions[previous];
+        break;
+      }
+    }
+  }
   keptRanges_ = std::move(normalized);
+  cutTransitions_ = std::move(transitions);
   return true;
 }
 
@@ -139,6 +158,35 @@ bool Timeline::rippleDelete(SourceRange remove) {
   }
   if (next.empty() || next == keptRanges_) return false;
   return replaceRanges(std::move(next));
+}
+
+std::optional<size_t> Timeline::nearestCutIndex(int64_t timelineUs,
+                                                int64_t toleranceUs) const {
+  if (cutTransitions_.empty() || toleranceUs < 0) return std::nullopt;
+  timelineUs = std::clamp(timelineUs, int64_t{0}, outputDurationUs());
+  int64_t cutUs = 0;
+  std::optional<size_t> nearest;
+  int64_t nearestDistance = (std::numeric_limits<int64_t>::max)();
+  for (size_t index = 0; index < cutTransitions_.size(); ++index) {
+    cutUs = saturatingAdd(cutUs, keptRanges_[index].durationUs());
+    const int64_t distance = std::llabs(timelineUs - cutUs);
+    if (distance <= toleranceUs && distance < nearestDistance) {
+      nearest = index;
+      nearestDistance = distance;
+    }
+  }
+  return nearest;
+}
+
+bool Timeline::setCutTransition(size_t cutIndex,
+                                CutTransition transition) {
+  if (cutIndex >= cutTransitions_.size()) return false;
+  transition = transition.kind == CutTransitionKind::Smooth
+                   ? CutTransition::smooth(transition.durationFrames)
+                   : CutTransition::hard();
+  if (cutTransitions_[cutIndex] == transition) return false;
+  cutTransitions_[cutIndex] = transition;
+  return true;
 }
 
 bool Timeline::containsSourceTime(int64_t sourceUs) const {
@@ -305,7 +353,7 @@ std::optional<SourceRange> Selection::trimRange(
 }
 
 bool Document::commit(Timeline next) {
-  if (next.keptRanges() == timeline_.keptRanges()) return false;
+  if (next.decisionList() == timeline_.decisionList()) return false;
   undo_.push_back(timeline_);
   timeline_ = std::move(next);
   redo_.clear();
@@ -320,6 +368,13 @@ bool Document::trimTo(SourceRange keep) {
 bool Document::rippleDelete(SourceRange remove) {
   Timeline next = timeline_;
   return next.rippleDelete(remove) && commit(std::move(next));
+}
+
+bool Document::setCutTransition(size_t cutIndex,
+                                CutTransition transition) {
+  Timeline next = timeline_;
+  return next.setCutTransition(cutIndex, transition) &&
+         commit(std::move(next));
 }
 
 bool Document::undo() {
@@ -347,13 +402,14 @@ bool Document::resetEdits() {
 bool Document::hasUnexportedChanges() const {
   if (timeline_.isUnmodified()) return false;
   return std::find(exportedRevisions_.begin(), exportedRevisions_.end(),
-                   timeline_.keptRanges()) == exportedRevisions_.end();
+                   timeline_.decisionList()) == exportedRevisions_.end();
 }
 
-void Document::markExported(const std::vector<SourceRange>& ranges) {
-  if (std::find(exportedRevisions_.begin(), exportedRevisions_.end(), ranges) ==
-      exportedRevisions_.end()) {
-    exportedRevisions_.push_back(ranges);
+void Document::markExported(const DecisionList& decisions) {
+  if (!decisions.hasValidShape()) return;
+  if (std::find(exportedRevisions_.begin(), exportedRevisions_.end(),
+                decisions) == exportedRevisions_.end()) {
+    exportedRevisions_.push_back(decisions);
   }
 }
 
@@ -390,6 +446,26 @@ EditSnapshot buildSnapshot(const Document& document,
   for (const playback_video_sequence::Clip& clip : sequence->clips()) {
     out.clips.push_back(EditClipSnapshot{clip.source,
                                          clip.presentationStartUs});
+  }
+  out.cuts.reserve(timeline.cutTransitions().size());
+  for (size_t cut = 0; cut < timeline.cutTransitions().size(); ++cut) {
+    out.cuts.push_back(
+        EditCutSnapshot{sequence->clips()[cut].presentationEndUs(),
+                        timeline.cutTransitions()[cut]});
+  }
+  if (active && playheadTimelineUs && !out.cuts.empty()) {
+    const int64_t frameDurationUs =
+        std::max<int64_t>(1, timecodeFrameDurationUs);
+    const int64_t toleranceUs = std::max<int64_t>(
+        50'000,
+        frameDurationUs <= (std::numeric_limits<int64_t>::max)() / 2
+            ? frameDurationUs * 2
+            : frameDurationUs);
+    if (const auto selected = timeline.nearestCutIndex(
+            *playheadTimelineUs, toleranceUs)) {
+      out.selectedCutTransition = timeline.cutTransitions()[*selected];
+      out.canToggleSmoothCut = true;
+    }
   }
   if (out.inSourceUs) {
     const auto point = sequence->pointForSource(

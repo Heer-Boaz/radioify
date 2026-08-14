@@ -4,11 +4,9 @@
 #include <optional>
 #include <vector>
 
-#include "playback/video/sequence.h"
+#include "playback/video/edit/decision_list.h"
 
 namespace playback_video_edit {
-
-using playback_video_sequence::SourceRange;
 
 enum class EditBoundary : uint8_t {
   In,
@@ -33,6 +31,11 @@ struct EditClipSnapshot {
   }
 };
 
+struct EditCutSnapshot {
+  int64_t timelineUs = 0;
+  CutTransition transition;
+};
+
 // Immutable value state consumed by both ASCII and framebuffer renderers.
 // All fields carrying "timeline" time use the edited program timeline. Source
 // time is kept explicit and is never used as the seek-bar coordinate system.
@@ -46,6 +49,7 @@ struct EditSnapshot {
   bool canTrim = false;
   bool canUndo = false;
   bool canRedo = false;
+  bool canToggleSmoothCut = false;
   int64_t sourceDurationUs = 0;
   int64_t timelineDurationUs = 0;
   // Stable sequence timebase for display. This is deliberately not the
@@ -53,6 +57,8 @@ struct EditSnapshot {
   int64_t timecodeFrameDurationUs = 0;
   std::vector<SourceRange> keptRanges;
   std::vector<EditClipSnapshot> clips;
+  std::vector<EditCutSnapshot> cuts;
+  std::optional<CutTransition> selectedCutTransition;
   std::optional<int64_t> inSourceUs;
   std::optional<int64_t> outSourceUs;
   std::optional<int64_t> inTimelineUs;

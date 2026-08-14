@@ -20,6 +20,7 @@ enum class Command : uint8_t {
   ClearInAndOut,
   RippleDelete,
   Trim,
+  ToggleSmoothCut,
   Undo,
   Redo,
   Reset,

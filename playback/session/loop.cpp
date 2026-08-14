@@ -487,6 +487,15 @@ struct PlaybackLoopRunner::Impl {
         if (videoEditPrompt() != playback_video_edit::Prompt::None) {
           return false;
         }
+        if (videoEditWorkspace.active()) {
+          if (request.timelineUs) {
+            videoEditWorkspace.selectCutAt(
+                *request.timelineUs, request.timelineToleranceUs);
+          } else {
+            videoEditWorkspace.clearCutSelection();
+          }
+          syncVideoEditPresentation(false);
+        }
         const int width =
             request.surface == playback_session::ContextMenuSurface::Terminal
                 ? screen.width()

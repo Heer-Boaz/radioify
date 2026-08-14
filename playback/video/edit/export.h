@@ -4,9 +4,8 @@
 #include <filesystem>
 #include <memory>
 #include <string>
-#include <vector>
 
-#include "playback/video/edit/view.h"
+#include "playback/video/edit/decision_list.h"
 
 namespace playback_video_edit {
 
@@ -21,7 +20,7 @@ enum class ExportState : uint8_t {
 struct ExportRequest {
   std::filesystem::path sourcePath;
   std::filesystem::path destinationPath;
-  std::vector<SourceRange> keptRanges;
+  DecisionList decisions;
   // The edited program uses the video stream the user was viewing. Every
   // source audio/subtitle stream is retained; track selection must never act
   // as an implicit export-time deletion policy.
@@ -33,7 +32,7 @@ struct ExportSnapshot {
   double progress = 0.0;
   std::filesystem::path destinationPath;
   // Exact edit decision list owned by this asynchronous job.
-  std::vector<SourceRange> keptRanges;
+  DecisionList decisions;
   std::string videoEncoder;
   std::string error;
 

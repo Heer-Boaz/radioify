@@ -1,6 +1,7 @@
 #include "playback/session/video_edit_workspace.h"
 
 #include <algorithm>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -20,7 +21,13 @@ struct CommandContext {
   int64_t positionUs = 0;
   int64_t sourcePositionUs = 0;
   int64_t frameDurationUs = 1;
+  int64_t sequenceFrameDurationUs = 1;
   int videoStreamIndex = -1;
+};
+
+struct SelectedCut {
+  int64_t outgoingEndUs = 0;
+  int64_t incomingStartUs = 0;
 };
 
 }  // namespace
@@ -40,6 +47,7 @@ struct VideoEditWorkspace::Impl {
   playback_video_timeline_preview::Provider& timelinePreviewProvider;
   playback_video_edit::Document document;
   playback_video_edit::Selection selection;
+  std::optional<SelectedCut> selectedCut;
   bool active = false;
   playback_video_edit::Prompt prompt = playback_video_edit::Prompt::None;
   playback_video_edit::Exporter exporter;
@@ -56,8 +64,24 @@ struct VideoEditWorkspace::Impl {
         std::max<int64_t>(0, context.sourceDurationUs));
     context.frameDurationUs =
         std::max<int64_t>(1, timeline.frameDurationUs);
+    context.sequenceFrameDurationUs = std::max<int64_t>(
+        1, timeline.nominalFrameDurationUs > 0
+               ? timeline.nominalFrameDurationUs
+               : timeline.frameDurationUs);
     context.videoStreamIndex = player.videoStreamIndex();
     return context;
+  }
+
+  std::optional<size_t> resolvedSelectedCutIndex() const {
+    if (!selectedCut) return std::nullopt;
+    const auto& ranges = document.timeline().keptRanges();
+    for (size_t index = 0; index + 1 < ranges.size(); ++index) {
+      if (ranges[index].endUs == selectedCut->outgoingEndUs &&
+          ranges[index + 1].startUs == selectedCut->incomingStartUs) {
+        return index;
+      }
+    }
+    return std::nullopt;
   }
 
   playback_video_edit::EditSnapshot editSnapshot() const {
@@ -68,9 +92,18 @@ struct VideoEditWorkspace::Impl {
       playheadTimelineUs = timeline.positionUs;
       timecodeFrameDurationUs = timeline.nominalFrameDurationUs;
     }
-    return playback_video_edit::buildSnapshot(
-        document, selection, active, playheadTimelineUs,
-        timecodeFrameDurationUs);
+    playback_video_edit::EditSnapshot snapshot =
+        playback_video_edit::buildSnapshot(
+            document, selection, active, playheadTimelineUs,
+            timecodeFrameDurationUs);
+    if (active) {
+      if (const auto cut = resolvedSelectedCutIndex()) {
+        snapshot.selectedCutTransition =
+            document.timeline().cutTransitions()[*cut];
+        snapshot.canToggleSmoothCut = true;
+      }
+    }
+    return snapshot;
   }
 
   playback_video_edit::ExportProgress exportProgressSnapshot() const {
@@ -80,9 +113,9 @@ struct VideoEditWorkspace::Impl {
     if (job.running()) {
       out.status = playback_video_edit::ExportStatus::Running;
       out.targetsCurrentRevision =
-          job.keptRanges == document.timeline().keptRanges();
+          job.decisions == document.timeline().decisionList();
     } else if (job.state == playback_video_edit::ExportState::Failed &&
-               job.keptRanges == document.timeline().keptRanges()) {
+               job.decisions == document.timeline().decisionList()) {
       // A terminal failure remains actionable only while its exact edit
       // revision is still current. New edits must not inherit stale job state.
       out.status = playback_video_edit::ExportStatus::Failed;
@@ -94,6 +127,7 @@ struct VideoEditWorkspace::Impl {
     prompt = playback_video_edit::Prompt::None;
     active = false;
     selection.clear();
+    selectedCut.reset();
   }
 
   void updateTimelinePreview(
@@ -111,6 +145,19 @@ struct VideoEditWorkspace::Impl {
     const auto point = sequence->pointForSource(sourceUs, bias);
     return point ? std::optional<int64_t>(point->presentationUs)
                  : std::nullopt;
+  }
+
+  std::optional<size_t> selectedCutIndex(
+      const CommandContext& context) const {
+    if (const auto selected = resolvedSelectedCutIndex()) return selected;
+    const int64_t frameDurationUs = context.sequenceFrameDurationUs;
+    const int64_t toleranceUs = std::max<int64_t>(
+        50'000,
+        frameDurationUs <= (std::numeric_limits<int64_t>::max)() / 2
+            ? frameDurationUs * 2
+            : frameDurationUs);
+    return document.timeline().nearestCutIndex(context.positionUs,
+                                               toleranceUs);
   }
 
   bool syncDocumentPreview(int64_t positionUs) {
@@ -140,9 +187,9 @@ struct VideoEditWorkspace::Impl {
     const bool completedCurrentRevision =
         document.hasUnexportedChanges() &&
         previous.state == playback_video_edit::ExportState::Succeeded &&
-        previous.keptRanges == document.timeline().keptRanges();
+        previous.decisions == document.timeline().decisionList();
     if (previous.state == playback_video_edit::ExportState::Succeeded) {
-      document.markExported(previous.keptRanges);
+      document.markExported(previous.decisions);
     }
     if (completedCurrentRevision) {
       exporter.consumeChanged();
@@ -170,7 +217,7 @@ struct VideoEditWorkspace::Impl {
     playback_video_edit::ExportRequest request;
     request.sourcePath = sourcePath;
     request.destinationPath = destination;
-    request.keptRanges = timeline.keptRanges();
+    request.decisions = timeline.decisionList();
     request.videoStreamIndex = context.videoStreamIndex;
     if (!exporter.start(std::move(request))) {
       result.message = "Could not start edit export";
@@ -236,7 +283,7 @@ playback_video_edit::ExitContext VideoEditWorkspace::exitContext() const {
       impl_->document.hasUnexportedChanges(),
       job.running(),
       job.running() &&
-          job.keptRanges == impl_->document.timeline().keptRanges(),
+          job.decisions == impl_->document.timeline().decisionList(),
   };
 }
 
@@ -263,6 +310,8 @@ VideoEditActionResult VideoEditWorkspace::execute(
   result.handled = true;
 
   const CommandContext context = impl_->commandContext();
+  const std::vector<playback_video_edit::SourceRange> previousRanges =
+      impl_->document.timeline().keptRanges();
   bool timelineChanged = false;
   // History and reset retain the current program coordinate. Edit operations
   // below override this only when they define a new review point.
@@ -275,6 +324,7 @@ VideoEditActionResult VideoEditWorkspace::execute(
       } else if (context.sourceDurationUs > 0) {
         impl_->document.load(context.sourceDurationUs);
         impl_->selection.clear();
+        impl_->selectedCut.reset();
         impl_->active = true;
         impl_->prompt = playback_video_edit::Prompt::None;
         result.message = "Video editor opened";
@@ -382,6 +432,23 @@ VideoEditActionResult VideoEditWorkspace::execute(
         result.message = "Set an In or Out point first";
       }
       break;
+    case playback_video_edit::Command::ToggleSmoothCut:
+      if (const auto cut = impl_->selectedCutIndex(context)) {
+        const playback_video_edit::CutTransition current =
+            impl_->document.timeline().cutTransitions()[*cut];
+        const bool enable =
+            current.kind != playback_video_edit::CutTransitionKind::Smooth;
+        timelineChanged = impl_->document.setCutTransition(
+            *cut, enable ? playback_video_edit::CutTransition::smooth()
+                         : playback_video_edit::CutTransition::hard());
+        result.message = timelineChanged
+                             ? (enable ? "Smooth cut set (4f)"
+                                       : "Hard cut restored")
+                             : "Cut transition is unchanged";
+      } else {
+        result.message = "Move the playhead to a cut first";
+      }
+      break;
     case playback_video_edit::Command::Undo:
       timelineChanged = impl_->document.undo();
       result.message = timelineChanged ? "Edit undone" : "Nothing to undo";
@@ -405,8 +472,12 @@ VideoEditActionResult VideoEditWorkspace::execute(
 
   bool projectionAccepted = true;
   if (timelineChanged) {
-    impl_->selection.clear();
-    projectionAccepted = impl_->syncDocumentPreview(nextPositionUs);
+    const bool playbackSequenceChanged =
+        previousRanges != impl_->document.timeline().keptRanges();
+    if (playbackSequenceChanged) {
+      impl_->selection.clear();
+      projectionAccepted = impl_->syncDocumentPreview(nextPositionUs);
+    }
   }
 
   if (!projectionAccepted) {
@@ -458,7 +529,7 @@ VideoEditPollResult VideoEditWorkspace::poll() {
   }
   switch (state.state) {
     case playback_video_edit::ExportState::Succeeded:
-      impl_->document.markExported(state.keptRanges);
+      impl_->document.markExported(state.decisions);
       result.completion = VideoEditExportCompletion::Succeeded;
       result.message =
           "Exported " + toUtf8String(state.destinationPath.filename());
@@ -475,6 +546,25 @@ VideoEditPollResult VideoEditWorkspace::poll() {
       break;
   }
   return result;
+}
+
+bool VideoEditWorkspace::selectCutAt(int64_t timelineUs,
+                                     int64_t toleranceUs) {
+  if (!impl_ || !impl_->active) return false;
+  const auto cut = impl_->document.timeline().nearestCutIndex(
+      timelineUs, std::max<int64_t>(0, toleranceUs));
+  if (!cut) {
+    impl_->selectedCut.reset();
+    return false;
+  }
+  const auto& ranges = impl_->document.timeline().keptRanges();
+  impl_->selectedCut = SelectedCut{ranges[*cut].endUs,
+                                  ranges[*cut + 1].startUs};
+  return true;
+}
+
+void VideoEditWorkspace::clearCutSelection() {
+  if (impl_) impl_->selectedCut.reset();
 }
 
 void VideoEditWorkspace::stop() {

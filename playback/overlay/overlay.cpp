@@ -604,7 +604,11 @@ void renderVideoEditTimelineToTarget(
   }
 
   for (const int cutCell : model.cutCells) {
-    target.writeChar(layout.progressBarX + cutCell, layout.progressBarY, L'┆',
+    target.writeChar(layout.progressBarX + cutCell, layout.progressBarY, L'|',
+                     cutStyle);
+  }
+  for (const int cutCell : model.smoothCutCells) {
+    target.writeChar(layout.progressBarX + cutCell, layout.progressBarY, L'~',
                      cutStyle);
   }
 
