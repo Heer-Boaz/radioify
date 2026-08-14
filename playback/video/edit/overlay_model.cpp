@@ -1,5 +1,7 @@
 #include "playback/video/edit/overlay_model.h"
 
+#include "playback/video/edit/command.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -149,15 +151,29 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
     return model;
   }
   if (prompt == Prompt::LeavePlayback) {
-    if (exportRunning) {
-      model.status = shortestFittingStatus(
-          {"EXPORT RUNNING", "EXPORTING", "EXPORT"}, width);
-    } else if (exportFailed) {
+    const ExitExportAction exportAction = exitExportAction({
+        edit.hasUnexportedChanges,
+        exportRunning,
+        editExport && editExport->targetsCurrentRevision,
+    });
+    if (exportFailed) {
       model.status =
           shortestFittingStatus({"EXPORT FAILED", "FAILED", "!"}, width);
-    } else {
+    } else if (exportAction == ExitExportAction::CancelBlockingExport) {
+      model.status = shortestFittingStatus(
+          {"UNEXPORTED EDITS  EXPORT BUSY", "UNEXPORTED  BUSY",
+           "UNEXPORTED", "EDIT*", "*"},
+          width);
+    } else if (exportRunning) {
+      model.status = shortestFittingStatus(
+          {"EXPORT RUNNING", "EXPORTING", "EXPORT"}, width);
+    } else if (edit.hasUnexportedChanges) {
       model.status = shortestFittingStatus(
           {"UNEXPORTED EDITS", "UNEXPORTED", "EDIT*", "*"}, width);
+    } else {
+      model.status =
+          shortestFittingStatus({"LEAVE PLAYBACK?", "LEAVE?", "EXIT?"},
+                                width);
     }
     return model;
   }
@@ -204,6 +220,13 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
     }
   }
 
+  if (exportFailed) {
+    appendStatusPart(
+        &model.status,
+        shortestFittingStatus({"EXPORT FAILED", "FAILED", "!"}, width),
+        width);
+  }
+
   if (edit.active) {
     std::vector<std::string> rangeParts;
     if (edit.inTimelineUs) {
@@ -244,19 +267,21 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
   if (exportRunning) {
     const int percentage = static_cast<int>(
         std::lround(std::clamp(editExport->fraction, 0.0, 1.0) * 100.0));
+    const bool targetsCurrent = editExport->targetsCurrentRevision;
+    const std::string progressLabel =
+        std::string(targetsCurrent ? "EXPORT " : "OLDER EXPORT ") +
+        std::to_string(percentage) + "%";
     if (!appendStatusPart(&model.status,
-                          "EXPORT " + std::to_string(percentage) + "%",
-                          width)) {
+                          progressLabel, width)) {
       appendStatusPart(
           &model.status,
-          shortestFittingStatus({"EXPORTING", "EXPORT", "EXP"}, width),
+          targetsCurrent
+              ? shortestFittingStatus({"EXPORTING", "EXPORT", "EXP"},
+                                      width)
+              : shortestFittingStatus(
+                    {"OLDER EXPORT", "OLD EXPORT", "EXPORT"}, width),
           width);
     }
-  } else if (exportFailed) {
-    appendStatusPart(
-        &model.status,
-        shortestFittingStatus({"EXPORT FAILED", "FAILED", "!"}, width),
-        width);
   }
   if (edit.active && edit.playheadTimelineUs) {
     appendStatusPart(

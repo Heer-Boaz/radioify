@@ -69,7 +69,9 @@ class Document {
   Timeline timeline_;
   std::vector<Timeline> undo_;
   std::vector<Timeline> redo_;
-  std::optional<std::vector<SourceRange>> exportedRanges_;
+  // Successful outputs are immutable artifacts. Exporting a newer decision
+  // list must not make an older, already exported revision dirty again.
+  std::vector<std::vector<SourceRange>> exportedRevisions_;
 };
 
 // Ephemeral timeline-controller state. Marks never affect document dirty

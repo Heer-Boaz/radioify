@@ -47,6 +47,7 @@ struct OverlayControlActions {
   std::function<bool()> subtitles;
   std::function<bool()> pictureInPicture;
   std::function<bool(playback_video_edit::Command)> videoEdit;
+  std::function<bool()> waitForVideoEditExport;
   std::function<bool()> confirmPendingExit;
   std::function<bool()> cancelPendingExit;
 };

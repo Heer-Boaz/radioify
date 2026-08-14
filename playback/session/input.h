@@ -62,6 +62,7 @@ struct PlaybackInputSignals {
   std::function<bool()> videoEditorActive;
   std::function<playback_video_edit::Prompt()> videoEditPrompt;
   std::function<bool(playback_video_edit::Command)> executeVideoEditCommand;
+  std::function<bool()> waitForVideoEditExportAndExit;
   std::function<bool()> navigateBack;
   std::function<bool()> confirmPendingExit;
   std::function<bool()> cancelPendingExit;

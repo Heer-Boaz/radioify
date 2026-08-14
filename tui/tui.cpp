@@ -1455,7 +1455,9 @@ int runTui(Options o) {
             case playback_overlay::OverlayControlId::EditRippleDelete:
             case playback_overlay::OverlayControlId::EditTrim:
             case playback_overlay::OverlayControlId::EditDone:
-            case playback_overlay::OverlayControlId::EditExport:
+            case playback_overlay::OverlayControlId::EditStartExport:
+            case playback_overlay::OverlayControlId::EditWaitForExport:
+            case playback_overlay::OverlayControlId::EditCancelExport:
             case playback_overlay::OverlayControlId::EditConfirmPrompt:
             case playback_overlay::OverlayControlId::EditCancelPrompt:
             case playback_overlay::OverlayControlId::EditDiscardAndExit:

@@ -56,7 +56,7 @@ videoEditCommandForShortcut(PlaybackShortcutAction action) {
     case PlaybackShortcutAction::ResetVideoEdits:
       return Command::Reset;
     case PlaybackShortcutAction::ExportVideoEdits:
-      return Command::Export;
+      return Command::StartExport;
     default:
       return std::nullopt;
   }

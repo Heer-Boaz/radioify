@@ -115,8 +115,12 @@ bool dispatchOverlayControl(OverlayControlId id,
       return invokeEdit(playback_video_edit::Command::Trim);
     case OverlayControlId::EditDone:
       return invokeEdit(playback_video_edit::Command::Finish);
-    case OverlayControlId::EditExport:
-      return invokeEdit(playback_video_edit::Command::Export);
+    case OverlayControlId::EditStartExport:
+      return invokeEdit(playback_video_edit::Command::StartExport);
+    case OverlayControlId::EditWaitForExport:
+      return invoke(actions.waitForVideoEditExport);
+    case OverlayControlId::EditCancelExport:
+      return invokeEdit(playback_video_edit::Command::CancelExport);
     case OverlayControlId::EditConfirmPrompt:
       return invokeEdit(playback_video_edit::Command::ConfirmPrompt);
     case OverlayControlId::EditCancelPrompt:
@@ -156,10 +160,31 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
   }
 
   if (state.videoEditPrompt == playback_video_edit::Prompt::LeavePlayback) {
-    add(OverlayControlId::EditExport,
-        state.videoEditExport.running() ? "Wait" : "Export",
-        state.videoEditExport.running());
-    add(OverlayControlId::EditDiscardAndExit, "Discard", false);
+    const playback_video_edit::ExitExportAction exportAction =
+        playback_video_edit::exitExportAction({
+            state.videoEdit.hasUnexportedChanges,
+            state.videoEditExport.running(),
+            state.videoEditExport.targetsCurrentRevision,
+        });
+    switch (exportAction) {
+      case playback_video_edit::ExitExportAction::ExportCurrent:
+        add(OverlayControlId::EditStartExport,
+            state.videoEditExport.failed() ? "Retry" : "Export", false);
+        break;
+      case playback_video_edit::ExitExportAction::WaitForExport:
+        add(OverlayControlId::EditWaitForExport, "Wait", true);
+        break;
+      case playback_video_edit::ExitExportAction::CancelBlockingExport:
+        break;
+      case playback_video_edit::ExitExportAction::None:
+        break;
+    }
+    if (state.videoEditExport.running()) {
+      add(OverlayControlId::EditCancelExport, "Cancel export", false);
+    } else {
+      add(OverlayControlId::EditDiscardAndExit,
+          state.videoEdit.hasUnexportedChanges ? "Discard" : "Exit", false);
+    }
     add(OverlayControlId::EditCancelExit, "Stay", true);
     finish();
     return out;

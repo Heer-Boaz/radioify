@@ -62,20 +62,21 @@ void ContextMenuController::refresh(
     }
   }
   if (editExport.running()) {
-    next.push_back({playback_video_edit::Command::Export, "Cancel export"});
+    next.push_back(
+        {playback_video_edit::Command::CancelExport,
+         editExport.targetsCurrentRevision ? "Cancel export"
+                                           : "Cancel older export"});
   } else if (edit.hasEdits) {
     // Exporting establishes a clean revision; it does not consume the edit
     // document. The same revision may be exported again or discarded.
     next.push_back(
-        {playback_video_edit::Command::Export,
+        {playback_video_edit::Command::StartExport,
          editExport.failed() ? "Retry export" : "Export edited copy"});
     next.push_back({playback_video_edit::Command::RequestDiscard,
                     "Discard changes"});
   }
   if (edit.active) {
-    next.push_back(
-        {playback_video_edit::Command::Finish,
-         edit.hasUnexportedChanges ? "Done and save" : "Done editing"});
+    next.push_back({playback_video_edit::Command::Finish, "Done editing"});
   }
   items_ = std::move(next);
   if (items_.empty()) {

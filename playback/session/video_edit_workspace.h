@@ -21,6 +21,20 @@ struct VideoEditActionResult {
   bool handled = false;
   bool pausePlayback = false;
   std::string message;
+  bool exportStarted = false;
+};
+
+enum class VideoEditExportCompletion : uint8_t {
+  None,
+  Succeeded,
+  Failed,
+  Cancelled,
+};
+
+struct VideoEditPollResult {
+  bool changed = false;
+  VideoEditExportCompletion completion = VideoEditExportCompletion::None;
+  std::string message;
 };
 
 // Application-level owner of a video's edit document, export job, and live
@@ -41,12 +55,13 @@ class VideoEditWorkspace {
   playback_video_edit::Prompt prompt() const;
   bool hasUnexportedChanges() const;
   bool needsExitConfirmation() const;
+  playback_video_edit::ExitContext exitContext() const;
 
   VideoEditActionResult execute(playback_video_edit::Command command);
   VideoEditActionResult navigateBack();
   bool moveBoundary(playback_video_edit::EditBoundary boundary,
                     int64_t timelineUs);
-  bool poll(std::string* message);
+  VideoEditPollResult poll();
   void stop();
 
   playback_video_edit::EditSnapshot edit() const;

@@ -86,7 +86,7 @@ struct PlaybackLoopRunner::Impl {
     PlaybackTransportCommand transport = PlaybackTransportCommand::Next;
     std::vector<std::filesystem::path> files;
     std::optional<OpenFilesRequest> deferredOpenRequest;
-    bool exitAfterExport = false;
+    bool exitWhenExportSucceeds = false;
     bool resumePlaybackOnCancel = false;
   };
 
@@ -289,7 +289,9 @@ struct PlaybackLoopRunner::Impl {
   }
 
   bool completePendingExit() {
-    if (!pendingExit) return false;
+    if (!pendingExit || videoEditWorkspace.exitContext().exportRunning) {
+      return false;
+    }
     PendingExit request = std::move(*pendingExit);
     pendingExit.reset();
     overlayControlHover.store(-1, std::memory_order_relaxed);
@@ -373,18 +375,20 @@ struct PlaybackLoopRunner::Impl {
   }
 
   void pollVideoEditExport() {
-    std::string message;
-    if (!videoEditWorkspace.poll(&message)) return;
+    const playback_session::VideoEditPollResult result =
+        videoEditWorkspace.poll();
+    if (!result.changed) return;
     overlayControlHover.store(-1, std::memory_order_relaxed);
     syncVideoEditPresentation();
-    if (!message.empty()) showEditMessage(message);
-    if (pendingExit && pendingExit->exitAfterExport &&
-        !videoEditWorkspace.exportProgress().running()) {
-      if (!videoEditWorkspace.hasUnexportedChanges()) {
+    if (!result.message.empty()) showEditMessage(result.message);
+    if (pendingExit && pendingExit->exitWhenExportSucceeds &&
+        result.completion !=
+            playback_session::VideoEditExportCompletion::None) {
+      pendingExit->exitWhenExportSucceeds = false;
+      if (result.completion ==
+              playback_session::VideoEditExportCompletion::Succeeded &&
+          !videoEditWorkspace.hasUnexportedChanges()) {
         completePendingExit();
-      } else {
-        pendingExit->exitAfterExport = false;
-        syncVideoEditPresentation();
       }
     }
   }
@@ -425,15 +429,12 @@ struct PlaybackLoopRunner::Impl {
   bool executeVideoEditCommand(playback_video_edit::Command command,
                                bool announce = true) {
     seekState.pendingVideoEditBoundaryCommit.reset();
-    const bool exportForPendingExit =
-        pendingExit && command == playback_video_edit::Command::Export;
-    if (exportForPendingExit &&
-        videoEditWorkspace.exportProgress().running()) {
-      pendingExit->exitAfterExport = true;
-      syncVideoEditPresentation();
-      showEditMessage("Will exit when export completes");
-      return true;
-    }
+    const bool startForPendingExit =
+        pendingExit &&
+        command == playback_video_edit::Command::StartExport &&
+        playback_video_edit::exitExportAction(
+            videoEditWorkspace.exitContext()) ==
+            playback_video_edit::ExitExportAction::ExportCurrent;
     const playback_session::VideoEditActionResult result =
         videoEditWorkspace.execute(command);
     if (result.pausePlayback) {
@@ -443,15 +444,37 @@ struct PlaybackLoopRunner::Impl {
     overlayControlHover.store(-1, std::memory_order_relaxed);
     std::string message = result.message;
     syncVideoEditPresentation();
-    if (exportForPendingExit &&
-        videoEditWorkspace.exportProgress().running()) {
-      pendingExit->exitAfterExport = true;
-      message = "Exporting; will exit when complete";
+    if (startForPendingExit) {
+      const playback_video_edit::ExitContext context =
+          videoEditWorkspace.exitContext();
+      if (result.exportStarted) {
+        pendingExit->exitWhenExportSucceeds = true;
+        message = "Exporting; will exit after success";
+      } else if (!context.hasUnexportedChanges && !context.exportRunning) {
+        return completePendingExit();
+      }
     }
     if (!message.empty() && (announce || !videoEditWorkspace.active())) {
       showEditMessage(message);
     }
     return result.handled;
+  }
+
+  bool waitForVideoEditExportAndExit() {
+    if (!pendingExit) return false;
+    const playback_video_edit::ExitExportAction action =
+        playback_video_edit::exitExportAction(
+            videoEditWorkspace.exitContext());
+    if (action != playback_video_edit::ExitExportAction::WaitForExport) {
+      return false;
+    }
+    // Arm the exact rendered intent before inspecting the worker again. A
+    // short export may reach a terminal state between the click and this UI
+    // turn; the next poll must still resolve that completion as Wait requested.
+    pendingExit->exitWhenExportSucceeds = true;
+    syncVideoEditPresentation();
+    showEditMessage("Will exit after export succeeds");
+    return true;
   }
 
   bool handleContextMenuInput(
@@ -563,6 +586,8 @@ struct PlaybackLoopRunner::Impl {
         [this](playback_video_edit::Command command) {
           return executeVideoEditCommand(command);
         };
+    inputSignals.waitForVideoEditExportAndExit =
+        [this]() { return waitForVideoEditExportAndExit(); };
     inputSignals.navigateBack = [this]() { return navigateBack(); };
     inputSignals.confirmPendingExit =
         [this]() { return completePendingExit(); };

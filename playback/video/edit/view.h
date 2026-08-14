@@ -77,6 +77,9 @@ enum class ExportStatus : uint8_t {
 struct ExportProgress {
   ExportStatus status = ExportStatus::Idle;
   double fraction = 0.0;
+  // A running encoder owns an immutable decision-list snapshot. This flag is
+  // true only when that snapshot is the document revision currently shown.
+  bool targetsCurrentRevision = false;
 
   bool running() const { return status == ExportStatus::Running; }
   bool failed() const { return status == ExportStatus::Failed; }

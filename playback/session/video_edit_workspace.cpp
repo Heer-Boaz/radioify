@@ -81,6 +81,8 @@ struct VideoEditWorkspace::Impl {
     out.fraction = job.progress;
     if (job.running()) {
       out.status = playback_video_edit::ExportStatus::Running;
+      out.targetsCurrentRevision =
+          job.keptRanges == document.timeline().keptRanges();
     } else if (job.state == playback_video_edit::ExportState::Failed &&
                job.keptRanges == document.timeline().keptRanges()) {
       // A terminal failure remains actionable only while its exact edit
@@ -129,6 +131,28 @@ struct VideoEditWorkspace::Impl {
   VideoEditActionResult startExport(const CommandContext& context) {
     VideoEditActionResult result;
     result.handled = true;
+    const playback_video_edit::ExportSnapshot previous = exporter.snapshot();
+    if (previous.running()) {
+      result.message = "An export is already running";
+      return result;
+    }
+    // Starting a new worker replaces its terminal snapshot. Reconcile a
+    // successful predecessor first so its immutable output revision can never
+    // be lost in the UI-thread/worker completion race.
+    const bool completedCurrentRevision =
+        document.hasUnexportedChanges() &&
+        previous.state == playback_video_edit::ExportState::Succeeded &&
+        previous.keptRanges == document.timeline().keptRanges();
+    if (previous.state == playback_video_edit::ExportState::Succeeded) {
+      document.markExported(previous.keptRanges);
+    }
+    if (completedCurrentRevision) {
+      exporter.consumeChanged();
+      observedExportState = playback_video_edit::ExportState::Succeeded;
+      result.message =
+          "Exported " + toUtf8String(previous.destinationPath.filename());
+      return result;
+    }
     const playback_video_edit::Timeline& timeline = document.timeline();
     if (timeline.sourceDurationUs() <= 0) {
       result.message = "Open the video editor and make an edit first";
@@ -156,57 +180,27 @@ struct VideoEditWorkspace::Impl {
       return result;
     }
     observedExportState = playback_video_edit::ExportState::Running;
+    result.exportStarted = true;
     result.message =
         "Export started: " +
         toUtf8String(destination.filename());
     return result;
   }
 
-  VideoEditActionResult toggleExport(const CommandContext& context) {
+  VideoEditActionResult cancelExport() {
     if (exporter.snapshot().running()) {
       exporter.cancel();
       return {true, false, "Cancelling edit export..."};
     }
-    return startExport(context);
+    return {true, false, "No export is running"};
   }
 
-  VideoEditActionResult finish(const CommandContext& context) {
-    VideoEditActionResult result;
-    result.handled = true;
-    const playback_video_edit::ExportSnapshot exportState =
-        exporter.snapshot();
-    const bool exportCoversCurrentRevision =
-        (exportState.running() ||
-         exportState.state == playback_video_edit::ExportState::Succeeded) &&
-        exportState.keptRanges == document.timeline().keptRanges();
-    switch (playback_video_edit::finishAction({
-        document.hasUnexportedChanges(),
-        exportState.running(),
-        exportCoversCurrentRevision,
-    })) {
-      case playback_video_edit::FinishAction::WaitForExport:
-        result.message =
-            "An older edit is exporting; wait or cancel it before Done";
-        return result;
-      case playback_video_edit::FinishAction::StartExport:
-        result = startExport(context);
-        if (const playback_video_edit::ExportSnapshot started =
-                exporter.snapshot();
-            started.running()) {
-          finishEditing();
-          result.message =
-              "Editing done; exporting " +
-              toUtf8String(started.destinationPath.filename());
-        }
-        return result;
-      case playback_video_edit::FinishAction::Close:
-        finishEditing();
-        result.message = exportState.running()
-                             ? "Editing done; export continues"
-                             : "Editing done";
-        return result;
-    }
-    return result;
+  VideoEditActionResult finish() {
+    const bool changesRetained = document.hasUnexportedChanges();
+    finishEditing();
+    return {true, false,
+            changesRetained ? "Edit mode closed; changes retained"
+                            : "Edit mode closed"};
   }
 };
 
@@ -233,9 +227,20 @@ bool VideoEditWorkspace::hasUnexportedChanges() const {
 }
 
 bool VideoEditWorkspace::needsExitConfirmation() const {
-  return impl_ &&
-         (impl_->document.hasUnexportedChanges() ||
-          impl_->exporter.snapshot().running());
+  if (!impl_) return false;
+  const playback_video_edit::ExitContext context = exitContext();
+  return context.hasUnexportedChanges || context.exportRunning;
+}
+
+playback_video_edit::ExitContext VideoEditWorkspace::exitContext() const {
+  if (!impl_) return {};
+  const playback_video_edit::ExportSnapshot job = impl_->exporter.snapshot();
+  return {
+      impl_->document.hasUnexportedChanges(),
+      job.running(),
+      job.running() &&
+          job.keptRanges == impl_->document.timeline().keptRanges(),
+  };
 }
 
 VideoEditActionResult VideoEditWorkspace::execute(
@@ -252,7 +257,8 @@ VideoEditActionResult VideoEditWorkspace::execute(
     return result;
   }
   if (!impl_->active && command != playback_video_edit::Command::Open &&
-      command != playback_video_edit::Command::Export &&
+      command != playback_video_edit::Command::StartExport &&
+      command != playback_video_edit::Command::CancelExport &&
       command != playback_video_edit::Command::RequestDiscard &&
       !promptCommand) {
     return result;
@@ -280,7 +286,7 @@ VideoEditActionResult VideoEditWorkspace::execute(
       }
       break;
     case playback_video_edit::Command::Finish:
-      result = impl_->finish(context);
+      result = impl_->finish();
       break;
     case playback_video_edit::Command::RequestClose:
       impl_->prompt = playback_video_edit::Prompt::LeaveEditMode;
@@ -392,8 +398,11 @@ VideoEditActionResult VideoEditWorkspace::execute(
       result.message = timelineChanged ? "All edits reset"
                                        : "Sequence is unchanged";
       break;
-    case playback_video_edit::Command::Export:
-      result = impl_->toggleExport(context);
+    case playback_video_edit::Command::StartExport:
+      result = impl_->startExport(context);
+      break;
+    case playback_video_edit::Command::CancelExport:
+      result = impl_->cancelExport();
       break;
   }
 
@@ -438,36 +447,37 @@ bool VideoEditWorkspace::moveBoundary(
   return true;
 }
 
-bool VideoEditWorkspace::poll(std::string* message) {
-  if (!impl_ || !impl_->exporter.consumeChanged()) return false;
+VideoEditPollResult VideoEditWorkspace::poll() {
+  VideoEditPollResult result;
+  if (!impl_ || !impl_->exporter.consumeChanged()) return result;
+  result.changed = true;
   const playback_video_edit::ExportState previous =
       impl_->observedExportState;
   const playback_video_edit::ExportSnapshot state = impl_->exporter.snapshot();
   impl_->observedExportState = state.state;
-  if (message) message->clear();
   if (previous != playback_video_edit::ExportState::Running ||
       !state.finished()) {
-    return true;
+    return result;
   }
   switch (state.state) {
     case playback_video_edit::ExportState::Succeeded:
       impl_->document.markExported(state.keptRanges);
-      if (message) {
-        *message =
-            "Exported " +
-            toUtf8String(state.destinationPath.filename());
-      }
+      result.completion = VideoEditExportCompletion::Succeeded;
+      result.message =
+          "Exported " + toUtf8String(state.destinationPath.filename());
       break;
     case playback_video_edit::ExportState::Failed:
-      if (message) *message = "Export failed: " + state.error;
+      result.completion = VideoEditExportCompletion::Failed;
+      result.message = "Export failed: " + state.error;
       break;
     case playback_video_edit::ExportState::Cancelled:
-      if (message) *message = "Export cancelled";
+      result.completion = VideoEditExportCompletion::Cancelled;
+      result.message = "Export cancelled";
       break;
     default:
       break;
   }
-  return true;
+  return result;
 }
 
 void VideoEditWorkspace::stop() {

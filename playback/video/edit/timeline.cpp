@@ -170,7 +170,7 @@ void Document::load(int64_t sourceDurationUs) {
     timeline_.reset(duration);
     undo_.clear();
     redo_.clear();
-    exportedRanges_.reset();
+    exportedRevisions_.clear();
   }
 }
 
@@ -345,12 +345,16 @@ bool Document::resetEdits() {
 }
 
 bool Document::hasUnexportedChanges() const {
-  return !timeline_.isUnmodified() &&
-         (!exportedRanges_ || timeline_.keptRanges() != *exportedRanges_);
+  if (timeline_.isUnmodified()) return false;
+  return std::find(exportedRevisions_.begin(), exportedRevisions_.end(),
+                   timeline_.keptRanges()) == exportedRevisions_.end();
 }
 
 void Document::markExported(const std::vector<SourceRange>& ranges) {
-  exportedRanges_ = ranges;
+  if (std::find(exportedRevisions_.begin(), exportedRevisions_.end(), ranges) ==
+      exportedRevisions_.end()) {
+    exportedRevisions_.push_back(ranges);
+  }
 }
 
 EditSnapshot buildSnapshot(const Document& document,

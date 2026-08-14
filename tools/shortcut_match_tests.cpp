@@ -240,7 +240,7 @@ int main() {
                        playback_video_edit::Command::ClearInAndOut &&
                    videoEditCommandForShortcut(
                        PlaybackShortcutAction::ExportVideoEdits) ==
-                       playback_video_edit::Command::Export &&
+                       playback_video_edit::Command::StartExport &&
                    !videoEditCommandForShortcut(
                        PlaybackShortcutAction::TogglePause),
                "shortcut translation must terminate at semantic edit commands");
@@ -311,7 +311,8 @@ int main() {
                    makeKey('E', 0, kPlaybackShortcutCtrlMask),
                    videoPlaybackContexts)
                    .value() == PlaybackShortcutAction::ExportVideoEdits,
-                "Ctrl+E must keep a background edit export cancellable after closing the editor");
+                "Ctrl+E must retain its start-export meaning after closing "
+                "the editor");
   ok &= expect(resolvePlaybackShortcutAction(makeKey('D'),
                                               videoEditExitContexts)
                    .value() ==
@@ -360,8 +361,12 @@ int main() {
   ok &= expect(resolvePlaybackShortcutAction(
                    makeKey('E', 0, kPlaybackShortcutCtrlMask),
                    videoEditExitContexts)
-                   .value() == PlaybackShortcutAction::ExportVideoEdits,
-               "Ctrl+E must export from the modal edit-exit prompt");
+                   .value() == PlaybackShortcutAction::ExportVideoEdits &&
+                   videoEditCommandForShortcut(
+                       PlaybackShortcutAction::ExportVideoEdits) ==
+                       playback_video_edit::Command::StartExport,
+               "Ctrl+E must keep one start/retry meaning in the modal exit "
+               "prompt instead of becoming wait or cancel");
   ok &= expect(resolvePlaybackShortcutAction(
                    makeKey('Z', 0, kPlaybackShortcutCtrlMask),
                    videoEditingContexts)

@@ -314,6 +314,10 @@ bool executeOverlayControl(const PlaybackInputView& view,
     return signals.executeVideoEditCommand &&
            signals.executeVideoEditCommand(command);
   };
+  actions.waitForVideoEditExport = [&]() {
+    return signals.waitForVideoEditExportAndExit &&
+           signals.waitForVideoEditExportAndExit();
+  };
   actions.confirmPendingExit = [&]() {
     return signals.confirmPendingExit && signals.confirmPendingExit();
   };

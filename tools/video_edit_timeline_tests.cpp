@@ -24,8 +24,8 @@ bool expect(bool condition, const char* message) {
 
 int main() {
   using playback_video_edit::Document;
-  using playback_video_edit::FinishAction;
-  using playback_video_edit::FinishContext;
+  using playback_video_edit::ExitExportAction;
+  using playback_video_edit::ExitContext;
   using playback_video_edit::Prompt;
   using playback_video_edit::Selection;
   using playback_video_edit::SourceRange;
@@ -33,28 +33,22 @@ int main() {
   using SequenceTimeline = playback_video_sequence::Timeline;
 
   bool ok = true;
-  ok &= expect(playback_video_edit::finishAction(FinishContext{}) ==
-                   FinishAction::Close,
-               "Done on a clean revision must only close the edit tools");
-  ok &= expect(playback_video_edit::finishAction(
-                   FinishContext{true, false, false}) ==
-                   FinishAction::StartExport,
-               "Done must make an unexported revision durable before closing");
-  ok &= expect(playback_video_edit::finishAction(
-                   FinishContext{true, true, true}) ==
-                   FinishAction::Close,
-               "Done may close while the current revision is already being "
-               "exported");
-  ok &= expect(playback_video_edit::finishAction(
-                   FinishContext{true, false, true}) ==
-                   FinishAction::Close,
-               "Done must not duplicate a completed export before its "
-               "completion notification is consumed");
-  ok &= expect(playback_video_edit::finishAction(
-                   FinishContext{true, true, false}) ==
-                   FinishAction::WaitForExport,
-               "Done must not pretend an older in-flight export contains the "
-               "current revision");
+  ok &= expect(playback_video_edit::exitExportAction(ExitContext{}) ==
+                   ExitExportAction::None &&
+                   playback_video_edit::exitExportAction(
+                       ExitContext{true, false, false}) ==
+                       ExitExportAction::ExportCurrent &&
+                   playback_video_edit::exitExportAction(
+                       ExitContext{true, true, true}) ==
+                       ExitExportAction::WaitForExport &&
+                   playback_video_edit::exitExportAction(
+                       ExitContext{false, true, false}) ==
+                       ExitExportAction::WaitForExport &&
+                   playback_video_edit::exitExportAction(
+                       ExitContext{true, true, false}) ==
+                       ExitExportAction::CancelBlockingExport,
+               "playback exit must distinguish exporting, waiting, and a "
+               "blocking older export from leaving the edit tools");
   const Timeline unopenedTimeline;
   ok &= expect(unopenedTimeline.isUnmodified(),
                "an unopened edit document must not be dirty");
@@ -168,12 +162,9 @@ int main() {
   finishSelection.markOut(document.timeline(), 1'966'667, 2'000'000);
   const auto finishSelectionSnapshot = playback_video_edit::buildSnapshot(
       document, finishSelection, true);
-  ok &= expect(
-      !finishSelectionSnapshot.hasUnexportedChanges &&
-          playback_video_edit::finishAction(
-              FinishContext{finishSelectionSnapshot.hasUnexportedChanges,
-                            false, false}) == FinishAction::Close,
-      "an unapplied In/Out range must remain outside document completion");
+  ok &= expect(!finishSelectionSnapshot.hasUnexportedChanges,
+               "an unapplied In/Out range must remain outside the persistent "
+               "edit document");
 
   Selection inOnlySelection;
   inOnlySelection.markIn(document.timeline(), 2'000'000);
@@ -311,6 +302,15 @@ int main() {
   ok &= expect(exported.redo() && exported.hasUnexportedChanges(),
                "redoing past the exported revision must restore dirty state");
 
+  const std::vector<SourceRange> secondExportedRevision =
+      exported.timeline().keptRanges();
+  exported.markExported(secondExportedRevision);
+  ok &= expect(!exported.hasUnexportedChanges() && exported.undo() &&
+                   !exported.hasUnexportedChanges() && exported.redo() &&
+                   !exported.hasUnexportedChanges(),
+               "exporting a newer revision must not revoke the durable state "
+               "of an older exported revision in undo history");
+
   Document asynchronousExport;
   asynchronousExport.load(10'000'000);
   ok &= expect(asynchronousExport.rippleDelete({2'000'000, 3'000'000}),
@@ -407,6 +407,7 @@ int main() {
   playback_video_edit::ExportProgress overlayExport;
   overlayExport.status = playback_video_edit::ExportStatus::Running;
   overlayExport.fraction = 0.42;
+  overlayExport.targetsCurrentRevision = true;
   const playback_video_edit::OverlayModel overlayModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
                                               Prompt::None, 10, 0.5);
@@ -530,14 +531,21 @@ int main() {
       playback_video_edit::buildOverlayModel(
           playback_video_edit::EditSnapshot{}, &failedExport,
           Prompt::LeavePlayback, 20, 0.0);
+  playback_video_edit::EditSnapshot activeFailedEdit = overlayEdit;
+  const playback_video_edit::OverlayModel activeFailedExportModel =
+      playback_video_edit::buildOverlayModel(
+          activeFailedEdit, &failedExport, Prompt::None, 10, 0.0);
   ok &= expect(failedExport.visible() && !failedExport.running() &&
                    failedExport.failed() &&
                    failedExportModel.status == "EXPORT FAILED" &&
                    failedExportModel.cells.empty() &&
                    tinyFailedExportModel.status == "FAILED" &&
-                   failedExitModel.status == "EXPORT FAILED",
+                   failedExitModel.status == "EXPORT FAILED" &&
+                   activeFailedExportModel.status == "FAILED" &&
+                   !activeFailedExportModel.cells.empty(),
                "a failed current-revision export must remain compactly "
-               "visible, including while playback exit is pending");
+               "visible in and outside edit mode, including while playback "
+               "exit is pending");
 
   playback_video_edit::EditSnapshot retainedProgram;
   retainedProgram.hasEdits = true;
@@ -654,20 +662,83 @@ int main() {
                    editControlActions) &&
                    dispatchedEditCommand ==
                        playback_video_edit::Command::Finish,
-               "Done must finish editing directly instead of entering the "
-               "Escape confirmation path; the workspace owns durability");
+               "Done must only leave the edit tools instead of entering the "
+               "Escape confirmation path or implying an export");
+  ok &= expect(playback_overlay::dispatchOverlayControl(
+                   playback_overlay::OverlayControlId::EditStartExport,
+                   editControlActions) &&
+                   dispatchedEditCommand ==
+                       playback_video_edit::Command::StartExport &&
+                   playback_overlay::dispatchOverlayControl(
+                       playback_overlay::OverlayControlId::EditCancelExport,
+                       editControlActions) &&
+                   dispatchedEditCommand ==
+                       playback_video_edit::Command::CancelExport,
+               "rendered export and cancel controls must dispatch distinct "
+               "commands rather than a worker-state toggle");
+  bool waitedForExport = false;
+  editControlActions.waitForVideoEditExport = [&]() {
+    waitedForExport = true;
+    return true;
+  };
+  dispatchedEditCommand.reset();
+  ok &= expect(playback_overlay::dispatchOverlayControl(
+                   playback_overlay::OverlayControlId::EditWaitForExport,
+                   editControlActions) &&
+                   waitedForExport && !dispatchedEditCommand,
+               "waiting for an exit export must remain a session action, not "
+               "an encoder command");
 
   playback_overlay::PlaybackOverlayState pendingExitControlState;
   pendingExitControlState.videoEditPrompt = Prompt::LeavePlayback;
+  pendingExitControlState.videoEdit.hasUnexportedChanges = true;
   pendingExitControlState.videoEditExport.status =
       playback_video_edit::ExportStatus::Running;
+  pendingExitControlState.videoEditExport.targetsCurrentRevision = true;
   const auto pendingExitControls = playback_overlay::buildOverlayControlSpecs(
       pendingExitControlState, -1);
-  ok &= expect(!pendingExitControls.empty() &&
+  ok &= expect(pendingExitControls.size() == 3 &&
                    pendingExitControls.front().id ==
-                       playback_overlay::OverlayControlId::EditExport &&
-                   pendingExitControls.front().normalText == " [Wait] ",
-               "the pending-exit action must preserve wait-then-exit semantics");
+                       playback_overlay::OverlayControlId::EditWaitForExport &&
+                   pendingExitControls[1].id ==
+                       playback_overlay::OverlayControlId::EditCancelExport &&
+                   pendingExitControls.front().normalText == " [Wait] " &&
+                   std::none_of(
+                       pendingExitControls.begin(), pendingExitControls.end(),
+                       [](const auto& control) {
+                         return control.id == playback_overlay::OverlayControlId::
+                                                  EditDiscardAndExit;
+                       }),
+               "a current-revision export must offer wait or explicit cancel "
+               "without conflating either action with discard");
+
+  pendingExitControlState.videoEditExport.targetsCurrentRevision = false;
+  const auto blockingExportControls =
+      playback_overlay::buildOverlayControlSpecs(pendingExitControlState, -1);
+  ok &= expect(blockingExportControls.size() == 2 &&
+                   blockingExportControls.front().id ==
+                       playback_overlay::OverlayControlId::EditCancelExport &&
+                   blockingExportControls.front().normalText ==
+                       " [Cancel export] " &&
+                   std::none_of(
+                       blockingExportControls.begin(),
+                       blockingExportControls.end(), [](const auto& control) {
+                         return control.id == playback_overlay::OverlayControlId::
+                                                  EditDiscardAndExit;
+                       }),
+               "an older export must be identified as blocking instead of "
+               "pretending that waiting or discard resolves both revisions");
+
+  pendingExitControlState.videoEditExport = {};
+  const auto resolvedExportControls =
+      playback_overlay::buildOverlayControlSpecs(pendingExitControlState, -1);
+  ok &= expect(resolvedExportControls.size() == 3 &&
+                   resolvedExportControls.front().id ==
+                       playback_overlay::OverlayControlId::EditStartExport &&
+                   resolvedExportControls[1].id ==
+                       playback_overlay::OverlayControlId::EditDiscardAndExit,
+               "export and discard may be offered only after no worker is "
+               "still holding an output revision");
 
   const int disabledDeleteToken = playback_overlay::overlayControlToken(
       playback_overlay::OverlayControlId::EditRippleDelete);
@@ -760,13 +831,15 @@ int main() {
                "the normal program duration must not be duplicated when no "
                "range is marked");
   overlayEdit.active = false;
+  playback_video_edit::ExportProgress olderOverlayExport = overlayExport;
+  olderOverlayExport.targetsCurrentRevision = false;
   const playback_video_edit::OverlayModel backgroundExportModel =
-      playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
+      playback_video_edit::buildOverlayModel(overlayEdit, &olderOverlayExport,
                                               Prompt::None, 10, 0.0);
   ok &= expect(backgroundExportModel.cells.empty() &&
-                    backgroundExportModel.status.find("EXPORT 42%") !=
-                        std::string::npos,
-                "background export progress must remain visible after the editor closes");
+                    backgroundExportModel.status == "OLD EXPORT",
+                "a background job for an older decision list must remain "
+                "visible without claiming to export the current revision");
 
   const playback_video_edit::OverlayModel exitModel =
       playback_video_edit::buildOverlayModel(
@@ -774,6 +847,24 @@ int main() {
   ok &= expect(exitModel.status == "UNEXPORTED" &&
                    exitModel.status.size() <= 10,
                "exit confirmation must use a complete width-bounded state");
+  playback_video_edit::ExportProgress blockingExitExport;
+  blockingExitExport.status = playback_video_edit::ExportStatus::Running;
+  blockingExitExport.fraction = 0.42;
+  const playback_video_edit::OverlayModel blockingExitModel =
+      playback_video_edit::buildOverlayModel(
+          overlayEdit, &blockingExitExport, Prompt::LeavePlayback, 40, 0.0);
+  ok &= expect(blockingExitModel.status ==
+                   "UNEXPORTED EDITS  EXPORT BUSY",
+               "playback exit must expose an older blocking job without "
+               "claiming that it saves the current revision");
+  overlayEdit.hasUnexportedChanges = false;
+  const playback_video_edit::OverlayModel hazardFreeExitModel =
+      playback_video_edit::buildOverlayModel(
+          overlayEdit, nullptr, Prompt::LeavePlayback, 20, 0.0);
+  ok &= expect(hazardFreeExitModel.status == "LEAVE PLAYBACK?",
+               "a completion race with no remaining hazard must not invent "
+               "unexported edits");
+  overlayEdit.hasUnexportedChanges = true;
 
   const playback_video_edit::OverlayModel closeEditorModel =
       playback_video_edit::buildOverlayModel(
@@ -810,7 +901,7 @@ int main() {
       playback_overlay::ProgressBarRegion{{100.0, 200.0, 200.0, 210.0}, 10};
   interactions.controls.push_back(
       {{20.0, 30.0, 40.0, 40.0},
-       playback_overlay::OverlayControlId::EditExport});
+       playback_overlay::OverlayControlId::EditStartExport});
   interactions.editBoundaries.push_back(
       {{95.0, 200.0, 115.0, 210.0},
        playback_video_edit::EditBoundary::In});
@@ -831,7 +922,7 @@ int main() {
   ok &= expect(progressHit && progressHit->ratio == 1.0,
                "captured progress drags must clamp beyond the bar");
   ok &= expect(playback_overlay::overlayControlAt(interactions, 25.0, 35.0) ==
-                   playback_overlay::OverlayControlId::EditExport,
+                   playback_overlay::OverlayControlId::EditStartExport,
                "rendered controls must retain their semantic identity");
   ok &= expect(playback_overlay::editBoundaryAt(interactions, 100.0, 205.0) ==
                    playback_video_edit::EditBoundary::In,
@@ -840,7 +931,7 @@ int main() {
       playback_overlay::transformInteractionMap(interactions, 5.0, 7.0,
                                                 2.0, 3.0);
   ok &= expect(playback_overlay::overlayControlAt(transformed, 50.0, 100.0) ==
-                   playback_overlay::OverlayControlId::EditExport,
+                   playback_overlay::OverlayControlId::EditStartExport,
                "presentation transforms must preserve exact control hits");
   const playback_overlay::InteractionHit transformedHit =
       playback_overlay::interactionHitAtTransformed(
@@ -955,7 +1046,7 @@ int main() {
       });
   const auto doneItem = std::find_if(
       dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
-        return item.label == "Done and save";
+        return item.label == "Done editing";
       });
   const auto discardItem = std::find_if(
       dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
@@ -973,13 +1064,18 @@ int main() {
                    discardItem != dirtyMenu.items.end() &&
                    exportItem != dirtyMenu.items.end(),
                "the context menu must own secondary edit commands");
+  const auto staleStartExportToken =
+      exportItem != dirtyMenu.items.end()
+          ? std::optional<playback_overlay::ContextMenuItemToken>(
+                exportItem->token)
+          : std::nullopt;
   if (doneItem != dirtyMenu.items.end()) {
     ok &= expect(playbackMenu.select(doneItem->token) &&
                      playbackMenu.activateSelection() ==
                          playback_video_edit::Command::Finish &&
                      !playbackMenu.visible(),
                  "the context Done action must finish without entering the "
-                 "Escape confirmation path; the workspace owns durability");
+                 "Escape confirmation path or starting an implicit export");
   }
   ok &= expect(playbackMenu.open(
                    playback_session::ContextMenuSurface::Terminal, 0.25,
@@ -1004,17 +1100,23 @@ int main() {
   ok &= expect(std::any_of(
                    runningExportMenu.items.begin(),
                    runningExportMenu.items.end(), [](const auto& item) {
-                     return item.label == "Cancel export";
+                     return item.label == "Cancel older export";
                    }),
-               "moving export off the monitor bar must keep cancellation "
-               "available in the context menu");
+               "an older background job must expose precise cancellation "
+               "without claiming to contain newer edits");
   ok &= expect(std::any_of(
                    runningExportMenu.items.begin(),
                    runningExportMenu.items.end(), [](const auto& item) {
-                     return item.label == "Done and save";
+                     return item.label == "Done editing";
                    }),
-                "a newer dirty revision must not be mislabeled as saved while "
-                "an older revision exports");
+                "leaving the edit tools must remain independent from an older "
+                "background export");
+  if (staleStartExportToken) {
+    ok &= expect(!playbackMenu.activate(*staleStartExportToken) &&
+                     playbackMenu.visible(),
+                 "a stale start-export hit target must never cancel a job "
+                 "that started after the menu was rendered");
+  }
 
   playbackMenu.dismiss();
   playbackMenu.refresh(cleanEdit, failedExport);

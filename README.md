@@ -186,18 +186,20 @@ The concrete implementation plan lives in
 - In the video editor: Ctrl+Z/Ctrl+Y undo/redo; Ctrl+R resets all edits
 - The editor bar contains only playback, In/Out, Delete, Trim, and Done;
   right-click exposes history, export, discard, and the same Done action
-- When committed edits are still unexported, Done writes that revision to a
-  new sibling file and leaves edit mode. An unapplied In/Out selection is
-  temporary and is cleared without changing the edit. Otherwise Done only
-  leaves edit mode
+- Done only leaves edit mode; it never starts or cancels an export. Committed
+  edits remain in the live program preview, while an unapplied In/Out selection
+  is temporary and is cleared without changing the edit
 - Committed edits become the program playback immediately and remain active
   after leaving edit mode; reset or discard restores the unedited source
-- Ctrl+E: export edits to a new sibling `- edited.mp4` file (press again to cancel); the source is never overwritten
+- Ctrl+E: export edits to a new sibling `- edited.mp4` file; cancellation is
+  an explicit context-menu action and the source is never overwritten
 - A failed export remains visible for that exact edit revision and can be
   retried from the context menu; changing the edit never inherits stale job state
 - The playback context menu can resume, export, or discard an edit session;
   discarding always requires explicit confirmation
-- Leaving playback with unexported edits offers the explicit Export, Discard, and Stay actions; no edit is silently lost
+- Leaving playback distinguishes exporting the current revision, waiting for
+  it, and cancelling a running export. A job must finish or be explicitly
+  cancelled before playback can close; no edit is silently lost
 - Ctrl+W: toggle video Window mode (framebuffer-mode)
 - Ctrl+P: toggle picture-in-picture in Window mode
 - T: toggle picture-in-picture TUI in Window mode
