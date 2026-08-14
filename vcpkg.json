@@ -2,7 +2,12 @@
   "name": "radioify",
   "version-string": "0.1.0",
   "dependencies": [
-    "ffmpeg",
+    {
+      "name": "ffmpeg",
+      "features": [
+        "dav1d"
+      ]
+    },
     "libass",
     "zlib"
   ],

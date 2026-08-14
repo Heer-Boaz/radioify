@@ -144,10 +144,38 @@ struct ExportPipeline {
     return self && self->isCancelled() ? 1 : 0;
   }
 
+  static const AVCodec* preferredDecoder(AVCodecID codecId) {
+    // The default Windows AV1 decoder may resolve to Media Foundation on a
+    // machine without AV1 hardware. Export owns CPU frames, so prefer the
+    // established software implementations and retain the codec-id fallback.
+    if (codecId == AV_CODEC_ID_AV1) {
+      for (const char* name : {"libdav1d", "libaom-av1"}) {
+        const AVCodec* decoder = avcodec_find_decoder_by_name(name);
+        if (decoder && decoder->id == codecId) return decoder;
+      }
+    }
+    return avcodec_find_decoder(codecId);
+  }
+
+  static bool normalizedChannelLayout(const AVChannelLayout& source,
+                                      AVChannelLayout* destination) {
+    if (!destination) return false;
+    av_channel_layout_uninit(destination);
+    const int channels = source.nb_channels > 0 ? source.nb_channels : 2;
+    if (source.order != AV_CHANNEL_ORDER_UNSPEC &&
+        av_channel_layout_check(&source)) {
+      return av_channel_layout_copy(destination, &source) >= 0;
+    }
+    // Older containers commonly publish only a channel count. Encoders need
+    // the corresponding semantic layout (for example one channel == mono).
+    av_channel_layout_default(destination, channels);
+    return av_channel_layout_check(destination) != 0;
+  }
+
   bool openDecoder(int streamIndex, AVCodecContext** destination,
                    std::string* error) {
     AVStream* stream = input->streams[streamIndex];
-    const AVCodec* codec = avcodec_find_decoder(stream->codecpar->codec_id);
+    const AVCodec* codec = preferredDecoder(stream->codecpar->codec_id);
     if (!codec) {
       setError(error, "No decoder is available for " +
                           std::string(av_get_media_type_string(
@@ -273,6 +301,11 @@ struct ExportPipeline {
     return AV_PIX_FMT_YUV420P;
   }
 
+  static int alignedDimension(int value, int chromaShift) {
+    const int alignment = 1 << std::max(0, chromaShift);
+    return (value + alignment - 1) / alignment * alignment;
+  }
+
   int64_t sourceVideoBitRate() const {
     int64_t bitRate = inputVideoStream->codecpar->bit_rate;
     if (bitRate <= 0 && input->bit_rate > 0) bitRate = input->bit_rate;
@@ -293,15 +326,23 @@ struct ExportPipeline {
     AVCodecContext* context = avcodec_alloc_context3(codec);
     if (!context) return false;
     context->codec_type = AVMEDIA_TYPE_VIDEO;
-    context->width = videoDecoder->width;
-    context->height = videoDecoder->height;
+    context->pix_fmt = choosePixelFormat(
+        codec, static_cast<AVPixelFormat>(videoDecoder->pix_fmt));
+    const AVPixFmtDescriptor* pixelDescription =
+        av_pix_fmt_desc_get(context->pix_fmt);
+    context->width = alignedDimension(
+        videoDecoder->width,
+        pixelDescription ? pixelDescription->log2_chroma_w : 0);
+    context->height = alignedDimension(
+        videoDecoder->height,
+        pixelDescription ? pixelDescription->log2_chroma_h : 0);
     context->sample_aspect_ratio =
         inputVideoStream->sample_aspect_ratio.num > 0
             ? inputVideoStream->sample_aspect_ratio
             : videoDecoder->sample_aspect_ratio;
-    context->pix_fmt = choosePixelFormat(
-        codec, static_cast<AVPixelFormat>(videoDecoder->pix_fmt));
-    context->time_base = AVRational{1, 90000};
+    context->time_base = codec->id == AV_CODEC_ID_MPEG4
+                             ? AVRational{1, 60000}
+                             : AVRational{1, 90000};
     context->framerate =
         av_guess_frame_rate(input, inputVideoStream, nullptr);
     if (context->framerate.num <= 0 || context->framerate.den <= 0) {
@@ -411,16 +452,20 @@ struct ExportPipeline {
     audioEncoder->sample_fmt = chooseSampleFormat(codec);
     audioEncoder->sample_rate =
         chooseSampleRate(codec, std::max(8000, audioDecoder->sample_rate));
-    if (audioDecoder->ch_layout.nb_channels > 0) {
-      av_channel_layout_copy(&audioEncoder->ch_layout,
-                             &audioDecoder->ch_layout);
-    } else {
-      av_channel_layout_default(&audioEncoder->ch_layout, 2);
+    if (!normalizedChannelLayout(audioDecoder->ch_layout,
+                                 &audioEncoder->ch_layout)) {
+      setError(error, "Could not normalize the source audio layout.");
+      return false;
     }
     audioEncoder->time_base = AVRational{1, audioEncoder->sample_rate};
-    audioEncoder->bit_rate = inputAudioStream->codecpar->bit_rate > 0
-                                 ? inputAudioStream->codecpar->bit_rate
-                                 : 192000;
+    const int64_t channels =
+        std::max<int64_t>(1, audioEncoder->ch_layout.nb_channels);
+    const int64_t maximumBitRate =
+        std::min<int64_t>(512000, channels * 128000);
+    const int64_t sourceBitRate = inputAudioStream->codecpar->bit_rate;
+    audioEncoder->bit_rate = std::clamp<int64_t>(
+        sourceBitRate > 0 ? sourceBitRate : channels * 96000,
+        std::min<int64_t>(64000, maximumBitRate), maximumBitRate);
     if (output->oformat->flags & AVFMT_GLOBALHEADER) {
       audioEncoder->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
@@ -566,16 +611,23 @@ struct ExportPipeline {
                      std::to_string(range.endUs) +
                      ",setpts=PTS-STARTPTS[vt" + index + "];";
       if (audioEncoder) {
-        const int64_t startPts = av_rescale_q(
+        const int64_t inputStartPts = av_rescale_q(
             range.startUs, kMicrosecondTimeBase,
             AVRational{1, audioDecoder->sample_rate});
-        const int64_t endPts = av_rescale_q(
+        const int64_t inputEndPts = av_rescale_q(
             range.endUs, kMicrosecondTimeBase,
             AVRational{1, audioDecoder->sample_rate});
+        const int64_t outputStartPts = av_rescale_q(
+            range.startUs, kMicrosecondTimeBase,
+            AVRational{1, audioEncoder->sample_rate});
         description += "[a" + index + "]atrim=start_pts=" +
-                       std::to_string(startPts) + ":end_pts=" +
-                       std::to_string(endPts) +
-                       ",asetpts=PTS-STARTPTS[at" + index + "];";
+                       std::to_string(inputStartPts) + ":end_pts=" +
+                       std::to_string(inputEndPts) + ",aresample=" +
+                       std::to_string(audioEncoder->sample_rate) +
+                       ":async=1:first_pts=" +
+                       std::to_string(outputStartPts) + ",asetpts=PTS-" +
+                       std::to_string(outputStartPts) + "[at" + index +
+                       "];";
       }
     }
     for (size_t i = 0; i < ranges.size(); ++i) {
@@ -590,8 +642,14 @@ struct ExportPipeline {
     } else {
       description += "[vcat];";
     }
-    description += "[vcat]format=pix_fmts=" + std::string(pixelFormat) +
-                   "[vout]";
+    description += "[vcat]";
+    if (videoEncoder->width != videoDecoder->width ||
+        videoEncoder->height != videoDecoder->height) {
+      description += "pad=" + std::to_string(videoEncoder->width) + ":" +
+                     std::to_string(videoEncoder->height) +
+                     ":0:0:color=black,";
+    }
+    description += "format=pix_fmts=" + std::string(pixelFormat) + "[vout]";
     if (audioEncoder) {
       const char* sampleFormat =
           av_get_sample_fmt_name(audioEncoder->sample_fmt);
@@ -602,7 +660,17 @@ struct ExportPipeline {
         setError(error, "The selected audio format cannot be described.");
         return {};
       }
-      description += ";[acat]aformat=sample_fmts=" +
+      int64_t outputDurationUs = 0;
+      for (const SourceRange& range : ranges) {
+        outputDurationUs += range.durationUs();
+      }
+      const int64_t outputSamples = av_rescale_q(
+          outputDurationUs, kMicrosecondTimeBase,
+          AVRational{1, audioEncoder->sample_rate});
+      description += ";[acat]apad=whole_len=" +
+                     std::to_string(outputSamples) +
+                     ",atrim=end_sample=" + std::to_string(outputSamples) +
+                     ",aformat=sample_fmts=" +
                      std::string(sampleFormat) + ":sample_rates=" +
                      std::to_string(audioEncoder->sample_rate) +
                      ":channel_layouts=" + std::string(channelLayout);
@@ -660,10 +728,9 @@ struct ExportPipeline {
       }
       const char* sampleFormat = av_get_sample_fmt_name(audioDecoder->sample_fmt);
       AVChannelLayout inputLayout{};
-      if (audioDecoder->ch_layout.nb_channels > 0) {
-        av_channel_layout_copy(&inputLayout, &audioDecoder->ch_layout);
-      } else {
-        av_channel_layout_default(&inputLayout, 2);
+      if (!normalizedChannelLayout(audioDecoder->ch_layout, &inputLayout)) {
+        setError(error, "Could not normalize the source audio layout.");
+        return false;
       }
       char layout[128]{};
       av_channel_layout_describe(&inputLayout, layout, sizeof(layout));
@@ -924,8 +991,9 @@ struct ExportPipeline {
       result = avcodec_send_packet(decoder, inputPacket);
     }
     if (result < 0 && result != AVERROR_EOF) {
-      setError(error, "Could not submit source packets to the decoder: " +
-                          ffmpegError(result));
+      setError(error, std::string("Could not submit source ") +
+                          (audio ? "audio" : "video") +
+                          " packets to the decoder: " + ffmpegError(result));
       return false;
     }
     return receiveDecoderFrames(decoder, audio, progress, error);

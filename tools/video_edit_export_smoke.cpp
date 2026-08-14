@@ -33,7 +33,7 @@ bool parseRange(const std::wstring& text,
 }
 
 bool probeOutput(const std::filesystem::path& path, int64_t expectedDurationUs,
-                 std::string* error) {
+                 bool expectedAudio, std::string* error) {
   AVFormatContext* format = nullptr;
   const std::string pathUtf8 = toUtf8String(path);
   int result = avformat_open_input(&format, pathUtf8.c_str(), nullptr, nullptr);
@@ -49,8 +49,19 @@ bool probeOutput(const std::filesystem::path& path, int64_t expectedDurationUs,
   }
   const int64_t durationUs = format ? format->duration : 0;
   avformat_close_input(&format);
-  if (result < 0 || !video || durationUs <= 0) {
-    if (error) *error = "exported MP4 did not probe as playable video";
+  if (result < 0) {
+    if (error) *error = "exported MP4 could not be probed";
+    return false;
+  }
+  if (!video || durationUs <= 0) {
+    if (error) *error = "exported MP4 has no playable video timeline";
+    return false;
+  }
+  if (audio != expectedAudio) {
+    if (error) {
+      *error = expectedAudio ? "exported MP4 lost the selected audio stream"
+                             : "exported MP4 unexpectedly gained audio";
+    }
     return false;
   }
   const int64_t durationDifference =
@@ -146,6 +157,7 @@ int wmain(int argc, wchar_t** argv) {
   for (const playback_video_edit::SourceRange& range : request.keptRanges) {
     expectedDurationUs += range.durationUs();
   }
+  const bool expectedAudio = request.audioStreamIndex >= 0;
 
   const std::set<std::filesystem::path> temporaryFilesBefore =
       temporarySiblings(request.destinationPath);
@@ -179,7 +191,7 @@ int wmain(int argc, wchar_t** argv) {
     std::cout << "encoder=" << snapshot.videoEncoder << '\n';
     std::string probeError;
     if (!probeOutput(snapshot.destinationPath, expectedDurationUs,
-                     &probeError)) {
+                     expectedAudio, &probeError)) {
       std::cerr << probeError << '\n';
       return 1;
     }
