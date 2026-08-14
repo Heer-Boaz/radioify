@@ -1,7 +1,10 @@
 #include "playback/video/edit/export.h"
 
 extern "C" {
+#include <libavcodec/codec_desc.h>
 #include <libavformat/avformat.h>
+#include <libavutil/channel_layout.h>
+#include <libavutil/pixdesc.h>
 }
 
 #include <algorithm>
@@ -32,41 +35,220 @@ bool parseRange(const std::wstring& text,
   return range->startUs >= 0 && range->endUs > range->startUs;
 }
 
-bool probeOutput(const std::filesystem::path& path, int64_t expectedDurationUs,
-                 bool expectedAudio, std::string* error) {
+struct StreamSignature {
+  AVMediaType type = AVMEDIA_TYPE_UNKNOWN;
+  AVCodecID codec = AV_CODEC_ID_NONE;
+  int profile = AV_PROFILE_UNKNOWN;
+  int disposition = 0;
+  int width = 0;
+  int height = 0;
+  int pixelDepth = 0;
+  int chromaWidthShift = 0;
+  int chromaHeightShift = 0;
+  uint64_t pixelFlags = 0;
+  AVRational sampleAspect{0, 1};
+  AVColorRange colorRange = AVCOL_RANGE_UNSPECIFIED;
+  AVColorPrimaries colorPrimaries = AVCOL_PRI_UNSPECIFIED;
+  AVColorTransferCharacteristic colorTransfer = AVCOL_TRC_UNSPECIFIED;
+  AVColorSpace colorSpace = AVCOL_SPC_UNSPECIFIED;
+  AVChromaLocation chromaLocation = AVCHROMA_LOC_UNSPECIFIED;
+  int sampleRate = 0;
+  int channels = 0;
+  std::string channelLayout;
+  int rawBits = 0;
+  int codedBits = 0;
+  std::string language;
+  std::string title;
+};
+
+struct MediaSignature {
+  std::string formatNames;
+  int64_t durationUs = 0;
+  std::vector<StreamSignature> streams;
+};
+
+std::string metadataValue(const AVDictionary* metadata, const char* key) {
+  const AVDictionaryEntry* entry = av_dict_get(metadata, key, nullptr, 0);
+  return entry && entry->value ? entry->value : "";
+}
+
+std::string channelLayoutName(const AVCodecParameters* parameters) {
+  if (!parameters || parameters->ch_layout.nb_channels <= 0) return {};
+  AVChannelLayout layout{};
+  if (parameters->ch_layout.order != AV_CHANNEL_ORDER_UNSPEC &&
+      av_channel_layout_check(&parameters->ch_layout)) {
+    if (av_channel_layout_copy(&layout, &parameters->ch_layout) < 0) return {};
+  } else {
+    av_channel_layout_default(&layout, parameters->ch_layout.nb_channels);
+  }
+  char name[128]{};
+  av_channel_layout_describe(&layout, name, sizeof(name));
+  av_channel_layout_uninit(&layout);
+  return name;
+}
+
+bool inspectMedia(const std::filesystem::path& path, MediaSignature* signature,
+                  std::string* error) {
+  if (!signature) return false;
   AVFormatContext* format = nullptr;
   const std::string pathUtf8 = toUtf8String(path);
   int result = avformat_open_input(&format, pathUtf8.c_str(), nullptr, nullptr);
   if (result >= 0) result = avformat_find_stream_info(format, nullptr);
-  bool video = false;
-  bool audio = false;
-  if (result >= 0) {
-    for (unsigned index = 0; index < format->nb_streams; ++index) {
-      const AVMediaType type = format->streams[index]->codecpar->codec_type;
-      video = video || type == AVMEDIA_TYPE_VIDEO;
-      audio = audio || type == AVMEDIA_TYPE_AUDIO;
-    }
+  if (result < 0 || !format) {
+    avformat_close_input(&format);
+    if (error) *error = "media could not be probed";
+    return false;
   }
-  const int64_t durationUs = format ? format->duration : 0;
+  signature->formatNames = format->iformat && format->iformat->name
+                               ? format->iformat->name
+                               : "";
+  signature->durationUs = format->duration;
+  signature->streams.clear();
+  signature->streams.reserve(format->nb_streams);
+  for (unsigned index = 0; index < format->nb_streams; ++index) {
+    const AVStream* stream = format->streams[index];
+    const AVCodecParameters* parameters = stream->codecpar;
+    StreamSignature current;
+    current.type = parameters->codec_type;
+    current.codec = parameters->codec_id;
+    current.profile = parameters->profile;
+    current.disposition = stream->disposition;
+    current.language = metadataValue(stream->metadata, "language");
+    current.title = metadataValue(stream->metadata, "title");
+    current.rawBits = parameters->bits_per_raw_sample;
+    current.codedBits = parameters->bits_per_coded_sample;
+    if (current.type == AVMEDIA_TYPE_VIDEO) {
+      current.width = parameters->width;
+      current.height = parameters->height;
+      current.sampleAspect = parameters->sample_aspect_ratio;
+      current.colorRange = parameters->color_range;
+      current.colorPrimaries = parameters->color_primaries;
+      current.colorTransfer = parameters->color_trc;
+      current.colorSpace = parameters->color_space;
+      current.chromaLocation = parameters->chroma_location;
+      const AVPixFmtDescriptor* pixel = av_pix_fmt_desc_get(
+          static_cast<AVPixelFormat>(parameters->format));
+      if (pixel) {
+        current.pixelDepth = pixel->comp[0].depth;
+        current.chromaWidthShift = pixel->log2_chroma_w;
+        current.chromaHeightShift = pixel->log2_chroma_h;
+        current.pixelFlags =
+            pixel->flags & (AV_PIX_FMT_FLAG_RGB | AV_PIX_FMT_FLAG_ALPHA |
+                            AV_PIX_FMT_FLAG_FLOAT | AV_PIX_FMT_FLAG_PAL |
+                            AV_PIX_FMT_FLAG_BAYER);
+      }
+    } else if (current.type == AVMEDIA_TYPE_AUDIO) {
+      current.sampleRate = parameters->sample_rate;
+      current.channels = parameters->ch_layout.nb_channels;
+      current.channelLayout = channelLayoutName(parameters);
+    }
+    signature->streams.push_back(std::move(current));
+  }
   avformat_close_input(&format);
-  if (result < 0) {
-    if (error) *error = "exported MP4 could not be probed";
-    return false;
-  }
-  if (!video || durationUs <= 0) {
-    if (error) *error = "exported MP4 has no playable video timeline";
-    return false;
-  }
-  if (audio != expectedAudio) {
-    if (error) {
-      *error = expectedAudio ? "exported MP4 lost the selected audio stream"
-                             : "exported MP4 unexpectedly gained audio";
+  return true;
+}
+
+bool formatFamiliesIntersect(const std::string& left,
+                             const std::string& right) {
+  size_t leftStart = 0;
+  while (leftStart <= left.size()) {
+    const size_t leftEnd = left.find(',', leftStart);
+    const std::string leftName = left.substr(
+        leftStart, leftEnd == std::string::npos ? std::string::npos
+                                                : leftEnd - leftStart);
+    size_t rightStart = 0;
+    while (rightStart <= right.size()) {
+      const size_t rightEnd = right.find(',', rightStart);
+      if (right.compare(rightStart,
+                        rightEnd == std::string::npos
+                            ? right.size() - rightStart
+                            : rightEnd - rightStart,
+                        leftName) == 0 &&
+          (rightEnd == std::string::npos
+               ? right.size() - rightStart
+               : rightEnd - rightStart) == leftName.size()) {
+        return true;
+      }
+      if (rightEnd == std::string::npos) break;
+      rightStart = rightEnd + 1;
     }
+    if (leftEnd == std::string::npos) break;
+    leftStart = leftEnd + 1;
+  }
+  return false;
+}
+
+bool sameAspect(AVRational left, AVRational right) {
+  if (left.num <= 0 || left.den <= 0) left = AVRational{1, 1};
+  if (right.num <= 0 || right.den <= 0) right = AVRational{1, 1};
+  return av_cmp_q(left, right) == 0;
+}
+
+bool validateOutput(const MediaSignature& source,
+                    const MediaSignature& output,
+                    int64_t expectedDurationUs, std::string* error) {
+  if (!formatFamiliesIntersect(source.formatNames, output.formatNames)) {
+    if (error) *error = "container family changed";
+    return false;
+  }
+  if (source.streams.size() != output.streams.size()) {
+    if (error) *error = "stream count changed";
+    return false;
+  }
+  bool video = false;
+  for (size_t index = 0; index < source.streams.size(); ++index) {
+    const StreamSignature& before = source.streams[index];
+    const StreamSignature& after = output.streams[index];
+    if (before.type != after.type || before.codec != after.codec ||
+        (before.profile != AV_PROFILE_UNKNOWN &&
+         before.profile != after.profile) ||
+        before.disposition != after.disposition ||
+        before.language != after.language || before.title != after.title) {
+      if (error) *error = "stream identity or metadata changed at index " +
+                          std::to_string(index);
+      return false;
+    }
+    if (before.type == AVMEDIA_TYPE_VIDEO) {
+      video = true;
+      if (before.width != after.width || before.height != after.height ||
+          before.pixelDepth != after.pixelDepth ||
+          before.chromaWidthShift != after.chromaWidthShift ||
+          before.chromaHeightShift != after.chromaHeightShift ||
+          before.pixelFlags != after.pixelFlags ||
+          !sameAspect(before.sampleAspect, after.sampleAspect) ||
+          before.colorRange != after.colorRange ||
+          before.colorPrimaries != after.colorPrimaries ||
+          before.colorTransfer != after.colorTransfer ||
+          before.colorSpace != after.colorSpace ||
+          before.chromaLocation != after.chromaLocation) {
+        if (error) *error = "video geometry, depth, or color changed";
+        return false;
+      }
+    } else if (before.type == AVMEDIA_TYPE_AUDIO) {
+      const AVCodecDescriptor* description =
+          avcodec_descriptor_get(before.codec);
+      const bool lossless =
+          description && (description->props & AV_CODEC_PROP_LOSSLESS) != 0;
+      if (before.sampleRate != after.sampleRate ||
+          before.channels != after.channels ||
+          before.channelLayout != after.channelLayout ||
+          (lossless && before.rawBits > 0 &&
+           before.rawBits != after.rawBits) ||
+          (lossless && before.codedBits > 0 &&
+           before.codedBits != after.codedBits)) {
+        if (error) *error = "audio rate, layout, or bit depth changed";
+        return false;
+      }
+    }
+  }
+  if (!video || output.durationUs <= 0) {
+    if (error) *error = "export has no playable video timeline";
     return false;
   }
   const int64_t durationDifference =
-      durationUs >= expectedDurationUs ? durationUs - expectedDurationUs
-                                       : expectedDurationUs - durationUs;
+      output.durationUs >= expectedDurationUs
+          ? output.durationUs - expectedDurationUs
+          : expectedDurationUs - output.durationUs;
   if (durationDifference > 150'000) {
     if (error) {
       *error = "export duration differs from the edit list by " +
@@ -74,30 +256,23 @@ bool probeOutput(const std::filesystem::path& path, int64_t expectedDurationUs,
     }
     return false;
   }
-  std::cout << "probe duration_us=" << durationUs << " video=1 audio="
-            << (audio ? 1 : 0) << '\n';
+  std::cout << "probe duration_us=" << output.durationUs
+            << " streams=" << output.streams.size() << '\n';
   return true;
 }
 
-bool selectInputStreams(const std::filesystem::path& path, int* videoIndex,
-                        int* audioIndex) {
+bool selectInputVideo(const std::filesystem::path& path, int* videoIndex) {
   AVFormatContext* format = nullptr;
   const std::string pathUtf8 = toUtf8String(path);
   int result = avformat_open_input(&format, pathUtf8.c_str(), nullptr, nullptr);
   if (result >= 0) result = avformat_find_stream_info(format, nullptr);
   int video = -1;
-  int audio = -1;
   if (result >= 0) {
     video = av_find_best_stream(format, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-    if (video >= 0) {
-      audio = av_find_best_stream(format, AVMEDIA_TYPE_AUDIO, -1, video,
-                                  nullptr, 0);
-    }
   }
   avformat_close_input(&format);
   if (video < 0) return false;
   if (videoIndex) *videoIndex = video;
-  if (audioIndex) *audioIndex = audio;
   return true;
 }
 
@@ -121,19 +296,20 @@ std::set<std::filesystem::path> temporarySiblings(
 int wmain(int argc, wchar_t** argv) {
   if (argc < 4) {
     std::cerr << "usage: video_edit_export_smoke <input> <output> "
-                 "[--cancel] <start_us:end_us> [range...]\n";
+                 "[--cancel|--expect-failure] <start_us:end_us> [range...]\n";
     return 2;
   }
   playback_video_edit::ExportRequest request;
   request.sourcePath = argv[1];
   request.destinationPath = argv[2];
-  if (!selectInputStreams(request.sourcePath, &request.videoStreamIndex,
-                          &request.audioStreamIndex)) {
+  if (!selectInputVideo(request.sourcePath, &request.videoStreamIndex)) {
     std::cerr << "input streams could not be selected\n";
     return 2;
   }
-  const bool cancelTest = std::wstring(argv[3]) == L"--cancel";
-  const int firstRange = cancelTest ? 4 : 3;
+  const std::wstring mode = argv[3];
+  const bool cancelTest = mode == L"--cancel";
+  const bool expectedFailure = mode == L"--expect-failure";
+  const int firstRange = cancelTest || expectedFailure ? 4 : 3;
   if (firstRange >= argc) {
     std::cerr << "at least one range is required\n";
     return 2;
@@ -157,7 +333,12 @@ int wmain(int argc, wchar_t** argv) {
   for (const playback_video_edit::SourceRange& range : request.keptRanges) {
     expectedDurationUs += range.durationUs();
   }
-  const bool expectedAudio = request.audioStreamIndex >= 0;
+  MediaSignature sourceSignature;
+  std::string probeError;
+  if (!inspectMedia(request.sourcePath, &sourceSignature, &probeError)) {
+    std::cerr << "source probe failed: " << probeError << '\n';
+    return 2;
+  }
 
   const std::set<std::filesystem::path> temporaryFilesBefore =
       temporarySiblings(request.destinationPath);
@@ -184,14 +365,28 @@ int wmain(int argc, wchar_t** argv) {
       std::cout << "cancelled cleanly\n";
       return 0;
     }
+    if (expectedFailure) {
+      const bool clean =
+          snapshot.state == playback_video_edit::ExportState::Failed &&
+          !snapshot.error.empty() &&
+          !std::filesystem::exists(snapshot.destinationPath) &&
+          temporarySiblings(snapshot.destinationPath) == temporaryFilesBefore;
+      if (!clean) {
+        std::cerr << "failed export published or leaked a partial file\n";
+        return 1;
+      }
+      std::cout << "failed cleanly: " << snapshot.error << '\n';
+      return 0;
+    }
     if (snapshot.state != playback_video_edit::ExportState::Succeeded) {
       std::cerr << "export failed: " << snapshot.error << '\n';
       return 1;
     }
     std::cout << "encoder=" << snapshot.videoEncoder << '\n';
-    std::string probeError;
-    if (!probeOutput(snapshot.destinationPath, expectedDurationUs,
-                     expectedAudio, &probeError)) {
+    MediaSignature outputSignature;
+    if (!inspectMedia(snapshot.destinationPath, &outputSignature, &probeError) ||
+        !validateOutput(sourceSignature, outputSignature, expectedDurationUs,
+                        &probeError)) {
       std::cerr << probeError << '\n';
       return 1;
     }

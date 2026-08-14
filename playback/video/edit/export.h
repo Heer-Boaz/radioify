@@ -22,11 +22,10 @@ struct ExportRequest {
   std::filesystem::path sourcePath;
   std::filesystem::path destinationPath;
   std::vector<SourceRange> keptRanges;
-  // When supplied by a playback session, export the streams the user was
-  // actually viewing/listening to. Negative indices retain the standalone
-  // exporter's best-stream fallback.
+  // The edited program uses the video stream the user was viewing. Every
+  // source audio/subtitle stream is retained; track selection must never act
+  // as an implicit export-time deletion policy.
   int videoStreamIndex = -1;
-  int audioStreamIndex = -1;
 };
 
 struct ExportSnapshot {

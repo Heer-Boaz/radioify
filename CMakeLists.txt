@@ -569,6 +569,9 @@ add_executable(video_edit_export_smoke)
 target_sources(video_edit_export_smoke PRIVATE
   $<TARGET_OBJECTS:radioify_tool_video_edit_export_smoke>
   ${CMAKE_SOURCE_DIR}/playback/video/edit/export.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/export_codec_support.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/export_metadata.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/export_pipeline.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )

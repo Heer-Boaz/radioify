@@ -21,7 +21,6 @@ struct CommandContext {
   int64_t sourcePositionUs = 0;
   int64_t frameDurationUs = 1;
   int videoStreamIndex = -1;
-  int audioStreamIndex = -1;
 };
 
 }  // namespace
@@ -58,7 +57,6 @@ struct VideoEditWorkspace::Impl {
     context.frameDurationUs =
         std::max<int64_t>(1, timeline.frameDurationUs);
     context.videoStreamIndex = player.videoStreamIndex();
-    context.audioStreamIndex = player.activeAudioStreamIndex();
     return context;
   }
 
@@ -174,7 +172,6 @@ struct VideoEditWorkspace::Impl {
     request.destinationPath = destination;
     request.keptRanges = timeline.keptRanges();
     request.videoStreamIndex = context.videoStreamIndex;
-    request.audioStreamIndex = context.audioStreamIndex;
     if (!exporter.start(std::move(request))) {
       result.message = "Could not start edit export";
       return result;

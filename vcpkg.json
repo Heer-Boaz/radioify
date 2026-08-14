@@ -5,7 +5,10 @@
     {
       "name": "ffmpeg",
       "features": [
-        "dav1d"
+        "dav1d",
+        "nvcodec",
+        "opus",
+        "vpx"
       ]
     },
     "libass",
@@ -19,5 +22,5 @@
       ]
     }
   },
-  "builtin-baseline": "14bb451131ccf6be50a63a8d9dfe7980e46b5958"
+  "builtin-baseline": "62159a45e18f3a9ac0548628dcaf74fcb60c6ff9"
 }
