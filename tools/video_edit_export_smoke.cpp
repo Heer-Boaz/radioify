@@ -360,10 +360,10 @@ int wmain(int argc, wchar_t** argv) {
     if (smoothCutTest) {
       std::fill(request.decisions.cutTransitions.begin(),
                 request.decisions.cutTransitions.end(),
-                playback_video_edit::CutTransition::smooth());
+                playback_video_edit::CutTransition::motionSmooth());
     } else {
       request.decisions.cutTransitions.front() =
-          playback_video_edit::CutTransition::smooth();
+          playback_video_edit::CutTransition::motionSmooth();
     }
   }
   for (const playback_video_edit::SourceRange& range :

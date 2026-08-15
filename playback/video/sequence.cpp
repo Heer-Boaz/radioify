@@ -15,6 +15,20 @@ bool canAdd(int64_t lhs, int64_t rhs) {
   return rhs >= 0 && lhs <= (std::numeric_limits<int64_t>::max)() - rhs;
 }
 
+bool validTransition(Transition transition) {
+  switch (transition.kind) {
+    case TransitionKind::Hard:
+      return transition.outgoingFrames == 0 &&
+             transition.incomingFrames == 0;
+    case TransitionKind::MotionSmooth:
+      return transition.outgoingFrames > 0 &&
+             transition.incomingFrames > 0 &&
+             transition.durationFrames() >= kMinimumTransitionFrames &&
+             transition.durationFrames() <= kMaximumTransitionFrames;
+  }
+  return false;
+}
+
 auto firstClipEndingAfter(const std::vector<Clip>& clips, int64_t sourceUs) {
   return std::upper_bound(
       clips.begin(), clips.end(), sourceUs,
@@ -38,8 +52,13 @@ std::optional<size_t> firstClipIntersectingSource(
 }  // namespace
 
 std::optional<Timeline> Timeline::create(
-    int64_t sourceDurationUs, const std::vector<SourceRange>& ranges) {
+    int64_t sourceDurationUs, const std::vector<SourceRange>& ranges,
+    const std::vector<Transition>& transitions) {
   if (sourceDurationUs <= 0 || ranges.empty()) return std::nullopt;
+  const size_t transitionCount = ranges.size() - 1;
+  if (!transitions.empty() && transitions.size() != transitionCount) {
+    return std::nullopt;
+  }
 
   Timeline timeline;
   timeline.sourceDurationUs_ = sourceDurationUs;
@@ -57,6 +76,14 @@ std::optional<Timeline> Timeline::create(
     previousEndUs = range.endUs;
   }
   timeline.durationUs_ = presentationUs;
+  timeline.transitions_ = transitions.empty()
+                              ? std::vector<Transition>(transitionCount,
+                                                        Transition::hard())
+                              : transitions;
+  if (!std::all_of(timeline.transitions_.begin(),
+                   timeline.transitions_.end(), validTransition)) {
+    return std::nullopt;
+  }
   return timeline;
 }
 

@@ -1,11 +1,14 @@
 #include "playback/video/edit/command.h"
 #include "playback/video/edit/overlay_model.h"
 #include "playback/video/edit/timeline.h"
+#include "playback/video/composition/render_plan.h"
+#include "playback/video/frame_step_prefetch.h"
 #include "playback/overlay/context_menu.h"
 #include "playback/overlay/overlay.h"
 #include "playback/session/context_menu_controller.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <iostream>
 #include <optional>
 #include <vector>
@@ -35,12 +38,120 @@ int main() {
 
   bool ok = true;
   ok &= expect(
-      playback_video_edit::CutTransition::smooth(1).durationFrames ==
+      playback_video_edit::CutTransition::motionSmooth(1).durationFrames() ==
               playback_video_edit::kMinimumSmoothCutFrames &&
-          playback_video_edit::CutTransition::smooth(255).durationFrames ==
+          playback_video_edit::CutTransition::motionSmooth(255)
+                  .durationFrames() ==
               playback_video_edit::kMaximumSmoothCutFrames,
       "smooth-cut duration must stay inside the editor's bounded handle "
       "window");
+  playback_video_composition::RenderPlan invalidTransitionPlan;
+  std::string invalidTransitionError;
+  ok &= expect(
+      !playback_video_composition::buildRenderPlan(
+          {{0, 1'000'000}, {2'000'000, 3'000'000}},
+          {{playback_video_sequence::TransitionKind::MotionSmooth, 255, 7}},
+          AVRational{30, 1}, &invalidTransitionPlan,
+          &invalidTransitionError),
+      "transition handle validation must not wrap at eight bits");
+  playback_video_composition::RenderPlan motionPlan;
+  std::string motionPlanError;
+  const std::vector<SourceRange> motionRanges{{0, 3'003'000},
+                                               {5'005'000, 10'010'000}};
+  const std::vector<playback_video_edit::CutTransition> motionTransitions{
+      playback_video_edit::CutTransition::motionSmooth()};
+  ok &= expect(playback_video_composition::buildRenderPlan(
+                   motionRanges, motionTransitions, AVRational{30'000, 1001},
+                   &motionPlan, &motionPlanError) &&
+                   motionPlan.hasMotionTransitions() &&
+                   motionPlan.cuts.size() == 1 && motionPlan.cuts[0] &&
+                   motionPlan.cuts[0]->outgoingFrames == 2 &&
+                   motionPlan.cuts[0]->incomingFrames == 2 &&
+                   motionPlan.cuts[0]->durationFrames == 4 &&
+                   motionPlan.clips[0].sourceEndUs ==
+                       motionPlan.cuts[0]->outgoingAnchorUs &&
+                   motionPlan.clips[1].sourceStartUs ==
+                       motionPlan.cuts[0]->incomingAnchorUs,
+               "a motion transition must own explicit coterminous outgoing "
+               "and incoming overlap windows");
+  if (!motionPlan.cuts.empty() && motionPlan.cuts[0]) {
+    const auto& window = *motionPlan.cuts[0];
+    const int64_t renderedDurationUs =
+        motionPlan.clips[0].sourceEndUs -
+            motionPlan.clips[0].sourceStartUs +
+        window.durationUs + motionPlan.clips[1].sourceEndUs -
+            motionPlan.clips[1].sourceStartUs;
+    const std::string transitionFilter =
+        playback_video_composition::buildTransitionFilterDescription(
+            motionPlan, window, AV_PIX_FMT_P010LE, &motionPlanError);
+    const std::string programFilter =
+        playback_video_composition::buildProgramFilterDescription(
+            motionPlan, AV_PIX_FMT_P010LE, &motionPlanError);
+    const std::string exactCore =
+        "settb=1001/30000,setpts=N+gte(N\\,2)*3";
+    ok &= expect(std::llabs(renderedDurationUs - 8'008'000) <= 1 &&
+                     window.presentationStartUs ==
+                         motionPlan.clips[0].sourceEndUs &&
+                     transitionFilter.find(exactCore) != std::string::npos &&
+                     programFilter.find(exactCore) != std::string::npos &&
+                     transitionFilter.find(
+                         "trim=start_frame=1:end_frame=5") !=
+                         std::string::npos &&
+                     transitionFilter.find(
+                         "format=pix_fmts=yuv420p10le,settb=1001/30000") !=
+                         std::string::npos &&
+                     transitionFilter.find("split=2") == std::string::npos,
+                 "preview and export must share exact frame-tick motion "
+                 "evaluation without duplicated still-frame synthesis");
+  }
+  playback_video_composition::RenderPlan overlappingPlan;
+  ok &= expect(
+      !playback_video_composition::buildRenderPlan(
+          {{0, 200'000}, {300'000, 500'000}, {600'000, 800'000}},
+          {playback_video_edit::CutTransition::motionSmooth(6),
+           playback_video_edit::CutTransition::motionSmooth(6)},
+          AVRational{30, 1}, &overlappingPlan, &motionPlanError),
+      "two transition overlaps must never consume the same clip interval");
+  const auto mappedSequence = SequenceTimeline::create(
+      4'000'000, {{500'000, 1'500'000}, {2'500'000, 3'500'000}});
+  playback_video_frame_step_prefetch::Request roundedFrameRequest;
+  roundedFrameRequest.serial = 1;
+  roundedFrameRequest.direction = playback_video_frame_step::Direction::Next;
+  roundedFrameRequest.boundary.ptsUs = 916'667;
+  roundedFrameRequest.boundary.sourcePtsUs = 1'416'667;
+  roundedFrameRequest.boundary.durationUs = 41'667;
+  roundedFrameRequest.join = roundedFrameRequest.boundary;
+  roundedFrameRequest.rangeStartUs = 916'667;
+  roundedFrameRequest.rangeEndUs = 1'958'334;
+  const auto roundedFrameMapping =
+      mappedSequence
+          ? playback_video_frame_step_prefetch::mapRequestToTimeline(
+                *mappedSequence, roundedFrameRequest)
+          : std::nullopt;
+  ok &= expect(
+      roundedFrameMapping &&
+          roundedFrameMapping->joinContinuity ==
+              playback_video_frame_step_prefetch::JoinContinuity::Source &&
+          roundedFrameMapping->sourceRangeStartUs == 1'416'667 &&
+          roundedFrameMapping->sourceRangeEndUs == 1'500'000,
+      "24 fps rounding must not cross a clip boundary before the current "
+      "frame reaches it");
+  roundedFrameRequest.boundary.ptsUs = 958'333;
+  roundedFrameRequest.boundary.sourcePtsUs = 1'458'333;
+  roundedFrameRequest.join = roundedFrameRequest.boundary;
+  roundedFrameRequest.rangeStartUs = 958'333;
+  const auto boundaryFrameMapping =
+      mappedSequence
+          ? playback_video_frame_step_prefetch::mapRequestToTimeline(
+                *mappedSequence, roundedFrameRequest)
+          : std::nullopt;
+  ok &= expect(
+      boundaryFrameMapping &&
+          boundaryFrameMapping->joinContinuity ==
+              playback_video_frame_step_prefetch::JoinContinuity::Presentation &&
+          boundaryFrameMapping->sourceRangeStartUs == 2'500'000,
+      "the final frame must cross to the next clip on its exact half-open "
+      "boundary");
   ok &= expect(playback_video_edit::exitExportAction(ExitContext{}) ==
                    ExitExportAction::None &&
                    playback_video_edit::exitExportAction(
@@ -77,9 +188,9 @@ int main() {
                    timeline.nearestCutIndex(3'000'000, 1) ==
                        std::optional<size_t>(0) &&
                    timeline.setCutTransition(
-                       0, playback_video_edit::CutTransition::smooth()) &&
+                       0, playback_video_edit::CutTransition::motionSmooth()) &&
                    timeline.cutTransitions()[0] ==
-                       playback_video_edit::CutTransition::smooth(),
+                       playback_video_edit::CutTransition::motionSmooth(),
                "a cut must own its explicit hard/smooth transition");
   const auto sequence =
       SequenceTimeline::create(timeline.sourceDurationUs(),
@@ -147,7 +258,7 @@ int main() {
                                             {5'000'000, 9'000'000}},
                 "outer trims must preserve all remaining source clips");
   ok &= expect(timeline.cutTransitions()[0] ==
-                   playback_video_edit::CutTransition::smooth(),
+                   playback_video_edit::CutTransition::motionSmooth(),
                "trimming clip edges must preserve an unchanged edit point");
   ok &= expect(!timeline.rippleDelete({0, 10'000'000}),
                "an edit must not publish an empty sequence");
@@ -351,7 +462,7 @@ int main() {
   ok &= expect(
       transitionDocument.rippleDelete({3'000'000, 5'000'000}) &&
           transitionDocument.setCutTransition(
-              0, playback_video_edit::CutTransition::smooth()),
+              0, playback_video_edit::CutTransition::motionSmooth()),
       "a smooth cut must commit as an undoable edit-point decision");
   const DecisionList exportedTransitionRevision =
       transitionDocument.timeline().decisionList();
@@ -362,7 +473,7 @@ int main() {
                    selectedSmoothCutSnapshot.canToggleSmoothCut &&
                    selectedSmoothCutSnapshot.selectedCutTransition ==
                        std::optional<playback_video_edit::CutTransition>(
-                           playback_video_edit::CutTransition::smooth()),
+                           playback_video_edit::CutTransition::motionSmooth()),
                "the playhead must select the transition owned by its cut");
   ok &= expect(
       transitionDocument.setCutTransition(
@@ -477,7 +588,7 @@ int main() {
                 "marks, cuts, and playhead must share the program-time axis");
   playback_video_edit::EditSnapshot smoothOverlay = overlayEdit;
   smoothOverlay.cuts.front().transition =
-      playback_video_edit::CutTransition::smooth();
+      playback_video_edit::CutTransition::motionSmooth();
   const playback_video_edit::OverlayModel smoothOverlayModel =
       playback_video_edit::buildOverlayModel(
           smoothOverlay, nullptr, Prompt::None, 10, 0.5);
@@ -1134,7 +1245,7 @@ int main() {
                    smoothCutItem != dirtyMenu.items.end(),
                "the context menu must own secondary edit commands");
   cleanEdit.selectedCutTransition =
-      playback_video_edit::CutTransition::smooth();
+      playback_video_edit::CutTransition::motionSmooth();
   playbackMenu.refresh(cleanEdit, idleExport);
   const auto smoothEnabledMenu = playbackMenu.snapshotFor(
       playback_session::ContextMenuSurface::Terminal);

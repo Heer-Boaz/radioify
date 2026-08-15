@@ -15,6 +15,8 @@ radioify_add_module_object_library(radioify_ascii_gpu
 )
 
 radioify_add_module_object_library(radioify_video_playback
+  ${CMAKE_CURRENT_SOURCE_DIR}/composition/preview_cache.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/composition/render_plan.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/audio/clock_reacquire.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/audio/output_clock_source.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/audio/output_timeline.cpp
@@ -26,6 +28,7 @@ radioify_add_module_object_library(radioify_video_playback
   ${CMAKE_CURRENT_SOURCE_DIR}/timing/timeline.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/frame_cursor.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/frame_step_prefetch.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/frame_step_prefetch_mapping.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/frame_step_snapshot.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/frame_step_source_cache.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/frame_step_seek.cpp

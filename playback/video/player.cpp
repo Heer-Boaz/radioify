@@ -61,6 +61,8 @@ extern "C" {
 #include "playback/video/audio/track_switch_timeline.h"
 #include "playback/video/control/events.h"
 #include "playback/video/control/serial.h"
+#include "playback/video/composition/preview_cache.h"
+#include "playback/video/composition/render_plan.h"
 #include "playback/video/frame_cursor.h"
 #include "playback/video/frame_step_prefetch.h"
 #include "playback/video/frame_step_seek.h"
@@ -1590,12 +1592,19 @@ struct Player::Impl {
   std::atomic<int64_t> estimatedFrameDurationUs{33333};
   std::atomic<int64_t> durationUs{0};
   std::atomic<int64_t> sourceDurationUs{0};
+  std::atomic<int> videoFrameRateNumerator{0};
+  std::atomic<int> videoFrameRateDenominator{1};
   struct SequenceBinding {
     int serial = 1;
     std::shared_ptr<const playback_video_sequence::Timeline> timeline;
   };
   mutable std::mutex sequenceMutex;
   SequenceBinding sequenceBinding;
+  playback_video_composition::PreviewCache compositionPreview;
+  std::atomic<int> compositionSerial{0};
+  std::atomic<uint64_t> compositionRevision{0};
+  std::atomic<MotionCompositionSupport> motionCompositionSupport{
+      MotionCompositionSupport::PreviewUnavailable};
   std::atomic<int> sourceWidth{0};
   std::atomic<int> sourceHeight{0};
   std::atomic<int> videoStreamIndex{-1};
@@ -1722,6 +1731,74 @@ struct Player::Impl {
     sequenceBinding = SequenceBinding{serial, std::move(timeline)};
   }
 
+  static bool sameSequenceClips(
+      const playback_video_sequence::Timeline& left,
+      const playback_video_sequence::Timeline& right) {
+    if (left.clips().size() != right.clips().size()) return false;
+    for (size_t index = 0; index < left.clips().size(); ++index) {
+      if (left.clips()[index].source != right.clips()[index].source) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool canBindComposition(
+      const std::vector<playback_video_sequence::SourceRange>& ranges,
+      const std::vector<playback_video_sequence::Transition>& transitions)
+      const {
+    const bool hasMotion = std::any_of(
+        transitions.begin(), transitions.end(), [](const auto& transition) {
+          return transition.kind ==
+                 playback_video_sequence::TransitionKind::MotionSmooth;
+        });
+    if (hasMotion &&
+        motionCompositionSupport.load(std::memory_order_relaxed) !=
+            MotionCompositionSupport::Available) {
+      return false;
+    }
+    playback_video_composition::RenderPlan plan;
+    return playback_video_composition::buildRenderPlan(
+        ranges, transitions,
+        AVRational{
+            videoFrameRateNumerator.load(std::memory_order_relaxed),
+            videoFrameRateDenominator.load(std::memory_order_relaxed)},
+        &plan, nullptr);
+  }
+
+  void configureCompositionPreview(
+      int serial,
+      const std::shared_ptr<const playback_video_sequence::Timeline>& timeline,
+      int64_t focusPresentationUs) {
+    const uint64_t revision =
+        compositionRevision.fetch_add(1, std::memory_order_relaxed) + 1;
+    compositionSerial.store(0, std::memory_order_relaxed);
+    if (!timeline) {
+      compositionPreview.setPlan(revision, {}, focusPresentationUs);
+      return;
+    }
+    std::vector<playback_video_sequence::SourceRange> ranges;
+    ranges.reserve(timeline->clips().size());
+    for (const auto& clip : timeline->clips()) ranges.push_back(clip.source);
+    playback_video_composition::RenderPlan plan;
+    std::string error;
+    const AVRational frameRate{
+        videoFrameRateNumerator.load(std::memory_order_relaxed),
+        videoFrameRateDenominator.load(std::memory_order_relaxed)};
+    if (!playback_video_composition::buildRenderPlan(
+            ranges, timeline->transitions(), frameRate, &plan, &error) ||
+        !plan.hasMotionTransitions()) {
+      compositionPreview.setPlan(revision, {}, focusPresentationUs);
+      return;
+    }
+    compositionPreview.setPlan(
+        revision,
+        std::make_shared<const playback_video_composition::RenderPlan>(
+            std::move(plan)),
+        focusPresentationUs);
+    compositionSerial.store(serial, std::memory_order_release);
+  }
+
   int64_t sourcePositionForPresentation(int64_t presentationUs) const {
     const auto currentSequence = sequenceSnapshot();
     return currentSequence ? currentSequence->pointAt(presentationUs).sourceUs
@@ -1816,14 +1893,16 @@ struct Player::Impl {
 
   bool postSequence(
       std::shared_ptr<const playback_video_sequence::Timeline> next,
-      int64_t positionUs) {
+      int64_t positionUs,
+      playback_video_control::EventType type =
+          playback_video_control::EventType::SetSequence) {
     std::lock_guard<std::mutex> lock(eventMutex);
     if (!ctrlRunning.load(std::memory_order_relaxed) ||
         !initDone.load(std::memory_order_relaxed)) {
       return false;
     }
     playback_video_control::Event ev{};
-    ev.type = playback_video_control::EventType::SetSequence;
+    ev.type = type;
     ev.sequence = std::move(next);
     ev.sequencePositionUs = std::max<int64_t>(0, positionUs);
     enqueueEventLocked(std::move(ev));
@@ -2393,6 +2472,7 @@ struct Player::Impl {
   void stopThreads() {
     appendTimingFmt("stop_threads begin");
     running.store(false);
+    compositionPreview.stop();
     playbackState.resetFrameSteps();
     SetEvent(frameReadyEvent.get());
     commandPending.store(false);
@@ -2452,8 +2532,14 @@ struct Player::Impl {
       std::lock_guard<std::mutex> lock(sequenceMutex);
       sequenceBinding = SequenceBinding{};
     }
+    compositionSerial.store(0, std::memory_order_relaxed);
+    compositionRevision.store(0, std::memory_order_relaxed);
+    motionCompositionSupport.store(MotionCompositionSupport::PreviewUnavailable,
+                                   std::memory_order_relaxed);
     durationUs.store(0, std::memory_order_relaxed);
     sourceDurationUs.store(0, std::memory_order_relaxed);
+    videoFrameRateNumerator.store(0, std::memory_order_relaxed);
+    videoFrameRateDenominator.store(1, std::memory_order_relaxed);
     clearFrameRequested.store(false, std::memory_order_relaxed);
     audioBufferedStartPtsUs.store(0, std::memory_order_relaxed);
     audioBufferedStartSerial.store(0, std::memory_order_relaxed);
@@ -2716,6 +2802,8 @@ struct Player::Impl {
                   initDone.load(std::memory_order_relaxed),
                   running.load(std::memory_order_relaxed)),
               "ctrl_sequence_change", SerialTransitionPurpose::Timeline);
+          configureCompositionPreview(nextSerial, next,
+                                      point.presentationUs);
         } else {
           const int64_t sourceDuration =
               sourceDurationUs.load(std::memory_order_relaxed);
@@ -2731,7 +2819,24 @@ struct Player::Impl {
                   targetUs, initDone.load(std::memory_order_relaxed),
                   running.load(std::memory_order_relaxed)),
               "ctrl_sequence_clear", SerialTransitionPurpose::Timeline);
+          configureCompositionPreview(nextSerial, {}, targetUs);
         }
+        break;
+      }
+      case playback_video_control::EventType::UpdateComposition: {
+        const auto current = sequenceSnapshot();
+        const auto next = ev.sequence;
+        const int currentSerial = serialControl.currentSerial();
+        if (!current || !next || !sameSequenceClips(*current, *next)) {
+          appendTimingFmt(
+              "ctrl_composition_update_rejected serial=%d current=%d next=%d",
+              currentSerial, current ? 1 : 0, next ? 1 : 0);
+          break;
+        }
+        bindSequence(currentSerial, next);
+        configureCompositionPreview(currentSerial, next, videoTimelineUs());
+        appendTimingFmt("ctrl_composition_update serial=%d cuts=%zu",
+                        currentSerial, next->transitions().size());
         break;
       }
       case playback_video_control::EventType::CycleAudioTrack: {
@@ -2929,21 +3034,66 @@ struct Player::Impl {
       if (stream) {
         AVRational rate = av_guess_frame_rate(demux.fmt, stream, nullptr);
         if (rate.num > 0 && rate.den > 0) {
+          videoFrameRateNumerator.store(rate.num, std::memory_order_relaxed);
+          videoFrameRateDenominator.store(rate.den,
+                                          std::memory_order_relaxed);
           estimatedFrameDurationSec = av_q2d(av_inv_q(rate));
         } else if (stream->avg_frame_rate.num > 0 &&
                    stream->avg_frame_rate.den > 0) {
+          videoFrameRateNumerator.store(stream->avg_frame_rate.num,
+                                        std::memory_order_relaxed);
+          videoFrameRateDenominator.store(stream->avg_frame_rate.den,
+                                          std::memory_order_relaxed);
           estimatedFrameDurationSec = av_q2d(av_inv_q(stream->avg_frame_rate));
         } else if (stream->r_frame_rate.num > 0 &&
                    stream->r_frame_rate.den > 0) {
+          videoFrameRateNumerator.store(stream->r_frame_rate.num,
+                                        std::memory_order_relaxed);
+          videoFrameRateDenominator.store(stream->r_frame_rate.den,
+                                          std::memory_order_relaxed);
           estimatedFrameDurationSec = av_q2d(av_inv_q(stream->r_frame_rate));
         }
       }
     }
     if (estimatedFrameDurationSec <= 0.0) {
       estimatedFrameDurationSec = 1.0 / 30.0;
+      videoFrameRateNumerator.store(30, std::memory_order_relaxed);
+      videoFrameRateDenominator.store(1, std::memory_order_relaxed);
     }
     estimatedFrameDurationUs.store(
         static_cast<int64_t>(estimatedFrameDurationSec * 1000000.0));
+
+    const AVFieldOrder sourceFieldOrder =
+        demux.fmt->streams[demux.videoStreamIndex]->codecpar->field_order;
+    const bool progressiveSource = sourceFieldOrder == AV_FIELD_UNKNOWN ||
+                                   sourceFieldOrder == AV_FIELD_PROGRESSIVE;
+    const bool compositionPreviewStarted =
+        progressiveSource && compositionPreview.start(
+                                 playback_video_composition::PreviewSource{
+                                     config.file,
+                                     demux.videoStreamIndex,
+                                 },
+                                 [this](const std::string& error) {
+                                   if (!error.empty()) {
+                                     appendTimingFmt(
+                                         "composition_preview_failed error=%s",
+                                         error.c_str());
+                                     return;
+                                   }
+                                   frameCounter.fetch_add(
+                                       1, std::memory_order_relaxed);
+                                   SetEvent(frameReadyEvent.get());
+                                 });
+    motionCompositionSupport.store(
+        !progressiveSource
+            ? MotionCompositionSupport::InterlacedSource
+            : compositionPreviewStarted
+                  ? MotionCompositionSupport::Available
+                  : MotionCompositionSupport::PreviewUnavailable,
+        std::memory_order_relaxed);
+    appendTimingFmt("composition_preview_start ok=%d progressive=%d",
+                    compositionPreviewStarted ? 1 : 0,
+                    progressiveSource ? 1 : 0);
 
     frameStepPrefetchStarted =
         frameStepPrefetch.start(config.file, demux.videoStreamIndex,
@@ -4494,6 +4644,42 @@ bool Player::setPlaybackSequence(
       positionUs);
 }
 
+bool Player::setPlaybackComposition(
+    const std::vector<playback_video_sequence::SourceRange>& ranges,
+    const std::vector<playback_video_sequence::Transition>& transitions,
+    int64_t positionUs) {
+  if (!impl_->canBindComposition(ranges, transitions)) return false;
+  const int64_t sourceDuration =
+      impl_->sourceDurationUs.load(std::memory_order_relaxed);
+  const auto timeline = playback_video_sequence::Timeline::create(
+      sourceDuration, ranges, transitions);
+  if (!timeline) return false;
+  return impl_->postSequence(
+      std::make_shared<const playback_video_sequence::Timeline>(*timeline),
+      positionUs);
+}
+
+bool Player::updatePlaybackComposition(
+    const std::vector<playback_video_sequence::SourceRange>& ranges,
+    const std::vector<playback_video_sequence::Transition>& transitions) {
+  if (!impl_->canBindComposition(ranges, transitions)) return false;
+  const int64_t sourceDuration =
+      impl_->sourceDurationUs.load(std::memory_order_relaxed);
+  const auto timeline = playback_video_sequence::Timeline::create(
+      sourceDuration, ranges, transitions);
+  if (!timeline) return false;
+  return impl_->postSequence(
+      std::make_shared<const playback_video_sequence::Timeline>(*timeline), 0,
+      playback_video_control::EventType::UpdateComposition);
+}
+
+bool Player::canRenderPlaybackComposition(
+    const std::vector<playback_video_sequence::SourceRange>& ranges,
+    const std::vector<playback_video_sequence::Transition>& transitions)
+    const {
+  return impl_->canBindComposition(ranges, transitions);
+}
+
 bool Player::clearPlaybackSequence(int64_t positionUs) {
   return impl_->postSequence({}, positionUs);
 }
@@ -4629,11 +4815,25 @@ bool Player::copyCurrentVideoFrame(VideoFrame* out) {
   if (!impl_->hasFrame.load(std::memory_order_relaxed)) {
     return false;
   }
-  std::lock_guard<std::mutex> lock(impl_->currentFrameMutex);
-  if (!impl_->hasFrame.load(std::memory_order_relaxed)) {
-    return false;
+  Impl::PresentedFrameState presented;
+  {
+    std::lock_guard<std::mutex> lock(impl_->currentFrameMutex);
+    if (!impl_->hasFrame.load(std::memory_order_relaxed)) {
+      return false;
+    }
+    *out = impl_->currentFrame;
+    presented = impl_->presentedFrame;
   }
-  *out = impl_->currentFrame;
+  if (presented.valid &&
+      presented.serial ==
+          impl_->compositionSerial.load(std::memory_order_acquire)) {
+    impl_->compositionPreview.requestNear(presented.ptsUs);
+    VideoFrame composited;
+    if (impl_->compositionPreview.copyFrame(
+            presented.ptsUs, presented.durationUs, &composited)) {
+      *out = std::move(composited);
+    }
+  }
   return true;
 }
 
@@ -4702,6 +4902,10 @@ int64_t Player::sourceDurationUs() const {
 
 int Player::videoStreamIndex() const {
   return impl_->videoStreamIndex.load(std::memory_order_relaxed);
+}
+
+MotionCompositionSupport Player::motionCompositionSupport() const {
+  return impl_->motionCompositionSupport.load(std::memory_order_relaxed);
 }
 
 int Player::activeAudioStreamIndex() const {

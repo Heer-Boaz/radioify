@@ -107,6 +107,11 @@ struct VideoMetadata {
 // objects or exception-capable callables.
 using VideoDecoderInterruptCallback = int (*)(void* opaque);
 
+enum class VideoCpuOutputPrecision : uint8_t {
+  EightBit,
+  PreserveSource,
+};
+
 class VideoDecoder {
  public:
   ~VideoDecoder();
@@ -115,7 +120,9 @@ class VideoDecoder {
             VideoStreamSelection* streamSelection = nullptr,
             int requestedStreamIndex = -1,
             VideoDecoderInterruptCallback interruptCallback = nullptr,
-            void* interruptOpaque = nullptr);
+            void* interruptOpaque = nullptr,
+            VideoCpuOutputPrecision outputPrecision =
+                VideoCpuOutputPrecision::EightBit);
   
   // Initialize with an external D3D11 device (for device sharing / zero-copy)
   // key: An optional mutex for synchronizing access to the device context

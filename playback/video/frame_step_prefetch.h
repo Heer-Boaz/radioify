@@ -10,6 +10,9 @@
 #include <optional>
 #include <vector>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <d3d11.h>
 
 #include "playback/video/decoder.h"

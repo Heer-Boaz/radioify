@@ -181,8 +181,8 @@ std::optional<size_t> Timeline::nearestCutIndex(int64_t timelineUs,
 bool Timeline::setCutTransition(size_t cutIndex,
                                 CutTransition transition) {
   if (cutIndex >= cutTransitions_.size()) return false;
-  transition = transition.kind == CutTransitionKind::Smooth
-                   ? CutTransition::smooth(transition.durationFrames)
+  transition = transition.kind == CutTransitionKind::MotionSmooth
+                   ? CutTransition::motionSmooth(transition.durationFrames())
                    : CutTransition::hard();
   if (cutTransitions_[cutIndex] == transition) return false;
   cutTransitions_[cutIndex] = transition;

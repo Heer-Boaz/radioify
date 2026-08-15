@@ -52,7 +52,7 @@ void ContextMenuController::refresh(
     }
     if (edit.canToggleSmoothCut && edit.selectedCutTransition) {
       const bool smooth = edit.selectedCutTransition->kind ==
-                          playback_video_edit::CutTransitionKind::Smooth;
+                          playback_video_edit::CutTransitionKind::MotionSmooth;
       next.push_back({playback_video_edit::Command::ToggleSmoothCut,
                       smooth ? "Hard cut" : "Smooth cut"});
     }

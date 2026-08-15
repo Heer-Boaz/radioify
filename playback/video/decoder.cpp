@@ -320,12 +320,18 @@ int streamRotationQuarterTurns(AVStream* stream) {
   return normalizeQuarterTurns(quarterTurns);
 }
 
-bool rotateNv12(const uint8_t* src, int srcStride, int srcPlaneHeight, int srcW,
-                int srcH, int quarterTurns, uint8_t* dst, int dstStride,
-                int dstPlaneHeight, int dstW, int dstH) {
+bool rotateSemiPlanarYuv(const uint8_t* src, int srcStride,
+                         int srcPlaneHeight, int srcW, int srcH,
+                         int bytesPerSample, int quarterTurns, uint8_t* dst,
+                         int dstStride, int dstPlaneHeight, int dstW,
+                         int dstH) {
   if (!src || !dst) return false;
   if (srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) return false;
-  if (srcStride < srcW || dstStride < dstW) return false;
+  if (bytesPerSample != 1 && bytesPerSample != 2) return false;
+  if (srcStride < srcW * bytesPerSample ||
+      dstStride < dstW * bytesPerSample) {
+    return false;
+  }
 
   quarterTurns = normalizeQuarterTurns(quarterTurns);
   int expectedW = 0;
@@ -343,12 +349,12 @@ bool rotateNv12(const uint8_t* src, int srcStride, int srcPlaneHeight, int srcW,
   if (quarterTurns == 0) {
     for (int y = 0; y < srcH; ++y) {
       std::memcpy(dstY + y * dstStride, srcY + y * srcStride,
-                  static_cast<size_t>(srcW));
+                  static_cast<size_t>(srcW) * bytesPerSample);
     }
     const int srcChromaH = srcH / 2;
     for (int y = 0; y < srcChromaH; ++y) {
       std::memcpy(dstUV + y * dstStride, srcUV + y * srcStride,
-                  static_cast<size_t>(srcW));
+                  static_cast<size_t>(srcW) * bytesPerSample);
     }
     return true;
   }
@@ -373,7 +379,9 @@ bool rotateNv12(const uint8_t* src, int srcStride, int srcPlaneHeight, int srcW,
         default:
           return false;
       }
-      dstY[y * dstStride + x] = srcY[sy * srcStride + sx];
+      std::memcpy(dstY + y * dstStride + x * bytesPerSample,
+                  srcY + sy * srcStride + sx * bytesPerSample,
+                  static_cast<size_t>(bytesPerSample));
     }
   }
 
@@ -401,10 +409,12 @@ bool rotateNv12(const uint8_t* src, int srcStride, int srcPlaneHeight, int srcW,
         default:
           return false;
       }
-      const uint8_t* srcPx = srcUV + sy * srcStride + sx * 2;
-      uint8_t* dstPx = dstUV + y * dstStride + x * 2;
-      dstPx[0] = srcPx[0];
-      dstPx[1] = srcPx[1];
+      const size_t chromaBytes = static_cast<size_t>(2 * bytesPerSample);
+      const uint8_t* srcPx =
+          srcUV + sy * srcStride + sx * 2 * bytesPerSample;
+      uint8_t* dstPx =
+          dstUV + y * dstStride + x * 2 * bytesPerSample;
+      std::memcpy(dstPx, srcPx, chromaBytes);
     }
   }
   return true;
@@ -564,6 +574,8 @@ struct VideoDecoder::Impl {
   int consecutiveTransferErrors = 0;
   bool hasPendingPacket = false;
   bool useSharedDevice = false;  // When true, keep frames on GPU without transfer
+  VideoCpuOutputPrecision outputPrecision =
+      VideoCpuOutputPrecision::EightBit;
 
   bool emitFrame(VideoFrame& out, VideoReadInfo* info, bool decodePixels,
                  AVFrame* src, bool keepOnGpu = false) {
@@ -678,9 +690,22 @@ struct VideoDecoder::Impl {
       return true;
     }
 
+    int sourceDepth = 8;
+    if (outputPrecision == VideoCpuOutputPrecision::PreserveSource) {
+      const AVPixFmtDescriptor* descriptor =
+          av_pix_fmt_desc_get(static_cast<AVPixelFormat>(src->format));
+      if (descriptor && descriptor->nb_components > 0) {
+        sourceDepth = descriptor->comp[0].depth;
+      }
+    }
+    const bool p010 = sourceDepth > 8;
+    const int bytesPerSample = p010 ? 2 : 1;
+    const AVPixelFormat destinationFormat =
+        p010 ? AV_PIX_FMT_P010LE : AV_PIX_FMT_NV12;
+
     int dstW = targetW;
     int dstH = targetH;
-    int stride = std::max(2, dstW);
+    int stride = std::max(2, dstW) * bytesPerSample;
     if (stride & 1) ++stride;
     int planeHeight = dstH;
     size_t required = static_cast<size_t>(stride) *
@@ -692,7 +717,7 @@ struct VideoDecoder::Impl {
       return false;
     }
     out.rgba.clear();
-    out.format = VideoPixelFormat::NV12;
+    out.format = p010 ? VideoPixelFormat::P010 : VideoPixelFormat::NV12;
     out.stride = stride;
     out.planeHeight = planeHeight;
 
@@ -701,7 +726,7 @@ struct VideoDecoder::Impl {
     if ((rotationTurns & 1) != 0) {
       std::swap(scaledW, scaledH);
     }
-    int scaledStride = std::max(2, scaledW);
+    int scaledStride = std::max(2, scaledW) * bytesPerSample;
     if (scaledStride & 1) ++scaledStride;
     int scaledPlaneHeight = scaledH;
 
@@ -727,18 +752,18 @@ struct VideoDecoder::Impl {
     int dstLinesize[4] = {scaledStride, scaledStride, 0, 0};
 
     AVPixelFormat srcFmt = static_cast<AVPixelFormat>(src->format);
-    if (srcFmt == AV_PIX_FMT_NV12 && src->width == scaledW &&
+    if (srcFmt == destinationFormat && src->width == scaledW &&
         src->height == scaledH) {
       for (int y = 0; y < scaledH; ++y) {
         std::memcpy(scaledY + y * scaledStride,
                     src->data[0] + y * src->linesize[0],
-                    static_cast<size_t>(scaledW));
+                    static_cast<size_t>(scaledW) * bytesPerSample);
       }
       int uvH = scaledH / 2;
       for (int y = 0; y < uvH; ++y) {
         std::memcpy(scaledUV + y * scaledStride,
                     src->data[1] + y * src->linesize[1],
-                    static_cast<size_t>(scaledW));
+                    static_cast<size_t>(scaledW) * bytesPerSample);
       }
     } else {
       // Use point sampling for high-res content (like 4K) to avoid excessive CPU usage.
@@ -750,7 +775,7 @@ struct VideoDecoder::Impl {
 
       sws = sws_getCachedContext(
           sws, src->width, src->height, srcFmt, scaledW, scaledH,
-          AV_PIX_FMT_NV12, flags, nullptr, nullptr, nullptr);
+          destinationFormat, flags, nullptr, nullptr, nullptr);
       if (!sws) {
         atEnd = true;
         return false;
@@ -760,9 +785,10 @@ struct VideoDecoder::Impl {
     }
 
     if (rotationTurns != 0) {
-      if (!rotateNv12(scaled.data(), scaledStride, scaledPlaneHeight, scaledW,
-                      scaledH, rotationTurns, out.yuv.data(), stride,
-                      planeHeight, dstW, dstH)) {
+      if (!rotateSemiPlanarYuv(
+              scaled.data(), scaledStride, scaledPlaneHeight, scaledW,
+              scaledH, bytesPerSample, rotationTurns, out.yuv.data(), stride,
+              planeHeight, dstW, dstH)) {
         atEnd = true;
         return false;
       }
@@ -780,7 +806,8 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
                         VideoStreamSelection* streamSelection,
                         int requestedStreamIndex,
                         VideoDecoderInterruptCallback interruptCallback,
-                        void* interruptOpaque) {
+                        void* interruptOpaque,
+                        VideoCpuOutputPrecision outputPrecision) {
   uninit();
 
   AVFormatContext* fmt = nullptr;
@@ -898,6 +925,7 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
   impl->fullRange = mapFullRange(ctx->color_range);
   impl->yuvMatrix = mapColorMatrix(ctx->colorspace);
   impl->yuvTransfer = mapColorTransfer(ctx->color_trc);
+  impl->outputPrecision = outputPrecision;
   impl->formatStartUs =
       (fmt->start_time != AV_NOPTS_VALUE) ? fmt->start_time : 0;
   if (fmt->streams[streamIndex]->start_time != AV_NOPTS_VALUE) {

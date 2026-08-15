@@ -1,6 +1,5 @@
 #pragma once
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -11,38 +10,15 @@ namespace playback_video_edit {
 
 using playback_video_sequence::SourceRange;
 
-inline constexpr uint8_t kMinimumSmoothCutFrames = 2;
-inline constexpr uint8_t kDefaultSmoothCutFrames = 4;
-inline constexpr uint8_t kMaximumSmoothCutFrames = 6;
+inline constexpr uint8_t kMinimumSmoothCutFrames =
+    playback_video_sequence::kMinimumTransitionFrames;
+inline constexpr uint8_t kDefaultSmoothCutFrames =
+    playback_video_sequence::kDefaultTransitionFrames;
+inline constexpr uint8_t kMaximumSmoothCutFrames =
+    playback_video_sequence::kMaximumTransitionFrames;
 
-enum class CutTransitionKind : uint8_t {
-  Hard,
-  Smooth,
-};
-
-struct CutTransition {
-  CutTransitionKind kind = CutTransitionKind::Hard;
-  uint8_t durationFrames = 0;
-
-  static constexpr CutTransition hard() { return {}; }
-  static constexpr CutTransition smooth(
-      uint8_t frames = kDefaultSmoothCutFrames) {
-    return {CutTransitionKind::Smooth,
-            std::clamp(frames, kMinimumSmoothCutFrames,
-                       kMaximumSmoothCutFrames)};
-  }
-};
-
-inline bool operator==(const CutTransition& left,
-                       const CutTransition& right) {
-  return left.kind == right.kind &&
-         left.durationFrames == right.durationFrames;
-}
-
-inline bool operator!=(const CutTransition& left,
-                       const CutTransition& right) {
-  return !(left == right);
-}
+using CutTransitionKind = playback_video_sequence::TransitionKind;
+using CutTransition = playback_video_sequence::Transition;
 
 struct DecisionList {
   std::vector<SourceRange> keptRanges;
@@ -58,11 +34,14 @@ struct DecisionList {
                        [](const CutTransition& transition) {
                          switch (transition.kind) {
                            case CutTransitionKind::Hard:
-                             return transition.durationFrames == 0;
-                           case CutTransitionKind::Smooth:
-                             return transition.durationFrames >=
+                             return transition.outgoingFrames == 0 &&
+                                    transition.incomingFrames == 0;
+                           case CutTransitionKind::MotionSmooth:
+                             return transition.outgoingFrames > 0 &&
+                                    transition.incomingFrames > 0 &&
+                                    transition.durationFrames() >=
                                         kMinimumSmoothCutFrames &&
-                                    transition.durationFrames <=
+                                    transition.durationFrames() <=
                                         kMaximumSmoothCutFrames;
                          }
                          return false;

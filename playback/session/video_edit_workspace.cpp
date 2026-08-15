@@ -84,6 +84,17 @@ struct VideoEditWorkspace::Impl {
     return std::nullopt;
   }
 
+  bool canEnableMotionTransition(size_t cutIndex) const {
+    const auto& ranges = document.timeline().keptRanges();
+    auto transitions = document.timeline().cutTransitions();
+    if (cutIndex + 1 >= ranges.size() || cutIndex >= transitions.size()) {
+      return false;
+    }
+    transitions[cutIndex] =
+        playback_video_edit::CutTransition::motionSmooth();
+    return player.canRenderPlaybackComposition(ranges, transitions);
+  }
+
   playback_video_edit::EditSnapshot editSnapshot() const {
     std::optional<int64_t> playheadTimelineUs;
     int64_t timecodeFrameDurationUs = 0;
@@ -100,7 +111,10 @@ struct VideoEditWorkspace::Impl {
       if (const auto cut = resolvedSelectedCutIndex()) {
         snapshot.selectedCutTransition =
             document.timeline().cutTransitions()[*cut];
-        snapshot.canToggleSmoothCut = true;
+        snapshot.canToggleSmoothCut =
+            snapshot.selectedCutTransition->kind ==
+                playback_video_edit::CutTransitionKind::MotionSmooth ||
+            canEnableMotionTransition(*cut);
       }
     }
     return snapshot;
@@ -165,8 +179,9 @@ struct VideoEditWorkspace::Impl {
     const playback_video_edit::Timeline& timeline = document.timeline();
     if (timeline.isUnmodified()) {
       if (!player.clearPlaybackSequence(positionUs)) return false;
-    } else if (!player.setPlaybackSequence(timeline.keptRanges(),
-                                           positionUs)) {
+    } else if (!player.setPlaybackComposition(
+                   timeline.keptRanges(), timeline.cutTransitions(),
+                   positionUs)) {
       return false;
     }
     updateTimelinePreview(timeline.keptRanges());
@@ -437,14 +452,27 @@ VideoEditActionResult VideoEditWorkspace::execute(
         const playback_video_edit::CutTransition current =
             impl_->document.timeline().cutTransitions()[*cut];
         const bool enable =
-            current.kind != playback_video_edit::CutTransitionKind::Smooth;
-        timelineChanged = impl_->document.setCutTransition(
-            *cut, enable ? playback_video_edit::CutTransition::smooth()
-                         : playback_video_edit::CutTransition::hard());
-        result.message = timelineChanged
-                             ? (enable ? "Smooth cut set (4f)"
-                                       : "Hard cut restored")
-                             : "Cut transition is unchanged";
+            current.kind !=
+            playback_video_edit::CutTransitionKind::MotionSmooth;
+        const MotionCompositionSupport support =
+            impl_->player.motionCompositionSupport();
+        if (enable && support == MotionCompositionSupport::InterlacedSource) {
+          result.message = "Smooth cut is unavailable for interlaced video";
+        } else if (enable &&
+                   support == MotionCompositionSupport::PreviewUnavailable) {
+          result.message = "Smooth cut preview is unavailable";
+        } else if (enable && !impl_->canEnableMotionTransition(*cut)) {
+          result.message = "Smooth cut needs longer adjacent clips";
+        } else {
+          timelineChanged = impl_->document.setCutTransition(
+              *cut,
+              enable ? playback_video_edit::CutTransition::motionSmooth()
+                     : playback_video_edit::CutTransition::hard());
+          result.message = timelineChanged
+                               ? (enable ? "Smooth cut set (4f)"
+                                         : "Hard cut restored")
+                               : "Cut transition is unchanged";
+        }
       } else {
         result.message = "Move the playhead to a cut first";
       }
@@ -477,6 +505,11 @@ VideoEditActionResult VideoEditWorkspace::execute(
     if (playbackSequenceChanged) {
       impl_->selection.clear();
       projectionAccepted = impl_->syncDocumentPreview(nextPositionUs);
+    } else {
+      const playback_video_edit::Timeline& timeline =
+          impl_->document.timeline();
+      projectionAccepted = impl_->player.updatePlaybackComposition(
+          timeline.keptRanges(), timeline.cutTransitions());
     }
   }
 

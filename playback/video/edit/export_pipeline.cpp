@@ -38,9 +38,9 @@ extern "C" {
 #include <vector>
 
 #include "core/runtime_helpers.h"
+#include "playback/video/composition/render_plan.h"
 #include "playback/video/edit/export_codec_support.h"
 #include "playback/video/edit/export_metadata.h"
-#include "playback/video/edit/export_render_plan.h"
 
 namespace playback_video_edit::detail {
 namespace {
@@ -243,7 +243,7 @@ class ExportPipeline {
   StaticFrameMetadata staticMetadata_;
   MetadataFingerprint sourceMetadata_;
   MetadataFingerprint expectedMetadata_;
-  VideoRenderPlan videoRenderPlan_;
+  playback_video_composition::RenderPlan videoRenderPlan_;
 };
 
 bool ExportPipeline::openInput(std::string* error) {
@@ -947,7 +947,7 @@ bool ExportPipeline::createVideoRenderPlan(std::string* error) {
       request_.decisions.cutTransitions.begin(),
       request_.decisions.cutTransitions.end(),
       [](const CutTransition& transition) {
-        return transition.kind == CutTransitionKind::Smooth;
+        return transition.kind == CutTransitionKind::MotionSmooth;
       });
   AVFieldOrder fieldOrder = video->inputStream->codecpar->field_order;
   if (fieldOrder == AV_FIELD_UNKNOWN) {
@@ -965,8 +965,9 @@ bool ExportPipeline::createVideoRenderPlan(std::string* error) {
   if (sourceFrameRate.num <= 0 || sourceFrameRate.den <= 0) {
     sourceFrameRate = video->inputStream->codecpar->framerate;
   }
-  return buildVideoRenderPlan(request_.decisions, sourceFrameRate,
-                              &videoRenderPlan_, error);
+  return playback_video_composition::buildRenderPlan(
+      request_.decisions.keptRanges, request_.decisions.cutTransitions,
+      sourceFrameRate, &videoRenderPlan_, error);
 }
 
 int64_t ExportPipeline::presentationStartForRange(size_t rangeIndex) const {
@@ -1071,8 +1072,8 @@ AVFilterInOut* makeEndpoint(const char* label, AVFilterContext* context) {
 std::string ExportPipeline::filterDescription(const EncodedStream& stream,
                                               std::string* error) const {
   if (stream.video()) {
-    return buildVideoFilterDescription(videoRenderPlan_,
-                                       stream.encoder->pix_fmt, error);
+    return playback_video_composition::buildProgramFilterDescription(
+        videoRenderPlan_, stream.encoder->pix_fmt, error);
   }
   const std::string prefix = "a";
   std::string description =

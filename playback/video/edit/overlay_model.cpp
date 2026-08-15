@@ -216,7 +216,7 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
       const int cutCell =
           timelineCell(cut.timelineUs, edit.timelineDurationUs, width);
       std::vector<int>& destination =
-          cut.transition.kind == CutTransitionKind::Smooth
+          cut.transition.kind == CutTransitionKind::MotionSmooth
               ? model.smoothCutCells
               : model.cutCells;
       if (destination.empty() || destination.back() != cutCell) {

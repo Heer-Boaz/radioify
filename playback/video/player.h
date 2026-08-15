@@ -22,6 +22,12 @@ struct PlayerConfig {
   int targetHeight = 0;
 };
 
+enum class MotionCompositionSupport : uint8_t {
+  Available,
+  InterlacedSource,
+  PreviewUnavailable,
+};
+
 struct PlayerDebugInfo {
   PlayerState state = PlayerState::Idle;
   PlayerClockSource masterSource = PlayerClockSource::None;
@@ -83,6 +89,19 @@ class Player {
   bool setPlaybackSequence(
       const std::vector<playback_video_sequence::SourceRange>& ranges,
       int64_t positionUs);
+  bool setPlaybackComposition(
+      const std::vector<playback_video_sequence::SourceRange>& ranges,
+      const std::vector<playback_video_sequence::Transition>& transitions,
+      int64_t positionUs);
+  // Update visual transition decisions for the currently bound source clips.
+  // This never seeks, changes serial, or touches the audio timeline.
+  bool updatePlaybackComposition(
+      const std::vector<playback_video_sequence::SourceRange>& ranges,
+      const std::vector<playback_video_sequence::Transition>& transitions);
+  bool canRenderPlaybackComposition(
+      const std::vector<playback_video_sequence::SourceRange>& ranges,
+      const std::vector<playback_video_sequence::Transition>& transitions)
+      const;
   bool clearPlaybackSequence(int64_t positionUs);
   void requestResize(int targetW, int targetH);
   void setVideoPaused(bool paused);
@@ -121,6 +140,7 @@ class Player {
   int sourceWidth() const;
   int sourceHeight() const;
   int videoStreamIndex() const;
+  MotionCompositionSupport motionCompositionSupport() const;
   int activeAudioStreamIndex() const;
 
  private:

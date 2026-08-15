@@ -450,7 +450,7 @@ int main(int argc, char** argv) {
                  "rapid-resume, resume-during-step, burst-previous, "
                  "burst-forward, alternating, seek-alternating, "
                  "seek-step-overlap, "
-                 "ended-replay, sequence\n";
+                 "ended-replay, sequence, composition\n";
     return 2;
   }
 
@@ -483,10 +483,12 @@ int main(int argc, char** argv) {
   bool replayAfterEnd = false;
   bool verifyStartup = false;
   bool verifySequence = false;
+  bool verifyComposition = false;
   if (argc >= 5) {
     const std::string mode = argv[4];
     verifyStartup = mode == "startup";
     verifySequence = mode == "sequence";
+    verifyComposition = mode == "composition";
     resumeAfterPrevious = mode == "resume";
     resumeAfterForward = mode == "forward-resume";
     resumeAfterMixed = mode == "mixed-resume";
@@ -500,7 +502,8 @@ int main(int argc, char** argv) {
       burstDirection = playback_video_frame_step::Direction::Next;
     }
     replayAfterEnd = mode == "ended-replay";
-    if (!verifyStartup && !verifySequence && !resumeAfterPrevious &&
+    if (!verifyStartup && !verifySequence && !verifyComposition &&
+        !resumeAfterPrevious &&
         !resumeAfterForward &&
         !resumeAfterMixed && !rapidResume && !resumeDuringStep && !burstSteps &&
         !alternatingSteps && !seekAlternatingSteps && !seekStepOverlap &&
@@ -510,7 +513,8 @@ int main(int argc, char** argv) {
                 << "'mixed-resume', 'rapid-resume', or "
                 << "'resume-during-step', 'burst-previous', "
                 << "'burst-forward', 'alternating', 'seek-alternating', "
-                << "'seek-step-overlap', 'ended-replay', or 'sequence')\n";
+                << "'seek-step-overlap', 'ended-replay', 'sequence', or "
+                   "'composition')\n";
       return 2;
     }
   }
@@ -584,6 +588,209 @@ int main(int argc, char** argv) {
       return 1;
     }
     std::cout << "video_frame_step_smoke: PASS startup_pts_us=0\n";
+    player.close();
+    return 0;
+  }
+
+  if (verifyComposition) {
+    const int64_t sourceDurationUs = player.sourceDurationUs();
+    if (sourceDurationUs < 3'500'000) {
+      std::cerr << "video_frame_step_smoke: composition mode requires at "
+                   "least 3.5 seconds of media; source_duration_us="
+                << sourceDurationUs << '\n';
+      player.close();
+      return 1;
+    }
+    if (!waitFor(player, kDefaultTimeoutMs, "composition_startup",
+                 [&](const PlayerDebugInfo& info) {
+                   return info.hasVideoFrame &&
+                          player.videoFrameCounter() > 0;
+                 })) {
+      player.close();
+      return 1;
+    }
+    player.setVideoPaused(true);
+    if (!waitFor(player, kDefaultTimeoutMs, "composition_paused",
+                 [](const PlayerDebugInfo& info) {
+                   return info.state == PlayerState::Paused;
+                 })) {
+      player.close();
+      return 1;
+    }
+
+    const std::vector<playback_video_sequence::SourceRange> ranges{
+        {500'000, 1'500'000}, {2'500'000, 3'500'000}};
+    const auto smooth =
+        playback_video_sequence::Transition::motionSmooth();
+    const int64_t frameDurationUs = std::max<int64_t>(
+        1, player.timelineSnapshot().nominalFrameDurationUs);
+    const int64_t transitionStartUs =
+        1'000'000 - smooth.outgoingFrames * frameDurationUs;
+    const int64_t targetUs = transitionStartUs + frameDurationUs / 2;
+    const int beforeSerial = player.debugInfo().currentSerial;
+    const uint64_t beforeCompositionCounter = player.videoFrameCounter();
+    const AudioStreamReset beforeAudioReset =
+        audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+    if (player.motionCompositionSupport() !=
+        MotionCompositionSupport::Available) {
+      std::cerr << "video_frame_step_smoke: composition preview is not "
+                   "supported for this source\n";
+      player.close();
+      return 1;
+    }
+    const int64_t shortClipUs = std::max<int64_t>(1, frameDurationUs * 2);
+    if (player.setPlaybackComposition(
+            {{500'000, 500'000 + shortClipUs}, {2'500'000, 3'500'000}},
+            {smooth}, 0) ||
+        player.debugInfo().currentSerial != beforeSerial) {
+      std::cerr << "video_frame_step_smoke: an unrenderable composition was "
+                   "accepted\n";
+      player.close();
+      return 1;
+    }
+    if (!player.setPlaybackComposition(ranges, {smooth}, targetUs)) {
+      std::cerr << "video_frame_step_smoke: composition was rejected\n";
+      player.close();
+      return 1;
+    }
+    PlayerDebugInfo projected{};
+    if (!waitFor(
+            player, kDefaultTimeoutMs, "composition_projected",
+            [&](const PlayerDebugInfo& info) {
+              const PlayerTimelineSnapshot timeline =
+                  player.timelineSnapshot();
+              return info.hasVideoFrame && !timeline.seekPending() &&
+                     info.currentSerial == beforeSerial + 1 &&
+                     std::llabs(timeline.positionUs - targetUs) <=
+                         std::max<int64_t>(frameDurationUs, 50'000);
+            },
+            &projected)) {
+      player.close();
+      return 1;
+    }
+    const int projectedSerial = projected.currentSerial;
+    const int64_t projectedPositionUs = player.timelineSnapshot().positionUs;
+    const AudioStreamReset projectedAudioReset =
+        audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+
+    VideoFrame composed;
+    const auto previewDeadline = std::chrono::steady_clock::now() +
+                                 std::chrono::milliseconds(kDefaultTimeoutMs);
+    uint64_t counter = player.videoFrameCounter();
+    while (std::chrono::steady_clock::now() < previewDeadline) {
+      if (player.videoFrameCounter() >= beforeCompositionCounter + 2 &&
+          player.copyCurrentVideoFrame(&composed) &&
+          (composed.format == VideoPixelFormat::NV12 ||
+           composed.format == VideoPixelFormat::P010) &&
+          !composed.yuv.empty()) {
+        break;
+      }
+      player.waitForVideoFrame(counter, 100);
+      counter = player.videoFrameCounter();
+    }
+    if ((composed.format != VideoPixelFormat::NV12 &&
+         composed.format != VideoPixelFormat::P010) ||
+        composed.yuv.empty()) {
+      std::cerr << "video_frame_step_smoke: transition render cache did not "
+                   "publish a composited frame\n";
+      player.close();
+      return 1;
+    }
+    const PlayerTimelineSnapshot afterRender = player.timelineSnapshot();
+    if (afterRender.serial != projectedSerial || afterRender.seekPending() ||
+        std::llabs(afterRender.positionUs - projectedPositionUs) >
+            std::max<int64_t>(frameDurationUs, 50'000)) {
+      std::cerr << "video_frame_step_smoke: cache completion mutated the "
+                   "transport; before_serial="
+                << projectedSerial << " after_serial=" << afterRender.serial
+                << " before_position_us=" << projectedPositionUs
+                << " after_position_us=" << afterRender.positionUs << '\n';
+      player.close();
+      return 1;
+    }
+    if (audioEnabled) {
+      const AudioStreamReset afterRenderAudioReset =
+          audioStreamLastAppliedReset();
+      if (afterRenderAudioReset.generation !=
+              projectedAudioReset.generation ||
+          projectedAudioReset.generation <= beforeAudioReset.generation) {
+        std::cerr << "video_frame_step_smoke: cache completion changed the "
+                     "audio reset contract\n";
+        player.close();
+        return 1;
+      }
+    }
+
+    ObservedFrameStep compositionStep{
+        afterRender.positionUs, projectedSerial, player.videoFrameCounter()};
+    for (size_t step = 0; step < 3; ++step) {
+      if (!requestAndObserveFrameStep(
+              player, audioEnabled,
+              playback_video_frame_step::Direction::Next,
+              "composition_next_" + std::to_string(step + 1), nullptr,
+              &compositionStep, true)) {
+        player.close();
+        return 1;
+      }
+      VideoFrame stepped;
+      if (!player.copyCurrentVideoFrame(&stepped) ||
+          (stepped.format != VideoPixelFormat::NV12 &&
+           stepped.format != VideoPixelFormat::P010)) {
+        std::cerr << "video_frame_step_smoke: forward frame-step bypassed "
+                     "the transition composition cache\n";
+        player.close();
+        return 1;
+      }
+    }
+    for (size_t step = 0; step < 3; ++step) {
+      if (!requestAndObserveFrameStep(
+              player, audioEnabled,
+              playback_video_frame_step::Direction::Previous,
+              "composition_previous_" + std::to_string(step + 1), nullptr,
+              &compositionStep, true)) {
+        player.close();
+        return 1;
+      }
+    }
+    if (compositionStep.serial != projectedSerial ||
+        std::llabs(compositionStep.ptsUs - afterRender.positionUs) >
+            std::max<int64_t>(frameDurationUs, 50'000)) {
+      std::cerr << "video_frame_step_smoke: bidirectional transition "
+                   "frame-step changed serial or failed to return\n";
+      player.close();
+      return 1;
+    }
+
+    if (!player.updatePlaybackComposition(
+            ranges, {playback_video_sequence::Transition::hard()})) {
+      std::cerr << "video_frame_step_smoke: hard-cut composition update was "
+                   "rejected\n";
+      player.close();
+      return 1;
+    }
+    VideoFrame hardCut;
+    const auto hardCutDeadline = std::chrono::steady_clock::now() +
+                                 std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < hardCutDeadline) {
+      if (player.copyCurrentVideoFrame(&hardCut) &&
+          hardCut.format == VideoPixelFormat::HWTexture) {
+        break;
+      }
+      player.waitForVideoFrame(player.videoFrameCounter(), 50);
+    }
+    const PlayerTimelineSnapshot afterHardCut = player.timelineSnapshot();
+    if (hardCut.format != VideoPixelFormat::HWTexture ||
+        afterHardCut.serial != projectedSerial || afterHardCut.seekPending()) {
+      std::cerr << "video_frame_step_smoke: transition-only update did not "
+                   "restore the base frame without a serial transition\n";
+      player.close();
+      return 1;
+    }
+    std::cout << "video_frame_step_smoke: PASS composition format="
+              << (composed.format == VideoPixelFormat::P010 ? "P010"
+                                                             : "NV12")
+              << " frames=" << static_cast<int>(smooth.durationFrames())
+              << " serial=" << projectedSerial << '\n';
     player.close();
     return 0;
   }

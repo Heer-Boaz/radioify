@@ -556,6 +556,8 @@ target_sources(video_edit_timeline_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/overlay/context_menu.cpp
   ${CMAKE_SOURCE_DIR}/playback/overlay/interaction.cpp
   ${CMAKE_SOURCE_DIR}/playback/session/context_menu_controller.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/composition/render_plan.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/frame_step_prefetch_mapping.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/sequence.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/timeline.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/overlay_model.cpp
@@ -571,7 +573,7 @@ target_sources(video_edit_export_smoke PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/edit/export.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/export_codec_support.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/export_metadata.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/edit/export_render_plan.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/composition/render_plan.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/export_pipeline.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
@@ -1230,6 +1232,7 @@ if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_edit_export_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
+  target_link_directories(video_edit_timeline_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
 endif()
 target_link_libraries(radioify PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(ffmpeg_audio_decoder_tests PRIVATE ${FFMPEG_LIBRARIES})
@@ -1237,6 +1240,7 @@ target_link_libraries(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_edit_export_smoke PRIVATE ${FFMPEG_LIBRARIES})
+target_link_libraries(video_edit_timeline_tests PRIVATE ${FFMPEG_LIBRARIES})
 
 set(RADIOIFY_HAS_LIBASS OFF)
 set(_radioify_libass_include_dirs "")

@@ -16,6 +16,7 @@ enum class EventType {
   PauseRequest,
   ResizeRequest,
   SetSequence,
+  UpdateComposition,
   CycleAudioTrack,
   CloseRequest,
   SeekApplied,
@@ -43,7 +44,9 @@ inline bool shouldCoalesceQueuedEvent(EventType queuedTail,
   return (queuedTail == EventType::SeekRequest &&
           incoming == EventType::SeekRequest) ||
          (queuedTail == EventType::SetSequence &&
-          incoming == EventType::SetSequence);
+          incoming == EventType::SetSequence) ||
+         (queuedTail == EventType::UpdateComposition &&
+          incoming == EventType::UpdateComposition);
 }
 
 }  // namespace playback_video_control
