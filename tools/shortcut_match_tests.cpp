@@ -1335,6 +1335,74 @@ int main() {
                "Sequence cache traversal must use presentation adjacency "
                "without inventing continuous source timestamps");
 
+  playback_video_frame_cursor::Controller discontinuousCursor;
+  discontinuousCursor.resetForSerial(6);
+  QueuedFrame discontinuousCurrent{};
+  discontinuousCurrent.ptsUs = 990000;
+  discontinuousCurrent.sourcePtsUs = 1990000;
+  discontinuousCurrent.durationUs = 10000;
+  discontinuousCurrent.sourceDurationUs = 10000;
+  discontinuousCurrent.serial = 6;
+  discontinuousCurrent.displayIndex = 1;
+  discontinuousCurrent.info.sourcePtsTicks = 199;
+  discontinuousCurrent.info.sourceDtsTicks = 199;
+  VideoFrame discontinuousCurrentFrame{};
+  discontinuousCurrentFrame.width = 42;
+  discontinuousCurrentFrame.timestamp100ns = 9900000;
+  discontinuousCurrentFrame.duration100ns = 100000;
+  discontinuousCursor.noteDecoded(discontinuousCurrent);
+  discontinuousCursor.appendPresented(discontinuousCurrent,
+                                      discontinuousCurrentFrame);
+  discontinuousCursor.enterFrameStepMode();
+  auto discontinuousRequest = discontinuousCursor.prefetchRequest(
+      playback_video_frame_step::Direction::Next, 2000000);
+  playback_video_frame_step_prefetch::Result discontinuousResult;
+  if (discontinuousRequest) {
+    discontinuousRequest->sourceRangeStartUs = 4000000;
+    discontinuousRequest->sourceRangeEndUs = 5000000;
+    discontinuousRequest->presentationOffsetUs = -3000000;
+    discontinuousRequest->joinContinuity =
+        playback_video_frame_step_prefetch::JoinContinuity::Presentation;
+    discontinuousResult.request = *discontinuousRequest;
+  }
+  discontinuousResult.frames = {
+      makeSequenceFrame(1000000, 4000000, 400),
+      makeSequenceFrame(1010000, 4010000, 401)};
+  ok &= expect(
+      discontinuousRequest &&
+          discontinuousCursor.adoptPrefetchedResult(
+              std::move(discontinuousResult)),
+      "A discontinuous decoded run must join the output-owned boundary "
+      "frame without decoding the previous clip again");
+  const auto* discontinuousNext = discontinuousCursor.step(
+      playback_video_frame_step::Direction::Next);
+  const auto* discontinuousPrevious = discontinuousCursor.step(
+      playback_video_frame_step::Direction::Previous);
+  ok &= expect(discontinuousNext && discontinuousNext->ptsUs == 1000000 &&
+                   discontinuousNext->sourcePtsUs == 4000000 &&
+                   discontinuousPrevious &&
+                   discontinuousPrevious->ptsUs == 990000,
+               "Frame stepping must remain reversible across a removed "
+               "source interval");
+
+  discontinuousCursor.resetForTimeline(7);
+  QueuedFrame remappedCurrent = discontinuousCurrent;
+  remappedCurrent.ptsUs = 490000;
+  remappedCurrent.serial = 7;
+  remappedCurrent.displayIndex = 1;
+  VideoFrame remappedCurrentFrame = discontinuousCurrentFrame;
+  remappedCurrentFrame.timestamp100ns = remappedCurrent.ptsUs * 10;
+  discontinuousCursor.noteDecoded(remappedCurrent);
+  discontinuousCursor.appendPresented(remappedCurrent,
+                                      remappedCurrentFrame);
+  discontinuousCursor.enterFrameStepMode();
+  const auto remappedRequest = discontinuousCursor.prefetchRequest(
+      playback_video_frame_step::Direction::Next, 1500000);
+  ok &= expect(discontinuousCursor.prefetchWindow().current.ptsUs == 490000 &&
+                   remappedRequest && !remappedRequest->joinCached,
+               "A new clip timeline must not reuse presentation timestamps "
+               "from an older edit projection");
+
   playback_video_frame_step_prefetch::SourceFrameCache forwardSequenceCache;
   auto firstClipJoin = makeSequenceFrame(990000, 1990000, 199);
   std::vector<

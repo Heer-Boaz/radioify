@@ -85,6 +85,7 @@ class Controller {
   void resetForSerial(int serial,
                       const playback_video_frame_step_seek::Plan* seekPlan =
                           nullptr);
+  void resetForTimeline(int serial);
   bool enterFrameStepMode();
   bool frameStepModeActive() const { return frameStepMode_; }
   bool adoptPrefetchedResult(

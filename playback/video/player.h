@@ -135,7 +135,7 @@ class Player {
   NativeWaitHandle videoFrameWaitHandle() const;
   NativeWaitHandle statusChangeWaitHandle() const;
 
-  bool copyCurrentVideoFrame(VideoFrame* out);
+  bool copyCurrentVideoFrame(VideoFrame* out) const;
   bool hasVideoFrame() const;
   int sourceWidth() const;
   int sourceHeight() const;

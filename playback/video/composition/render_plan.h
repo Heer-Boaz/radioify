@@ -46,9 +46,13 @@ struct RenderPlan {
   AVRational frameRate{0, 1};
   int64_t frameDurationUs = 0;
   std::vector<ClipWindow> clips;
-  std::vector<std::optional<MotionTransitionWindow>> cuts;
+  // Only executable transition nodes belong in the render plan. Hard cuts
+  // remain a timeline decision and require no render node.
+  std::vector<MotionTransitionWindow> motionTransitions;
 
   bool hasMotionTransitions() const;
+  std::optional<size_t> motionTransitionIndexNear(
+      int64_t presentationUs, int64_t maximumDistanceUs) const;
 };
 
 bool buildRenderPlan(

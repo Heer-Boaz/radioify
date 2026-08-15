@@ -6,6 +6,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <iterator>
 #include <limits>
 #include <utility>
 
@@ -157,8 +158,47 @@ const char* pixelFormatName(AVPixelFormat format, std::string* error) {
 }  // namespace
 
 bool RenderPlan::hasMotionTransitions() const {
-  return std::any_of(cuts.begin(), cuts.end(),
-                     [](const auto& cut) { return cut.has_value(); });
+  return !motionTransitions.empty();
+}
+
+std::optional<size_t> RenderPlan::motionTransitionIndexNear(
+    int64_t presentationUs, int64_t maximumDistanceUs) const {
+  if (presentationUs < 0 || maximumDistanceUs < 0 ||
+      motionTransitions.empty()) {
+    return std::nullopt;
+  }
+  const auto next = std::lower_bound(
+      motionTransitions.begin(), motionTransitions.end(), presentationUs,
+      [](const MotionTransitionWindow& window, int64_t positionUs) {
+        return window.presentationStartUs < positionUs;
+      });
+
+  std::optional<size_t> selected;
+  int64_t selectedDistance = (std::numeric_limits<int64_t>::max)();
+  const auto consider = [&](auto candidate) {
+    if (candidate == motionTransitions.end() ||
+        candidate->presentationStartUs < 0 || candidate->durationUs <= 0 ||
+        candidate->presentationStartUs >
+            (std::numeric_limits<int64_t>::max)() - candidate->durationUs) {
+      return;
+    }
+    const int64_t endUs =
+        candidate->presentationStartUs + candidate->durationUs;
+    int64_t distanceUs = 0;
+    if (presentationUs < candidate->presentationStartUs) {
+      distanceUs = candidate->presentationStartUs - presentationUs;
+    } else if (presentationUs >= endUs) {
+      distanceUs = presentationUs - endUs;
+    }
+    if (distanceUs <= maximumDistanceUs &&
+        distanceUs < selectedDistance) {
+      selected = static_cast<size_t>(candidate - motionTransitions.begin());
+      selectedDistance = distanceUs;
+    }
+  };
+  if (next != motionTransitions.begin()) consider(std::prev(next));
+  consider(next);
+  return selected;
 }
 
 bool buildRenderPlan(
@@ -181,7 +221,8 @@ bool buildRenderPlan(
   RenderPlan next;
   next.frameRate = frameRate;
   next.clips.reserve(ranges.size());
-  next.cuts.resize(transitions.size());
+  std::vector<std::optional<MotionTransitionWindow>> cutWindows(
+      transitions.size());
   const bool hasMotion = std::any_of(
       transitions.begin(), transitions.end(), [](const auto& transition) {
         return transition.kind ==
@@ -196,6 +237,11 @@ bool buildRenderPlan(
     return false;
   }
   if (hasMotion) {
+    next.motionTransitions.reserve(static_cast<size_t>(std::count_if(
+        transitions.begin(), transitions.end(), [](const auto& transition) {
+          return transition.kind ==
+                 playback_video_sequence::TransitionKind::MotionSmooth;
+        })));
     next.frameDurationUs = av_rescale_q_rnd(
         1, av_inv_q(frameRate), kMicrosecondTimeBase,
         static_cast<AVRounding>(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
@@ -259,7 +305,7 @@ bool buildRenderPlan(
         frameOffsetUs(outgoingAnchorFrame, frameRate);
     const int64_t incomingAnchorUs =
         frameOffsetUs(incomingAnchorFrame, frameRate);
-    next.cuts[cutIndex] = MotionTransitionWindow{
+    MotionTransitionWindow window{
         cutIndex,
         transition.outgoingFrames,
         transition.incomingFrames,
@@ -275,6 +321,8 @@ bool buildRenderPlan(
         incomingAnchorFrame,
         incomingAnchorFrame + 2,
     };
+    cutWindows[cutIndex] = window;
+    next.motionTransitions.push_back(window);
   }
 
   for (size_t clipIndex = 0; clipIndex < ranges.size(); ++clipIndex) {
@@ -282,15 +330,15 @@ bool buildRenderPlan(
     int64_t endUs = ranges[clipIndex].endUs;
     int64_t startFrame = hasMotion ? rangeStartFrames[clipIndex] : -1;
     int64_t endFrame = hasMotion ? rangeEndFrames[clipIndex] : -1;
-    if (clipIndex > 0 && next.cuts[clipIndex - 1]) {
-      startUs += frameOffsetUs(next.cuts[clipIndex - 1]->incomingFrames,
+    if (clipIndex > 0 && cutWindows[clipIndex - 1]) {
+      startUs += frameOffsetUs(cutWindows[clipIndex - 1]->incomingFrames,
                                frameRate);
-      startFrame += next.cuts[clipIndex - 1]->incomingFrames;
+      startFrame += cutWindows[clipIndex - 1]->incomingFrames;
     }
-    if (clipIndex < next.cuts.size() && next.cuts[clipIndex]) {
-      endUs -= frameOffsetUs(next.cuts[clipIndex]->outgoingFrames,
+    if (clipIndex < cutWindows.size() && cutWindows[clipIndex]) {
+      endUs -= frameOffsetUs(cutWindows[clipIndex]->outgoingFrames,
                              frameRate);
-      endFrame -= next.cuts[clipIndex]->outgoingFrames;
+      endFrame -= cutWindows[clipIndex]->outgoingFrames;
     }
     if (endUs <= startUs || (hasMotion && endFrame <= startFrame)) {
       setError(error,
@@ -306,27 +354,37 @@ bool buildRenderPlan(
 }
 
 std::string buildProgramFilterDescription(const RenderPlan& plan,
-                                          AVPixelFormat outputFormat,
-                                          std::string* error) {
-  if (plan.clips.empty() || plan.cuts.size() + 1 != plan.clips.size()) {
+                                           AVPixelFormat outputFormat,
+                                           std::string* error) {
+  size_t previousCutIndex = 0;
+  bool firstTransition = true;
+  const bool validTransitions = std::all_of(
+      plan.motionTransitions.begin(), plan.motionTransitions.end(),
+      [&](const MotionTransitionWindow& transition) {
+        const bool valid = transition.cutIndex < plan.clips.size() &&
+                           transition.cutIndex + 1 < plan.clips.size() &&
+                           (firstTransition ||
+                            transition.cutIndex > previousCutIndex);
+        previousCutIndex = transition.cutIndex;
+        firstTransition = false;
+        return valid;
+      });
+  if (plan.clips.empty() || !validTransitions) {
     setError(error, "The video composition render plan has an invalid shape.");
     return {};
   }
   const char* formatName = pixelFormatName(outputFormat, error);
   if (!formatName) return {};
 
-  size_t branchCount = plan.clips.size();
-  for (const auto& cut : plan.cuts) {
-    if (cut) branchCount += 2;
-  }
+  const size_t branchCount =
+      plan.clips.size() + plan.motionTransitions.size() * 2;
   std::string description = "[src]split=" + std::to_string(branchCount);
   for (size_t clip = 0; clip < plan.clips.size(); ++clip) {
     description += "[raw_m" + std::to_string(clip) + "]";
   }
-  for (size_t cut = 0; cut < plan.cuts.size(); ++cut) {
-    if (!plan.cuts[cut]) continue;
-    description += "[raw_l" + std::to_string(cut) + "]";
-    description += "[raw_r" + std::to_string(cut) + "]";
+  for (const auto& transition : plan.motionTransitions) {
+    description += "[raw_l" + std::to_string(transition.cutIndex) + "]";
+    description += "[raw_r" + std::to_string(transition.cutIndex) + "]";
   }
   description += ";";
 
@@ -343,10 +401,10 @@ std::string buildProgramFilterDescription(const RenderPlan& plan,
     }
     description += ",setpts=PTS-STARTPTS[m" + std::to_string(clip) + "];";
   }
-  for (size_t cut = 0; cut < plan.cuts.size(); ++cut) {
-    if (!plan.cuts[cut]) continue;
+  for (const auto& transition : plan.motionTransitions) {
+    const size_t cut = transition.cutIndex;
     if (!appendMotionTransition(
-            &description, plan, *plan.cuts[cut],
+            &description, plan, transition,
             "[raw_l" + std::to_string(cut) + "]",
             "[raw_r" + std::to_string(cut) + "]",
             "[s" + std::to_string(cut) + "]", outputFormat, error)) {
@@ -354,14 +412,15 @@ std::string buildProgramFilterDescription(const RenderPlan& plan,
     }
   }
 
-  size_t partCount = plan.clips.size();
-  for (const auto& cut : plan.cuts) {
-    if (cut) ++partCount;
-  }
+  const size_t partCount =
+      plan.clips.size() + plan.motionTransitions.size();
+  size_t transitionIndex = 0;
   for (size_t clip = 0; clip < plan.clips.size(); ++clip) {
     description += "[m" + std::to_string(clip) + "]";
-    if (clip < plan.cuts.size() && plan.cuts[clip]) {
+    if (transitionIndex < plan.motionTransitions.size() &&
+        plan.motionTransitions[transitionIndex].cutIndex == clip) {
       description += "[s" + std::to_string(clip) + "]";
+      ++transitionIndex;
     }
   }
   description += "concat=n=" + std::to_string(partCount) +

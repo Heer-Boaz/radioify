@@ -47,29 +47,6 @@ int64_t steadyNowUs() {
       .count();
 }
 
-std::optional<size_t> transitionNear(const RenderPlan& plan,
-                                     int64_t presentationUs) {
-  std::optional<size_t> selected;
-  int64_t selectedDistance = (std::numeric_limits<int64_t>::max)();
-  for (size_t index = 0; index < plan.cuts.size(); ++index) {
-    if (!plan.cuts[index]) continue;
-    const MotionTransitionWindow& window = *plan.cuts[index];
-    const int64_t start = window.presentationStartUs;
-    const int64_t end = start + window.durationUs;
-    int64_t distance = 0;
-    if (presentationUs < start) {
-      distance = start - presentationUs;
-    } else if (presentationUs >= end) {
-      distance = presentationUs - end;
-    }
-    if (distance <= kPrefetchDistanceUs && distance < selectedDistance) {
-      selected = index;
-      selectedDistance = distance;
-    }
-  }
-  return selected;
-}
-
 AVColorSpace avColorSpace(YuvMatrix matrix) {
   switch (matrix) {
     case YuvMatrix::Bt601:
@@ -265,15 +242,14 @@ bool copyOutputFrame(const AVFrame* source, const VideoFrame& metadata,
 struct PreviewCache::Impl {
   struct Work {
     uint64_t generation = 0;
-    uint64_t revision = 0;
-    size_t cutIndex = 0;
+    uint64_t compositionId = 0;
+    size_t transitionIndex = 0;
     PreviewSource source;
     std::shared_ptr<const RenderPlan> plan;
   };
 
   struct Cached {
-    uint64_t revision = 0;
-    size_t cutIndex = 0;
+    size_t transitionIndex = 0;
     MotionTransitionWindow window;
     std::vector<VideoFrame> frames;
   };
@@ -282,10 +258,10 @@ struct PreviewCache::Impl {
   std::condition_variable workAvailable;
   std::thread worker;
   PreviewSource source;
-  StatusCallback statusCallback;
+  EventCallback eventCallback;
   std::shared_ptr<const RenderPlan> plan;
-  uint64_t revision = 0;
-  std::optional<size_t> requestedCut;
+  uint64_t compositionId = 0;
+  std::optional<size_t> requestedTransition;
   std::optional<Cached> cached;
   uint64_t attemptedGeneration = 0;
   bool started = false;
@@ -418,12 +394,13 @@ struct PreviewCache::Impl {
   }
 
   bool render(const Work& work, Cached* result, std::string* error) {
-    if (!result || !work.plan || work.cutIndex >= work.plan->cuts.size() ||
-        !work.plan->cuts[work.cutIndex]) {
+    if (!result || !work.plan ||
+        work.transitionIndex >= work.plan->motionTransitions.size()) {
       if (error) *error = "The requested transition render window is absent.";
       return false;
     }
-    const MotionTransitionWindow window = *work.plan->cuts[work.cutIndex];
+    const MotionTransitionWindow window =
+        work.plan->motionTransitions[work.transitionIndex];
     activeGeneration.store(work.generation, std::memory_order_relaxed);
     deadlineUs.store(
         steadyNowUs() +
@@ -570,7 +547,7 @@ struct PreviewCache::Impl {
       }
       return false;
     }
-    *result = Cached{work.revision, work.cutIndex, window,
+    *result = Cached{work.transitionIndex, window,
                      std::move(rendered)};
     return true;
   }
@@ -583,14 +560,14 @@ struct PreviewCache::Impl {
         std::unique_lock<std::mutex> lock(mutex);
         workAvailable.wait(lock, [&]() {
           return stopping.load(std::memory_order_relaxed) ||
-                 (started && plan && requestedCut &&
+                 (started && plan && requestedTransition &&
                   attemptedGeneration !=
                       workGeneration.load(std::memory_order_relaxed));
         });
         if (stopping.load(std::memory_order_relaxed)) break;
         work.generation = workGeneration.load(std::memory_order_relaxed);
-        work.revision = revision;
-        work.cutIndex = *requestedCut;
+        work.compositionId = compositionId;
+        work.transitionIndex = *requestedTransition;
         work.source = source;
         work.plan = plan;
       }
@@ -605,25 +582,29 @@ struct PreviewCache::Impl {
       } catch (...) {
         error = "Transition preview failed unexpectedly.";
       }
-      StatusCallback callback;
+      EventCallback callback;
       {
         std::lock_guard<std::mutex> lock(mutex);
         attemptedGeneration = work.generation;
         if (ready && !stopping.load(std::memory_order_relaxed) &&
             work.generation ==
                 workGeneration.load(std::memory_order_relaxed) &&
-            work.revision == revision && requestedCut &&
-            *requestedCut == work.cutIndex) {
+            work.compositionId == compositionId && requestedTransition &&
+            *requestedTransition == work.transitionIndex) {
           cached = std::move(next);
-          callback = statusCallback;
+          callback = eventCallback;
         } else if (!ready && !error.empty() &&
                    !stopping.load(std::memory_order_relaxed) &&
                    work.generation ==
                        workGeneration.load(std::memory_order_relaxed)) {
-          callback = statusCallback;
+          callback = eventCallback;
         }
       }
-      if (callback) callback(ready ? std::string{} : error);
+      if (callback) {
+        callback(ready ? PreviewEvent{PreviewEventType::FrameChanged, {}}
+                       : PreviewEvent{PreviewEventType::RenderFailed,
+                                      std::move(error)});
+      }
     }
     deadlineUs.store(0, std::memory_order_relaxed);
     activeGeneration.store(0, std::memory_order_relaxed);
@@ -635,7 +616,7 @@ PreviewCache::PreviewCache() : impl_(std::make_unique<Impl>()) {}
 PreviewCache::~PreviewCache() { stop(); }
 
 bool PreviewCache::start(const PreviewSource& source,
-                         StatusCallback statusCallback) {
+                         EventCallback eventCallback) {
   stop();
   if (source.path.empty() || source.videoStreamIndex < 0) {
     return false;
@@ -643,10 +624,10 @@ bool PreviewCache::start(const PreviewSource& source,
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->source = source;
-    impl_->statusCallback = std::move(statusCallback);
+    impl_->eventCallback = std::move(eventCallback);
     impl_->plan.reset();
-    impl_->revision = 0;
-    impl_->requestedCut.reset();
+    impl_->compositionId = 0;
+    impl_->requestedTransition.reset();
     impl_->cached.reset();
     impl_->attemptedGeneration = 0;
     impl_->workGeneration.store(0, std::memory_order_relaxed);
@@ -659,7 +640,7 @@ bool PreviewCache::start(const PreviewSource& source,
     std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->started = false;
     impl_->source = PreviewSource{};
-    impl_->statusCallback = {};
+    impl_->eventCallback = {};
     return false;
   }
   return true;
@@ -672,7 +653,7 @@ void PreviewCache::stop() {
     if (!impl_->started && !impl_->worker.joinable()) return;
     impl_->stopping.store(true, std::memory_order_relaxed);
     impl_->workGeneration.fetch_add(1, std::memory_order_relaxed);
-    impl_->requestedCut.reset();
+    impl_->requestedTransition.reset();
   }
   impl_->workAvailable.notify_all();
   if (impl_->worker.joinable()) impl_->worker.join();
@@ -680,64 +661,77 @@ void PreviewCache::stop() {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->started = false;
     impl_->source = PreviewSource{};
-    impl_->statusCallback = {};
+    impl_->eventCallback = {};
     impl_->plan.reset();
-    impl_->revision = 0;
+    impl_->compositionId = 0;
     impl_->cached.reset();
     impl_->attemptedGeneration = 0;
   }
 }
 
-void PreviewCache::setPlan(uint64_t revision,
+void PreviewCache::setPlan(uint64_t compositionId,
                            std::shared_ptr<const RenderPlan> plan,
                            int64_t focusPresentationUs) {
-  StatusCallback callback;
+  EventCallback callback;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (!impl_->started) return;
     const bool removedVisibleCache = impl_->cached.has_value();
-    impl_->revision = revision;
+    impl_->compositionId = compositionId;
     impl_->plan = std::move(plan);
     impl_->cached.reset();
-    impl_->requestedCut = impl_->plan
-                              ? transitionNear(*impl_->plan,
-                                               focusPresentationUs)
-                              : std::nullopt;
+    impl_->requestedTransition =
+        impl_->plan
+            ? impl_->plan->motionTransitionIndexNear(focusPresentationUs,
+                                                     kPrefetchDistanceUs)
+            : std::nullopt;
     impl_->workGeneration.fetch_add(1, std::memory_order_relaxed);
-    if (removedVisibleCache) callback = impl_->statusCallback;
+    if (removedVisibleCache) callback = impl_->eventCallback;
   }
   impl_->workAvailable.notify_one();
-  if (callback) callback({});
+  if (callback) callback({PreviewEventType::FrameChanged, {}});
 }
 
-void PreviewCache::requestNear(int64_t presentationUs) {
+void PreviewCache::prefetchAround(uint64_t compositionId,
+                                  int64_t presentationUs) {
   bool notify = false;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (!impl_->started || !impl_->plan) return;
+    if (!impl_->started || !impl_->plan ||
+        compositionId != impl_->compositionId) {
+      return;
+    }
     const std::optional<size_t> requested =
-        transitionNear(*impl_->plan, presentationUs);
-    if (!requested) return;
-    if (impl_->cached && impl_->cached->revision == impl_->revision &&
-        impl_->cached->cutIndex == *requested) {
+        impl_->plan->motionTransitionIndexNear(presentationUs,
+                                               kPrefetchDistanceUs);
+    if (!requested) {
+      if (impl_->requestedTransition) {
+        impl_->requestedTransition.reset();
+        impl_->workGeneration.fetch_add(1, std::memory_order_relaxed);
+      }
       return;
     }
-    if (impl_->requestedCut && *impl_->requestedCut == *requested) {
+    if (impl_->cached && impl_->cached->transitionIndex == *requested) {
       return;
     }
-    impl_->requestedCut = requested;
+    if (impl_->requestedTransition &&
+        *impl_->requestedTransition == *requested) {
+      return;
+    }
+    impl_->requestedTransition = requested;
     impl_->workGeneration.fetch_add(1, std::memory_order_relaxed);
     notify = true;
   }
   if (notify) impl_->workAvailable.notify_one();
 }
 
-bool PreviewCache::copyFrame(int64_t presentationUs,
+bool PreviewCache::copyFrame(uint64_t compositionId,
+                             int64_t presentationUs,
                              int64_t presentationDurationUs,
                              VideoFrame* out) const {
   if (!out) return false;
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  if (!impl_->cached || impl_->cached->revision != impl_->revision ||
+  if (compositionId != impl_->compositionId || !impl_->cached ||
       impl_->cached->frames.empty()) {
     return false;
   }

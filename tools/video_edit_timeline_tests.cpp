@@ -64,18 +64,18 @@ int main() {
                    motionRanges, motionTransitions, AVRational{30'000, 1001},
                    &motionPlan, &motionPlanError) &&
                    motionPlan.hasMotionTransitions() &&
-                   motionPlan.cuts.size() == 1 && motionPlan.cuts[0] &&
-                   motionPlan.cuts[0]->outgoingFrames == 2 &&
-                   motionPlan.cuts[0]->incomingFrames == 2 &&
-                   motionPlan.cuts[0]->durationFrames == 4 &&
+                   motionPlan.motionTransitions.size() == 1 &&
+                   motionPlan.motionTransitions[0].outgoingFrames == 2 &&
+                   motionPlan.motionTransitions[0].incomingFrames == 2 &&
+                   motionPlan.motionTransitions[0].durationFrames == 4 &&
                    motionPlan.clips[0].sourceEndUs ==
-                       motionPlan.cuts[0]->outgoingAnchorUs &&
+                       motionPlan.motionTransitions[0].outgoingAnchorUs &&
                    motionPlan.clips[1].sourceStartUs ==
-                       motionPlan.cuts[0]->incomingAnchorUs,
+                       motionPlan.motionTransitions[0].incomingAnchorUs,
                "a motion transition must own explicit coterminous outgoing "
                "and incoming overlap windows");
-  if (!motionPlan.cuts.empty() && motionPlan.cuts[0]) {
-    const auto& window = *motionPlan.cuts[0];
+  if (!motionPlan.motionTransitions.empty()) {
+    const auto& window = motionPlan.motionTransitions[0];
     const int64_t renderedDurationUs =
         motionPlan.clips[0].sourceEndUs -
             motionPlan.clips[0].sourceStartUs +
@@ -112,6 +112,25 @@ int main() {
            playback_video_edit::CutTransition::motionSmooth(6)},
           AVRational{30, 1}, &overlappingPlan, &motionPlanError),
       "two transition overlaps must never consume the same clip interval");
+  playback_video_composition::RenderPlan sparseMotionPlan;
+  ok &= expect(
+      playback_video_composition::buildRenderPlan(
+          {{0, 2'000'000}, {3'000'000, 5'000'000},
+           {6'000'000, 8'000'000}, {9'000'000, 11'000'000}},
+          {playback_video_edit::CutTransition::motionSmooth(),
+           playback_video_edit::CutTransition::hard(),
+           playback_video_edit::CutTransition::motionSmooth()},
+          AVRational{30, 1}, &sparseMotionPlan, &motionPlanError) &&
+          sparseMotionPlan.motionTransitions.size() == 2 &&
+          sparseMotionPlan.motionTransitions[0].cutIndex == 0 &&
+          sparseMotionPlan.motionTransitions[1].cutIndex == 2 &&
+          sparseMotionPlan.motionTransitionIndexNear(2'500'000, 500'000) ==
+              std::optional<size_t>{0} &&
+          !sparseMotionPlan.motionTransitionIndexNear(4'000'000, 500'000) &&
+          sparseMotionPlan.motionTransitionIndexNear(5'000'000, 1'000'000) ==
+              std::optional<size_t>{1},
+      "the immutable render plan must index nearby executable transitions "
+      "without scanning hard cuts");
   const auto mappedSequence = SequenceTimeline::create(
       4'000'000, {{500'000, 1'500'000}, {2'500'000, 3'500'000}});
   playback_video_frame_step_prefetch::Request roundedFrameRequest;

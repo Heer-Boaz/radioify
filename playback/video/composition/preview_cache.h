@@ -16,15 +16,23 @@ struct PreviewSource {
   int videoStreamIndex = -1;
 };
 
+enum class PreviewEventType : uint8_t {
+  FrameChanged,
+  RenderFailed,
+};
+
+struct PreviewEvent {
+  PreviewEventType type = PreviewEventType::FrameChanged;
+  std::string message;
+};
+
 // A one-transition, in-memory render cache. The worker evaluates the same
 // motion filter definition as export, while Player's transport keeps decoding
 // the immutable source timeline. Until a render is ready, callers simply keep
 // the ordinary hard-cut frame.
 class PreviewCache {
  public:
-  // Empty means the cached visual changed; a message reports a failed
-  // background render without replacing the currently displayed base frame.
-  using StatusCallback = std::function<void(const std::string&)>;
+  using EventCallback = std::function<void(PreviewEvent)>;
 
   PreviewCache();
   ~PreviewCache();
@@ -32,15 +40,15 @@ class PreviewCache {
   PreviewCache(const PreviewCache&) = delete;
   PreviewCache& operator=(const PreviewCache&) = delete;
 
-  bool start(const PreviewSource& source, StatusCallback statusCallback);
+  bool start(const PreviewSource& source, EventCallback eventCallback);
   void stop();
 
-  void setPlan(uint64_t revision, std::shared_ptr<const RenderPlan> plan,
+  void setPlan(uint64_t compositionId, std::shared_ptr<const RenderPlan> plan,
                int64_t focusPresentationUs);
-  void requestNear(int64_t presentationUs);
+  void prefetchAround(uint64_t compositionId, int64_t presentationUs);
 
-  bool copyFrame(int64_t presentationUs, int64_t presentationDurationUs,
-                 VideoFrame* out) const;
+  bool copyFrame(uint64_t compositionId, int64_t presentationUs,
+                 int64_t presentationDurationUs, VideoFrame* out) const;
 
  private:
   struct Impl;

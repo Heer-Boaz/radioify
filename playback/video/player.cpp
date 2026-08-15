@@ -1550,6 +1550,7 @@ struct Player::Impl {
   struct PresentedFrameState {
     bool valid = false;
     int serial = 0;
+    uint64_t compositionId = 0;
     int64_t ptsUs = 0;
     int64_t sourcePtsUs = 0;
     int64_t durationUs = 0;
@@ -1596,13 +1597,13 @@ struct Player::Impl {
   std::atomic<int> videoFrameRateDenominator{1};
   struct SequenceBinding {
     int serial = 1;
+    uint64_t compositionId = 0;
     std::shared_ptr<const playback_video_sequence::Timeline> timeline;
   };
   mutable std::mutex sequenceMutex;
   SequenceBinding sequenceBinding;
+  uint64_t lastCompositionId = 0;
   playback_video_composition::PreviewCache compositionPreview;
-  std::atomic<int> compositionSerial{0};
-  std::atomic<uint64_t> compositionRevision{0};
   std::atomic<MotionCompositionSupport> motionCompositionSupport{
       MotionCompositionSupport::PreviewUnavailable};
   std::atomic<int> sourceWidth{0};
@@ -1712,23 +1713,39 @@ struct Player::Impl {
     return (std::max)(int64_t{0}, targetUs);
   }
 
-  std::shared_ptr<const playback_video_sequence::Timeline>
-  sequenceForSerial(int serial) const {
+  SequenceBinding sequenceBindingForSerial(int serial) const {
     std::lock_guard<std::mutex> lock(sequenceMutex);
-    return sequenceBinding.serial == serial ? sequenceBinding.timeline
-                                            : nullptr;
+    return sequenceBinding.serial == serial
+               ? sequenceBinding
+               : SequenceBinding{serial, 0, {}};
+  }
+
+  std::shared_ptr<const playback_video_sequence::Timeline> sequenceForSerial(
+      int serial) const {
+    return sequenceBindingForSerial(serial).timeline;
+  }
+
+  SequenceBinding sequenceBindingSnapshot() const {
+    return sequenceBindingForSerial(serialControl.currentSerial());
   }
 
   std::shared_ptr<const playback_video_sequence::Timeline>
   sequenceSnapshot() const {
-    return sequenceForSerial(serialControl.currentSerial());
+    return sequenceBindingSnapshot().timeline;
   }
 
   void bindSequence(
-      int serial,
+      int serial, uint64_t compositionId,
       std::shared_ptr<const playback_video_sequence::Timeline> timeline) {
     std::lock_guard<std::mutex> lock(sequenceMutex);
-    sequenceBinding = SequenceBinding{serial, std::move(timeline)};
+    sequenceBinding =
+        SequenceBinding{serial, compositionId, std::move(timeline)};
+  }
+
+  uint64_t nextCompositionId() {
+    ++lastCompositionId;
+    if (lastCompositionId == 0) ++lastCompositionId;
+    return lastCompositionId;
   }
 
   static bool sameSequenceClips(
@@ -1767,14 +1784,11 @@ struct Player::Impl {
   }
 
   void configureCompositionPreview(
-      int serial,
+      uint64_t compositionId,
       const std::shared_ptr<const playback_video_sequence::Timeline>& timeline,
       int64_t focusPresentationUs) {
-    const uint64_t revision =
-        compositionRevision.fetch_add(1, std::memory_order_relaxed) + 1;
-    compositionSerial.store(0, std::memory_order_relaxed);
     if (!timeline) {
-      compositionPreview.setPlan(revision, {}, focusPresentationUs);
+      compositionPreview.setPlan(compositionId, {}, focusPresentationUs);
       return;
     }
     std::vector<playback_video_sequence::SourceRange> ranges;
@@ -1788,15 +1802,14 @@ struct Player::Impl {
     if (!playback_video_composition::buildRenderPlan(
             ranges, timeline->transitions(), frameRate, &plan, &error) ||
         !plan.hasMotionTransitions()) {
-      compositionPreview.setPlan(revision, {}, focusPresentationUs);
+      compositionPreview.setPlan(compositionId, {}, focusPresentationUs);
       return;
     }
     compositionPreview.setPlan(
-        revision,
+        compositionId,
         std::make_shared<const playback_video_composition::RenderPlan>(
             std::move(plan)),
         focusPresentationUs);
-    compositionSerial.store(serial, std::memory_order_release);
   }
 
   int64_t sourcePositionForPresentation(int64_t presentationUs) const {
@@ -1993,6 +2006,8 @@ struct Player::Impl {
     item.ptsUs = prepared.frame.ptsUs;
     item.durationUs = prepared.frameDurationUs;
     const int serialForFrame = static_cast<int>(item.serial);
+    const SequenceBinding compositionBinding =
+        sequenceBindingForSerial(serialForFrame);
     if (cursorPublication == VideoCursorPublication::Append) {
       frameCursor.appendPresented(item, frame);
     }
@@ -2001,12 +2016,15 @@ struct Player::Impl {
       currentFrame = std::move(frame);
       presentedFrame.valid = true;
       presentedFrame.serial = serialForFrame;
+      presentedFrame.compositionId = compositionBinding.compositionId;
       presentedFrame.ptsUs = item.ptsUs;
       presentedFrame.sourcePtsUs = item.sourcePtsUs;
       presentedFrame.durationUs = prepared.frameDurationUs;
       presentedFrame.displayIndex = item.displayIndex;
       hasFrame.store(true, std::memory_order_relaxed);
     }
+    compositionPreview.prefetchAround(compositionBinding.compositionId,
+                                      item.ptsUs);
     serialControl.notePresentedPosition(serialForFrame, item.ptsUs);
     lastMasterUs.store(masterUs, std::memory_order_relaxed);
     lastMasterSource.store(static_cast<int>(source),
@@ -2107,6 +2125,18 @@ struct Player::Impl {
             static_cast<long long>(request.rangeEndUs), frameCount,
             decoderSeeked ? 1 : 0, decodedFrameCount,
             reachedMediaBoundary ? 1 : 0);
+      } else {
+        frameCursor.notePrefetchFailure(request);
+        appendTimingFmt(
+            "frame_step_prefetch_reject serial=%d direction=%d "
+            "join_us=%lld start_us=%lld end_us=%lld new_frames=%zu",
+            serial,
+            request.direction == playback_video_frame_step::Direction::Previous
+                ? -1
+                : 1,
+            static_cast<long long>(request.join.sourcePtsUs),
+            static_cast<long long>(request.rangeStartUs),
+            static_cast<long long>(request.rangeEndUs), frameCount);
       }
     }
   }
@@ -2532,8 +2562,7 @@ struct Player::Impl {
       std::lock_guard<std::mutex> lock(sequenceMutex);
       sequenceBinding = SequenceBinding{};
     }
-    compositionSerial.store(0, std::memory_order_relaxed);
-    compositionRevision.store(0, std::memory_order_relaxed);
+    lastCompositionId = 0;
     motionCompositionSupport.store(MotionCompositionSupport::PreviewUnavailable,
                                    std::memory_order_relaxed);
     durationUs.store(0, std::memory_order_relaxed);
@@ -2628,8 +2657,10 @@ struct Player::Impl {
         };
     auto beginSerialTransition = [&](int64_t targetUs,
                                      const char* tag) -> int {
-      const auto currentSequence = sequenceSnapshot();
-      bindSequence(serialControl.currentSerial() + 1, currentSequence);
+      const SequenceBinding currentBinding = sequenceBindingSnapshot();
+      const auto& currentSequence = currentBinding.timeline;
+      bindSequence(serialControl.currentSerial() + 1,
+                   currentBinding.compositionId, currentSequence);
       if (currentSequence) {
         const playback_video_sequence::Point point =
             currentSequence->pointAt(targetUs);
@@ -2655,8 +2686,10 @@ struct Player::Impl {
             uint64_t generation, const char* tag) {
           assert(plan.valid());
           int expectedSeekSerial = serialControl.currentSerial() + 1;
-          const auto currentSequence = sequenceSnapshot();
-          bindSequence(expectedSeekSerial, currentSequence);
+          const SequenceBinding currentBinding = sequenceBindingSnapshot();
+          const auto& currentSequence = currentBinding.timeline;
+          bindSequence(expectedSeekSerial, currentBinding.compositionId,
+                       currentSequence);
           frameStepSeek.publishForSerial(expectedSeekSerial, plan);
           playback_video_serial_control::DemuxSeekMode demuxSeekMode =
               plan.mode ==
@@ -2787,7 +2820,8 @@ struct Player::Impl {
       case playback_video_control::EventType::SetSequence: {
         const auto next = ev.sequence;
         const int nextSerial = serialControl.currentSerial() + 1;
-        bindSequence(nextSerial, next);
+        const uint64_t compositionId = nextCompositionId();
+        bindSequence(nextSerial, compositionId, next);
         if (next) {
           durationUs.store(next->durationUs(), std::memory_order_relaxed);
           const playback_video_sequence::Point point =
@@ -2802,7 +2836,7 @@ struct Player::Impl {
                   initDone.load(std::memory_order_relaxed),
                   running.load(std::memory_order_relaxed)),
               "ctrl_sequence_change", SerialTransitionPurpose::Timeline);
-          configureCompositionPreview(nextSerial, next,
+          configureCompositionPreview(compositionId, next,
                                       point.presentationUs);
         } else {
           const int64_t sourceDuration =
@@ -2819,12 +2853,13 @@ struct Player::Impl {
                   targetUs, initDone.load(std::memory_order_relaxed),
                   running.load(std::memory_order_relaxed)),
               "ctrl_sequence_clear", SerialTransitionPurpose::Timeline);
-          configureCompositionPreview(nextSerial, {}, targetUs);
+          configureCompositionPreview(compositionId, {}, targetUs);
         }
         break;
       }
       case playback_video_control::EventType::UpdateComposition: {
-        const auto current = sequenceSnapshot();
+        const SequenceBinding currentBinding = sequenceBindingSnapshot();
+        const auto& current = currentBinding.timeline;
         const auto next = ev.sequence;
         const int currentSerial = serialControl.currentSerial();
         if (!current || !next || !sameSequenceClips(*current, *next)) {
@@ -2833,8 +2868,16 @@ struct Player::Impl {
               currentSerial, current ? 1 : 0, next ? 1 : 0);
           break;
         }
-        bindSequence(currentSerial, next);
-        configureCompositionPreview(currentSerial, next, videoTimelineUs());
+        const uint64_t compositionId = nextCompositionId();
+        bindSequence(currentSerial, compositionId, next);
+        {
+          std::lock_guard<std::mutex> lock(currentFrameMutex);
+          if (presentedFrame.valid &&
+              presentedFrame.serial == currentSerial) {
+            presentedFrame.compositionId = compositionId;
+          }
+        }
+        configureCompositionPreview(compositionId, next, videoTimelineUs());
         appendTimingFmt("ctrl_composition_update serial=%d cuts=%zu",
                         currentSerial, next->transitions().size());
         break;
@@ -3073,11 +3116,15 @@ struct Player::Impl {
                                      config.file,
                                      demux.videoStreamIndex,
                                  },
-                                 [this](const std::string& error) {
-                                   if (!error.empty()) {
+                                 [this](
+                                     playback_video_composition::PreviewEvent
+                                         event) {
+                                   if (event.type ==
+                                       playback_video_composition::
+                                           PreviewEventType::RenderFailed) {
                                      appendTimingFmt(
                                          "composition_preview_failed error=%s",
-                                         error.c_str());
+                                         event.message.c_str());
                                      return;
                                    }
                                    frameCounter.fetch_add(
@@ -4156,10 +4203,20 @@ struct Player::Impl {
           syncState, static_cast<int>(serial),
           estimatedFrameDurationUs.load(std::memory_order_relaxed), nowUs());
       if (outputSerialChanged) {
-        outputSequence = sequenceForSerial(static_cast<int>(serial));
+        const auto nextOutputSequence =
+            sequenceForSerial(static_cast<int>(serial));
+        const bool sameClipTimeline =
+            (!outputSequence && !nextOutputSequence) ||
+            (outputSequence && nextOutputSequence &&
+             sameSequenceClips(*outputSequence, *nextOutputSequence));
+        outputSequence = nextOutputSequence;
         auto seekPlan = frameStepSeek.consumeForSerial(static_cast<int>(serial));
         if (seekPlan) {
+          assert(sameClipTimeline &&
+                 "A frame-step seek must retain its immutable clip timeline");
           frameCursor.resetForSerial(static_cast<int>(serial), &*seekPlan);
+        } else if (!sameClipTimeline) {
+          frameCursor.resetForTimeline(static_cast<int>(serial));
         } else {
           frameCursor.resetForSerial(static_cast<int>(serial));
         }
@@ -4810,7 +4867,7 @@ NativeWaitHandle Player::statusChangeWaitHandle() const {
   return NativeWaitHandle(impl_->statusChangedEvent.get());
 }
 
-bool Player::copyCurrentVideoFrame(VideoFrame* out) {
+bool Player::copyCurrentVideoFrame(VideoFrame* out) const {
   if (!out) return false;
   if (!impl_->hasFrame.load(std::memory_order_relaxed)) {
     return false;
@@ -4824,13 +4881,11 @@ bool Player::copyCurrentVideoFrame(VideoFrame* out) {
     *out = impl_->currentFrame;
     presented = impl_->presentedFrame;
   }
-  if (presented.valid &&
-      presented.serial ==
-          impl_->compositionSerial.load(std::memory_order_acquire)) {
-    impl_->compositionPreview.requestNear(presented.ptsUs);
+  if (presented.valid) {
     VideoFrame composited;
     if (impl_->compositionPreview.copyFrame(
-            presented.ptsUs, presented.durationUs, &composited)) {
+            presented.compositionId, presented.ptsUs, presented.durationUs,
+            &composited)) {
       *out = std::move(composited);
     }
   }

@@ -94,6 +94,13 @@ void Controller::resetForSerial(
   publishReplayPending(false);
 }
 
+void Controller::resetForTimeline(int serial) {
+  sourceCache_.clear();
+  sourceStartIdentity_.reset();
+  sourceEndIdentity_.reset();
+  resetForSerial(serial);
+}
+
 bool Controller::enterFrameStepMode() {
   const bool activated = !frameStepMode_;
   frameStepMode_ = true;
@@ -143,10 +150,38 @@ bool Controller::adoptPrefetchedResult(
 
   const playback_video_frame_step_prefetch::FrameIdentity currentIdentity =
       identityFor(entries_[cursorIndex_]);
+  std::shared_ptr<const playback_video_frame_step_prefetch::SourceFrame>
+      joinFrame = std::move(result.joinFrame);
+  if (!joinFrame &&
+      request.joinContinuity ==
+          playback_video_frame_step_prefetch::JoinContinuity::Presentation &&
+      !sourceCache_.find(request.join.identity)) {
+    const std::optional<size_t> joinIndex =
+        entryIndexForIdentity(request.join.identity);
+    if (!joinIndex) {
+      return false;
+    }
+    const PresentedFrame& presented = entries_[*joinIndex];
+    if (presented.sourceFrame) {
+      joinFrame = presented.sourceFrame;
+    } else {
+      auto retained = std::make_shared<
+          playback_video_frame_step_prefetch::SourceFrame>();
+      retained->frame = presented.videoFrame();
+      retained->info = presented.info;
+      retained->identity = identityFor(presented);
+      retained->ptsUs = presented.ptsUs;
+      retained->sourcePtsUs = presented.sourcePtsUs;
+      retained->durationUs = presented.durationUs;
+      retained->sourceDurationUs = presented.sourceDurationUs;
+      retained->decodeMs = presented.decodeMs;
+      joinFrame = std::move(retained);
+    }
+  }
   playback_video_frame_step_prefetch::SourceFrameCache committedCache =
       sourceCache_;
   if (!committedCache.commitDecodedRun(request.direction, request.join.identity,
-                                       std::move(result.joinFrame),
+                                       std::move(joinFrame),
                                        result.frames) ||
       !committedCache
            .windowAround(
