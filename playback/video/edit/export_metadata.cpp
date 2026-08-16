@@ -295,6 +295,7 @@ bool decodeStreamAudit(const std::filesystem::path& path, int streamIndex,
     if (!decoder) goto cleanup;
     failureStage = "opening its decoder";
     result = avcodec_parameters_to_context(decoder, stream->codecpar);
+    if (result >= 0) decoder->pkt_timebase = stream->time_base;
     if (result >= 0) result = avcodec_open2(decoder, codec, nullptr);
     if (result < 0) {
       setError(error, "Could not open an exported stream for decode audit: " +

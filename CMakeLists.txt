@@ -579,6 +579,8 @@ target_sources(video_edit_export_smoke PRIVATE
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
 radioify_link_repo_target(video_edit_export_smoke)
+add_test(NAME video_edit_export_cadence_audit_tests
+         COMMAND $<TARGET_FILE:video_edit_export_smoke> --self-test)
 
 add_executable(window_display_lifecycle_tests)
 target_sources(window_display_lifecycle_tests PRIVATE

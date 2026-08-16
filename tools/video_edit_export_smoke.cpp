@@ -14,10 +14,12 @@ extern "C" {
 #include <iostream>
 #include <set>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 #include "core/runtime_helpers.h"
+#include "playback/video/edit/export_metadata.h"
 
 namespace {
 
@@ -35,6 +37,38 @@ bool parseRange(const std::wstring& text,
   return range->startUs >= 0 && range->endUs > range->startUs;
 }
 
+int runAuditSelfTest() {
+  using playback_video_edit::detail::CadenceFingerprint;
+  using playback_video_edit::detail::equalFrameCadence;
+
+  CadenceFingerprint source;
+  for (const int64_t pts : {0, 37, 90, 127, 180}) {
+    source.observe(pts, AVRational{1, 1000});
+  }
+  CadenceFingerprint equivalent;
+  for (const int64_t pts : {0, 37'000, 90'000, 127'000, 180'000}) {
+    equivalent.observe(pts, AVRational{1, 1'000'000});
+  }
+  std::string error;
+  if (!equalFrameCadence(source, equivalent, &error)) {
+    std::cerr << "equivalent cadence clocks compared unequal: " << error
+              << '\n';
+    return 1;
+  }
+
+  CadenceFingerprint quantized;
+  for (const int64_t pts : {0, 1, 2, 3, 4}) {
+    quantized.observe(pts, AVRational{4, 89});
+  }
+  error.clear();
+  if (equalFrameCadence(source, quantized, &error) || error.empty()) {
+    std::cerr << "VFR-to-CFR quantization escaped the cadence audit\n";
+    return 1;
+  }
+  std::cout << "video_edit_export_cadence_audit: PASS\n";
+  return 0;
+}
+
 struct StreamSignature {
   AVMediaType type = AVMEDIA_TYPE_UNKNOWN;
   AVCodecID codec = AV_CODEC_ID_NONE;
@@ -46,7 +80,6 @@ struct StreamSignature {
   int chromaWidthShift = 0;
   int chromaHeightShift = 0;
   uint64_t pixelFlags = 0;
-  AVRational frameRate{0, 1};
   AVFieldOrder fieldOrder = AV_FIELD_UNKNOWN;
   AVRational sampleAspect{0, 1};
   AVColorRange colorRange = AVCOL_RANGE_UNSPECIFIED;
@@ -123,7 +156,6 @@ bool inspectMedia(const std::filesystem::path& path, MediaSignature* signature,
       current.width = parameters->width;
       current.height = parameters->height;
       current.sampleAspect = parameters->sample_aspect_ratio;
-      current.frameRate = av_guess_frame_rate(format, stream, nullptr);
       current.fieldOrder = parameters->field_order;
       current.colorRange = parameters->color_range;
       current.colorPrimaries = parameters->color_primaries;
@@ -219,9 +251,6 @@ bool validateOutput(const MediaSignature& source,
           before.chromaWidthShift != after.chromaWidthShift ||
           before.chromaHeightShift != after.chromaHeightShift ||
           before.pixelFlags != after.pixelFlags ||
-          (before.frameRate.num > 0 && before.frameRate.den > 0 &&
-           (after.frameRate.num <= 0 || after.frameRate.den <= 0 ||
-            av_cmp_q(before.frameRate, after.frameRate) != 0)) ||
           (before.fieldOrder != AV_FIELD_UNKNOWN &&
            before.fieldOrder != after.fieldOrder) ||
           !sameAspect(before.sampleAspect, after.sampleAspect) ||
@@ -231,7 +260,7 @@ bool validateOutput(const MediaSignature& source,
           before.colorSpace != after.colorSpace ||
           before.chromaLocation != after.chromaLocation) {
         if (error) {
-          *error = "video geometry, cadence, depth, or color changed";
+          *error = "video geometry, depth, or color changed";
         }
         return false;
       }
@@ -305,6 +334,9 @@ std::set<std::filesystem::path> temporarySiblings(
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
+  if (argc == 2 && std::wstring_view(argv[1]) == L"--self-test") {
+    return runAuditSelfTest();
+  }
   if (argc < 4) {
     std::cerr << "usage: video_edit_export_smoke <input> <output> "
                  "[--cancel|--expect-failure|--smooth-cut|"

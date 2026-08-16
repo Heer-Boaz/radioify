@@ -248,11 +248,15 @@ struct EncodedStream {
   AVFilterGraph* graph = nullptr;
   AVFilterContext* source = nullptr;
   AVFilterContext* sink = nullptr;
+  AVFrame* pendingVideoFrame = nullptr;
+  AVRational pendingVideoTimeBase{0, 1};
+  int64_t finalVideoFrameDurationUs = 0;
   int64_t nextAudioPtsUs = AV_NOPTS_VALUE;
   bool sourceSatisfied = false;
   std::string encoderName;
 
   ~EncodedStream() {
+    av_frame_free(&pendingVideoFrame);
     avfilter_graph_free(&graph);
     avcodec_free_context(&decoder);
     avcodec_free_context(&encoder);
@@ -341,6 +345,9 @@ class ExportPipeline {
                    std::string* error);
   bool drainAvailable(EncodedStream* stream, std::string* error);
   bool drainToEnd(EncodedStream* stream, std::string* error);
+  bool queueFilteredFrame(EncodedStream* stream, AVFrame* frame,
+                          AVRational sourceTimeBase, std::string* error);
+  bool flushPendingVideoFrame(EncodedStream* stream, std::string* error);
   bool encodeFrame(EncodedStream* stream, AVFrame* frame,
                    AVRational sourceTimeBase, std::string* error);
   bool writeEncoderPackets(EncodedStream* stream, std::string* error);
@@ -437,6 +444,9 @@ bool ExportPipeline::openDecoder(EncodedStream* stream, std::string* error) {
   }
   int result = avcodec_parameters_to_context(
       stream->decoder, stream->inputStream->codecpar);
+  if (result >= 0) {
+    stream->decoder->pkt_timebase = stream->inputStream->time_base;
+  }
   if (result >= 0) result = avcodec_open2(stream->decoder, codec, nullptr);
   if (result < 0) {
     setError(error, "Could not open the " + std::string(codec->name) +
@@ -608,13 +618,32 @@ bool ExportPipeline::tryVideoEncoder(EncodedStream* stream,
                                      : stream->decoder->sample_aspect_ratio;
   context->framerate = av_guess_frame_rate(input_, stream->inputStream, nullptr);
   if (context->framerate.num <= 0 || context->framerate.den <= 0) {
-    context->framerate = source->framerate.num > 0
+    context->framerate = source->framerate.num > 0 && source->framerate.den > 0
                              ? source->framerate
-                             : AVRational{30, 1};
+                             : AVRational{0, 1};
   }
-  context->time_base = av_inv_q(context->framerate);
-  context->gop_size = std::max(
-      12, static_cast<int>(std::ceil(av_q2d(context->framerate) * 2.0)));
+  // Preserve the demuxer's timestamp grid, which is the clock that represented
+  // the source cadence in its original container.  Using 1/framerate here
+  // silently turns VFR timestamps into a constant-rate grid; using the edit
+  // graph's microsecond clock unconditionally can exceed codec/container clock
+  // limits (notably QuickTime).  AVCodecContext::framerate remains only an
+  // encoder hint.
+  context->time_base =
+      stream->inputStream->time_base.num > 0 &&
+              stream->inputStream->time_base.den > 0
+          ? stream->inputStream->time_base
+          : kMicrosecondTimeBase;
+  // This pipeline supplies frame durations from the render graph.  Without
+  // this contract libavcodec is required to discard them and encoders fall
+  // back to the nominal framerate, which is wrong for VFR and can make the
+  // muxer mark the final frame as discard padding.
+  context->flags |= AV_CODEC_FLAG_FRAME_DURATION;
+  const double nominalFramesPerSecond = av_q2d(context->framerate);
+  context->gop_size =
+      nominalFramesPerSecond > 0.0 && std::isfinite(nominalFramesPerSecond)
+          ? std::max(12, static_cast<int>(
+                             std::ceil(nominalFramesPerSecond * 2.0)))
+          : 12;
   context->max_b_frames = 2;
   context->bit_rate = source->bit_rate > 0
                           ? source->bit_rate
@@ -983,9 +1012,6 @@ bool ExportPipeline::createEncodedOutputStream(EncodedStream* stream,
   outputStream->id = stream->inputStream->id;
   outputStream->disposition = stream->inputStream->disposition;
   av_dict_copy(&outputStream->metadata, stream->inputStream->metadata, 0);
-  if (stream->video()) {
-    outputStream->avg_frame_rate = stream->encoder->framerate;
-  }
   int result =
       avcodec_parameters_from_context(outputStream->codecpar, stream->encoder);
   if (result < 0) {
@@ -1406,13 +1432,13 @@ int64_t ExportPipeline::relativeFramePtsUs(const EncodedStream& stream,
   return 0;
 }
 
-bool frameFallsInRanges(int64_t ptsUs,
-                        const std::vector<SourceRange>& ranges) {
+const SourceRange* rangeContainingFrame(
+    int64_t ptsUs, const std::vector<SourceRange>& ranges) {
   for (const SourceRange& range : ranges) {
-    if (ptsUs < range.startUs) return false;
-    if (ptsUs < range.endUs) return true;
+    if (ptsUs < range.startUs) return nullptr;
+    if (ptsUs < range.endUs) return &range;
   }
-  return false;
+  return nullptr;
 }
 
 bool ExportPipeline::submitFrame(
@@ -1431,8 +1457,14 @@ bool ExportPipeline::submitFrame(
       return false;
     }
     staticMetadata_.capture(frame);
-    if (frameFallsInRanges(ptsUs, request_.decisions.keptRanges)) {
+    if (const SourceRange* retainedRange = rangeContainingFrame(
+            ptsUs, request_.decisions.keptRanges)) {
       sourceMetadata_.observe(frame);
+      const int64_t availableUs = retainedRange->endUs - ptsUs;
+      stream->finalVideoFrameDurationUs = std::max<int64_t>(
+          1, sourceFrameDurationUs > 0
+                 ? std::min(sourceFrameDurationUs, availableUs)
+                 : availableUs);
     }
     frame->pts = ptsUs;
     frame->time_base = kMicrosecondTimeBase;
@@ -1542,6 +1574,13 @@ bool ExportPipeline::encodeFrame(EncodedStream* stream, AVFrame* frame,
     if (stream->video()) {
       if (!staticMetadata_.apply(frame, error)) return false;
       expectedMetadata_.observe(frame);
+      // Project the render graph's PTS directly onto the finalized container
+      // clock.  This accounts for the muxer's representable precision without
+      // blessing any additional quantisation introduced by the encoder.
+      expectedVideoCadence_.observe(
+          av_rescale_q(frame->pts, sourceTimeBase,
+                       stream->outputStream->time_base),
+          stream->outputStream->time_base);
       frame->pict_type = AV_PICTURE_TYPE_NONE;
     }
     frame->pts =
@@ -1551,12 +1590,6 @@ bool ExportPipeline::encodeFrame(EncodedStream* stream, AVFrame* frame,
                                      stream->encoder->time_base);
     }
     frame->time_base = stream->encoder->time_base;
-    if (stream->video()) {
-      expectedVideoCadence_.observe(
-          av_rescale_q(frame->pts, stream->encoder->time_base,
-                       stream->outputStream->time_base),
-          stream->outputStream->time_base);
-    }
   }
   int result = avcodec_send_frame(stream->encoder, frame);
   if (result == AVERROR(EAGAIN)) {
@@ -1571,6 +1604,67 @@ bool ExportPipeline::encodeFrame(EncodedStream* stream, AVFrame* frame,
   return writeEncoderPackets(stream, error);
 }
 
+bool ExportPipeline::queueFilteredFrame(EncodedStream* stream, AVFrame* frame,
+                                        AVRational sourceTimeBase,
+                                        std::string* error) {
+  if (!stream->video()) {
+    return encodeFrame(stream, frame, sourceTimeBase, error);
+  }
+  if (!stream->pendingVideoFrame) {
+    stream->pendingVideoFrame = av_frame_alloc();
+    if (!stream->pendingVideoFrame) {
+      setError(error, "Could not allocate the video timing look-ahead.");
+      return false;
+    }
+  }
+  if (stream->pendingVideoFrame->buf[0]) {
+    const int64_t nextPts = av_rescale_q(
+        frame->pts, sourceTimeBase, stream->pendingVideoTimeBase);
+    if (nextPts <= stream->pendingVideoFrame->pts) {
+      setError(error,
+               "The render graph produced non-monotonic video timestamps.");
+      return false;
+    }
+    stream->pendingVideoFrame->duration =
+        nextPts - stream->pendingVideoFrame->pts;
+    if (!encodeFrame(stream, stream->pendingVideoFrame,
+                     stream->pendingVideoTimeBase, error)) {
+      return false;
+    }
+    av_frame_unref(stream->pendingVideoFrame);
+  }
+  const int result = av_frame_ref(stream->pendingVideoFrame, frame);
+  if (result < 0) {
+    setError(error, "Could not retain a filtered video frame: " +
+                        ffmpegError(result));
+    return false;
+  }
+  stream->pendingVideoTimeBase = sourceTimeBase;
+  return true;
+}
+
+bool ExportPipeline::flushPendingVideoFrame(EncodedStream* stream,
+                                            std::string* error) {
+  if (!stream->video() || !stream->pendingVideoFrame ||
+      !stream->pendingVideoFrame->buf[0]) {
+    return true;
+  }
+  if (stream->finalVideoFrameDurationUs <= 0) {
+    setError(error,
+             "Could not determine the final retained video-frame duration.");
+    return false;
+  }
+  stream->pendingVideoFrame->duration = std::max<int64_t>(
+      1, av_rescale_q(stream->finalVideoFrameDurationUs,
+                      kMicrosecondTimeBase,
+                      stream->pendingVideoTimeBase));
+  const bool encoded =
+      encodeFrame(stream, stream->pendingVideoFrame,
+                  stream->pendingVideoTimeBase, error);
+  av_frame_unref(stream->pendingVideoFrame);
+  return encoded;
+}
+
 bool ExportPipeline::drainAvailable(EncodedStream* stream,
                                     std::string* error) {
   for (;;) {
@@ -1583,7 +1677,7 @@ bool ExportPipeline::drainAvailable(EncodedStream* stream,
       return false;
     }
     const AVRational timeBase = av_buffersink_get_time_base(stream->sink);
-    if (!encodeFrame(stream, filtered_, timeBase, error)) return false;
+    if (!queueFilteredFrame(stream, filtered_, timeBase, error)) return false;
   }
 }
 
@@ -1609,7 +1703,7 @@ bool ExportPipeline::drainToEnd(EncodedStream* stream, std::string* error) {
       return false;
     }
     const AVRational timeBase = av_buffersink_get_time_base(stream->sink);
-    if (!encodeFrame(stream, filtered_, timeBase, error)) return false;
+    if (!queueFilteredFrame(stream, filtered_, timeBase, error)) return false;
     if (cancelled()) return false;
   }
 }
@@ -1707,6 +1801,7 @@ bool ExportPipeline::finish(std::string* error) {
       return false;
     }
     if (!drainToEnd(stream.get(), error) ||
+        !flushPendingVideoFrame(stream.get(), error) ||
         !encodeFrame(stream.get(), nullptr, stream->encoder->time_base,
                      error)) {
       return false;
@@ -1877,21 +1972,11 @@ bool ExportPipeline::validate(std::string* error) {
       }
       const AVPixelFormat actualPixelFormat =
           static_cast<AVPixelFormat>(actual->format);
-      AVRational sourceFrameRate =
-          av_guess_frame_rate(input_, stream->inputStream, nullptr);
-      if (sourceFrameRate.num <= 0 || sourceFrameRate.den <= 0) {
-        sourceFrameRate = stream->encoder->framerate;
-      }
-      AVRational actualFrameRate = av_guess_frame_rate(
-          probe, probe->streams[outputIndex], nullptr);
       if (source->width != actual->width || source->height != actual->height ||
           (actualPixelFormat != AV_PIX_FMT_NONE &&
            !samePixelGeometry(sourcePixelFormat, actualPixelFormat)) ||
           !sameDisplayAspect(source->sample_aspect_ratio,
                              actual->sample_aspect_ratio) ||
-          (sourceFrameRate.num > 0 && sourceFrameRate.den > 0 &&
-           (actualFrameRate.num <= 0 || actualFrameRate.den <= 0 ||
-            av_cmp_q(sourceFrameRate, actualFrameRate) != 0)) ||
           (source->field_order != AV_FIELD_UNKNOWN &&
            source->field_order != actual->field_order) ||
           source->color_range != actual->color_range ||
@@ -1901,7 +1986,7 @@ bool ExportPipeline::validate(std::string* error) {
           source->chroma_location != actual->chroma_location) {
         avformat_close_input(&probe);
         setError(error,
-                 "Video geometry, frame cadence, bit depth, or HDR color "
+                 "Video geometry, bit depth, or HDR color "
                  "signalling changed; the completed file was rejected.");
         return false;
       }
