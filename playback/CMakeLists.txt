@@ -27,6 +27,7 @@ radioify_add_module_object_library(radioify_playback
   ${CMAKE_CURRENT_SOURCE_DIR}/video/edit/overlay_model.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/video/edit/export.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/video/edit/export_codec_support.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/video/edit/export_dolby_vision.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/video/edit/export_metadata.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/video/edit/export_pipeline.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/overlay/cell_layout.cpp

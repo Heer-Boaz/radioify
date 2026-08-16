@@ -24,14 +24,15 @@ inline constexpr std::array<AVFrameSideDataType, 8>
         AV_FRAME_DATA_AMBIENT_VIEWING_ENVIRONMENT,
         AV_FRAME_DATA_ICC_PROFILE,
         AV_FRAME_DATA_A53_CC,
-        AV_FRAME_DATA_DOVI_RPU_BUFFER,
+        AV_FRAME_DATA_DOVI_METADATA,
 };
 
 bool isStaticMetadata(AVFrameSideDataType type);
 
 struct MetadataFingerprint {
   std::array<std::set<uint64_t>, kPreservedFrameMetadata.size()> values;
-  std::array<uint64_t, kPreservedFrameMetadata.size()> occurrences{};
+  std::array<uint64_t, kPreservedFrameMetadata.size()> frameSequences{};
+  uint64_t frameCount = 0;
 
   void observe(const AVFrame* frame);
 };
@@ -56,6 +57,9 @@ class StaticFrameMetadata {
 bool metadataSurvivedFilter(const MetadataFingerprint& source,
                             const MetadataFingerprint& filtered,
                             std::string* error);
+bool validateDynamicHdrFrameForRender(const AVFrame* frame,
+                                      bool rendersSyntheticFrames,
+                                      std::string* error);
 
 struct CadenceFingerprint {
   uint64_t hash = 1469598103934665603ULL;

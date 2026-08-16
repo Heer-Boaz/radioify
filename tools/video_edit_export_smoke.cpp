@@ -4,10 +4,12 @@ extern "C" {
 #include <libavcodec/codec_desc.h>
 #include <libavformat/avformat.h>
 #include <libavutil/channel_layout.h>
+#include <libavutil/dovi_meta.h>
 #include <libavutil/pixdesc.h>
 }
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -39,7 +41,10 @@ bool parseRange(const std::wstring& text,
 
 int runAuditSelfTest() {
   using playback_video_edit::detail::CadenceFingerprint;
+  using playback_video_edit::detail::MetadataFingerprint;
+  using playback_video_edit::detail::equalCriticalMetadata;
   using playback_video_edit::detail::equalFrameCadence;
+  using playback_video_edit::detail::validateDynamicHdrFrameForRender;
 
   CadenceFingerprint source;
   for (const int64_t pts : {0, 37, 90, 127, 180}) {
@@ -65,7 +70,54 @@ int runAuditSelfTest() {
     std::cerr << "VFR-to-CFR quantization escaped the cadence audit\n";
     return 1;
   }
+
+  const auto observeMetadata = [](MetadataFingerprint* fingerprint,
+                                  uint8_t value) {
+    AVFrame* frame = av_frame_alloc();
+    AVFrameSideData* sideData = frame ? av_frame_new_side_data(
+                                            frame, AV_FRAME_DATA_A53_CC, 1)
+                                      : nullptr;
+    if (!sideData) {
+      av_frame_free(&frame);
+      return false;
+    }
+    sideData->data[0] = value;
+    fingerprint->observe(frame);
+    av_frame_free(&frame);
+    return true;
+  };
+  MetadataFingerprint ordered;
+  MetadataFingerprint reordered;
+  if (!observeMetadata(&ordered, 1) || !observeMetadata(&ordered, 2) ||
+      !observeMetadata(&ordered, 1) || !observeMetadata(&reordered, 1) ||
+      !observeMetadata(&reordered, 1) || !observeMetadata(&reordered, 2)) {
+    std::cerr << "metadata sequence test could not allocate a frame\n";
+    return 1;
+  }
+  error.clear();
+  if (equalCriticalMetadata(ordered, reordered, &error) || error.empty()) {
+    std::cerr << "reordered frame metadata escaped the sequence audit\n";
+    return 1;
+  }
+
+  AVFrame* dynamicHdr = av_frame_alloc();
+  if (!dynamicHdr ||
+      !av_frame_new_side_data(dynamicHdr, AV_FRAME_DATA_DYNAMIC_HDR_PLUS, 1)) {
+    av_frame_free(&dynamicHdr);
+    std::cerr << "dynamic HDR policy test could not allocate a frame\n";
+    return 1;
+  }
+  error.clear();
+  if (!validateDynamicHdrFrameForRender(dynamicHdr, false, &error) ||
+      validateDynamicHdrFrameForRender(dynamicHdr, true, &error) ||
+      error.empty()) {
+    av_frame_free(&dynamicHdr);
+    std::cerr << "synthetic dynamic HDR frames were not rejected\n";
+    return 1;
+  }
+  av_frame_free(&dynamicHdr);
   std::cout << "video_edit_export_cadence_audit: PASS\n";
+  std::cout << "video_edit_export_metadata_audit: PASS\n";
   return 0;
 }
 
@@ -73,6 +125,7 @@ struct StreamSignature {
   AVMediaType type = AVMEDIA_TYPE_UNKNOWN;
   AVCodecID codec = AV_CODEC_ID_NONE;
   int profile = AV_PROFILE_UNKNOWN;
+  int level = AV_LEVEL_UNKNOWN;
   int disposition = 0;
   int width = 0;
   int height = 0;
@@ -94,6 +147,9 @@ struct StreamSignature {
   int codedBits = 0;
   std::string language;
   std::string title;
+  int hevcTier = -1;
+  bool hasDolbyVision = false;
+  std::array<int, 8> dolbyVision{};
 };
 
 struct MediaSignature {
@@ -147,6 +203,7 @@ bool inspectMedia(const std::filesystem::path& path, MediaSignature* signature,
     current.type = parameters->codec_type;
     current.codec = parameters->codec_id;
     current.profile = parameters->profile;
+    current.level = parameters->level;
     current.disposition = stream->disposition;
     current.language = metadataValue(stream->metadata, "language");
     current.title = metadataValue(stream->metadata, "title");
@@ -172,6 +229,31 @@ bool inspectMedia(const std::filesystem::path& path, MediaSignature* signature,
             pixel->flags & (AV_PIX_FMT_FLAG_RGB | AV_PIX_FMT_FLAG_ALPHA |
                             AV_PIX_FMT_FLAG_FLOAT | AV_PIX_FMT_FLAG_PAL |
                             AV_PIX_FMT_FLAG_BAYER);
+      }
+      if (parameters->codec_id == AV_CODEC_ID_HEVC &&
+          parameters->extradata && parameters->extradata_size >= 13 &&
+          parameters->extradata[0] == 1) {
+        current.hevcTier = (parameters->extradata[1] & 0x20) != 0;
+      }
+      const AVPacketSideData* dolbyVision = av_packet_side_data_get(
+          parameters->coded_side_data, parameters->nb_coded_side_data,
+          AV_PKT_DATA_DOVI_CONF);
+      if (dolbyVision && dolbyVision->data &&
+          dolbyVision->size >= sizeof(AVDOVIDecoderConfigurationRecord)) {
+        const auto* configuration =
+            reinterpret_cast<const AVDOVIDecoderConfigurationRecord*>(
+                dolbyVision->data);
+        current.hasDolbyVision = true;
+        current.dolbyVision = {
+            configuration->dv_version_major,
+            configuration->dv_version_minor,
+            configuration->dv_profile,
+            configuration->dv_level,
+            configuration->rpu_present_flag,
+            configuration->el_present_flag,
+            configuration->bl_present_flag,
+            configuration->dv_bl_signal_compatibility_id,
+        };
       }
     } else if (current.type == AVMEDIA_TYPE_AUDIO) {
       current.sampleRate = parameters->sample_rate;
@@ -261,6 +343,16 @@ bool validateOutput(const MediaSignature& source,
           before.chromaLocation != after.chromaLocation) {
         if (error) {
           *error = "video geometry, depth, or color changed";
+        }
+        return false;
+      }
+      if (before.hasDolbyVision &&
+          (!after.hasDolbyVision || before.dolbyVision != after.dolbyVision ||
+           (before.level != AV_LEVEL_UNKNOWN &&
+            before.level != after.level) ||
+           (before.hevcTier >= 0 && before.hevcTier != after.hevcTier))) {
+        if (error) {
+          *error = "Dolby Vision profile or HEVC level/tier changed";
         }
         return false;
       }

@@ -3,6 +3,7 @@
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/ambient_viewing_environment.h>
+#include <libavutil/dovi_meta.h>
 #include <libavutil/hdr_dynamic_metadata.h>
 #include <libavutil/mathematics.h>
 #include <libavutil/mastering_display_metadata.h>
@@ -101,6 +102,261 @@ void hashRational(uint64_t* hash, AVRational value) {
   hashInteger(hash, denominator);
 }
 
+void hashColorPrimaries(uint64_t* hash,
+                        const AVColorPrimariesDesc& primaries) {
+  hashRational(hash, primaries.wp.x);
+  hashRational(hash, primaries.wp.y);
+  for (const AVCIExy* primary :
+       {&primaries.prim.r, &primaries.prim.g, &primaries.prim.b}) {
+    hashRational(hash, primary->x);
+    hashRational(hash, primary->y);
+  }
+}
+
+bool hashDolbyVisionCurve(uint64_t* hash,
+                          const AVDOVIReshapingCurve& curve) {
+  hashInteger(hash, curve.num_pivots);
+  if (curve.num_pivots < 2 ||
+      curve.num_pivots > AV_DOVI_MAX_PIECES + 1) {
+    return false;
+  }
+  for (uint8_t index = 0; index < curve.num_pivots; ++index) {
+    hashInteger(hash, curve.pivots[index]);
+  }
+  for (uint8_t index = 0; index + 1 < curve.num_pivots; ++index) {
+    hashInteger(hash, curve.mapping_idc[index]);
+    if (curve.mapping_idc[index] == AV_DOVI_MAPPING_POLYNOMIAL) {
+      const uint8_t order = curve.poly_order[index];
+      hashInteger(hash, order);
+      if (order < 1 || order > 2) {
+        return false;
+      }
+      for (uint8_t coefficient = 0; coefficient <= order; ++coefficient) {
+        hashInteger(hash, curve.poly_coef[index][coefficient]);
+      }
+      continue;
+    }
+    if (curve.mapping_idc[index] == AV_DOVI_MAPPING_MMR) {
+      const uint8_t order = curve.mmr_order[index];
+      hashInteger(hash, order);
+      hashInteger(hash, curve.mmr_constant[index]);
+      if (order < 1 || order > 3) {
+        return false;
+      }
+      for (uint8_t component = 0; component < order; ++component) {
+        for (uint8_t coefficient = 0; coefficient < 7; ++coefficient) {
+          hashInteger(hash, curve.mmr_coef[index][component][coefficient]);
+        }
+      }
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+uint64_t dolbyVisionExtensionHash(const AVDOVIDmData& extension) {
+  uint64_t hash = 1469598103934665603ULL;
+  hashInteger(&hash, extension.level);
+  switch (extension.level) {
+    case 1:
+      hashInteger(&hash, extension.l1.min_pq);
+      hashInteger(&hash, extension.l1.max_pq);
+      hashInteger(&hash, extension.l1.avg_pq);
+      break;
+    case 2:
+      hashInteger(&hash, extension.l2.target_max_pq);
+      hashInteger(&hash, extension.l2.trim_slope);
+      hashInteger(&hash, extension.l2.trim_offset);
+      hashInteger(&hash, extension.l2.trim_power);
+      hashInteger(&hash, extension.l2.trim_chroma_weight);
+      hashInteger(&hash, extension.l2.trim_saturation_gain);
+      hashInteger(&hash, extension.l2.ms_weight);
+      break;
+    case 3:
+      hashInteger(&hash, extension.l3.min_pq_offset);
+      hashInteger(&hash, extension.l3.max_pq_offset);
+      hashInteger(&hash, extension.l3.avg_pq_offset);
+      break;
+    case 4:
+      hashInteger(&hash, extension.l4.anchor_pq);
+      hashInteger(&hash, extension.l4.anchor_power);
+      break;
+    case 5:
+      hashInteger(&hash, extension.l5.left_offset);
+      hashInteger(&hash, extension.l5.right_offset);
+      hashInteger(&hash, extension.l5.top_offset);
+      hashInteger(&hash, extension.l5.bottom_offset);
+      break;
+    case 6:
+      hashInteger(&hash, extension.l6.max_luminance);
+      hashInteger(&hash, extension.l6.min_luminance);
+      hashInteger(&hash, extension.l6.max_cll);
+      hashInteger(&hash, extension.l6.max_fall);
+      break;
+    case 8:
+      hashInteger(&hash, extension.l8.target_display_index);
+      hashInteger(&hash, extension.l8.trim_slope);
+      hashInteger(&hash, extension.l8.trim_offset);
+      hashInteger(&hash, extension.l8.trim_power);
+      hashInteger(&hash, extension.l8.trim_chroma_weight);
+      hashInteger(&hash, extension.l8.trim_saturation_gain);
+      hashInteger(&hash, extension.l8.ms_weight);
+      hashInteger(&hash, extension.l8.target_mid_contrast);
+      hashInteger(&hash, extension.l8.clip_trim);
+      for (const uint8_t value : extension.l8.saturation_vector_field) {
+        hashInteger(&hash, value);
+      }
+      for (const uint8_t value : extension.l8.hue_vector_field) {
+        hashInteger(&hash, value);
+      }
+      break;
+    case 9:
+      hashInteger(&hash, extension.l9.source_primary_index);
+      hashColorPrimaries(&hash, extension.l9.source_display_primaries);
+      break;
+    case 10:
+      hashInteger(&hash, extension.l10.target_display_index);
+      hashInteger(&hash, extension.l10.target_max_pq);
+      hashInteger(&hash, extension.l10.target_min_pq);
+      hashInteger(&hash, extension.l10.target_primary_index);
+      hashColorPrimaries(&hash, extension.l10.target_display_primaries);
+      break;
+    case 11:
+      hashInteger(&hash, extension.l11.content_type);
+      hashInteger(&hash, extension.l11.whitepoint);
+      hashInteger(&hash, extension.l11.reference_mode_flag);
+      hashInteger(&hash, extension.l11.sharpness);
+      hashInteger(&hash, extension.l11.noise_reduction);
+      hashInteger(&hash, extension.l11.mpeg_noise_reduction);
+      hashInteger(&hash, extension.l11.frame_rate_conversion);
+      hashInteger(&hash, extension.l11.brightness);
+      hashInteger(&hash, extension.l11.color);
+      break;
+    case 254:
+      hashInteger(&hash, extension.l254.dm_mode);
+      hashInteger(&hash, extension.l254.dm_version_index);
+      break;
+    case 255:
+      hashInteger(&hash, extension.l255.dm_run_mode);
+      hashInteger(&hash, extension.l255.dm_run_version);
+      for (const uint8_t value : extension.l255.dm_debug) {
+        hashInteger(&hash, value);
+      }
+      break;
+    default:
+      return hashBytes(reinterpret_cast<const uint8_t*>(&extension),
+                       sizeof(extension));
+  }
+  return hash;
+}
+
+bool objectWithin(size_t offset, size_t objectSize, size_t totalSize) {
+  return offset <= totalSize && objectSize <= totalSize - offset;
+}
+
+uint64_t canonicalDolbyVisionHash(const uint8_t* data, size_t size) {
+  if (!data || size < sizeof(AVDOVIMetadata)) return hashBytes(data, size);
+  const auto* metadata = reinterpret_cast<const AVDOVIMetadata*>(data);
+  if (!objectWithin(metadata->header_offset, sizeof(AVDOVIRpuDataHeader), size) ||
+      !objectWithin(metadata->mapping_offset, sizeof(AVDOVIDataMapping), size) ||
+      !objectWithin(metadata->color_offset, sizeof(AVDOVIColorMetadata), size) ||
+      metadata->num_ext_blocks < 0 ||
+      metadata->num_ext_blocks > AV_DOVI_MAX_EXT_BLOCKS ||
+      (metadata->num_ext_blocks > 0 &&
+       (metadata->ext_block_size != sizeof(AVDOVIDmData) ||
+        metadata->ext_block_size >
+            (size - std::min(metadata->ext_block_offset, size)) /
+                static_cast<size_t>(metadata->num_ext_blocks) ||
+        !objectWithin(metadata->ext_block_offset,
+                      metadata->ext_block_size *
+                          static_cast<size_t>(metadata->num_ext_blocks),
+                      size)))) {
+    return hashBytes(data, size);
+  }
+
+  uint64_t hash = 1469598103934665603ULL;
+  const AVDOVIRpuDataHeader* header = av_dovi_get_header(metadata);
+  hashInteger(&hash, header->rpu_type);
+  hashInteger(&hash, header->rpu_format);
+  hashInteger(&hash, header->vdr_rpu_profile);
+  hashInteger(&hash, header->vdr_rpu_level);
+  hashInteger(&hash, header->chroma_resampling_explicit_filter_flag);
+  hashInteger(&hash, header->coef_data_type);
+  hashInteger(&hash, header->coef_log2_denom);
+  hashInteger(&hash, header->vdr_rpu_normalized_idc);
+  hashInteger(&hash, header->bl_video_full_range_flag);
+  hashInteger(&hash, header->bl_bit_depth);
+  hashInteger(&hash, header->el_bit_depth);
+  hashInteger(&hash, header->vdr_bit_depth);
+  hashInteger(&hash, header->spatial_resampling_filter_flag);
+  hashInteger(&hash, header->el_spatial_resampling_filter_flag);
+  hashInteger(&hash, header->disable_residual_flag);
+  hashInteger(&hash, header->ext_mapping_idc_0_4);
+  hashInteger(&hash, header->ext_mapping_idc_5_7);
+
+  const AVDOVIDataMapping* mapping = av_dovi_get_mapping(metadata);
+  hashInteger(&hash, mapping->vdr_rpu_id);
+  hashInteger(&hash, mapping->mapping_color_space);
+  hashInteger(&hash, mapping->mapping_chroma_format_idc);
+  for (const AVDOVIReshapingCurve& curve : mapping->curves) {
+    if (!hashDolbyVisionCurve(&hash, curve)) return hashBytes(data, size);
+  }
+  hashInteger(&hash, mapping->nlq_method_idc);
+  hashInteger(&hash, mapping->num_x_partitions);
+  hashInteger(&hash, mapping->num_y_partitions);
+  if (mapping->nlq_method_idc != AV_DOVI_NLQ_NONE) {
+    hashInteger(&hash, mapping->nlq_pivots[0]);
+    hashInteger(&hash, mapping->nlq_pivots[1]);
+    for (const AVDOVINLQParams& parameters : mapping->nlq) {
+      hashInteger(&hash, parameters.nlq_offset);
+      hashInteger(&hash, parameters.vdr_in_max);
+      hashInteger(&hash, parameters.linear_deadzone_slope);
+      hashInteger(&hash, parameters.linear_deadzone_threshold);
+    }
+  }
+
+  const AVDOVIColorMetadata* color = av_dovi_get_color(metadata);
+  hashInteger(&hash, color->dm_metadata_id);
+  hashInteger(&hash, color->scene_refresh_flag);
+  for (const AVRational value : color->ycc_to_rgb_matrix) {
+    hashRational(&hash, value);
+  }
+  for (const AVRational value : color->ycc_to_rgb_offset) {
+    hashRational(&hash, value);
+  }
+  for (const AVRational value : color->rgb_to_lms_matrix) {
+    hashRational(&hash, value);
+  }
+  hashInteger(&hash, color->signal_eotf);
+  hashInteger(&hash, color->signal_eotf_param0);
+  hashInteger(&hash, color->signal_eotf_param1);
+  hashInteger(&hash, color->signal_eotf_param2);
+  hashInteger(&hash, color->signal_bit_depth);
+  hashInteger(&hash, color->signal_color_space);
+  hashInteger(&hash, color->signal_chroma_format);
+  hashInteger(&hash, color->signal_full_range_flag);
+  hashInteger(&hash, color->source_min_pq);
+  hashInteger(&hash, color->source_max_pq);
+  hashInteger(&hash, color->source_diagonal);
+
+  std::vector<uint64_t> extensionHashes;
+  extensionHashes.reserve(metadata->num_ext_blocks);
+  for (int index = 0; index < metadata->num_ext_blocks; ++index) {
+    extensionHashes.push_back(
+        dolbyVisionExtensionHash(*av_dovi_get_ext(metadata, index)));
+  }
+  // FFmpeg may move repeated static extension blocks while regenerating an
+  // RPU. Their semantic multiset is stable even when their serialized order is
+  // not.
+  std::sort(extensionHashes.begin(), extensionHashes.end());
+  hashInteger(&hash, metadata->num_ext_blocks);
+  for (const uint64_t extensionHash : extensionHashes) {
+    hashInteger(&hash, static_cast<int64_t>(extensionHash));
+  }
+  return hash;
+}
+
 uint64_t canonicalMetadataHash(AVFrameSideDataType type, const uint8_t* data,
                                size_t size) {
   uint64_t hash = 1469598103934665603ULL;
@@ -151,6 +407,9 @@ uint64_t canonicalMetadataHash(AVFrameSideDataType type, const uint8_t* data,
     }
     av_free(t35);
   }
+  if (type == AV_FRAME_DATA_DOVI_METADATA) {
+    return canonicalDolbyVisionHash(data, size);
+  }
   return hashBytes(data, size);
 }
 
@@ -165,14 +424,19 @@ bool isStaticMetadata(AVFrameSideDataType type) {
 
 void MetadataFingerprint::observe(const AVFrame* frame) {
   if (!frame) return;
+  if (frameCount == 0) frameSequences.fill(1469598103934665603ULL);
   for (size_t index = 0; index < kPreservedFrameMetadata.size(); ++index) {
     const AVFrameSideData* sideData =
         av_frame_get_side_data(frame, kPreservedFrameMetadata[index]);
-    if (!sideData || !sideData->data || sideData->size == 0) continue;
-    values[index].insert(canonicalMetadataHash(
-        kPreservedFrameMetadata[index], sideData->data, sideData->size));
-    ++occurrences[index];
+    const bool present = sideData && sideData->data && sideData->size > 0;
+    hashInteger(&frameSequences[index], present ? 1 : 0);
+    if (!present) continue;
+    const uint64_t metadataHash = canonicalMetadataHash(
+        kPreservedFrameMetadata[index], sideData->data, sideData->size);
+    values[index].insert(metadataHash);
+    hashInteger(&frameSequences[index], static_cast<int64_t>(metadataHash));
   }
+  ++frameCount;
 }
 
 void StaticFrameMetadata::capture(AVFrameSideDataType type,
@@ -248,12 +512,29 @@ bool metadataSurvivedFilter(const MetadataFingerprint& source,
       return false;
     }
     if (!isStaticMetadata(type) &&
-        source.occurrences[index] != filtered.occurrences[index]) {
+        (source.frameCount != filtered.frameCount ||
+         source.frameSequences[index] != filtered.frameSequences[index])) {
       setError(error, std::string("The render graph did not retain ") +
                           av_frame_side_data_name(type) +
                           " frame-for-frame; no output was published.");
       return false;
     }
+  }
+  return true;
+}
+
+bool validateDynamicHdrFrameForRender(const AVFrame* frame,
+                                      bool rendersSyntheticFrames,
+                                      std::string* error) {
+  if (!frame || !rendersSyntheticFrames) return true;
+  for (const AVFrameSideDataType type : {AV_FRAME_DATA_DYNAMIC_HDR_PLUS,
+                                         AV_FRAME_DATA_DYNAMIC_HDR_VIVID}) {
+    if (!av_frame_get_side_data(frame, type)) continue;
+    setError(error, std::string("Smooth cut renders new pixels and cannot ") +
+                        "preserve source " + av_frame_side_data_name(type) +
+                        " analysis frame-for-frame; use a hard cut for this "
+                        "source.");
+    return false;
   }
   return true;
 }
@@ -358,7 +639,8 @@ bool equalCriticalMetadata(const MetadataFingerprint& expected,
       return false;
     }
     if (!isStaticMetadata(type) &&
-        expected.occurrences[index] != actual.occurrences[index]) {
+        (expected.frameCount != actual.frameCount ||
+         expected.frameSequences[index] != actual.frameSequences[index])) {
       setError(error, std::string(av_frame_side_data_name(type)) +
                           " was not retained frame-for-frame; the completed "
                           "file was rejected.");

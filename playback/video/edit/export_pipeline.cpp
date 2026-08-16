@@ -40,6 +40,7 @@ extern "C" {
 #include "core/runtime_helpers.h"
 #include "playback/video/composition/render_plan.h"
 #include "playback/video/edit/export_codec_support.h"
+#include "playback/video/edit/export_dolby_vision.h"
 #include "playback/video/edit/export_metadata.h"
 
 namespace playback_video_edit::detail {
@@ -93,6 +94,14 @@ bool validRanges(const std::vector<SourceRange>& ranges) {
     previousEnd = range.endUs;
   }
   return true;
+}
+
+bool hasMotionSmoothCut(const std::vector<CutTransition>& transitions) {
+  return std::any_of(transitions.begin(), transitions.end(),
+                     [](const CutTransition& transition) {
+                       return transition.kind ==
+                              CutTransitionKind::MotionSmooth;
+                     });
 }
 
 int64_t editedDurationUs(const std::vector<SourceRange>& ranges) {
@@ -358,7 +367,7 @@ class ExportPipeline {
                              const AVFrame* frame) const;
   int64_t presentationStartForRange(size_t rangeIndex) const;
   void captureStreamStaticMetadata();
-  bool probeStaticVideoMetadata(std::string* error);
+  bool probeFirstRetainedVideoMetadata(std::string* error);
 
   const ExportRequest& request_;
   std::atomic<bool>* cancelled_ = nullptr;
@@ -377,6 +386,7 @@ class ExportPipeline {
   std::filesystem::path temporaryPath_;
   std::string videoEncoderName_;
   StaticFrameMetadata staticMetadata_;
+  DolbyVisionExportContract dolbyVision_;
   MetadataFingerprint sourceMetadata_;
   MetadataFingerprint expectedMetadata_;
   CadenceFingerprint expectedVideoCadence_;
@@ -546,16 +556,8 @@ bool ExportPipeline::buildStreamPlan(std::string* error) {
     copiedByInput_[static_cast<size_t>(stream.inputIndex)] = &stream;
   }
 
-  AVStream* video = input_->streams[selectedVideoIndex_];
-  if (av_packet_side_data_get(video->codecpar->coded_side_data,
-                              video->codecpar->nb_coded_side_data,
-                              AV_PKT_DATA_DOVI_CONF)) {
-    setError(error,
-             "Dolby Vision RPU metadata cannot yet be rendered without "
-             "loss; export was not started.");
-    return false;
-  }
-  return true;
+  return dolbyVision_.inspectSource(
+      input_->streams[selectedVideoIndex_]->codecpar, error);
 }
 
 bool ExportPipeline::allocateOutput(std::string* error) {
@@ -677,7 +679,6 @@ bool ExportPipeline::tryVideoEncoder(EncodedStream* stream,
     avcodec_free_context(&context);
     return false;
   }
-
   AVDictionary* options = nullptr;
   const std::string name(codec->name);
   if (const char* profile =
@@ -685,24 +686,41 @@ bool ExportPipeline::tryVideoEncoder(EncodedStream* stream,
     av_dict_set(&options, "profile", profile, 0);
   }
   applyVideoEncoderPolicy(name, context, &options);
+  std::string dolbyVisionFailure;
+  if (!dolbyVision_.configureEncoder(source, name, context, &options,
+                                     &dolbyVisionFailure)) {
+    if (failure) {
+      *failure = std::string(codec->name) + ": " + dolbyVisionFailure;
+    }
+    av_dict_free(&options);
+    avcodec_free_context(&context);
+    return false;
+  }
+
   const int result = avcodec_open2(context, codec, &options);
   const AVDictionaryEntry* unusedOption =
       av_dict_get(options, "", nullptr, AV_DICT_IGNORE_SUFFIX);
   const std::string unusedOptionName =
       unusedOption && unusedOption->key ? unusedOption->key : "";
   av_dict_free(&options);
+  const bool dolbyVisionConfigured =
+      result < 0 || dolbyVision_.validateEncoder(context, &dolbyVisionFailure);
   if (result < 0 || !unusedOptionName.empty() ||
+      !dolbyVisionConfigured ||
       context->codec_id != source->codec_id ||
       context->width != source->width || context->height != source->height ||
       !samePixelGeometry(sourceFormat, context->pix_fmt)) {
     if (failure) {
-      *failure = name + ": " +
-                 (result < 0
-                      ? ffmpegError(result)
-                      : !unusedOptionName.empty()
-                            ? "required option '" + unusedOptionName +
-                                  "' was not accepted"
-                            : "source geometry/depth was not retained");
+      std::string reason = "source geometry/depth was not retained";
+      if (result < 0) {
+        reason = ffmpegError(result);
+      } else if (!unusedOptionName.empty()) {
+        reason = "required option '" + unusedOptionName +
+                 "' was not accepted";
+      } else if (!dolbyVisionConfigured) {
+        reason = dolbyVisionFailure;
+      }
+      *failure = name + ": " + reason;
     }
     avcodec_free_context(&context);
     return false;
@@ -854,7 +872,7 @@ void ExportPipeline::captureStreamStaticMetadata() {
   }
 }
 
-bool ExportPipeline::probeStaticVideoMetadata(std::string* error) {
+bool ExportPipeline::probeFirstRetainedVideoMetadata(std::string* error) {
   if (selectedVideoIndex_ < 0 ||
       selectedVideoIndex_ >= static_cast<int>(encodedByInput_.size()) ||
       !encodedByInput_[selectedVideoIndex_] ||
@@ -864,12 +882,13 @@ bool ExportPipeline::probeStaticVideoMetadata(std::string* error) {
   }
   EncodedStream* video = encodedByInput_[selectedVideoIndex_];
   AVFormatContext* format = avformat_alloc_context();
+  AVCodecContext* probeDecoder = nullptr;
   AVPacket* packet = nullptr;
   AVFrame* frame = nullptr;
   bool foundFrame = false;
   bool passedRange = false;
   if (!format) {
-    setError(error, "Could not allocate the HDR metadata probe.");
+    setError(error, "Could not allocate the video metadata probe.");
     return false;
   }
   format->interrupt_callback.callback = &ExportPipeline::interrupt;
@@ -878,7 +897,7 @@ bool ExportPipeline::probeStaticVideoMetadata(std::string* error) {
   int result = avformat_open_input(&format, sourceUtf8.c_str(), nullptr, nullptr);
   if (result >= 0) result = avformat_find_stream_info(format, nullptr);
   if (result < 0 || !format) {
-    setError(error, "Could not open the source HDR metadata probe: " +
+    setError(error, "Could not open the source video metadata probe: " +
                         ffmpegError(result));
     goto cleanup;
   }
@@ -889,6 +908,26 @@ bool ExportPipeline::probeStaticVideoMetadata(std::string* error) {
              "The selected video stream changed during metadata preflight.");
     result = AVERROR_INVALIDDATA;
     goto cleanup;
+  }
+  {
+    AVStream* probeStream = format->streams[selectedVideoIndex_];
+    const AVCodec* codec = preferredDecoder(probeStream->codecpar->codec_id);
+    probeDecoder = codec ? avcodec_alloc_context3(codec) : nullptr;
+    if (!probeDecoder) {
+      setError(error,
+               "Could not allocate the source video metadata decoder.");
+      result = AVERROR_DECODER_NOT_FOUND;
+      goto cleanup;
+    }
+    result = avcodec_parameters_to_context(probeDecoder,
+                                           probeStream->codecpar);
+    if (result >= 0) probeDecoder->pkt_timebase = probeStream->time_base;
+    if (result >= 0) result = avcodec_open2(probeDecoder, codec, nullptr);
+    if (result < 0) {
+      setError(error, "Could not open the source video metadata decoder: " +
+                          ffmpegError(result));
+      goto cleanup;
+    }
   }
   {
     const SourceRange& firstRange = request_.decisions.keptRanges.front();
@@ -908,26 +947,24 @@ bool ExportPipeline::probeStaticVideoMetadata(std::string* error) {
       }
       if (result < 0) {
         setError(error,
-                 "Could not seek to the first retained frame for HDR "
+                 "Could not seek to the first retained frame for video "
                  "metadata inspection: " +
                      ffmpegError(result));
         goto cleanup;
       }
     }
 
-    avcodec_flush_buffers(video->decoder);
     packet = av_packet_alloc();
     frame = av_frame_alloc();
     if (!packet || !frame) {
-      setError(error, "Could not allocate the HDR metadata probe buffers.");
+      setError(error, "Could not allocate the video metadata probe buffers.");
       goto cleanup;
     }
 
     const auto receiveFrames = [&]() -> bool {
       for (;;) {
         av_frame_unref(frame);
-        const int receiveResult =
-            avcodec_receive_frame(video->decoder, frame);
+        const int receiveResult = avcodec_receive_frame(probeDecoder, frame);
         if (receiveResult == AVERROR(EAGAIN) || receiveResult == AVERROR_EOF) {
           return true;
         }
@@ -948,8 +985,18 @@ bool ExportPipeline::probeStaticVideoMetadata(std::string* error) {
           passedRange = true;
           return true;
         }
+        if (!dolbyVision_.inspectFirstRetainedFrame(frame, error)) {
+          result = AVERROR_INVALIDDATA;
+          return false;
+        }
+        if (!validateDynamicHdrFrameForRender(
+                frame, hasMotionSmoothCut(request_.decisions.cutTransitions),
+                error)) {
+          result = AVERROR(ENOSYS);
+          return false;
+        }
         staticMetadata_.capture(frame);
-        staticMetadata_.capture(video->decoder);
+        staticMetadata_.capture(probeDecoder);
         foundFrame = true;
         return true;
       }
@@ -961,16 +1008,16 @@ bool ExportPipeline::probeStaticVideoMetadata(std::string* error) {
         av_packet_unref(packet);
         continue;
       }
-      result = avcodec_send_packet(video->decoder, packet);
+      result = avcodec_send_packet(probeDecoder, packet);
       if (result == AVERROR(EAGAIN)) {
         if (!receiveFrames()) goto cleanup;
-        result = avcodec_send_packet(video->decoder, packet);
+        result = avcodec_send_packet(probeDecoder, packet);
       }
       av_packet_unref(packet);
       if (result < 0 || !receiveFrames()) goto cleanup;
     }
     if (!foundFrame && !cancelled() && result == AVERROR_EOF) {
-      result = avcodec_send_packet(video->decoder, nullptr);
+      result = avcodec_send_packet(probeDecoder, nullptr);
       if (result >= 0 || result == AVERROR_EOF) {
         if (!receiveFrames()) goto cleanup;
       }
@@ -988,12 +1035,12 @@ bool ExportPipeline::probeStaticVideoMetadata(std::string* error) {
   }
 
 cleanup:
-  avcodec_flush_buffers(video->decoder);
   av_frame_free(&frame);
   av_packet_free(&packet);
+  avcodec_free_context(&probeDecoder);
   avformat_close_input(&format);
   if (result < 0 && error && error->empty() && !cancelled()) {
-    setError(error, "Could not inspect the retained HDR metadata: " +
+    setError(error, "Could not inspect the retained video metadata: " +
                         ffmpegError(result));
   }
   return result >= 0;
@@ -1098,12 +1145,8 @@ bool ExportPipeline::createVideoRenderPlan(std::string* error) {
     setError(error, "The selected video decoder is not ready.");
     return false;
   }
-  const bool hasSmoothCut = std::any_of(
-      request_.decisions.cutTransitions.begin(),
-      request_.decisions.cutTransitions.end(),
-      [](const CutTransition& transition) {
-        return transition.kind == CutTransitionKind::MotionSmooth;
-      });
+  const bool hasSmoothCut =
+      hasMotionSmoothCut(request_.decisions.cutTransitions);
   AVFieldOrder fieldOrder = video->inputStream->codecpar->field_order;
   if (fieldOrder == AV_FIELD_UNKNOWN) {
     fieldOrder = video->decoder->field_order;
@@ -1115,6 +1158,7 @@ bool ExportPipeline::createVideoRenderPlan(std::string* error) {
              "use a hard cut for this source.");
     return false;
   }
+  if (!dolbyVision_.validateRenderPlan(hasSmoothCut, error)) return false;
   AVRational sourceFrameRate =
       av_guess_frame_rate(input_, video->inputStream, nullptr);
   if (sourceFrameRate.num <= 0 || sourceFrameRate.den <= 0) {
@@ -1400,7 +1444,8 @@ bool ExportPipeline::prepare(std::string* error) {
     return false;
   }
   captureStreamStaticMetadata();
-  if (!probeStaticVideoMetadata(error) || !createVideoRenderPlan(error) ||
+  if (!probeFirstRetainedVideoMetadata(error) ||
+      !createVideoRenderPlan(error) ||
       !allocateOutput(error) || !createOutputStreams(error) ||
       !copyChapters(error)) {
     return false;
@@ -1459,6 +1504,10 @@ bool ExportPipeline::submitFrame(
     staticMetadata_.capture(frame);
     if (const SourceRange* retainedRange = rangeContainingFrame(
             ptsUs, request_.decisions.keptRanges)) {
+      if (!validateDynamicHdrFrameForRender(
+              frame, !videoRenderPlan_.motionTransitions.empty(), error)) {
+        return false;
+      }
       sourceMetadata_.observe(frame);
       const int64_t availableUs = retainedRange->endUs - ptsUs;
       stream->finalVideoFrameDurationUs = std::max<int64_t>(
@@ -1573,6 +1622,7 @@ bool ExportPipeline::encodeFrame(EncodedStream* stream, AVFrame* frame,
   if (frame) {
     if (stream->video()) {
       if (!staticMetadata_.apply(frame, error)) return false;
+      if (!dolbyVision_.validateRenderedFrame(frame, error)) return false;
       expectedMetadata_.observe(frame);
       // Project the render graph's PTS directly onto the finalized container
       // clock.  This accounts for the muxer's representable precision without
@@ -1988,6 +2038,10 @@ bool ExportPipeline::validate(std::string* error) {
         setError(error,
                  "Video geometry, bit depth, or HDR color "
                  "signalling changed; the completed file was rejected.");
+        return false;
+      }
+      if (!dolbyVision_.validateOutput(actual, error)) {
+        avformat_close_input(&probe);
         return false;
       }
     } else {
