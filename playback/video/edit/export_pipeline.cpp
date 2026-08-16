@@ -57,6 +57,31 @@ void setError(std::string* destination, const std::string& message) {
   if (destination) *destination = message;
 }
 
+void applyVideoEncoderPolicy(const std::string& name,
+                             AVCodecContext* context,
+                             AVDictionary** options) {
+  if (!context || !options) return;
+  if (name.find("_nvenc") != std::string::npos) {
+    av_dict_set(options, "preset", "p6", 0);
+    av_dict_set(options, "tune", "hq", 0);
+    av_dict_set(options, "rc", "vbr", 0);
+    av_dict_set(options, "cq", "18", 0);
+    return;
+  }
+  if (name == "libx264" || name == "libx265") {
+    context->bit_rate = 0;
+    av_dict_set(options, "preset", "medium", 0);
+    av_dict_set(options, "crf", "18", 0);
+    return;
+  }
+  if (name == "libaom-av1") {
+    context->bit_rate = 0;
+    av_dict_set(options, "cpu-used", "6", 0);
+    av_dict_set(options, "crf", "18", 0);
+    av_dict_set(options, "row-mt", "1", 0);
+  }
+}
+
 bool validRanges(const std::vector<SourceRange>& ranges) {
   if (ranges.empty()) return false;
   int64_t previousEnd = -1;
@@ -630,24 +655,25 @@ bool ExportPipeline::tryVideoEncoder(EncodedStream* stream,
           encoderProfileOption(source->codec_id, source->profile)) {
     av_dict_set(&options, "profile", profile, 0);
   }
-  if (name.find("_nvenc") != std::string::npos) {
-    av_dict_set(&options, "preset", "p6", 0);
-    av_dict_set(&options, "tune", "hq", 0);
-    av_dict_set(&options, "rc", "vbr", 0);
-    av_dict_set(&options, "cq", "18", 0);
-  } else if (name == "libx264" || name == "libx265") {
-    av_dict_set(&options, "preset", "medium", 0);
-    av_dict_set(&options, "crf", "18", 0);
-  }
+  applyVideoEncoderPolicy(name, context, &options);
   const int result = avcodec_open2(context, codec, &options);
+  const AVDictionaryEntry* unusedOption =
+      av_dict_get(options, "", nullptr, AV_DICT_IGNORE_SUFFIX);
+  const std::string unusedOptionName =
+      unusedOption && unusedOption->key ? unusedOption->key : "";
   av_dict_free(&options);
-  if (result < 0 || context->codec_id != source->codec_id ||
+  if (result < 0 || !unusedOptionName.empty() ||
+      context->codec_id != source->codec_id ||
       context->width != source->width || context->height != source->height ||
       !samePixelGeometry(sourceFormat, context->pix_fmt)) {
     if (failure) {
       *failure = name + ": " +
-                 (result < 0 ? ffmpegError(result)
-                             : "source geometry/depth was not retained");
+                 (result < 0
+                      ? ffmpegError(result)
+                      : !unusedOptionName.empty()
+                            ? "required option '" + unusedOptionName +
+                                  "' was not accepted"
+                            : "source geometry/depth was not retained");
     }
     avcodec_free_context(&context);
     return false;

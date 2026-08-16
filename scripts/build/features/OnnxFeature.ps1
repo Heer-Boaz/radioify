@@ -76,7 +76,5 @@ function Configure-MelodyAnalysisBuild {
   $overlayPortsDir = Join-Path $Context.Paths.Root "vcpkg-overlays\ports"
   if (Test-Path $overlayPortsDir) {
     Assert-OnnxOverlayPortComplete $overlayPortsDir
-    Add-VcpkgOverlayPortPath $overlayPortsDir
-    Write-Host "Using vcpkg overlay ports: $overlayPortsDir"
   }
 }

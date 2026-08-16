@@ -1,0 +1,20 @@
+{
+  "name": "x265",
+  "version": "4.1",
+  "port-version": 2,
+  "description": "x265 is a H.265 / HEVC video encoder application library, packaged with linked 8-bit and 10-bit APIs.",
+  "homepage": "https://bitbucket.org/multicoreware/x265_git/",
+  "license": "GPL-2.0-or-later",
+  "supports": "windows & !uwp & x64",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    }
+  ],
+  "features": {
+    "tool": {
+      "description": "Build the command line tool"
+    }
+  }
+}

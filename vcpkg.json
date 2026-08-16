@@ -1,17 +1,20 @@
 {
   "name": "radioify",
   "version-string": "0.1.0",
+  "builtin-baseline": "62159a45e18f3a9ac0548628dcaf74fcb60c6ff9",
   "dependencies": [
     {
       "name": "ffmpeg",
       "features": [
+        "aom",
         "dav1d",
         "nvcodec",
         "opus",
         "theora",
         "vorbis",
         "vpx",
-        "x264"
+        "x264",
+        "x265"
       ]
     },
     "libass",
@@ -24,6 +27,5 @@
         "onnxruntime"
       ]
     }
-  },
-  "builtin-baseline": "62159a45e18f3a9ac0548628dcaf74fcb60c6ff9"
+  }
 }

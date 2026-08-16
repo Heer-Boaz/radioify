@@ -30,13 +30,13 @@ function Initialize-BuildDependencies {
   param([pscustomobject]$Context)
 
   Assert-ExplicitVcpkgRootValid -ProvidedRoot $Context.Options.VcpkgRoot
-  Configure-MelodyAnalysisBuild -Context $Context
-
   $dependencyState = Resolve-BuildDependencyState -Context $Context
   $dependencyState.VcpkgExe = Resolve-VcpkgExe -VcpkgRoot $dependencyState.VcpkgRoot
 
   Apply-BuildDependencyState -Context $Context -DependencyState $dependencyState
 
+  Configure-RepositoryVcpkgOverlays -Context $Context
+  Configure-MelodyAnalysisBuild -Context $Context
   Configure-NvidiaRtxVideoSdkBuild -Context $Context
 
   if ($Context.Options.InstallDeps) {

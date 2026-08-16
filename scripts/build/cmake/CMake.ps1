@@ -110,10 +110,6 @@ function New-CMakeConfigureInfo {
   if ($triplets.EffectiveTargetTriplet) {
     $cmakeArgs += "-DVCPKG_TARGET_TRIPLET=$($triplets.EffectiveTargetTriplet)"
   }
-  if ($env:VCPKG_OVERLAY_PORTS) {
-    $cmakeArgs += "-DVCPKG_OVERLAY_PORTS=$(Convert-ToCMakePathList $env:VCPKG_OVERLAY_PORTS)"
-  }
-
   return [pscustomobject]@{
     Arguments = $cmakeArgs
     DesiredManifestMode = $desiredManifestMode
