@@ -160,6 +160,9 @@ std::vector<const AVCodec*> encoderCandidates(AVCodecID codecId) {
       addByName("libopus");
       addByName("opus");
       break;
+    case AV_CODEC_ID_VORBIS:
+      addByName("libvorbis");
+      break;
     default:
       break;
   }

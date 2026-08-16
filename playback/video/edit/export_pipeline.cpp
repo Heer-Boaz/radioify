@@ -587,10 +587,7 @@ bool ExportPipeline::tryVideoEncoder(EncodedStream* stream,
                              ? source->framerate
                              : AVRational{30, 1};
   }
-  context->time_base = AVRational{1, 90000};
-  if (source->codec_id == AV_CODEC_ID_MPEG4) {
-    context->time_base = AVRational{1, 60000};
-  }
+  context->time_base = av_inv_q(context->framerate);
   context->gop_size = std::max(
       12, static_cast<int>(std::ceil(av_q2d(context->framerate) * 2.0)));
   context->max_b_frames = 2;

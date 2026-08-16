@@ -8,6 +8,8 @@
         "dav1d",
         "nvcodec",
         "opus",
+        "theora",
+        "vorbis",
         "vpx",
         "x264"
       ]

@@ -47,6 +47,33 @@ void observeDecodedVideoFrame(const AVFormatContext* format, int streamIndex,
   }
 }
 
+int receiveAuditFrames(AVCodecContext* decoder, AVFrame* frame,
+                       const AVFormatContext* format, int streamIndex,
+                       DecodedVideoAudit* videoAudit, bool* decodedFrame) {
+  for (;;) {
+    const int result = avcodec_receive_frame(decoder, frame);
+    if (result < 0) return result;
+    if (decodedFrame) *decodedFrame = true;
+    observeDecodedVideoFrame(format, streamIndex, frame, videoAudit);
+    av_frame_unref(frame);
+  }
+}
+
+int submitAuditPacket(AVCodecContext* decoder, const AVPacket* packet,
+                      AVFrame* frame, const AVFormatContext* format,
+                      int streamIndex, DecodedVideoAudit* videoAudit,
+                      bool* decodedFrame) {
+  int result = 0;
+  while ((result = avcodec_send_packet(decoder, packet)) == AVERROR(EAGAIN)) {
+    result = receiveAuditFrames(decoder, frame, format, streamIndex,
+                                videoAudit, decodedFrame);
+    if (result != AVERROR(EAGAIN)) return result;
+  }
+  if (result < 0) return result;
+  return receiveAuditFrames(decoder, frame, format, streamIndex, videoAudit,
+                            decodedFrame);
+}
+
 uint64_t hashBytes(const uint8_t* data, size_t size) {
   uint64_t hash = 1469598103934665603ULL;
   for (size_t index = 0; index < size; ++index) {
@@ -239,12 +266,16 @@ bool decodeStreamAudit(const std::filesystem::path& path, int streamIndex,
   AVFrame* frame = nullptr;
   bool ok = false;
   bool decodedFrame = false;
+  AVMediaType mediaType = AVMEDIA_TYPE_UNKNOWN;
+  AVCodecID codecId = AV_CODEC_ID_NONE;
+  const char* failureStage = "opening the completed export";
   const std::string pathUtf8 = toUtf8String(path);
   int result = avformat_open_input(&format, pathUtf8.c_str(), nullptr, nullptr);
   if (result < 0 || !format) {
     setError(error, "Could not reopen the completed export for decode audit.");
     goto cleanup;
   }
+  failureStage = "reading the completed stream table";
   result = avformat_find_stream_info(format, nullptr);
   if (result < 0 || streamIndex < 0 ||
       streamIndex >= static_cast<int>(format->nb_streams)) {
@@ -253,6 +284,8 @@ bool decodeStreamAudit(const std::filesystem::path& path, int streamIndex,
   }
   {
     AVStream* stream = format->streams[streamIndex];
+    mediaType = stream->codecpar->codec_type;
+    codecId = stream->codecpar->codec_id;
     const AVCodec* codec = preferredDecoder(stream->codecpar->codec_id);
     if (!codec) {
       setError(error, "Could not decode a completed export stream.");
@@ -260,6 +293,7 @@ bool decodeStreamAudit(const std::filesystem::path& path, int streamIndex,
     }
     decoder = avcodec_alloc_context3(codec);
     if (!decoder) goto cleanup;
+    failureStage = "opening its decoder";
     result = avcodec_parameters_to_context(decoder, stream->codecpar);
     if (result >= 0) result = avcodec_open2(decoder, codec, nullptr);
     if (result < 0) {
@@ -271,30 +305,24 @@ bool decodeStreamAudit(const std::filesystem::path& path, int streamIndex,
   packet = av_packet_alloc();
   frame = av_frame_alloc();
   if (!packet || !frame) goto cleanup;
+  failureStage = "reading its packets";
   while ((result = av_read_frame(format, packet)) >= 0) {
     if (packet->stream_index != streamIndex) {
       av_packet_unref(packet);
       continue;
     }
-    result = avcodec_send_packet(decoder, packet);
+    failureStage = "decoding a packet";
+    result = submitAuditPacket(decoder, packet, frame, format, streamIndex,
+                               videoAudit, &decodedFrame);
     av_packet_unref(packet);
-    if (result < 0 && result != AVERROR(EAGAIN)) goto cleanup;
-    while ((result = avcodec_receive_frame(decoder, frame)) >= 0) {
-      decodedFrame = true;
-      observeDecodedVideoFrame(format, streamIndex, frame, videoAudit);
-      av_frame_unref(frame);
-    }
-    if (result != AVERROR(EAGAIN) && result != AVERROR_EOF) goto cleanup;
+    if (result != AVERROR(EAGAIN)) goto cleanup;
+    failureStage = "reading its packets";
   }
   if (result != AVERROR_EOF) goto cleanup;
-  result = avcodec_send_packet(decoder, nullptr);
-  if (result < 0 && result != AVERROR_EOF) goto cleanup;
-  while ((result = avcodec_receive_frame(decoder, frame)) >= 0) {
-    decodedFrame = true;
-    observeDecodedVideoFrame(format, streamIndex, frame, videoAudit);
-    av_frame_unref(frame);
-  }
-  if (result != AVERROR_EOF && result != AVERROR(EAGAIN)) goto cleanup;
+  failureStage = "draining its decoder";
+  result = submitAuditPacket(decoder, nullptr, frame, format, streamIndex,
+                             videoAudit, &decodedFrame);
+  if (result != AVERROR_EOF) goto cleanup;
   ok = decodedFrame &&
        (!videoAudit || videoAudit->pixelFormat != AV_PIX_FMT_NONE);
   if (!ok) {
@@ -307,8 +335,12 @@ cleanup:
   avcodec_free_context(&decoder);
   avformat_close_input(&format);
   if (!ok && error && error->empty()) {
-    setError(error, "An exported stream failed its full decode audit: " +
-                        ffmpegError(result));
+    const char* typeName = av_get_media_type_string(mediaType);
+    setError(error, "The exported " +
+                        std::string(typeName ? typeName : "unknown") +
+                        " stream " + std::to_string(streamIndex) + " (" +
+                        avcodec_get_name(codecId) + ") failed while " +
+                        failureStage + ": " + ffmpegError(result));
   }
   return ok;
 }
