@@ -1595,6 +1595,8 @@ struct Player::Impl {
   std::atomic<int64_t> sourceDurationUs{0};
   std::atomic<int> videoFrameRateNumerator{0};
   std::atomic<int> videoFrameRateDenominator{1};
+  std::atomic<int> videoTimeBaseNumerator{0};
+  std::atomic<int> videoTimeBaseDenominator{1};
   struct SequenceBinding {
     int serial = 1;
     uint64_t compositionId = 0;
@@ -1748,6 +1750,17 @@ struct Player::Impl {
     return lastCompositionId;
   }
 
+  playback_video_composition::SourceTiming compositionSourceTiming() const {
+    return {
+        AVRational{
+            videoFrameRateNumerator.load(std::memory_order_relaxed),
+            videoFrameRateDenominator.load(std::memory_order_relaxed)},
+        AVRational{
+            videoTimeBaseNumerator.load(std::memory_order_relaxed),
+            videoTimeBaseDenominator.load(std::memory_order_relaxed)},
+    };
+  }
+
   static bool sameSequenceClips(
       const playback_video_sequence::Timeline& left,
       const playback_video_sequence::Timeline& right) {
@@ -1776,11 +1789,7 @@ struct Player::Impl {
     }
     playback_video_composition::RenderPlan plan;
     return playback_video_composition::buildRenderPlan(
-        ranges, transitions,
-        AVRational{
-            videoFrameRateNumerator.load(std::memory_order_relaxed),
-            videoFrameRateDenominator.load(std::memory_order_relaxed)},
-        &plan, nullptr);
+        ranges, transitions, compositionSourceTiming(), &plan, nullptr);
   }
 
   void configureCompositionPreview(
@@ -1796,11 +1805,9 @@ struct Player::Impl {
     for (const auto& clip : timeline->clips()) ranges.push_back(clip.source);
     playback_video_composition::RenderPlan plan;
     std::string error;
-    const AVRational frameRate{
-        videoFrameRateNumerator.load(std::memory_order_relaxed),
-        videoFrameRateDenominator.load(std::memory_order_relaxed)};
     if (!playback_video_composition::buildRenderPlan(
-            ranges, timeline->transitions(), frameRate, &plan, &error) ||
+            ranges, timeline->transitions(), compositionSourceTiming(), &plan,
+            &error) ||
         !plan.hasMotionTransitions()) {
       compositionPreview.setPlan(compositionId, {}, focusPresentationUs);
       return;
@@ -2569,6 +2576,8 @@ struct Player::Impl {
     sourceDurationUs.store(0, std::memory_order_relaxed);
     videoFrameRateNumerator.store(0, std::memory_order_relaxed);
     videoFrameRateDenominator.store(1, std::memory_order_relaxed);
+    videoTimeBaseNumerator.store(0, std::memory_order_relaxed);
+    videoTimeBaseDenominator.store(1, std::memory_order_relaxed);
     clearFrameRequested.store(false, std::memory_order_relaxed);
     audioBufferedStartPtsUs.store(0, std::memory_order_relaxed);
     audioBufferedStartSerial.store(0, std::memory_order_relaxed);
@@ -3059,6 +3068,10 @@ struct Player::Impl {
       sourceHeight.store(videoDec.height);
       videoStreamIndex.store(demux.videoStreamIndex,
                              std::memory_order_relaxed);
+      videoTimeBaseNumerator.store(demux.videoTimeBase.num,
+                                   std::memory_order_relaxed);
+      videoTimeBaseDenominator.store(demux.videoTimeBase.den,
+                                     std::memory_order_relaxed);
       const int64_t mediaDurationUs =
           demux.durationUs > 0 ? demux.durationUs : 0;
       sourceDurationUs.store(mediaDurationUs, std::memory_order_relaxed);

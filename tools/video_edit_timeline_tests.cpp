@@ -23,6 +23,22 @@ bool expect(bool condition, const char* message) {
   return true;
 }
 
+std::vector<playback_video_composition::SourceFrameTiming> observedTiming(
+    const std::vector<int64_t>& pts, int64_t quantumUs = 1) {
+  const auto quantize = [quantumUs](int64_t value) {
+    return ((value + quantumUs / 2) / quantumUs) * quantumUs;
+  };
+  std::vector<playback_video_composition::SourceFrameTiming> frames;
+  frames.reserve(pts.size());
+  for (size_t index = 0; index < pts.size(); ++index) {
+    const int64_t framePtsUs = quantize(pts[index]);
+    const int64_t durationUs =
+        index + 1 < pts.size() ? quantize(pts[index + 1]) - framePtsUs : 0;
+    frames.push_back({framePtsUs, durationUs});
+  }
+  return frames;
+}
+
 }  // namespace
 
 int main() {
@@ -47,12 +63,15 @@ int main() {
       "window");
   playback_video_composition::RenderPlan invalidTransitionPlan;
   std::string invalidTransitionError;
+  const playback_video_composition::SourceTiming timing30{
+      AVRational{30, 1}, AVRational{1, 90'000}};
+  const playback_video_composition::SourceTiming timingNtsc{
+      AVRational{30'000, 1001}, AVRational{1, 90'000}};
   ok &= expect(
       !playback_video_composition::buildRenderPlan(
           {{0, 1'000'000}, {2'000'000, 3'000'000}},
           {{playback_video_sequence::TransitionKind::MotionSmooth, 255, 7}},
-          AVRational{30, 1}, &invalidTransitionPlan,
-          &invalidTransitionError),
+          timing30, &invalidTransitionPlan, &invalidTransitionError),
       "transition handle validation must not wrap at eight bits");
   playback_video_composition::RenderPlan motionPlan;
   std::string motionPlanError;
@@ -61,7 +80,7 @@ int main() {
   const std::vector<playback_video_edit::CutTransition> motionTransitions{
       playback_video_edit::CutTransition::motionSmooth()};
   ok &= expect(playback_video_composition::buildRenderPlan(
-                   motionRanges, motionTransitions, AVRational{30'000, 1001},
+                   motionRanges, motionTransitions, timingNtsc,
                    &motionPlan, &motionPlanError) &&
                    motionPlan.hasMotionTransitions() &&
                    motionPlan.motionTransitions.size() == 1 &&
@@ -100,17 +119,96 @@ int main() {
                      transitionFilter.find(
                          "format=pix_fmts=yuv420p10le,settb=1001/30000") !=
                          std::string::npos &&
+                     programFilter.find("[raw_m0]trim=start_pts=") !=
+                         std::string::npos &&
+                     programFilter.find("[raw_l0]trim=start_pts=") !=
+                         std::string::npos &&
                      transitionFilter.find("split=2") == std::string::npos,
                  "preview and export must share exact frame-tick motion "
-                 "evaluation without duplicated still-frame synthesis");
+                 "evaluation over source-PTS clip windows");
+
+    playback_video_composition::MotionSourceTiming expectedTiming;
+    std::string cadenceError;
+    const bool resolvedTiming =
+        playback_video_composition::motionSourceTiming(
+            motionPlan, window, &expectedTiming, &cadenceError);
+    auto outgoingTiming = observedTiming(expectedTiming.outgoingPtsUs);
+    auto incomingTiming = observedTiming(expectedTiming.incomingPtsUs);
+    ok &= expect(
+        resolvedTiming &&
+            playback_video_composition::validateMotionSourceTiming(
+                motionPlan, window, outgoingTiming, incomingTiming,
+                &cadenceError),
+        "a motion transition must accept its exact bounded source cadence");
+    if (incomingTiming.size() > 1) {
+      incomingTiming[1].ptsUs += motionPlan.frameDurationUs / 2;
+    }
+    cadenceError.clear();
+    ok &= expect(
+        !playback_video_composition::validateMotionSourceTiming(
+            motionPlan, window, outgoingTiming, incomingTiming,
+            &cadenceError) &&
+            cadenceError.find("hard cut") != std::string::npos,
+        "a locally variable source cadence must fail closed before motion "
+        "rendering");
   }
+  playback_video_composition::RenderPlan millisecondPlan;
+  std::string millisecondError;
+  ok &= expect(
+      playback_video_composition::buildRenderPlan(
+          {{200'000, 1'233'000}, {1'800'000, 2'800'000}},
+          motionTransitions,
+          {AVRational{30, 1}, AVRational{1, 1'000}}, &millisecondPlan,
+          &millisecondError),
+      "a millisecond source clock must remain usable for 30 fps video");
+  if (millisecondPlan.hasMotionTransitions()) {
+    const auto& window = millisecondPlan.motionTransitions.front();
+    playback_video_composition::MotionSourceTiming expectedTiming;
+    ok &= expect(playback_video_composition::motionSourceTiming(
+                     millisecondPlan, window, &expectedTiming,
+                     &millisecondError),
+                 "millisecond source timing must resolve");
+    ok &= expect(
+        playback_video_composition::validateMotionSourceTiming(
+            millisecondPlan, window,
+            observedTiming(expectedTiming.outgoingPtsUs, 1'000),
+            observedTiming(expectedTiming.incomingPtsUs, 1'000),
+            &millisecondError),
+        "stable CFR timing quantized to millisecond ticks must not be "
+        "misclassified as VFR");
+  }
+  playback_video_composition::RenderPlan phasePlan;
+  ok &= expect(
+      playback_video_composition::buildRenderPlan(
+          {{1'000, 3'004'000}, {5'006'000, 10'011'000}},
+          motionTransitions, timingNtsc, &phasePlan, &motionPlanError) &&
+          phasePlan.motionTransitions[0].outgoingAnchorUs ==
+              3'004'000 - 66'733 &&
+          phasePlan.motionTransitions[0].incomingAnchorUs ==
+              5'006'000 + 66'733,
+      "source-frame windows must remain relative to real edit boundaries, "
+      "not a synthetic zero-based frame grid");
+  playback_video_composition::RenderPlan coarseTimingPlan;
+  ok &= expect(
+      !playback_video_composition::buildRenderPlan(
+          {{0, 1'000'000}, {2'000'000, 3'000'000}}, motionTransitions,
+          {AVRational{30, 1}, AVRational{1, 25}}, &coarseTimingPlan,
+          &motionPlanError),
+      "smooth cuts must reject a source clock that cannot identify frames");
+  playback_video_composition::RenderPlan exactFrameClockPlan;
+  ok &= expect(
+      playback_video_composition::buildRenderPlan(
+          {{0, 1'000'000}, {2'000'000, 3'000'000}}, motionTransitions,
+          {AVRational{30, 1}, AVRational{1, 30}}, &exactFrameClockPlan,
+          &motionPlanError),
+      "a coarse clock must remain valid when each tick is exactly one frame");
   playback_video_composition::RenderPlan overlappingPlan;
   ok &= expect(
       !playback_video_composition::buildRenderPlan(
           {{0, 200'000}, {300'000, 500'000}, {600'000, 800'000}},
           {playback_video_edit::CutTransition::motionSmooth(6),
            playback_video_edit::CutTransition::motionSmooth(6)},
-          AVRational{30, 1}, &overlappingPlan, &motionPlanError),
+          timing30, &overlappingPlan, &motionPlanError),
       "two transition overlaps must never consume the same clip interval");
   playback_video_composition::RenderPlan sparseMotionPlan;
   ok &= expect(
@@ -120,7 +218,7 @@ int main() {
           {playback_video_edit::CutTransition::motionSmooth(),
            playback_video_edit::CutTransition::hard(),
            playback_video_edit::CutTransition::motionSmooth()},
-          AVRational{30, 1}, &sparseMotionPlan, &motionPlanError) &&
+          timing30, &sparseMotionPlan, &motionPlanError) &&
           sparseMotionPlan.motionTransitions.size() == 2 &&
           sparseMotionPlan.motionTransitions[0].cutIndex == 0 &&
           sparseMotionPlan.motionTransitions[1].cutIndex == 2 &&

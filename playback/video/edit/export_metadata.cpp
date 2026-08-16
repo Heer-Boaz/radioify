@@ -4,6 +4,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/ambient_viewing_environment.h>
 #include <libavutil/hdr_dynamic_metadata.h>
+#include <libavutil/mathematics.h>
 #include <libavutil/mastering_display_metadata.h>
 }
 
@@ -25,6 +26,25 @@ std::string ffmpegError(int error) {
   char buffer[AV_ERROR_MAX_STRING_SIZE]{};
   av_strerror(error, buffer, sizeof(buffer));
   return std::string(buffer);
+}
+
+void observeDecodedVideoFrame(const AVFormatContext* format, int streamIndex,
+                              const AVFrame* frame,
+                              DecodedVideoAudit* audit) {
+  if (!format || streamIndex < 0 ||
+      streamIndex >= static_cast<int>(format->nb_streams) || !frame ||
+      !audit) {
+    return;
+  }
+  if (audit->pixelFormat == AV_PIX_FMT_NONE) {
+    audit->pixelFormat = static_cast<AVPixelFormat>(frame->format);
+  }
+  audit->metadata.observe(frame);
+  int64_t timestamp = frame->best_effort_timestamp;
+  if (timestamp == AV_NOPTS_VALUE) timestamp = frame->pts;
+  if (timestamp != AV_NOPTS_VALUE) {
+    audit->cadence.observe(timestamp, format->streams[streamIndex]->time_base);
+  }
 }
 
 uint64_t hashBytes(const uint8_t* data, size_t size) {
@@ -261,10 +281,7 @@ bool decodeStreamAudit(const std::filesystem::path& path, int streamIndex,
     if (result < 0 && result != AVERROR(EAGAIN)) goto cleanup;
     while ((result = avcodec_receive_frame(decoder, frame)) >= 0) {
       decodedFrame = true;
-      if (videoAudit && videoAudit->pixelFormat == AV_PIX_FMT_NONE) {
-        videoAudit->pixelFormat = static_cast<AVPixelFormat>(frame->format);
-      }
-      if (videoAudit) videoAudit->metadata.observe(frame);
+      observeDecodedVideoFrame(format, streamIndex, frame, videoAudit);
       av_frame_unref(frame);
     }
     if (result != AVERROR(EAGAIN) && result != AVERROR_EOF) goto cleanup;
@@ -274,10 +291,7 @@ bool decodeStreamAudit(const std::filesystem::path& path, int streamIndex,
   if (result < 0 && result != AVERROR_EOF) goto cleanup;
   while ((result = avcodec_receive_frame(decoder, frame)) >= 0) {
     decodedFrame = true;
-    if (videoAudit && videoAudit->pixelFormat == AV_PIX_FMT_NONE) {
-      videoAudit->pixelFormat = static_cast<AVPixelFormat>(frame->format);
-    }
-    if (videoAudit) videoAudit->metadata.observe(frame);
+    observeDecodedVideoFrame(format, streamIndex, frame, videoAudit);
     av_frame_unref(frame);
   }
   if (result != AVERROR_EOF && result != AVERROR(EAGAIN)) goto cleanup;
@@ -317,6 +331,45 @@ bool equalCriticalMetadata(const MetadataFingerprint& expected,
                           "file was rejected.");
       return false;
     }
+  }
+  return true;
+}
+
+void CadenceFingerprint::observe(int64_t pts, AVRational timeBase) {
+  if (!valid) return;
+  if (pts < 0 || timeBase.num <= 0 || timeBase.den <= 0) {
+    valid = false;
+    return;
+  }
+  if (frameCount > 0) {
+    if (pts <= previousPts) {
+      valid = false;
+      return;
+    }
+    constexpr AVRational kFingerprintTimeBase{1, 1'000'000'000};
+    const int64_t normalizedDelta = av_rescale_q_rnd(
+        pts - previousPts, timeBase, kFingerprintTimeBase,
+        static_cast<AVRounding>(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+    if (normalizedDelta <= 0) {
+      valid = false;
+      return;
+    }
+    hashInteger(&hash, normalizedDelta);
+  }
+  previousPts = pts;
+  ++frameCount;
+}
+
+bool equalFrameCadence(const CadenceFingerprint& expected,
+                       const CadenceFingerprint& actual,
+                       std::string* error) {
+  if (!expected.valid || !actual.valid || expected.frameCount == 0 ||
+      expected.frameCount != actual.frameCount ||
+      expected.hash != actual.hash) {
+    setError(error,
+             "The encoder or muxer changed the rendered video cadence; the "
+             "completed file was rejected.");
+    return false;
   }
   return true;
 }

@@ -57,9 +57,19 @@ bool metadataSurvivedFilter(const MetadataFingerprint& source,
                             const MetadataFingerprint& filtered,
                             std::string* error);
 
+struct CadenceFingerprint {
+  uint64_t hash = 1469598103934665603ULL;
+  uint64_t frameCount = 0;
+  int64_t previousPts = 0;
+  bool valid = true;
+
+  void observe(int64_t pts, AVRational timeBase);
+};
+
 struct DecodedVideoAudit {
   MetadataFingerprint metadata;
   AVPixelFormat pixelFormat = AV_PIX_FMT_NONE;
+  CadenceFingerprint cadence;
 };
 
 bool decodeStreamAudit(const std::filesystem::path& path, int streamIndex,
@@ -67,5 +77,7 @@ bool decodeStreamAudit(const std::filesystem::path& path, int streamIndex,
 bool equalCriticalMetadata(const MetadataFingerprint& expected,
                            const MetadataFingerprint& actual,
                            std::string* error);
+bool equalFrameCadence(const CadenceFingerprint& expected,
+                       const CadenceFingerprint& actual, std::string* error);
 
 }  // namespace playback_video_edit::detail

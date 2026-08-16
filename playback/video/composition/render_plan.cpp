@@ -6,6 +6,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <cstdlib>
 #include <iterator>
 #include <limits>
 #include <utility>
@@ -28,16 +29,66 @@ bool addWithoutOverflow(int64_t left, int64_t right, int64_t* result) {
   return true;
 }
 
-int64_t frameIndexAtUs(int64_t sourceUs, AVRational frameRate) {
-  return av_rescale_q_rnd(
-      sourceUs, kMicrosecondTimeBase, av_inv_q(frameRate),
-      static_cast<AVRounding>(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
-}
-
 int64_t frameOffsetUs(int64_t frames, AVRational frameRate) {
   return av_rescale_q_rnd(
       frames, av_inv_q(frameRate), kMicrosecondTimeBase,
       static_cast<AVRounding>(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+}
+
+int64_t timestampToleranceUs(AVRational frameRate,
+                             AVRational sourceTimeBase,
+                             int64_t frameDurationUs) {
+  if (frameRate.num <= 0 || frameRate.den <= 0 ||
+      sourceTimeBase.num <= 0 || sourceTimeBase.den <= 0 ||
+      frameDurationUs <= 0) {
+    return 0;
+  }
+  const int64_t sourceTickUs = std::llabs(av_rescale_q_rnd(
+      1, sourceTimeBase, kMicrosecondTimeBase,
+      static_cast<AVRounding>(AV_ROUND_UP | AV_ROUND_PASS_MINMAX)));
+  const int64_t ticksPerFrameNumerator =
+      static_cast<int64_t>(frameRate.den) * sourceTimeBase.den;
+  const int64_t ticksPerFrameDenominator =
+      static_cast<int64_t>(frameRate.num) * sourceTimeBase.num;
+  const bool exactFrameClock = ticksPerFrameDenominator > 0 &&
+                               ticksPerFrameNumerator > 0 &&
+                               ticksPerFrameNumerator %
+                                       ticksPerFrameDenominator ==
+                                   0;
+  // With an integral number of source ticks per frame, only the conversion to
+  // microseconds can differ. Otherwise two independently quantized frame PTS
+  // values can differ from the ideal cadence by one complete source tick.
+  const int64_t toleranceUs = exactFrameClock ? 2 : sourceTickUs + 1;
+  return toleranceUs <= (frameDurationUs - 1) / 2 ? toleranceUs : 0;
+}
+
+int64_t trimBoundaryUs(const RenderPlan& plan, int64_t boundaryUs) {
+  return (std::max)(int64_t{0}, boundaryUs - plan.timestampToleranceUs);
+}
+
+bool validateTimingSequence(const std::vector<int64_t>& expected,
+                            const std::vector<SourceFrameTiming>& actual,
+                            int64_t toleranceUs) {
+  if (expected.size() != actual.size()) return false;
+  for (size_t index = 0; index < expected.size(); ++index) {
+    if (!sourceTimestampMatches(actual[index].ptsUs, expected[index],
+                                toleranceUs)) {
+      return false;
+    }
+    if (index + 1 < expected.size()) {
+      if (actual[index + 1].ptsUs <= actual[index].ptsUs) return false;
+      if (actual[index].durationUs > 0) {
+        int64_t endUs = 0;
+        if (!addWithoutOverflow(actual[index].ptsUs,
+                                actual[index].durationUs, &endUs) ||
+            !sourceTimestampMatches(endUs, expected[index + 1],
+                                    toleranceUs * 2)) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
 }
 
 bool validTransitionShape(
@@ -132,15 +183,19 @@ bool appendMotionTransition(
   const std::string right = "motion_r" + number;
   const std::string prepared = "motion_input" + number;
 
-  *description += leftInput + "trim=start_frame=" +
-                  std::to_string(window.outgoingContextStartFrame) +
-                  ":end_frame=" +
-                  std::to_string(window.outgoingAnchorFrame + 1) +
+  *description += leftInput + "trim=start_pts=" +
+                  std::to_string(trimBoundaryUs(
+                      plan, window.outgoingContextStartUs)) +
+                  ":end_pts=" +
+                  std::to_string(trimBoundaryUs(
+                      plan, window.outgoingContextEndUs)) +
                   ",setpts=PTS-STARTPTS[" + left + "];";
-  *description += rightInput + "trim=start_frame=" +
-                  std::to_string(window.incomingAnchorFrame) +
-                  ":end_frame=" +
-                  std::to_string(window.incomingContextEndFrame) +
+  *description += rightInput + "trim=start_pts=" +
+                  std::to_string(trimBoundaryUs(
+                      plan, window.incomingAnchorUs)) +
+                  ":end_pts=" +
+                  std::to_string(trimBoundaryUs(
+                      plan, window.incomingContextEndUs)) +
                   ",setpts=PTS-STARTPTS[" + right + "];";
   *description += "[" + left + "][" + right +
                   "]concat=n=2:v=1:a=0[" + prepared + "];";
@@ -159,6 +214,13 @@ const char* pixelFormatName(AVPixelFormat format, std::string* error) {
 
 bool RenderPlan::hasMotionTransitions() const {
   return !motionTransitions.empty();
+}
+
+bool sourceTimestampMatches(int64_t actualUs, int64_t expectedUs,
+                            int64_t toleranceUs) {
+  if (actualUs < 0 || expectedUs < 0 || toleranceUs < 0) return false;
+  return actualUs >= expectedUs ? actualUs - expectedUs <= toleranceUs
+                                : expectedUs - actualUs <= toleranceUs;
 }
 
 std::optional<size_t> RenderPlan::motionTransitionIndexNear(
@@ -204,7 +266,7 @@ std::optional<size_t> RenderPlan::motionTransitionIndexNear(
 bool buildRenderPlan(
     const std::vector<playback_video_sequence::SourceRange>& ranges,
     const std::vector<playback_video_sequence::Transition>& transitions,
-    AVRational frameRate, RenderPlan* plan, std::string* error) {
+    SourceTiming sourceTiming, RenderPlan* plan, std::string* error) {
   if (!plan) {
     setError(error, "The composition render destination is absent.");
     return false;
@@ -219,7 +281,7 @@ bool buildRenderPlan(
   }
 
   RenderPlan next;
-  next.frameRate = frameRate;
+  next.frameRate = sourceTiming.frameRate;
   next.clips.reserve(ranges.size());
   std::vector<std::optional<MotionTransitionWindow>> cutWindows(
       transitions.size());
@@ -229,11 +291,13 @@ bool buildRenderPlan(
                playback_video_sequence::TransitionKind::MotionSmooth;
       });
   if (hasMotion &&
-      (frameRate.num <= 0 || frameRate.den <= 0 ||
-       av_q2d(frameRate) < 1.0 || av_q2d(frameRate) > 240.0)) {
+      (sourceTiming.frameRate.num <= 0 || sourceTiming.frameRate.den <= 0 ||
+       sourceTiming.timeBase.num <= 0 || sourceTiming.timeBase.den <= 0 ||
+       av_q2d(sourceTiming.frameRate) < 1.0 ||
+       av_q2d(sourceTiming.frameRate) > 240.0)) {
     setError(error,
-             "Smooth cut requires a stable sequence frame rate between 1 "
-             "and 240 fps.");
+             "Smooth cut requires a valid source timebase and a stable frame "
+             "rate between 1 and 240 fps.");
     return false;
   }
   if (hasMotion) {
@@ -243,29 +307,20 @@ bool buildRenderPlan(
                  playback_video_sequence::TransitionKind::MotionSmooth;
         })));
     next.frameDurationUs = av_rescale_q_rnd(
-        1, av_inv_q(frameRate), kMicrosecondTimeBase,
+        1, av_inv_q(sourceTiming.frameRate), kMicrosecondTimeBase,
         static_cast<AVRounding>(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
     if (next.frameDurationUs <= 0) {
       setError(error, "Smooth cut could not resolve the sequence timebase.");
       return false;
     }
-  }
-
-  std::vector<int64_t> rangeStartFrames;
-  std::vector<int64_t> rangeEndFrames;
-  if (hasMotion) {
-    rangeStartFrames.reserve(ranges.size());
-    rangeEndFrames.reserve(ranges.size());
-    for (const auto& range : ranges) {
-      const int64_t startFrame = frameIndexAtUs(range.startUs, frameRate);
-      const int64_t endFrame = frameIndexAtUs(range.endUs, frameRate);
-      if (startFrame < 0 || endFrame <= startFrame) {
-        setError(error,
-                 "Smooth cut requires source ranges aligned to video frames.");
-        return false;
-      }
-      rangeStartFrames.push_back(startFrame);
-      rangeEndFrames.push_back(endFrame);
+    next.timestampToleranceUs = timestampToleranceUs(
+        sourceTiming.frameRate, sourceTiming.timeBase,
+        next.frameDurationUs);
+    if (next.timestampToleranceUs <= 0) {
+      setError(error,
+               "Smooth cut cannot identify individual frames in this source "
+               "timebase; use a hard cut.");
+      return false;
     }
   }
 
@@ -285,14 +340,47 @@ bool buildRenderPlan(
     const uint8_t durationFrames =
         static_cast<uint8_t>(transition.durationFrames());
     const int64_t outgoingUs =
-        frameOffsetUs(transition.outgoingFrames, frameRate);
-    const int64_t durationUs = frameOffsetUs(durationFrames, frameRate);
-    const int64_t outgoingAnchorFrame =
-        rangeEndFrames[cutIndex] - transition.outgoingFrames;
-    const int64_t incomingAnchorFrame =
-        rangeStartFrames[cutIndex + 1] + transition.incomingFrames;
-    if (outgoingAnchorFrame - 1 < rangeStartFrames[cutIndex] ||
-        incomingAnchorFrame + 2 > rangeEndFrames[cutIndex + 1]) {
+        frameOffsetUs(transition.outgoingFrames, sourceTiming.frameRate);
+    const int64_t durationUs =
+        frameOffsetUs(durationFrames, sourceTiming.frameRate);
+    const int64_t outgoingContextOffsetUs = frameOffsetUs(
+        static_cast<int64_t>(transition.outgoingFrames) + 1,
+        sourceTiming.frameRate);
+    const int64_t outgoingContextEndOffsetUs = frameOffsetUs(
+        static_cast<int64_t>(transition.outgoingFrames) - 1,
+        sourceTiming.frameRate);
+    const int64_t incomingAnchorOffsetUs =
+        frameOffsetUs(transition.incomingFrames, sourceTiming.frameRate);
+    const int64_t incomingContextEndOffsetUs = frameOffsetUs(
+        static_cast<int64_t>(transition.incomingFrames) + 2,
+        sourceTiming.frameRate);
+    const auto& outgoingRange = ranges[cutIndex];
+    const auto& incomingRange = ranges[cutIndex + 1];
+    if (outgoingUs <= 0 || durationUs <= 0 ||
+        outgoingContextOffsetUs <= 0 ||
+        outgoingContextOffsetUs > outgoingRange.endUs ||
+        incomingAnchorOffsetUs <= 0 || incomingContextEndOffsetUs <= 0 ||
+        incomingRange.startUs >
+            (std::numeric_limits<int64_t>::max)() -
+                incomingContextEndOffsetUs) {
+      setError(error, "A smooth-cut source window overflowed.");
+      return false;
+    }
+    const int64_t outgoingContextStartUs =
+        outgoingRange.endUs - outgoingContextOffsetUs;
+    const int64_t outgoingAnchorUs = outgoingRange.endUs - outgoingUs;
+    const int64_t outgoingContextEndUs =
+        outgoingRange.endUs - outgoingContextEndOffsetUs;
+    const int64_t incomingAnchorUs =
+        incomingRange.startUs + incomingAnchorOffsetUs;
+    const int64_t incomingContextEndUs =
+        incomingRange.startUs + incomingContextEndOffsetUs;
+    if (outgoingContextStartUs < outgoingRange.startUs ||
+        outgoingAnchorUs <= outgoingContextStartUs ||
+        outgoingContextEndUs <= outgoingAnchorUs ||
+        incomingAnchorUs <= incomingRange.startUs ||
+        incomingContextEndUs <= incomingAnchorUs ||
+        incomingContextEndUs > incomingRange.endUs) {
       setError(error,
                "A clip next to smooth cut " +
                    std::to_string(cutIndex + 1) +
@@ -301,26 +389,18 @@ bool buildRenderPlan(
                    "-frame transition.");
       return false;
     }
-    const int64_t outgoingAnchorUs =
-        frameOffsetUs(outgoingAnchorFrame, frameRate);
-    const int64_t incomingAnchorUs =
-        frameOffsetUs(incomingAnchorFrame, frameRate);
-    MotionTransitionWindow window{
-        cutIndex,
-        transition.outgoingFrames,
-        transition.incomingFrames,
-        durationFrames,
-        durationUs,
-        presentationCutUs - outgoingUs,
-        frameOffsetUs(outgoingAnchorFrame - 1, frameRate),
-        outgoingAnchorUs,
-        incomingAnchorUs,
-        frameOffsetUs(incomingAnchorFrame + 2, frameRate),
-        outgoingAnchorFrame - 1,
-        outgoingAnchorFrame,
-        incomingAnchorFrame,
-        incomingAnchorFrame + 2,
-    };
+    MotionTransitionWindow window;
+    window.cutIndex = cutIndex;
+    window.outgoingFrames = transition.outgoingFrames;
+    window.incomingFrames = transition.incomingFrames;
+    window.durationFrames = durationFrames;
+    window.durationUs = durationUs;
+    window.presentationStartUs = presentationCutUs - outgoingUs;
+    window.outgoingContextStartUs = outgoingContextStartUs;
+    window.outgoingAnchorUs = outgoingAnchorUs;
+    window.outgoingContextEndUs = outgoingContextEndUs;
+    window.incomingAnchorUs = incomingAnchorUs;
+    window.incomingContextEndUs = incomingContextEndUs;
     cutWindows[cutIndex] = window;
     next.motionTransitions.push_back(window);
   }
@@ -328,28 +408,85 @@ bool buildRenderPlan(
   for (size_t clipIndex = 0; clipIndex < ranges.size(); ++clipIndex) {
     int64_t startUs = ranges[clipIndex].startUs;
     int64_t endUs = ranges[clipIndex].endUs;
-    int64_t startFrame = hasMotion ? rangeStartFrames[clipIndex] : -1;
-    int64_t endFrame = hasMotion ? rangeEndFrames[clipIndex] : -1;
     if (clipIndex > 0 && cutWindows[clipIndex - 1]) {
-      startUs += frameOffsetUs(cutWindows[clipIndex - 1]->incomingFrames,
-                               frameRate);
-      startFrame += cutWindows[clipIndex - 1]->incomingFrames;
+      startUs = cutWindows[clipIndex - 1]->incomingAnchorUs;
     }
     if (clipIndex < cutWindows.size() && cutWindows[clipIndex]) {
-      endUs -= frameOffsetUs(cutWindows[clipIndex]->outgoingFrames,
-                             frameRate);
-      endFrame -= cutWindows[clipIndex]->outgoingFrames;
+      endUs = cutWindows[clipIndex]->outgoingAnchorUs;
     }
-    if (endUs <= startUs || (hasMotion && endFrame <= startFrame)) {
+    if (endUs <= startUs) {
       setError(error,
                "Smooth-cut overlaps meet inside clip " +
                    std::to_string(clipIndex + 1) + ".");
       return false;
     }
-    next.clips.push_back({startUs, endUs, startFrame, endFrame});
+    next.clips.push_back({startUs, endUs});
   }
 
   *plan = std::move(next);
+  return true;
+}
+
+bool motionSourceTiming(const RenderPlan& plan,
+                        const MotionTransitionWindow& transition,
+                        MotionSourceTiming* timing, std::string* error) {
+  if (!timing || plan.frameRate.num <= 0 || plan.frameRate.den <= 0 ||
+      transition.outgoingFrames == 0 || transition.incomingFrames == 0) {
+    setError(error, "The motion transition source timing is invalid.");
+    return false;
+  }
+  const int64_t outgoingRangeEndUs =
+      transition.outgoingAnchorUs +
+      frameOffsetUs(transition.outgoingFrames, plan.frameRate);
+  const int64_t incomingRangeStartUs =
+      transition.incomingAnchorUs -
+      frameOffsetUs(transition.incomingFrames, plan.frameRate);
+  if (outgoingRangeEndUs <= transition.outgoingAnchorUs ||
+      incomingRangeStartUs < 0) {
+    setError(error, "The motion transition source timing overflowed.");
+    return false;
+  }
+
+  MotionSourceTiming next;
+  next.outgoingPtsUs.reserve(
+      static_cast<size_t>(transition.outgoingFrames) + 2);
+  for (int64_t index = 0;
+       index <= static_cast<int64_t>(transition.outgoingFrames) + 1;
+       ++index) {
+    const int64_t framesBeforeEnd =
+        static_cast<int64_t>(transition.outgoingFrames) + 1 - index;
+    next.outgoingPtsUs.push_back(
+        outgoingRangeEndUs - frameOffsetUs(framesBeforeEnd, plan.frameRate));
+  }
+  next.incomingPtsUs.reserve(
+      static_cast<size_t>(transition.incomingFrames) + 2);
+  for (int64_t index = 0;
+       index <= static_cast<int64_t>(transition.incomingFrames) + 1;
+       ++index) {
+    next.incomingPtsUs.push_back(
+        incomingRangeStartUs + frameOffsetUs(index, plan.frameRate));
+  }
+  *timing = std::move(next);
+  return true;
+}
+
+bool validateMotionSourceTiming(
+    const RenderPlan& plan, const MotionTransitionWindow& transition,
+    const std::vector<SourceFrameTiming>& outgoing,
+    const std::vector<SourceFrameTiming>& incoming, std::string* error) {
+  MotionSourceTiming expected;
+  if (!motionSourceTiming(plan, transition, &expected, error)) return false;
+  if (plan.timestampToleranceUs <= 0 ||
+      !validateTimingSequence(expected.outgoingPtsUs, outgoing,
+                              plan.timestampToleranceUs) ||
+      !validateTimingSequence(expected.incomingPtsUs, incoming,
+                              plan.timestampToleranceUs)) {
+    setError(error,
+             "Smooth cut " + std::to_string(transition.cutIndex + 1) +
+                 " is not aligned to a stable source-frame cadence; use a "
+                 "hard cut for this edit point.");
+    return false;
+  }
   return true;
 }
 
@@ -390,15 +527,13 @@ std::string buildProgramFilterDescription(const RenderPlan& plan,
 
   for (size_t clip = 0; clip < plan.clips.size(); ++clip) {
     const ClipWindow& window = plan.clips[clip];
-    description += "[raw_m" + std::to_string(clip) + "]trim=start_";
-    if (plan.hasMotionTransitions()) {
-      description += "frame=" + std::to_string(window.sourceStartFrame) +
-                     ":end_frame=" +
-                     std::to_string(window.sourceEndFrame);
-    } else {
-      description += "pts=" + std::to_string(window.sourceStartUs) +
-                     ":end_pts=" + std::to_string(window.sourceEndUs);
-    }
+    description += "[raw_m" + std::to_string(clip) +
+                   "]trim=start_pts=" +
+                   std::to_string(trimBoundaryUs(plan,
+                                                 window.sourceStartUs)) +
+                   ":end_pts=" +
+                   std::to_string(trimBoundaryUs(plan,
+                                                 window.sourceEndUs));
     description += ",setpts=PTS-STARTPTS[m" + std::to_string(clip) + "];";
   }
   for (const auto& transition : plan.motionTransitions) {

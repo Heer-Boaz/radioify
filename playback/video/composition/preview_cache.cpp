@@ -14,6 +14,7 @@ extern "C" {
 #include <libavfilter/buffersrc.h>
 #include <libavutil/avutil.h>
 #include <libavutil/frame.h>
+#include <libavutil/mathematics.h>
 #include <libavutil/pixfmt.h>
 }
 
@@ -37,7 +38,6 @@ namespace playback_video_composition {
 namespace {
 
 constexpr int64_t kPrefetchDistanceUs = 1'000'000;
-constexpr int64_t kFallbackFrameDurationUs = 33'333;
 constexpr int kMaximumDecodeFrames = 2048;
 constexpr auto kRenderDeadline = std::chrono::seconds(10);
 
@@ -288,37 +288,51 @@ struct PreviewCache::Impl {
             steadyNowUs() >= deadlineUs.load(std::memory_order_relaxed));
   }
 
-  bool decodePair(VideoDecoder& decoder, int64_t targetUs,
-                  int64_t frameDurationUs, uint64_t generation,
-                  std::vector<VideoFrame>* frames) {
-    if (!frames || targetUs < 0 ||
-        targetUs > (std::numeric_limits<int64_t>::max)() / 10 ||
-        !decoder.seekToTimestamp100ns(targetUs * 10)) {
+  bool decodeTimingSequence(
+      VideoDecoder& decoder, const std::vector<int64_t>& expectedPtsUs,
+      size_t firstPixelIndex, size_t secondPixelIndex, int64_t toleranceUs,
+      uint64_t generation, std::vector<SourceFrameTiming>* observed,
+      std::vector<VideoFrame>* frames) {
+    if (!observed || !frames || expectedPtsUs.empty() ||
+        firstPixelIndex >= expectedPtsUs.size() ||
+        secondPixelIndex >= expectedPtsUs.size() ||
+        firstPixelIndex >= secondPixelIndex || toleranceUs <= 0 ||
+        expectedPtsUs.front() < 0 ||
+        expectedPtsUs.front() >
+            (std::numeric_limits<int64_t>::max)() / 10 ||
+        !decoder.seekToTimestamp100ns(expectedPtsUs.front() * 10)) {
       return false;
     }
+    observed->clear();
+    observed->reserve(expectedPtsUs.size());
     for (int count = 0;
          count < kMaximumDecodeFrames && !cancelled(generation); ++count) {
       VideoFrame timing;
       if (!decoder.readFrame(timing, nullptr, false)) return false;
       const int64_t ptsUs =
           (std::max)(int64_t{0}, timing.timestamp100ns / 10);
-      int64_t durationUs = timing.duration100ns / 10;
-      if (durationUs <= 0) durationUs = frameDurationUs;
-      if (durationUs <= 0) durationUs = kFallbackFrameDurationUs;
-      if (ptsUs < targetUs && durationUs <= targetUs - ptsUs) continue;
-
-      VideoFrame first;
-      if (!decoder.redecodeLastFrame(first)) return false;
-      VideoFrame second;
-      if (!decoder.readFrame(second, nullptr, true)) return false;
-      if (first.format != second.format || first.width != second.width ||
-          first.height != second.height || first.stride != second.stride ||
-          first.planeHeight != second.planeHeight) {
+      const int64_t durationUs = timing.duration100ns / 10;
+      if (ptsUs < expectedPtsUs.front() &&
+          !sourceTimestampMatches(ptsUs, expectedPtsUs.front(),
+                                  toleranceUs)) {
+        continue;
+      }
+      if ((ptsUs > expectedPtsUs.back() &&
+           !sourceTimestampMatches(ptsUs, expectedPtsUs.back(),
+                                   toleranceUs)) ||
+          observed->size() >= expectedPtsUs.size()) {
         return false;
       }
-      frames->push_back(std::move(first));
-      frames->push_back(std::move(second));
-      return !cancelled(generation);
+      const size_t index = observed->size();
+      observed->push_back({ptsUs, durationUs});
+      if (index == firstPixelIndex || index == secondPixelIndex) {
+        VideoFrame decoded;
+        if (!decoder.redecodeLastFrame(decoded)) return false;
+        frames->push_back(std::move(decoded));
+      }
+      if (observed->size() == expectedPtsUs.size()) {
+        return !cancelled(generation);
+      }
     }
     return false;
   }
@@ -425,13 +439,24 @@ struct PreviewCache::Impl {
     }
     std::vector<VideoFrame> context;
     context.reserve(4);
-    if (!decodePair(decoder, window.outgoingContextStartUs,
-                    work.plan->frameDurationUs, work.generation, &context) ||
-        !decodePair(decoder, window.incomingAnchorUs,
-                    work.plan->frameDurationUs, work.generation, &context) ||
+    MotionSourceTiming expected;
+    std::vector<SourceFrameTiming> outgoing;
+    std::vector<SourceFrameTiming> incoming;
+    if (!motionSourceTiming(*work.plan, window, &expected, error) ||
+        !decodeTimingSequence(
+            decoder, expected.outgoingPtsUs, 0, 1,
+            work.plan->timestampToleranceUs, work.generation, &outgoing,
+            &context) ||
+        !decodeTimingSequence(
+            decoder, expected.incomingPtsUs, window.incomingFrames,
+            static_cast<size_t>(window.incomingFrames) + 1,
+            work.plan->timestampToleranceUs, work.generation, &incoming,
+            &context) ||
+        !validateMotionSourceTiming(*work.plan, window, outgoing, incoming,
+                                    error) ||
         context.size() != 4 || cancelled(work.generation)) {
       deadlineUs.store(0, std::memory_order_relaxed);
-      if (error && !cancelled(work.generation)) {
+      if (error && error->empty() && !cancelled(work.generation)) {
         *error = "Could not decode the four transition context frames.";
       }
       return false;
@@ -523,11 +548,19 @@ struct PreviewCache::Impl {
         return false;
       }
       VideoFrame output;
-      const int64_t timestampUs =
-          window.presentationStartUs +
-          static_cast<int64_t>(rendered.size()) * work.plan->frameDurationUs;
+      const int64_t index = static_cast<int64_t>(rendered.size());
+      const int64_t frameStartUs = av_rescale_q_rnd(
+          index, av_inv_q(work.plan->frameRate), AVRational{1, AV_TIME_BASE},
+          static_cast<AVRounding>(AV_ROUND_NEAR_INF |
+                                  AV_ROUND_PASS_MINMAX));
+      const int64_t frameEndUs = av_rescale_q_rnd(
+          index + 1, av_inv_q(work.plan->frameRate),
+          AVRational{1, AV_TIME_BASE},
+          static_cast<AVRounding>(AV_ROUND_NEAR_INF |
+                                  AV_ROUND_PASS_MINMAX));
+      const int64_t timestampUs = window.presentationStartUs + frameStartUs;
       if (!copyOutputFrame(filtered.frame, metadata, timestampUs,
-                           work.plan->frameDurationUs, &output)) {
+                           frameEndUs - frameStartUs, &output)) {
         deadlineUs.store(0, std::memory_order_relaxed);
         if (error) {
           *error = "The transition preview graph changed the preserving pixel "
@@ -736,16 +769,19 @@ bool PreviewCache::copyFrame(uint64_t compositionId,
     return false;
   }
   const Impl::Cached& cached = *impl_->cached;
-  const int64_t frameDurationUs =
-      impl_->plan ? impl_->plan->frameDurationUs : 0;
-  if (frameDurationUs <= 0) return false;
   const int64_t sampleUs =
       presentationUs + (std::max)(int64_t{0}, presentationDurationUs) / 2;
   const int64_t offsetUs = sampleUs - cached.window.presentationStartUs;
   if (offsetUs < 0 || offsetUs >= cached.window.durationUs) return false;
-  const size_t index = static_cast<size_t>(offsetUs / frameDurationUs);
-  if (index >= cached.frames.size()) return false;
-  *out = cached.frames[index];
+  const auto selected = std::find_if(
+      cached.frames.begin(), cached.frames.end(), [&](const VideoFrame& frame) {
+        const int64_t startUs = frame.timestamp100ns / 10;
+        const int64_t durationUs = frame.duration100ns / 10;
+        return durationUs > 0 && sampleUs >= startUs &&
+               sampleUs - startUs < durationUs;
+      });
+  if (selected == cached.frames.end()) return false;
+  *out = *selected;
   out->timestamp100ns = presentationUs * 10;
   out->duration100ns = presentationDurationUs * 10;
   return true;

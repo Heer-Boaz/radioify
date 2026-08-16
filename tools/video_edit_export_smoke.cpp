@@ -308,7 +308,7 @@ int wmain(int argc, wchar_t** argv) {
   if (argc < 4) {
     std::cerr << "usage: video_edit_export_smoke <input> <output> "
                  "[--cancel|--expect-failure|--smooth-cut|"
-                 "--smooth-first-cut] "
+                 "--expect-smooth-failure|--smooth-first-cut] "
                  "<start_us:end_us> [range...]\n";
     return 2;
   }
@@ -321,8 +321,11 @@ int wmain(int argc, wchar_t** argv) {
   }
   const std::wstring mode = argv[3];
   const bool cancelTest = mode == L"--cancel";
-  const bool expectedFailure = mode == L"--expect-failure";
-  const bool smoothCutTest = mode == L"--smooth-cut";
+  const bool expectedSmoothFailure = mode == L"--expect-smooth-failure";
+  const bool expectedFailure =
+      mode == L"--expect-failure" || expectedSmoothFailure;
+  const bool smoothCutTest =
+      mode == L"--smooth-cut" || expectedSmoothFailure;
   const bool mixedCutTest = mode == L"--smooth-first-cut";
   const int firstRange =
       cancelTest || expectedFailure || smoothCutTest || mixedCutTest ? 4 : 3;

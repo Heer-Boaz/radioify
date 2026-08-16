@@ -109,6 +109,110 @@ bool hasNamePart(const char* names, const char* part) {
   return false;
 }
 
+class MotionTimingAudit {
+ public:
+  bool reset(const playback_video_composition::RenderPlan& plan,
+             std::string* error) {
+    observations_.clear();
+    segments_.clear();
+    currentSegment_ = 0;
+    failed_ = false;
+    toleranceUs_ = plan.timestampToleranceUs;
+    observations_.reserve(plan.motionTransitions.size());
+    segments_.reserve(plan.motionTransitions.size() * 2);
+    for (const auto& transition : plan.motionTransitions) {
+      Observation observation;
+      observation.transition = transition;
+      if (!playback_video_composition::motionSourceTiming(
+              plan, transition, &observation.expected, error)) {
+        return false;
+      }
+      observations_.push_back(std::move(observation));
+      const size_t index = observations_.size() - 1;
+      segments_.push_back({index, true});
+      segments_.push_back({index, false});
+    }
+    return true;
+  }
+
+  bool observe(int64_t ptsUs, int64_t durationUs, std::string* error) {
+    if (failed_ || segments_.empty()) return !failed_;
+    while (currentSegment_ < segments_.size()) {
+      const Segment& segment = segments_[currentSegment_];
+      Observation& observation = observations_[segment.observationIndex];
+      const std::vector<int64_t>& expected =
+          segment.outgoing ? observation.expected.outgoingPtsUs
+                           : observation.expected.incomingPtsUs;
+      std::vector<playback_video_composition::SourceFrameTiming>& actual =
+          segment.outgoing ? observation.outgoing : observation.incoming;
+      if (ptsUs < expected.front() &&
+          !playback_video_composition::sourceTimestampMatches(
+              ptsUs, expected.front(), toleranceUs_)) {
+        return true;
+      }
+      if (ptsUs > expected.back() &&
+          !playback_video_composition::sourceTimestampMatches(
+              ptsUs, expected.back(), toleranceUs_)) {
+        if (actual.size() != expected.size()) return fail(observation, error);
+        ++currentSegment_;
+        continue;
+      }
+      const size_t index = actual.size();
+      if (index >= expected.size() ||
+          !playback_video_composition::sourceTimestampMatches(
+              ptsUs, expected[index], toleranceUs_)) {
+        return fail(observation, error);
+      }
+      actual.push_back({ptsUs, durationUs});
+      return true;
+    }
+    return true;
+  }
+
+  bool finish(const playback_video_composition::RenderPlan& plan,
+              std::string* error) {
+    if (failed_) return false;
+    for (const Observation& observation : observations_) {
+      if (!playback_video_composition::validateMotionSourceTiming(
+              plan, observation.transition, observation.outgoing,
+              observation.incoming, error)) {
+        failed_ = true;
+        return false;
+      }
+    }
+    return true;
+  }
+
+ private:
+  struct Observation {
+    playback_video_composition::MotionTransitionWindow transition;
+    playback_video_composition::MotionSourceTiming expected;
+    std::vector<playback_video_composition::SourceFrameTiming> outgoing;
+    std::vector<playback_video_composition::SourceFrameTiming> incoming;
+  };
+
+  struct Segment {
+    size_t observationIndex = 0;
+    bool outgoing = false;
+  };
+
+  bool fail(const Observation& observation, std::string* error) {
+    failed_ = true;
+    setError(error,
+             "Smooth cut " +
+                 std::to_string(observation.transition.cutIndex + 1) +
+                 " is not aligned to a stable source-frame cadence; use a "
+                 "hard cut for this edit point.");
+    return false;
+  }
+
+  std::vector<Observation> observations_;
+  std::vector<Segment> segments_;
+  size_t currentSegment_ = 0;
+  int64_t toleranceUs_ = 0;
+  bool failed_ = false;
+};
+
 struct EncodedStream {
   int inputIndex = -1;
   AVMediaType type = AVMEDIA_TYPE_UNKNOWN;
@@ -243,7 +347,9 @@ class ExportPipeline {
   StaticFrameMetadata staticMetadata_;
   MetadataFingerprint sourceMetadata_;
   MetadataFingerprint expectedMetadata_;
+  CadenceFingerprint expectedVideoCadence_;
   playback_video_composition::RenderPlan videoRenderPlan_;
+  MotionTimingAudit motionTimingAudit_;
 };
 
 bool ExportPipeline::openInput(std::string* error) {
@@ -965,9 +1071,15 @@ bool ExportPipeline::createVideoRenderPlan(std::string* error) {
   if (sourceFrameRate.num <= 0 || sourceFrameRate.den <= 0) {
     sourceFrameRate = video->inputStream->codecpar->framerate;
   }
-  return playback_video_composition::buildRenderPlan(
-      request_.decisions.keptRanges, request_.decisions.cutTransitions,
-      sourceFrameRate, &videoRenderPlan_, error);
+  if (!playback_video_composition::buildRenderPlan(
+          request_.decisions.keptRanges,
+          request_.decisions.cutTransitions,
+          playback_video_composition::SourceTiming{
+              sourceFrameRate, video->inputStream->time_base},
+          &videoRenderPlan_, error)) {
+    return false;
+  }
+  return motionTimingAudit_.reset(videoRenderPlan_, error);
 }
 
 int64_t ExportPipeline::presentationStartForRange(size_t rangeIndex) const {
@@ -1286,6 +1398,15 @@ bool ExportPipeline::submitFrame(
   if (stream->sourceSatisfied) return true;
   const int64_t ptsUs = relativeFramePtsUs(*stream, frame);
   if (stream->video()) {
+    const int64_t sourceFrameDurationUs =
+        frame->duration > 0
+            ? av_rescale_q(frame->duration, stream->inputStream->time_base,
+                           kMicrosecondTimeBase)
+            : 0;
+    if (stream->inputIndex == selectedVideoIndex_ &&
+        !motionTimingAudit_.observe(ptsUs, sourceFrameDurationUs, error)) {
+      return false;
+    }
     staticMetadata_.capture(frame);
     if (frameFallsInRanges(ptsUs, request_.decisions.keptRanges)) {
       sourceMetadata_.observe(frame);
@@ -1407,6 +1528,12 @@ bool ExportPipeline::encodeFrame(EncodedStream* stream, AVFrame* frame,
                                      stream->encoder->time_base);
     }
     frame->time_base = stream->encoder->time_base;
+    if (stream->video()) {
+      expectedVideoCadence_.observe(
+          av_rescale_q(frame->pts, stream->encoder->time_base,
+                       stream->outputStream->time_base),
+          stream->outputStream->time_base);
+    }
   }
   int result = avcodec_send_frame(stream->encoder, frame);
   if (result == AVERROR(EAGAIN)) {
@@ -1562,6 +1689,7 @@ bool ExportPipeline::finish(std::string* error) {
       return false;
     }
   }
+  if (!motionTimingAudit_.finish(videoRenderPlan_, error)) return false;
   if (!metadataSurvivedFilter(sourceMetadata_, expectedMetadata_, error)) {
     return false;
   }
@@ -1834,6 +1962,9 @@ bool ExportPipeline::validate(std::string* error) {
     setError(error,
              "Decoded output bit depth/chroma does not match the source; the "
              "completed file was rejected.");
+    return false;
+  }
+  if (!equalFrameCadence(expectedVideoCadence_, audit.cadence, error)) {
     return false;
   }
   if (!equalCriticalMetadata(expectedMetadata_, audit.metadata, error)) {
