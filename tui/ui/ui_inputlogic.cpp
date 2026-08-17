@@ -263,7 +263,7 @@ void setBrowserSearchFocus(BrowserState& browser, BrowserSearchFocus focus,
   }
 }
 
-void handleInputEvent(const InputEvent& ev, BrowserState& browser,
+void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
                       const GridLayout& layout,
                       const BreadcrumbLine& breadcrumbLine, int breadcrumbY,
                       int searchBarY, int searchBarWidth, int listTop,
@@ -274,68 +274,36 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
                       bool decoderReady, int& breadcrumbHover, int& actionHover,
                       bool& searchBarHover, bool& dirty, bool& running,
                       const InputCallbacks& callbacks) {
-  auto clearForwardHistory = [&]() { browser.forwardHistory.clear(); };
-  auto captureLocation = [&]() {
-    return captureBrowserLocation(browser, browserLocationKind(browser));
-  };
-  auto loadBrowserPath = [&](const std::filesystem::path& dir) {
-    browser.dir = dir;
-    setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
-    browser.selected = 0;
-    browser.scrollRow = 0;
-    browser.viewportRestoreMode = BrowserState::ViewportRestoreMode::None;
-    browser.viewportRestoreScrollRow = 0;
-    if (callbacks.onRefreshBrowser) {
-      callbacks.onRefreshBrowser(browser, "");
-    }
-    breadcrumbHover = -1;
-    dirty = true;
-  };
-  auto navigateToLocation = [&](const BrowserState::Location& location) {
-    if (location.kind == BrowserState::LocationKind::TrackBrowser &&
-        !loadTrackBrowserForFile(location.dir)) {
-      return false;
-    }
-    loadBrowserPath(location.dir);
-    restoreBrowserLocation(browser, location);
-    return true;
-  };
+  BrowserState& browser = navigator.state();
   auto navigateDirectoryWithHistory = [&](const std::filesystem::path& dir) {
-    if (dir == browser.dir) return false;
-    const BrowserState::Location from = captureLocation();
-    loadBrowserPath(dir);
-    recordBrowserNavigation(browser, from, captureLocation());
-    return true;
+    const bool navigated = navigator.navigate(browserDirectoryLocation(dir));
+    if (navigated) breadcrumbHover = -1;
+    return navigated;
   };
   auto navigateUpWithHistory = [&]() {
-    const std::optional<std::filesystem::path> parent =
-        browserParentDirectory(browser.dir);
-    if (!parent) return false;
+    if (optionsBrowserIsActive(browser)) {
+      const bool navigated = navigator.back();
+      if (navigated) breadcrumbHover = -1;
+      return navigated;
+    }
 
     const bool leavingTrackBrowser = isTrackBrowserActive(browser);
+    const std::filesystem::path departedPath = browser.location.path;
+    const std::optional<std::filesystem::path> parent =
+        browserParentDirectory(departedPath);
+    if (!parent) return false;
+
     FileEntry departedEntry;
-    departedEntry.path = leavingTrackBrowser ? trackBrowserFile() : browser.dir;
+    departedEntry.path = departedPath;
     departedEntry.name = toUtf8String(departedEntry.path.filename());
     departedEntry.isDir = !leavingTrackBrowser;
     const BrowserState::EntryIdentity departed =
         browserEntryIdentity(departedEntry);
-    const BrowserState::Location from = captureLocation();
 
-    loadBrowserPath(*parent);
-    selectBrowserEntry(browser, departed);
-    requestBrowserSelectionReveal(browser);
-    recordBrowserNavigation(browser, from, captureLocation());
-    return true;
-  };
-  auto navigateBack = [&]() {
-    const std::optional<BrowserState::Location> target =
-        browserHistoryBack(browser, captureLocation());
-    return target && navigateToLocation(*target);
-  };
-  auto navigateForward = [&]() {
-    const std::optional<BrowserState::Location> target =
-        browserHistoryForward(browser, captureLocation());
-    return target && navigateToLocation(*target);
+    const bool navigated = navigator.navigate(browserDirectoryLocation(*parent),
+                                               {}, departed);
+    if (navigated) breadcrumbHover = -1;
+    return navigated;
   };
 
   auto resolvePathSearchTarget = [&](const std::string& query,
@@ -378,7 +346,11 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       target /= std::filesystem::path();
     }
     if (!target.is_absolute()) {
-      target = browser.dir / target;
+      const std::filesystem::path base =
+          browser.location.kind == BrowserLocationKind::Directory
+              ? browser.location.path
+              : browser.location.path.parent_path();
+      target = base / target;
     }
 
     if (!target.has_root_name() && !target.has_root_directory() &&
@@ -398,8 +370,10 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     if (!browser.pathSearchActive) return;
     std::filesystem::path target;
     if (!resolvePathSearchTarget(browser.pathSearch, target)) return;
-    if (target != browser.dir) {
-      loadBrowserPath(target);
+    if (browser.location.kind != BrowserLocationKind::Directory ||
+        target != browser.location.path) {
+      navigator.replace(browserDirectoryLocation(target));
+      breadcrumbHover = -1;
     } else {
       dirty = true;
     }
@@ -423,11 +397,11 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     // not inadvertently trigger playback shortcuts (ExitPlaybackSession, etc.).
     if (browserInteractionEnabled) {
       if (browserBackAction) {
-        navigateBack();
+        navigator.back();
         return;
       }
       if (browserForwardAction) {
-        navigateForward();
+        navigator.forward();
         return;
       }
     }
@@ -487,12 +461,12 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       if (key.vk == VK_ESCAPE) {
         browser.filter = browser.filterBackup;
         setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
-        if (callbacks.onRefreshBrowser) callbacks.onRefreshBrowser(browser, "");
+        navigator.reload();
         return;
       }
       if (key.vk == VK_RETURN) {
         setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
-        if (callbacks.onRefreshBrowser) callbacks.onRefreshBrowser(browser, "");
+        navigator.reload();
         return;
       }
       if (backspaceKey) {
@@ -538,9 +512,6 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
                             kPlaybackShortcutContextShared |
                                 kPlaybackShortcutContextGlobal) !=
             PlaybackInputResult::Ignored) {
-      if (key.vk == 'O' || key.ch == 'o' || key.ch == 'O') {
-        clearForwardHistory();
-      }
       dirty = true;
       return;
     }
@@ -562,7 +533,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
         else
           browser.sortDescending = true;
       }
-      if (callbacks.onRefreshBrowser) callbacks.onRefreshBrowser(browser, "");
+      navigator.reload();
       dirty = true;
       return;
     }
@@ -574,17 +545,6 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       return;
     }
     if (backspaceKey) {
-      if (optionsBrowserIsActive(browser)) {
-        clearForwardHistory();
-        if (optionsBrowserNavigateUp(browser)) {
-          if (callbacks.onRefreshBrowser) {
-            callbacks.onRefreshBrowser(browser, "");
-          }
-          breadcrumbHover = -1;
-          dirty = true;
-        }
-        return;
-      }
       navigateUpWithHistory();
       return;
     }
@@ -603,6 +563,8 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
         if (pick.isDir) {
           if (pick.name == "..") {
             navigateUpWithHistory();
+          } else if (pick.targetLocation) {
+            navigator.navigate(*pick.targetLocation);
           } else {
             navigateDirectoryWithHistory(pick.path);
           }
@@ -712,8 +674,8 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
         breadcrumbHover >= 0) {
       const auto& crumb =
           breadcrumbLine.crumbs[static_cast<size_t>(breadcrumbHover)];
-      if (browser.dir != crumb.path) {
-        navigateDirectoryWithHistory(crumb.path);
+      if (browser.location != crumb.location) {
+        navigator.navigate(crumb.location);
         breadcrumbHover = -1;
         dirty = true;
       }
@@ -770,7 +732,6 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
             dirty = true;
             return;
           case ActionStripItem::Options:
-            clearForwardHistory();
             if (callbacks.onToggleOptions) callbacks.onToggleOptions();
             dirty = true;
             return;
@@ -867,6 +828,8 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       if (pick.isDir) {
         if (pick.name == "..") {
           navigateUpWithHistory();
+        } else if (pick.targetLocation) {
+          navigator.navigate(*pick.targetLocation);
         } else {
           navigateDirectoryWithHistory(pick.path);
         }

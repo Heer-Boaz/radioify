@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 
 #include "browser_model.h"
@@ -12,9 +13,10 @@ enum class OptionsBrowserResult {
 
 bool optionsBrowserIsActive(const BrowserState& browser);
 bool optionsBrowserCanToggle(const BrowserState& browser);
+std::optional<BrowserLocation> optionsBrowserOpenLocation(
+    const BrowserState& browser);
+bool optionsBrowserSupportsLocation(const BrowserLocation& location);
 bool optionsBrowserRefresh(BrowserState& browser);
 OptionsBrowserResult optionsBrowserActivateSelection(BrowserState& browser);
-void optionsBrowserToggle(BrowserState& browser);
-bool optionsBrowserNavigateUp(BrowserState& browser);
 std::string optionsBrowserSelectionMeta(const BrowserState& browser);
-std::string optionsBrowserShowingLabel();
+std::string optionsBrowserShowingLabel(const BrowserState& browser);

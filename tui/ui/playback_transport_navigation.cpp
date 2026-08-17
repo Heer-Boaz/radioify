@@ -8,37 +8,17 @@
 #include "runtime_helpers.h"
 #include "track_browser_state.h"
 #include "ui_helpers.h"
-#include "ui_inputlogic.h"
 
 namespace playback_transport_navigation {
 
-Navigator::Navigator(BrowserState& browser, Callbacks callbacks)
-    : browser_(browser), callbacks_(std::move(callbacks)) {}
-
-BrowserState::Location Navigator::captureLocation() const {
-  return captureBrowserLocation(browser_, browserLocationKind(browser_));
-}
+Navigator::Navigator(BrowserNavigator& browserNavigator, Callbacks callbacks)
+    : browserNavigator_(browserNavigator),
+      browser_(browserNavigator.state()),
+      callbacks_(std::move(callbacks)) {}
 
 bool Navigator::activateTrackBrowser(const std::filesystem::path& file) {
-  const BrowserState::Location from = captureLocation();
-  if (!loadTrackBrowserForFile(file)) {
-    return false;
-  }
-  browser_.dir = trackBrowserFile();
-  browser_.selected = 0;
-  browser_.scrollRow = 0;
-  browser_.filter.clear();
-  if (callbacks_.dirty) {
-    setBrowserSearchFocus(browser_, BrowserSearchFocus::None, *callbacks_.dirty);
-  }
-  if (callbacks_.refreshBrowser) {
-    callbacks_.refreshBrowser("");
-  }
-  if (callbacks_.markLayoutDirty) {
-    callbacks_.markLayoutDirty();
-  }
-  recordBrowserNavigation(browser_, from, captureLocation());
-  return true;
+  return browserNavigator_.navigate(
+      browserTrackLocation(normalizeTrackBrowserPath(file)));
 }
 
 std::optional<PlaybackTarget> Navigator::resolveEntryTarget(
@@ -54,7 +34,7 @@ bool Navigator::syncBrowserToPlaybackTarget(const PlaybackTarget& target) {
     const std::filesystem::path trackPath =
         normalizeTrackBrowserPath(target.file);
     const bool requiresRefresh =
-        !isTrackBrowserActive(browser_) || browser_.dir != trackPath;
+        !isTrackBrowserActive(browser_) || browser_.location.path != trackPath;
     if (requiresRefresh && !activateTrackBrowser(target.file)) {
       return false;
     }
@@ -62,55 +42,35 @@ bool Navigator::syncBrowserToPlaybackTarget(const PlaybackTarget& target) {
       return true;
     }
     browser_.filter.clear();
-    if (callbacks_.dirty) {
-      setBrowserSearchFocus(browser_, BrowserSearchFocus::None, *callbacks_.dirty);
-    }
-    if (callbacks_.refreshBrowser) {
-      callbacks_.refreshBrowser("");
-    }
-    if (callbacks_.markLayoutDirty) {
-      callbacks_.markLayoutDirty();
-    }
+    browser_.filterActive = false;
+    browser_.pathSearch.clear();
+    browser_.pathSearchActive = false;
+    browserNavigator_.reload();
     return selectPlaybackTarget(target);
   }
 
   std::filesystem::path targetDir =
       target.file.has_parent_path() ? target.file.parent_path()
                                     : std::filesystem::path(".");
-  const BrowserState::Location from = captureLocation();
   const bool requiresRefresh =
-      isTrackBrowserActive(browser_) || browser_.dir != targetDir;
+      browser_.location.kind != BrowserLocationKind::Directory ||
+      browser_.location.path != targetDir;
   if (requiresRefresh) {
-    browser_.dir = targetDir;
-    browser_.selected = 0;
-    browser_.scrollRow = 0;
-    browser_.filter.clear();
-    if (callbacks_.dirty) {
-      setBrowserSearchFocus(browser_, BrowserSearchFocus::None, *callbacks_.dirty);
-    }
-    if (callbacks_.refreshBrowser) {
-      callbacks_.refreshBrowser(toUtf8String(target.file.filename()));
-    }
-    if (callbacks_.markLayoutDirty) {
-      callbacks_.markLayoutDirty();
+    if (!browserNavigator_.navigate(
+            browserDirectoryLocation(targetDir),
+            toUtf8String(target.file.filename()))) {
+      return false;
     }
   }
   if (selectPlaybackTarget(target)) {
-    recordBrowserNavigation(browser_, from, captureLocation());
     return true;
   }
   browser_.filter.clear();
-  if (callbacks_.dirty) {
-    setBrowserSearchFocus(browser_, BrowserSearchFocus::None, *callbacks_.dirty);
-  }
-  if (callbacks_.refreshBrowser) {
-    callbacks_.refreshBrowser(toUtf8String(target.file.filename()));
-  }
-  if (callbacks_.markLayoutDirty) {
-    callbacks_.markLayoutDirty();
-  }
+  browser_.filterActive = false;
+  browser_.pathSearch.clear();
+  browser_.pathSearchActive = false;
+  browserNavigator_.reload(toUtf8String(target.file.filename()));
   const bool selected = selectPlaybackTarget(target);
-  recordBrowserNavigation(browser_, from, captureLocation());
   return selected;
 }
 

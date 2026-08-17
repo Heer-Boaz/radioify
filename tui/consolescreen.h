@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "ui/browser_location.h"
 #include "core/native_wait_handle.h"
 #include "terminal_cell_metrics.h"
 
@@ -31,7 +32,7 @@ struct Style {
 struct Breadcrumb {
   int startX = 0;
   int endX = 0;
-  std::filesystem::path path;
+  BrowserLocation location;
 };
 
 struct BreadcrumbLine {
@@ -47,9 +48,10 @@ struct ScreenCell {
   Color bg{0, 0, 0};
 };
 
-BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width);
+BreadcrumbLine buildBreadcrumbLine(const BrowserLocation& location, int width);
 int breadcrumbIndexAt(const BreadcrumbLine& line, int x, int y, int lineY);
-bool hitTestBreadcrumb(const BreadcrumbLine& line, int x, int y, int lineY, std::filesystem::path* outPath);
+bool hitTestBreadcrumb(const BreadcrumbLine& line, int x, int y, int lineY,
+                       BrowserLocation* outLocation);
 NativeWaitHandle browserThumbnailWakeHandle();
 bool consumeBrowserThumbnailWake();
 

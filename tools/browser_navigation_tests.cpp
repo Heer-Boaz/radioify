@@ -63,16 +63,16 @@ int main() {
 
   BrowserState browser;
   browser.viewMode = BrowserState::ViewMode::Thumbnails;
-  browser.dir = "C:/Media";
+  browser.location = browserDirectoryLocation("C:/Media");
   for (int i = 0; i < 30; ++i) {
     browser.entries.push_back(
         fileEntry("Folder " + std::to_string(i),
-                  browser.dir / ("Folder " + std::to_string(i)), true));
+                  browser.location.path / ("Folder " + std::to_string(i)),
+                  true));
   }
   browser.selected = 17;
   browser.scrollRow = 13;
-  const BrowserState::Location saved =
-      captureBrowserLocation(browser, BrowserState::LocationKind::Directory);
+  const BrowserState::Location saved = captureBrowserLocation(browser);
 
   browser.selected = 0;
   browser.scrollRow = 0;
@@ -115,19 +115,19 @@ int main() {
                "list columns must reveal the selected entry as one viewport");
 
   BrowserState historyBrowser;
-  historyBrowser.dir = "C:/Media";
+  historyBrowser.location = browserDirectoryLocation("C:/Media");
   historyBrowser.entries = files;
   historyBrowser.selected = 1;
   historyBrowser.scrollRow = 4;
-  const BrowserState::Location parentLocation = captureBrowserLocation(
-      historyBrowser, BrowserState::LocationKind::Directory);
+  const BrowserState::Location parentLocation =
+      captureBrowserLocation(historyBrowser);
 
-  historyBrowser.dir = songA;
+  historyBrowser.location = browserTrackLocation(songA);
   historyBrowser.entries = tracks;
   historyBrowser.selected = 0;
   historyBrowser.scrollRow = 0;
-  BrowserState::Location trackBrowserLocation = captureBrowserLocation(
-      historyBrowser, BrowserState::LocationKind::TrackBrowser);
+  BrowserState::Location trackBrowserLocation =
+      captureBrowserLocation(historyBrowser);
   ok &= expect(recordBrowserNavigation(historyBrowser, parentLocation,
                                        trackBrowserLocation),
                "a real location change must create one history entry");
@@ -137,29 +137,27 @@ int main() {
 
   historyBrowser.selected = 1;
   historyBrowser.scrollRow = 6;
-  BrowserState::Location currentTrackLocation = captureBrowserLocation(
-      historyBrowser, BrowserState::LocationKind::TrackBrowser);
+  BrowserState::Location currentTrackLocation =
+      captureBrowserLocation(historyBrowser);
   const std::optional<BrowserState::Location> backTarget =
       browserHistoryBack(historyBrowser, currentTrackLocation);
-  ok &= expect(backTarget && backTarget->dir == parentLocation.dir &&
+  ok &= expect(backTarget && backTarget->route == parentLocation.route &&
                    backTarget->selectedEntry &&
                    backTarget->selectedEntry->path == songB &&
                    backTarget->scrollRow == 4,
                "Back must return the exact source location");
 
-  historyBrowser.dir = parentLocation.dir;
+  historyBrowser.location = parentLocation.route;
   historyBrowser.entries = files;
   historyBrowser.selected = 1;
   historyBrowser.scrollRow = 4;
   const std::optional<BrowserState::Location> forwardTarget =
-      browserHistoryForward(
-          historyBrowser,
-          captureBrowserLocation(historyBrowser,
-                                 BrowserState::LocationKind::Directory));
+      browserHistoryForward(historyBrowser,
+                            captureBrowserLocation(historyBrowser));
   ok &= expect(
       forwardTarget &&
-          forwardTarget->kind == BrowserState::LocationKind::TrackBrowser &&
-          forwardTarget->dir == songA && forwardTarget->selectedEntry &&
+          forwardTarget->route.kind == BrowserLocationKind::TrackBrowser &&
+          forwardTarget->route.path == songA && forwardTarget->selectedEntry &&
           forwardTarget->selectedEntry->trackIndex == 3 &&
           forwardTarget->scrollRow == 6,
       "Forward must restore the destination as it was left");
@@ -172,10 +170,46 @@ int main() {
 
   BrowserState locationKindBrowser;
   BrowserState::Location physicalLocation = trackBrowserLocation;
-  physicalLocation.kind = BrowserState::LocationKind::Directory;
+  physicalLocation.route = browserDirectoryLocation(songA);
   ok &= expect(recordBrowserNavigation(locationKindBrowser, physicalLocation,
                                        trackBrowserLocation),
                "physical and virtual locations with one path must differ");
+
+  BrowserState routedBrowser;
+  routedBrowser.location = browserDirectoryLocation("C:/Media");
+  routedBrowser.entries = files;
+  int activated = 0;
+  int refreshed = 0;
+  BrowserNavigator::Callbacks navigatorCallbacks;
+  navigatorCallbacks.activate = [&](const BrowserLocation&) {
+    ++activated;
+    return true;
+  };
+  navigatorCallbacks.refresh = [&](const std::string&) { ++refreshed; };
+  BrowserNavigator navigator(routedBrowser, std::move(navigatorCallbacks));
+  const BrowserLocation optionsLocation = browserOptionsLocation(
+      songA, 3, BrowserOptionsPage::VgmDevices);
+  ok &= expect(navigator.navigate(optionsLocation),
+               "the navigator must activate a typed content route");
+  ok &= expect(routedBrowser.location == optionsLocation && activated == 1 &&
+                   refreshed == 1 && routedBrowser.backHistory.size() == 1,
+               "one navigation owner must update route, content and history");
+  const BrowserLocation deviceLocation = browserOptionsLocation(
+      songA, 3, BrowserOptionsPage::VgmDevice, 0x2612);
+  ok &= expect(optionsLocation != deviceLocation,
+               "typed options pages must be distinct browser locations");
+
+  BrowserState rejectedBrowser;
+  rejectedBrowser.location = browserDirectoryLocation("C:/Media");
+  BrowserNavigator::Callbacks rejectedCallbacks;
+  rejectedCallbacks.activate = [](const BrowserLocation&) { return false; };
+  BrowserNavigator rejectedNavigator(rejectedBrowser,
+                                     std::move(rejectedCallbacks));
+  ok &= expect(!rejectedNavigator.navigate(browserTrackLocation(songA)) &&
+                   rejectedBrowser.location ==
+                       browserDirectoryLocation("C:/Media") &&
+                   rejectedBrowser.backHistory.empty(),
+               "a rejected content route must not mutate browser state");
 
 #ifdef _WIN32
   const std::optional<std::filesystem::path> driveParent =

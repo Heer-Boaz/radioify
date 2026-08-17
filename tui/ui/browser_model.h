@@ -3,11 +3,21 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "browser_location.h"
 #include "consolescreen.h"
 
 struct FileEntry {
+  FileEntry() = default;
+  FileEntry(std::string entryName, std::filesystem::path entryPath,
+            bool directory, bool sectionHeader = false)
+      : name(std::move(entryName)),
+        path(std::move(entryPath)),
+        isDir(directory),
+        isSectionHeader(sectionHeader) {}
+
   std::string name;
   std::filesystem::path path;
   bool isDir = false;
@@ -19,6 +29,7 @@ struct FileEntry {
   int auditionDevice = -1;
   int auditionChannel = -1;
   int auditionIndex = -1;
+  std::optional<BrowserLocation> targetLocation;
 };
 
 struct BrowserState {
@@ -28,13 +39,8 @@ struct BrowserState {
     bool isDir = false;
     int trackIndex = -1;
   };
-  enum class LocationKind {
-    Directory,
-    TrackBrowser,
-  };
   struct Location {
-    LocationKind kind = LocationKind::Directory;
-    std::filesystem::path dir;
+    BrowserLocation route;
     std::optional<EntryIdentity> selectedEntry;
     int scrollRow = 0;
   };
@@ -48,7 +54,7 @@ struct BrowserState {
     RestoreScroll,
   };
 
-  std::filesystem::path dir;
+  BrowserLocation location;
   std::vector<FileEntry> entries;
   int selected = 0;
   int scrollRow = 0;

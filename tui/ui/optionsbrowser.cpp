@@ -25,22 +25,7 @@ enum class OptionsTarget {
   Vgm,
 };
 
-enum class OptionsBrowserMode {
-  Root,
-  Instruments,
-  VgmDevices,
-  VgmDevice,
-  VgmMetadata,
-};
-
-struct OptionsBrowserState {
-  bool active = false;
-  OptionsTarget target = OptionsTarget::None;
-  OptionsBrowserMode mode = OptionsBrowserMode::Root;
-  std::filesystem::path path;
-  std::filesystem::path returnDir;
-  std::filesystem::path file;
-  int trackIndex = 0;
+struct OptionsBrowserCache {
   std::filesystem::path instrumentFile;
   int instrumentTrack = -1;
   std::vector<KssInstrumentProfile> instruments;
@@ -50,7 +35,7 @@ struct OptionsBrowserState {
   std::vector<VgmDeviceInfo> vgmDevices;
 };
 
-OptionsBrowserState gOptionsBrowser;
+OptionsBrowserCache gOptionsBrowser;
 
 OptionsTarget targetForPath(const std::filesystem::path& p) {
   if (isKssExt(p)) return OptionsTarget::Kss;
@@ -232,66 +217,20 @@ std::string hex32(uint32_t value) {
   return std::string(buf);
 }
 
-std::filesystem::path instrumentsPath() {
-  if (gOptionsBrowser.path.empty()) return {};
-  return gOptionsBrowser.path / "Instruments";
+BrowserLocation optionsPageLocation(const BrowserLocation& location,
+                                    BrowserOptionsPage page,
+                                    uint32_t deviceId = 0) {
+  return browserOptionsLocation(location.path, location.trackIndex, page,
+                                deviceId);
 }
 
-std::filesystem::path devicesPath() {
-  if (gOptionsBrowser.path.empty()) return {};
-  return gOptionsBrowser.path / "Devices";
-}
-
-std::filesystem::path metadataPath() {
-  if (gOptionsBrowser.path.empty()) return {};
-  return gOptionsBrowser.path / "Metadata";
-}
-
-bool isPathWithin(const std::filesystem::path& base,
-                  const std::filesystem::path& path) {
-  if (base.empty()) return false;
-  auto baseIt = base.begin();
-  auto pathIt = path.begin();
-  for (; baseIt != base.end(); ++baseIt, ++pathIt) {
-    if (pathIt == path.end() || *baseIt != *pathIt) return false;
-  }
-  return true;
-}
-
-bool parseHexId(const std::string& text, uint32_t* out) {
-  if (!out) return false;
-  if (text.size() < 3 || text[0] != '0' ||
-      (text[1] != 'x' && text[1] != 'X')) {
-    return false;
-  }
-  char* end = nullptr;
-  unsigned long value = std::strtoul(text.c_str() + 2, &end, 16);
-  if (!end || *end != '\0') return false;
-  *out = static_cast<uint32_t>(value);
-  return true;
-}
-
-bool parseDeviceIdFromPath(const std::filesystem::path& path,
-                           uint32_t* out) {
-  if (!out) return false;
-  if (path.parent_path() != devicesPath()) return false;
-  return parseHexId(toUtf8String(path.filename()), out);
-}
-
-bool isOptionsPath(const std::filesystem::path& path) {
-  if (!gOptionsBrowser.active) return false;
-  return isPathWithin(gOptionsBrowser.path, path);
-}
-
-OptionsBrowserMode modeForPath(const std::filesystem::path& path) {
-  if (path == instrumentsPath()) return OptionsBrowserMode::Instruments;
-  if (path == metadataPath()) return OptionsBrowserMode::VgmMetadata;
-  if (path == devicesPath()) return OptionsBrowserMode::VgmDevices;
-  uint32_t deviceId = 0;
-  if (parseDeviceIdFromPath(path, &deviceId)) {
-    return OptionsBrowserMode::VgmDevice;
-  }
-  return OptionsBrowserMode::Root;
+FileEntry optionsDirectoryEntry(const std::string& name,
+                                const BrowserLocation& target) {
+  FileEntry entry;
+  entry.name = name;
+  entry.isDir = true;
+  entry.targetLocation = target;
+  return entry;
 }
 
 std::filesystem::path resolveOptionsFile(const BrowserState& browser,
@@ -318,18 +257,17 @@ std::filesystem::path resolveOptionsFile(const BrowserState& browser,
   return {};
 }
 
-void buildOptionsEntries(std::vector<FileEntry>& entries) {
+void buildOptionsEntries(std::vector<FileEntry>& entries,
+                         const BrowserLocation& location) {
   entries.clear();
-  if (!gOptionsBrowser.returnDir.empty()) {
-    entries.push_back(FileEntry{"..", gOptionsBrowser.returnDir, true});
-  }
+  entries.push_back(FileEntry{"..", {}, true});
 
-  if (gOptionsBrowser.target == OptionsTarget::Kss) {
+  const OptionsTarget target = targetForPath(location.path);
+  if (target == OptionsTarget::Kss) {
     KssPlaybackOptions options = audioGetKssOptionState();
     auto addOption = [&](KssOptionId id, const std::string& label) {
       FileEntry entry;
       entry.name = label;
-      entry.path = gOptionsBrowser.path;
       entry.isDir = false;
       entry.optionId = static_cast<int>(id);
       entries.push_back(std::move(entry));
@@ -356,17 +294,14 @@ void buildOptionsEntries(std::vector<FileEntry>& entries) {
     addOption(KssOptionId::MuteOpll,
               "OPLL mute: " + onOffLabel(options.muteOpll));
 
-    FileEntry instruments;
-    instruments.name = "Instrument list";
-    instruments.path = instrumentsPath();
-    instruments.isDir = true;
-    entries.push_back(std::move(instruments));
-  } else if (gOptionsBrowser.target == OptionsTarget::Nsf) {
+    entries.push_back(optionsDirectoryEntry(
+        "Instrument list",
+        optionsPageLocation(location, BrowserOptionsPage::Instruments)));
+  } else if (target == OptionsTarget::Nsf) {
     NsfPlaybackOptions options = audioGetNsfOptionState();
     auto addOption = [&](NsfOptionId id, const std::string& label) {
       FileEntry entry;
       entry.name = label;
-      entry.path = gOptionsBrowser.path;
       entry.isDir = false;
       entry.optionId = static_cast<int>(id);
       entries.push_back(std::move(entry));
@@ -380,12 +315,11 @@ void buildOptionsEntries(std::vector<FileEntry>& entries) {
               "Ignore silence: " + onOffLabel(options.ignoreSilence));
     addOption(NsfOptionId::TempoMode,
               "Speed: " + nsfTempoLabel(options.tempoMode));
-  } else if (gOptionsBrowser.target == OptionsTarget::Vgm) {
+  } else if (target == OptionsTarget::Vgm) {
     VgmPlaybackOptions options = audioGetVgmOptionState();
     auto addOption = [&](VgmOptionId id, const std::string& label) {
       FileEntry entry;
       entry.name = label;
-      entry.path = gOptionsBrowser.path;
       entry.isDir = false;
       entry.optionId = static_cast<int>(id);
       entries.push_back(std::move(entry));
@@ -409,23 +343,20 @@ void buildOptionsEntries(std::vector<FileEntry>& entries) {
     addOption(VgmOptionId::PhaseInvert,
               "Phase invert: " + vgmPhaseInvertLabel(options.phaseInvert));
 
-    FileEntry devices;
-    devices.name = "Devices";
-    devices.path = devicesPath();
-    devices.isDir = true;
-    entries.push_back(std::move(devices));
-
-    FileEntry metadata;
-    metadata.name = "Metadata";
-    metadata.path = metadataPath();
-    metadata.isDir = true;
-    entries.push_back(std::move(metadata));
+    entries.push_back(optionsDirectoryEntry(
+        "Devices",
+        optionsPageLocation(location, BrowserOptionsPage::VgmDevices)));
+    entries.push_back(optionsDirectoryEntry(
+        "Metadata",
+        optionsPageLocation(location, BrowserOptionsPage::VgmMetadata)));
   }
 }
 
-void buildInstrumentEntries(std::vector<FileEntry>& entries) {
+void buildInstrumentEntries(std::vector<FileEntry>& entries,
+                            const BrowserLocation& location) {
   entries.clear();
-  entries.push_back(FileEntry{"..", gOptionsBrowser.path, true});
+  entries.push_back(optionsDirectoryEntry(
+      "..", optionsPageLocation(location, BrowserOptionsPage::Root)));
 
   KssInstrumentDevice auditionDevice = KssInstrumentDevice::None;
   uint32_t auditionHash = 0;
@@ -440,38 +371,35 @@ void buildInstrumentEntries(std::vector<FileEntry>& entries) {
     }
     FileEntry auditionStop;
     auditionStop.name = auditionLabel;
-    auditionStop.path = gOptionsBrowser.path;
     auditionStop.isDir = false;
     auditionStop.auditionDevice = static_cast<int>(KssInstrumentDevice::None);
     entries.push_back(std::move(auditionStop));
   }
 
-  if (gOptionsBrowser.target != OptionsTarget::Kss) return;
+  if (targetForPath(location.path) != OptionsTarget::Kss) return;
 
-  int trackIndex = gOptionsBrowser.trackIndex;
+  int trackIndex = std::max(0, location.trackIndex);
   if (!auditionActive) {
     std::filesystem::path nowPlaying = audioGetNowPlaying();
-    if (!nowPlaying.empty() && nowPlaying == gOptionsBrowser.file) {
+    if (!nowPlaying.empty() && nowPlaying == location.path) {
       int currentTrack = audioGetTrackIndex();
       if (currentTrack >= 0) {
         trackIndex = currentTrack;
-        gOptionsBrowser.trackIndex = currentTrack;
       }
     }
   }
 
-  if (gOptionsBrowser.instrumentFile != gOptionsBrowser.file ||
+  if (gOptionsBrowser.instrumentFile != location.path ||
       gOptionsBrowser.instrumentTrack != trackIndex) {
     gOptionsBrowser.instruments.clear();
     std::string error;
-    bool ok = audioScanKssInstruments(gOptionsBrowser.file, trackIndex,
+    bool ok = audioScanKssInstruments(location.path, trackIndex,
                                       &gOptionsBrowser.instruments, &error);
-    gOptionsBrowser.instrumentFile = gOptionsBrowser.file;
+    gOptionsBrowser.instrumentFile = location.path;
     gOptionsBrowser.instrumentTrack = trackIndex;
     if (!ok && !error.empty()) {
       FileEntry entry;
       entry.name = "Scan failed: " + error;
-      entry.path = gOptionsBrowser.path;
       entry.isDir = false;
       entries.push_back(std::move(entry));
       return;
@@ -491,7 +419,6 @@ void buildInstrumentEntries(std::vector<FileEntry>& entries) {
 
     FileEntry entry;
     entry.name = label;
-    entry.path = gOptionsBrowser.path;
     entry.isDir = false;
     entry.auditionIndex = static_cast<int>(i);
     entries.push_back(std::move(entry));
@@ -500,28 +427,28 @@ void buildInstrumentEntries(std::vector<FileEntry>& entries) {
   if (gOptionsBrowser.instruments.empty()) {
     FileEntry entry;
     entry.name = "(no instruments found)";
-    entry.path = gOptionsBrowser.path;
     entry.isDir = false;
     entries.push_back(std::move(entry));
   }
 }
 
-void buildVgmMetadataEntries(std::vector<FileEntry>& entries) {
+void buildVgmMetadataEntries(std::vector<FileEntry>& entries,
+                             const BrowserLocation& location) {
   entries.clear();
-  entries.push_back(FileEntry{"..", gOptionsBrowser.path, true});
+  entries.push_back(optionsDirectoryEntry(
+      "..", optionsPageLocation(location, BrowserOptionsPage::Root)));
 
-  if (gOptionsBrowser.target != OptionsTarget::Vgm) return;
+  if (targetForPath(location.path) != OptionsTarget::Vgm) return;
 
-  if (gOptionsBrowser.vgmMetadataFile != gOptionsBrowser.file) {
+  if (gOptionsBrowser.vgmMetadataFile != location.path) {
     gOptionsBrowser.vgmMetadata.clear();
     std::string error;
-    bool ok = audioScanVgmMetadata(gOptionsBrowser.file,
+    bool ok = audioScanVgmMetadata(location.path,
                                    &gOptionsBrowser.vgmMetadata, &error);
-    gOptionsBrowser.vgmMetadataFile = gOptionsBrowser.file;
+    gOptionsBrowser.vgmMetadataFile = location.path;
     if (!ok && !error.empty()) {
       FileEntry entry;
       entry.name = "Scan failed: " + error;
-      entry.path = metadataPath();
       entry.isDir = false;
       entries.push_back(std::move(entry));
       return;
@@ -531,7 +458,6 @@ void buildVgmMetadataEntries(std::vector<FileEntry>& entries) {
   for (const auto& meta : gOptionsBrowser.vgmMetadata) {
     FileEntry entry;
     entry.name = meta.key + ": " + meta.value;
-    entry.path = metadataPath();
     entry.isDir = false;
     entries.push_back(std::move(entry));
   }
@@ -539,29 +465,29 @@ void buildVgmMetadataEntries(std::vector<FileEntry>& entries) {
   if (gOptionsBrowser.vgmMetadata.empty()) {
     FileEntry entry;
     entry.name = "(no metadata)";
-    entry.path = metadataPath();
     entry.isDir = false;
     entries.push_back(std::move(entry));
   }
 }
 
-void buildVgmDeviceEntries(std::vector<FileEntry>& entries) {
+void buildVgmDeviceEntries(std::vector<FileEntry>& entries,
+                           const BrowserLocation& location) {
   entries.clear();
-  entries.push_back(FileEntry{"..", gOptionsBrowser.path, true});
+  entries.push_back(optionsDirectoryEntry(
+      "..", optionsPageLocation(location, BrowserOptionsPage::Root)));
 
-  if (gOptionsBrowser.target != OptionsTarget::Vgm) return;
+  if (targetForPath(location.path) != OptionsTarget::Vgm) return;
 
-  if (gOptionsBrowser.vgmDevicesFile != gOptionsBrowser.file) {
+  if (gOptionsBrowser.vgmDevicesFile != location.path) {
     gOptionsBrowser.vgmDevices.clear();
     std::string error;
     bool ok =
-        audioScanVgmDevices(gOptionsBrowser.file, &gOptionsBrowser.vgmDevices,
+        audioScanVgmDevices(location.path, &gOptionsBrowser.vgmDevices,
                             &error);
-    gOptionsBrowser.vgmDevicesFile = gOptionsBrowser.file;
+    gOptionsBrowser.vgmDevicesFile = location.path;
     if (!ok && !error.empty()) {
       FileEntry entry;
       entry.name = "Scan failed: " + error;
-      entry.path = devicesPath();
       entry.isDir = false;
       entries.push_back(std::move(entry));
       return;
@@ -575,32 +501,34 @@ void buildVgmDeviceEntries(std::vector<FileEntry>& entries) {
     }
     FileEntry entry;
     entry.name = label;
-    entry.path = devicesPath() / hex32(device.id);
     entry.isDir = true;
+    entry.targetLocation = optionsPageLocation(
+        location, BrowserOptionsPage::VgmDevice, device.id);
     entries.push_back(std::move(entry));
   }
 
   if (gOptionsBrowser.vgmDevices.empty()) {
     FileEntry entry;
     entry.name = "(no devices found)";
-    entry.path = devicesPath();
     entry.isDir = false;
     entries.push_back(std::move(entry));
   }
 }
 
 void buildVgmDeviceOptionEntries(std::vector<FileEntry>& entries,
-                                 uint32_t deviceId) {
+                                 const BrowserLocation& location) {
   entries.clear();
-  entries.push_back(FileEntry{"..", devicesPath(), true});
+  entries.push_back(optionsDirectoryEntry(
+      "..", optionsPageLocation(location, BrowserOptionsPage::VgmDevices)));
 
-  if (gOptionsBrowser.target != OptionsTarget::Vgm) return;
+  if (targetForPath(location.path) != OptionsTarget::Vgm) return;
+
+  const uint32_t deviceId = location.deviceId;
 
   VgmDeviceOptions options{};
   if (!audioGetVgmDeviceOptions(deviceId, &options)) {
     FileEntry entry;
     entry.name = "Device options unavailable";
-    entry.path = devicesPath();
     entry.isDir = false;
     entries.push_back(std::move(entry));
     return;
@@ -631,7 +559,6 @@ void buildVgmDeviceOptionEntries(std::vector<FileEntry>& entries,
   auto addOption = [&](VgmDeviceOptionId id, const std::string& label) {
     FileEntry entry;
     entry.name = label;
-    entry.path = gOptionsBrowser.path;
     entry.isDir = false;
     entry.optionId = static_cast<int>(id);
     entries.push_back(std::move(entry));
@@ -651,7 +578,7 @@ void buildVgmDeviceOptionEntries(std::vector<FileEntry>& entries,
 }  // namespace
 
 bool optionsBrowserIsActive(const BrowserState& browser) {
-  return isOptionsPath(browser.dir);
+  return browser.location.kind == BrowserLocationKind::OptionsBrowser;
 }
 
 bool optionsBrowserCanToggle(const BrowserState& browser) {
@@ -660,31 +587,74 @@ bool optionsBrowserCanToggle(const BrowserState& browser) {
   return !resolveOptionsFile(browser, &target).empty();
 }
 
-bool optionsBrowserRefresh(BrowserState& browser) {
-  if (!isOptionsPath(browser.dir)) {
-    if (gOptionsBrowser.active && !isOptionsPath(browser.dir)) {
-      gOptionsBrowser.active = false;
-      gOptionsBrowser.target = OptionsTarget::None;
-      gOptionsBrowser.mode = OptionsBrowserMode::Root;
+std::optional<BrowserLocation> optionsBrowserOpenLocation(
+    const BrowserState& browser) {
+  OptionsTarget target = OptionsTarget::None;
+  const std::filesystem::path file = resolveOptionsFile(browser, &target);
+  if (file.empty() || target == OptionsTarget::None) {
+    return std::nullopt;
+  }
+
+  int trackIndex = -1;
+  if (!browser.entries.empty()) {
+    const int idx = std::clamp(
+        browser.selected, 0, static_cast<int>(browser.entries.size()) - 1);
+    const auto& entry = browser.entries[static_cast<size_t>(idx)];
+    if (!entry.isDir && entry.path == file && entry.trackIndex >= 0) {
+      trackIndex = entry.trackIndex;
     }
+  }
+  const std::filesystem::path nowPlaying = audioGetNowPlaying();
+  if (!nowPlaying.empty() && nowPlaying == file) {
+    const int currentTrack = audioGetTrackIndex();
+    if (currentTrack >= 0) {
+      trackIndex = currentTrack;
+    }
+  }
+  return browserOptionsLocation(file, trackIndex);
+}
+
+bool optionsBrowserSupportsLocation(const BrowserLocation& location) {
+  if (location.kind != BrowserLocationKind::OptionsBrowser) {
     return false;
   }
-  gOptionsBrowser.mode = modeForPath(browser.dir);
-  if (gOptionsBrowser.mode == OptionsBrowserMode::Instruments) {
-    buildInstrumentEntries(browser.entries);
-  } else if (gOptionsBrowser.mode == OptionsBrowserMode::VgmMetadata) {
-    buildVgmMetadataEntries(browser.entries);
-  } else if (gOptionsBrowser.mode == OptionsBrowserMode::VgmDevices) {
-    buildVgmDeviceEntries(browser.entries);
-  } else if (gOptionsBrowser.mode == OptionsBrowserMode::VgmDevice) {
-    uint32_t deviceId = 0;
-    if (parseDeviceIdFromPath(browser.dir, &deviceId)) {
-      buildVgmDeviceOptionEntries(browser.entries, deviceId);
-    } else {
-      buildOptionsEntries(browser.entries);
-    }
-  } else {
-    buildOptionsEntries(browser.entries);
+  const OptionsTarget target = targetForPath(location.path);
+  if (target == OptionsTarget::None) {
+    return false;
+  }
+  switch (location.optionsPage) {
+    case BrowserOptionsPage::Root:
+      return true;
+    case BrowserOptionsPage::Instruments:
+      return target == OptionsTarget::Kss;
+    case BrowserOptionsPage::VgmDevices:
+    case BrowserOptionsPage::VgmDevice:
+    case BrowserOptionsPage::VgmMetadata:
+      return target == OptionsTarget::Vgm;
+  }
+  return false;
+}
+
+bool optionsBrowserRefresh(BrowserState& browser) {
+  if (!optionsBrowserSupportsLocation(browser.location)) {
+    return false;
+  }
+  switch (browser.location.optionsPage) {
+    case BrowserOptionsPage::Instruments:
+      buildInstrumentEntries(browser.entries, browser.location);
+      break;
+    case BrowserOptionsPage::VgmMetadata:
+      buildVgmMetadataEntries(browser.entries, browser.location);
+      break;
+    case BrowserOptionsPage::VgmDevices:
+      buildVgmDeviceEntries(browser.entries, browser.location);
+      break;
+    case BrowserOptionsPage::VgmDevice:
+      buildVgmDeviceOptionEntries(browser.entries, browser.location);
+      break;
+    case BrowserOptionsPage::Root:
+      buildOptionsEntries(browser.entries, browser.location);
+      break;
   }
   return true;
 }
@@ -699,7 +669,7 @@ OptionsBrowserResult optionsBrowserActivateSelection(BrowserState& browser) {
   int idx = std::clamp(browser.selected, 0,
                        static_cast<int>(browser.entries.size()) - 1);
   const auto& entry = browser.entries[static_cast<size_t>(idx)];
-  if (gOptionsBrowser.mode == OptionsBrowserMode::Instruments) {
+  if (browser.location.optionsPage == BrowserOptionsPage::Instruments) {
     if (entry.auditionDevice >= 0) {
       auto device =
           static_cast<KssInstrumentDevice>(entry.auditionDevice);
@@ -717,101 +687,34 @@ OptionsBrowserResult optionsBrowserActivateSelection(BrowserState& browser) {
       }
     }
     return OptionsBrowserResult::Handled;
-  } else if (gOptionsBrowser.mode == OptionsBrowserMode::VgmDevice) {
-    uint32_t deviceId = 0;
-    if (entry.optionId >= 0 && parseDeviceIdFromPath(browser.dir, &deviceId)) {
+  } else if (browser.location.optionsPage ==
+             BrowserOptionsPage::VgmDevice) {
+    if (entry.optionId >= 0) {
       if (audioAdjustVgmDeviceOption(
-              deviceId, static_cast<VgmDeviceOptionId>(entry.optionId))) {
+              browser.location.deviceId,
+              static_cast<VgmDeviceOptionId>(entry.optionId))) {
         return OptionsBrowserResult::Changed;
       }
     }
     return OptionsBrowserResult::Handled;
   }
   if (entry.optionId >= 0) {
-    if (gOptionsBrowser.target == OptionsTarget::Kss) {
+    const OptionsTarget target = targetForPath(browser.location.path);
+    if (target == OptionsTarget::Kss) {
       if (audioAdjustKssOption(static_cast<KssOptionId>(entry.optionId))) {
         return OptionsBrowserResult::Changed;
       }
-    } else if (gOptionsBrowser.target == OptionsTarget::Nsf) {
+    } else if (target == OptionsTarget::Nsf) {
       if (audioAdjustNsfOption(static_cast<NsfOptionId>(entry.optionId))) {
         return OptionsBrowserResult::Changed;
       }
-    } else if (gOptionsBrowser.target == OptionsTarget::Vgm) {
+    } else if (target == OptionsTarget::Vgm) {
       if (audioAdjustVgmOption(static_cast<VgmOptionId>(entry.optionId))) {
         return OptionsBrowserResult::Changed;
       }
     }
   }
   return OptionsBrowserResult::Handled;
-}
-
-void optionsBrowserToggle(BrowserState& browser) {
-  if (optionsBrowserIsActive(browser)) {
-    browser.dir = gOptionsBrowser.returnDir;
-    gOptionsBrowser.active = false;
-    gOptionsBrowser.target = OptionsTarget::None;
-    gOptionsBrowser.mode = OptionsBrowserMode::Root;
-    return;
-  }
-
-  OptionsTarget target = OptionsTarget::None;
-  std::filesystem::path file = resolveOptionsFile(browser, &target);
-  if (file.empty() || target == OptionsTarget::None) {
-    return;
-  }
-  gOptionsBrowser.active = true;
-  gOptionsBrowser.target = target;
-  gOptionsBrowser.mode = OptionsBrowserMode::Root;
-  gOptionsBrowser.returnDir = browser.dir;
-  gOptionsBrowser.file = file;
-  gOptionsBrowser.trackIndex = 0;
-  if (!browser.entries.empty()) {
-    int idx = std::clamp(browser.selected, 0,
-                         static_cast<int>(browser.entries.size()) - 1);
-    const auto& entry = browser.entries[static_cast<size_t>(idx)];
-    if (!entry.isDir && entry.trackIndex >= 0) {
-      gOptionsBrowser.trackIndex = entry.trackIndex;
-    }
-  }
-  std::filesystem::path nowPlaying = audioGetNowPlaying();
-  if (!nowPlaying.empty() && nowPlaying == gOptionsBrowser.file) {
-    int currentTrack = audioGetTrackIndex();
-    if (currentTrack >= 0) {
-      gOptionsBrowser.trackIndex = currentTrack;
-    }
-  }
-  gOptionsBrowser.path = browser.dir / "Options";
-  browser.dir = gOptionsBrowser.path;
-  browser.selected = 0;
-  browser.scrollRow = 0;
-  browser.filter.clear();
-  browser.filterActive = false;
-}
-
-bool optionsBrowserNavigateUp(BrowserState& browser) {
-  if (!optionsBrowserIsActive(browser)) return false;
-  if (gOptionsBrowser.mode == OptionsBrowserMode::Instruments) {
-    browser.dir = gOptionsBrowser.path;
-    gOptionsBrowser.mode = OptionsBrowserMode::Root;
-  } else if (gOptionsBrowser.mode == OptionsBrowserMode::VgmDevice) {
-    browser.dir = devicesPath();
-    gOptionsBrowser.mode = OptionsBrowserMode::VgmDevices;
-  } else if (gOptionsBrowser.mode == OptionsBrowserMode::VgmDevices ||
-             gOptionsBrowser.mode == OptionsBrowserMode::VgmMetadata) {
-    browser.dir = gOptionsBrowser.path;
-    gOptionsBrowser.mode = OptionsBrowserMode::Root;
-  } else {
-    if (gOptionsBrowser.returnDir.empty()) return false;
-    browser.dir = gOptionsBrowser.returnDir;
-    gOptionsBrowser.active = false;
-    gOptionsBrowser.target = OptionsTarget::None;
-    gOptionsBrowser.mode = OptionsBrowserMode::Root;
-  }
-  browser.selected = 0;
-  browser.scrollRow = 0;
-  browser.filter.clear();
-  browser.filterActive = false;
-  return true;
 }
 
 std::string optionsBrowserSelectionMeta(const BrowserState& browser) {
@@ -833,21 +736,21 @@ std::string optionsBrowserSelectionMeta(const BrowserState& browser) {
   return metaLine;
 }
 
-std::string optionsBrowserShowingLabel() {
+std::string optionsBrowserShowingLabel(const BrowserState& browser) {
   std::string label = "  Showing: ";
-  if (gOptionsBrowser.mode == OptionsBrowserMode::Instruments) {
+  if (browser.location.optionsPage == BrowserOptionsPage::Instruments) {
     label += "instruments";
-  } else if (gOptionsBrowser.mode == OptionsBrowserMode::VgmDevices) {
+  } else if (browser.location.optionsPage == BrowserOptionsPage::VgmDevices) {
     label += "devices";
-  } else if (gOptionsBrowser.mode == OptionsBrowserMode::VgmDevice) {
+  } else if (browser.location.optionsPage == BrowserOptionsPage::VgmDevice) {
     label += "device options";
-  } else if (gOptionsBrowser.mode == OptionsBrowserMode::VgmMetadata) {
+  } else if (browser.location.optionsPage == BrowserOptionsPage::VgmMetadata) {
     label += "metadata";
   } else {
     label += "options";
   }
-  if (!gOptionsBrowser.file.empty()) {
-    label += " for " + toUtf8String(gOptionsBrowser.file.filename());
+  if (!browser.location.path.empty()) {
+    label += " for " + toUtf8String(browser.location.path.filename());
   }
   return label;
 }

@@ -8,18 +8,18 @@
 #include "browser_model.h"
 #include "playback_target.h"
 
+class BrowserNavigator;
+
 namespace playback_transport_navigation {
 
 class Navigator {
  public:
   struct Callbacks {
-    bool* dirty = nullptr;
     std::function<void()> markDirty;
     std::function<void()> markLayoutDirty;
-    std::function<void(const std::string&)> refreshBrowser;
   };
 
-  Navigator(BrowserState& browser, Callbacks callbacks);
+  Navigator(BrowserNavigator& browserNavigator, Callbacks callbacks);
 
   bool activateTrackBrowser(const std::filesystem::path& file);
   std::optional<PlaybackTarget> resolveEntryTarget(const FileEntry& entry) const;
@@ -28,9 +28,9 @@ class Navigator {
       const PlaybackTarget& current, int direction);
 
  private:
-  BrowserState::Location captureLocation() const;
   bool selectPlaybackTarget(const PlaybackTarget& target);
 
+  BrowserNavigator& browserNavigator_;
   BrowserState& browser_;
   Callbacks callbacks_;
 };

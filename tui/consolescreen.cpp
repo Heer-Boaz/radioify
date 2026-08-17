@@ -958,7 +958,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
   }
 }
 
-BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width) {
+BreadcrumbLine buildBreadcrumbLine(const BrowserLocation& location, int width) {
   BreadcrumbLine line;
   const std::string prefix = "  Path: ";
   const int prefixLen = utf8DisplayWidth(prefix);
@@ -970,35 +970,74 @@ BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width) 
 
   struct Item {
     std::string label;
-    std::filesystem::path path;
+    BrowserLocation location;
   };
   std::vector<Item> items;
-  std::filesystem::path cur;
-  std::filesystem::path root = dir.root_path();
+  auto appendPath = [&](const std::filesystem::path& path,
+                        const BrowserLocation& finalLocation) {
+    std::filesystem::path cur;
+    const std::filesystem::path root = path.root_path();
 #ifdef _WIN32
-  items.push_back(Item{"This PC", {}});
-  if (!root.empty()) {
-    std::string rootLabel = toUtf8String(dir.root_name());
-    if (rootLabel.empty()) rootLabel = toUtf8String(root);
-    if (!rootLabel.empty() && (rootLabel.back() == '\\' || rootLabel.back() == '/')) {
-      rootLabel.pop_back();
+    items.push_back(Item{"This PC", browserDirectoryLocation({})});
+    if (!root.empty()) {
+      std::string rootLabel = toUtf8String(path.root_name());
+      if (rootLabel.empty()) rootLabel = toUtf8String(root);
+      if (!rootLabel.empty() &&
+          (rootLabel.back() == '\\' || rootLabel.back() == '/')) {
+        rootLabel.pop_back();
+      }
+      if (rootLabel.empty()) rootLabel = "\\";
+      cur = root;
+      items.push_back(Item{rootLabel, browserDirectoryLocation(cur)});
     }
-    if (rootLabel.empty()) rootLabel = "\\";
-    cur = root;
-    items.push_back(Item{rootLabel, cur});
-  }
 #else
-  if (!root.empty()) {
-    cur = root;
-    items.push_back(Item{"/", cur});
-  }
+    if (!root.empty()) {
+      cur = root;
+      items.push_back(Item{"/", browserDirectoryLocation(cur)});
+    }
 #endif
-  for (const auto& part : dir.relative_path()) {
-    cur /= part;
-    items.push_back(Item{toUtf8String(part), cur});
-  }
-  if (items.empty()) {
-    items.push_back(Item{toUtf8String(dir), dir});
+    for (const auto& part : path.relative_path()) {
+      cur /= part;
+      items.push_back(
+          Item{toUtf8String(part), browserDirectoryLocation(cur)});
+    }
+    if (items.empty()) {
+      items.push_back(Item{toUtf8String(path), finalLocation});
+    } else if (!path.empty()) {
+      items.back().location = finalLocation;
+    }
+  };
+
+  if (location.kind == BrowserLocationKind::OptionsBrowser) {
+    appendPath(location.path.parent_path(),
+               browserDirectoryLocation(location.path.parent_path()));
+    const BrowserLocation root = browserOptionsLocation(
+        location.path, location.trackIndex, BrowserOptionsPage::Root);
+    items.push_back(Item{"Options", root});
+    switch (location.optionsPage) {
+      case BrowserOptionsPage::Root:
+        break;
+      case BrowserOptionsPage::Instruments:
+        items.push_back(Item{"Instruments", location});
+        break;
+      case BrowserOptionsPage::VgmDevices: {
+        items.push_back(Item{"Devices", location});
+        break;
+      }
+      case BrowserOptionsPage::VgmDevice: {
+        items.push_back(Item{
+            "Devices", browserOptionsLocation(location.path,
+                                               location.trackIndex,
+                                               BrowserOptionsPage::VgmDevices)});
+        items.push_back(Item{"Device", location});
+        break;
+      }
+      case BrowserOptionsPage::VgmMetadata:
+        items.push_back(Item{"Metadata", location});
+        break;
+    }
+  } else {
+    appendPath(location.path, location);
   }
 
   const std::string sep = " > ";
@@ -1051,7 +1090,7 @@ BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width) 
     Breadcrumb crumb;
     crumb.startX = x;
     crumb.endX = x + labelLen;
-    crumb.path = item.path;
+    crumb.location = item.location;
     line.crumbs.push_back(crumb);
 
     text += item.label;
@@ -1064,7 +1103,8 @@ BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width) 
   }
   line.text = text;
   if (line.text.empty()) {
-    std::string fallback = fitLine(toUtf8String(dir), width - prefixLen);
+    std::string fallback =
+        fitLine(toUtf8String(location.path), width - prefixLen);
     line.text = prefix + fallback;
   }
   if (line.crumbs.empty()) {
@@ -1073,17 +1113,20 @@ BreadcrumbLine buildBreadcrumbLine(const std::filesystem::path& dir, int width) 
       Breadcrumb crumb;
       crumb.startX = prefixLen;
       crumb.endX = std::min(width, total);
-      crumb.path = dir;
+      crumb.location = location;
       line.crumbs.push_back(crumb);
     }
   }
   return line;
 }
 
-bool hitTestBreadcrumb(const BreadcrumbLine& line, int x, int y, int lineY, std::filesystem::path* outPath) {
+bool hitTestBreadcrumb(const BreadcrumbLine& line, int x, int y, int lineY,
+                       BrowserLocation* outLocation) {
   int index = breadcrumbIndexAt(line, x, y, lineY);
   if (index < 0) return false;
-  if (outPath) *outPath = line.crumbs[static_cast<size_t>(index)].path;
+  if (outLocation) {
+    *outLocation = line.crumbs[static_cast<size_t>(index)].location;
+  }
   return true;
 }
 

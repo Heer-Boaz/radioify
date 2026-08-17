@@ -37,8 +37,9 @@ struct InputCallbacks {
   std::function<bool(const std::vector<std::filesystem::path>&)> onPlayFiles;
   std::function<void(const FileEntry&, int, int)> onOpenFileContextMenu;
   std::function<void(const std::filesystem::path&)> onRenderFile;
-  std::function<void(BrowserState&, const std::string&)> onRefreshBrowser;
 };
+
+class BrowserNavigator;
 
 enum class PlaybackInputResult : uint8_t {
   Ignored,
@@ -83,7 +84,7 @@ PlaybackInputResult handlePlaybackInput(
     uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
                                 kPlaybackShortcutContextShared);
 
-void handleInputEvent(const InputEvent& ev, BrowserState& browser,
+void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
                       const GridLayout& layout,
                       const BreadcrumbLine& breadcrumbLine, int breadcrumbY,
                       int searchBarY, int searchBarWidth, int listTop,

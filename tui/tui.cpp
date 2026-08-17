@@ -340,26 +340,27 @@ static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
 
 static void refreshBrowser(BrowserState& state,
                            const std::string& initialName) {
-  bool optionsActive = optionsBrowserRefresh(state);
+  const bool optionsActive = optionsBrowserRefresh(state);
   if (!optionsActive && isTrackBrowserActive(state)) {
     state.entries.clear();
-    if (state.dir.has_parent_path()) {
-      state.entries.push_back(FileEntry{"..", state.dir.parent_path(), true});
+    if (state.location.path.has_parent_path()) {
+      state.entries.push_back(
+          FileEntry{"..", state.location.path.parent_path(), true});
     }
     int digits = trackLabelDigits(trackBrowserTracks().size());
     for (const auto& track : trackBrowserTracks()) {
       FileEntry entry;
       entry.name = formatTrackLabel(track, digits);
-      entry.path = state.dir;
+      entry.path = state.location.path;
       entry.isDir = false;
       entry.trackIndex = track.index;
       state.entries.push_back(std::move(entry));
     }
   } else if (!optionsActive) {
-    if (trackBrowserActive() && state.dir != trackBrowserFile()) {
+    if (trackBrowserActive()) {
       clearTrackBrowserState();
     }
-    state.entries = listEntries(state.dir);
+    state.entries = listEntries(state.location.path);
   }
 
   if (!state.filter.empty()) {
@@ -375,7 +376,7 @@ static void refreshBrowser(BrowserState& state,
   }
 
   if (!state.entries.empty() && !optionsActive) {
-    const bool sortingRootLevel = state.dir.empty();
+    const bool sortingRootLevel = state.location.path.empty();
 #ifdef _WIN32
     auto isDriveEntry = [](const FileEntry& entry) {
       if (entry.path.empty()) return false;
@@ -885,7 +886,7 @@ int runTui(Options o) {
   }
 
   BrowserState browser;
-  browser.dir = startDir;
+  browser.location = browserDirectoryLocation(startDir);
   refreshBrowser(browser, initialName);
 
   input.init();
@@ -1033,7 +1034,7 @@ int runTui(Options o) {
           hasPendingVideo = true;
         } else {
           if (loadTrackBrowserForFile(inputPath)) {
-            browser.dir = trackBrowserFile();
+            browser.location = browserTrackLocation(trackBrowserFile());
             browser.selected = 0;
             browser.scrollRow = 0;
             browser.filter.clear();
@@ -1168,25 +1169,35 @@ int runTui(Options o) {
     }
   };
 
-  playback_transport_navigation::Navigator::Callbacks transportCallbacks;
-  transportCallbacks.dirty = &dirty;
-  transportCallbacks.markDirty = [&]() { markDirty(); };
-  transportCallbacks.markLayoutDirty = [&]() { markLayoutDirty(); };
-  transportCallbacks.refreshBrowser = [&](const std::string& initialName) {
+  BrowserNavigator::Callbacks browserNavigationCallbacks;
+  browserNavigationCallbacks.activate = [&](const BrowserLocation& location) {
+    if (location.kind == BrowserLocationKind::TrackBrowser) {
+      return loadTrackBrowserForFile(location.path);
+    }
+    if (location.kind == BrowserLocationKind::OptionsBrowser) {
+      return optionsBrowserSupportsLocation(location);
+    }
+    if (location.path.empty()) {
+      return true;
+    }
+    std::error_code ec;
+    return std::filesystem::is_directory(location.path, ec) && !ec;
+  };
+  browserNavigationCallbacks.refresh = [&](const std::string& initialName) {
     refreshBrowser(browser, initialName);
   };
+  browserNavigationCallbacks.changed = [&]() { markLayoutDirty(); };
+  BrowserNavigator browserNavigator(browser,
+                                    std::move(browserNavigationCallbacks));
+
+  playback_transport_navigation::Navigator::Callbacks transportCallbacks;
+  transportCallbacks.markDirty = [&]() { markDirty(); };
+  transportCallbacks.markLayoutDirty = [&]() { markLayoutDirty(); };
   playback_transport_navigation::Navigator transportNavigator(
-      browser, std::move(transportCallbacks));
+      browserNavigator, std::move(transportCallbacks));
 
   auto openBrowserDirectory = [&](const std::filesystem::path& dir) {
-    browser.dir = dir;
-    browser.selected = 0;
-    browser.scrollRow = 0;
-    browser.filter.clear();
-    browser.filterActive = false;
-    setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
-    refreshBrowser(browser, "");
-    markLayoutDirty();
+    browserNavigator.navigate(browserDirectoryLocation(dir));
   };
 
   auto resolveOpenDirectory =
@@ -1617,7 +1628,7 @@ int runTui(Options o) {
     listHeight = std::max(1, height - listTop - footerLayout.reservedLines);
     layout = buildLayout(browser, width, listHeight);
     applyBrowserViewportRestore(browser, layout);
-    breadcrumbLine = buildBreadcrumbLine(browser.dir, width);
+    breadcrumbLine = buildBreadcrumbLine(browser.location, width);
     if (!browserInteractionEnabled) {
       breadcrumbHover = -1;
     } else if (breadcrumbHover >= static_cast<int>(breadcrumbLine.crumbs.size())) {
@@ -1641,17 +1652,11 @@ int runTui(Options o) {
 
   InputCallbacks callbacks;
   callbacks.onQuit = [&]() { running = false; };
-  callbacks.onRefreshBrowser = [&](BrowserState& nextBrowser,
-                                   const std::string& initialName) {
-    refreshBrowser(nextBrowser, initialName);
-    markLayoutDirty();
-  };
   callbacks.onPlayFile = [&](const std::filesystem::path& file) {
     OptionsBrowserResult optionsResult =
         optionsBrowserActivateSelection(browser);
     if (optionsResult == OptionsBrowserResult::Changed) {
-      refreshBrowser(browser, "");
-      markLayoutDirty();
+      browserNavigator.reload();
       return true;
     }
     if (optionsResult == OptionsBrowserResult::Handled) {
@@ -1760,10 +1765,13 @@ int runTui(Options o) {
     }
   };
   callbacks.onToggleOptions = [&]() {
-    if (optionsBrowserCanToggle(browser)) {
-      optionsBrowserToggle(browser);
-      refreshBrowser(browser, "");
-      markLayoutDirty();
+    if (optionsBrowserIsActive(browser)) {
+      while (optionsBrowserIsActive(browser) && browserNavigator.back()) {
+      }
+      return;
+    }
+    if (const auto location = optionsBrowserOpenLocation(browser)) {
+      browserNavigator.navigate(*location);
     }
   };
   callbacks.onSeekBy = [&](int direction) {
@@ -2027,9 +2035,9 @@ int runTui(Options o) {
                       }});
       if (optionsBrowserCanToggle(browser)) {
         cmds.push_back({"Options", "O", true, [&]() {
-                          optionsBrowserToggle(browser);
-                          refreshBrowser(browser, "");
-                          markLayoutDirty();
+                          if (callbacks.onToggleOptions) {
+                            callbacks.onToggleOptions();
+                          }
                         }});
       }
       if (!audioGetNowPlaying().empty()) {
@@ -2504,9 +2512,7 @@ int runTui(Options o) {
           browser.filter.clear();
           setBrowserSearchFocus(browser, BrowserSearchFocus::Filter, dirty);
         }
-        if (callbacks.onRefreshBrowser) {
-          callbacks.onRefreshBrowser(browser, "");
-        }
+        browserNavigator.reload();
         markDirty();
         return;
       }
@@ -2715,7 +2721,7 @@ int runTui(Options o) {
           return;
         }
       }
-      handleInputEvent(ev, browser, layout, breadcrumbLine, breadcrumbY,
+      handleInputEvent(ev, browserNavigator, layout, breadcrumbLine, breadcrumbY,
                        searchBarY, searchBarWidth, listTop, listHeight,
                        progressBarX, progressBarY,
                        progressBarWidth, actionStrip, browserInteractionEnabled,
@@ -2902,7 +2908,7 @@ int runTui(Options o) {
             static_cast<unsigned char>(headerTitle[static_cast<size_t>(i)]));
         screen.writeChar(headerTitleX + i, 0, ch, titleAttr);
       }
-      breadcrumbLine = buildBreadcrumbLine(browser.dir, width);
+      breadcrumbLine = buildBreadcrumbLine(browser.location, width);
       if (browserInteractionEnabled) {
         const bool browserSearchFocused =
             browser.filterActive || browser.pathSearchActive;
@@ -2968,10 +2974,11 @@ int runTui(Options o) {
       if (!browserInteractionEnabled) {
         showingLabel.clear();
       } else if (optionsMode) {
-        showingLabel = optionsBrowserShowingLabel();
+        showingLabel = optionsBrowserShowingLabel(browser);
       } else if (trackMode) {
         showingLabel =
-            "  Showing: tracks in " + toUtf8String(browser.dir.filename());
+            "  Showing: tracks in " +
+            toUtf8String(browser.location.path.filename());
       } else {
         showingLabel.clear();
       }

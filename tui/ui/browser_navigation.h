@@ -1,13 +1,15 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <optional>
+#include <string>
+#include <utility>
 
 #include "browser_model.h"
 
 BrowserState::EntryIdentity browserEntryIdentity(const FileEntry& entry);
-BrowserState::Location captureBrowserLocation(const BrowserState& browser,
-                                              BrowserState::LocationKind kind);
+BrowserState::Location captureBrowserLocation(const BrowserState& browser);
 
 bool selectBrowserEntry(BrowserState& browser,
                         const BrowserState::EntryIdentity& identity);
@@ -20,6 +22,41 @@ std::optional<BrowserState::Location> browserHistoryBack(
     BrowserState& browser, const BrowserState::Location& current);
 std::optional<BrowserState::Location> browserHistoryForward(
     BrowserState& browser, const BrowserState::Location& current);
+
+class BrowserNavigator {
+ public:
+  struct Callbacks {
+    std::function<bool(const BrowserLocation&)> activate;
+    std::function<void(const std::string&)> refresh;
+    std::function<void()> changed;
+  };
+
+  BrowserNavigator(BrowserState& browser, Callbacks callbacks);
+
+  BrowserState& state() { return browser_; }
+  const BrowserState& state() const { return browser_; }
+
+  bool navigate(const BrowserLocation& target,
+                const std::string& initialName = {},
+                const std::optional<BrowserState::EntryIdentity>& selection =
+                    std::nullopt);
+  bool replace(const BrowserLocation& target,
+               const std::string& initialName = {},
+               const std::optional<BrowserState::EntryIdentity>& selection =
+                   std::nullopt);
+  bool restore(const BrowserState::Location& location);
+  bool back();
+  bool forward();
+  void reload(const std::string& initialName = {});
+
+ private:
+  bool activate(const BrowserLocation& target,
+                const std::string& initialName,
+                const std::optional<BrowserState::EntryIdentity>& selection);
+
+  BrowserState& browser_;
+  Callbacks callbacks_;
+};
 
 void requestBrowserSelectionReveal(BrowserState& browser);
 void applyBrowserViewportRestore(BrowserState& browser,

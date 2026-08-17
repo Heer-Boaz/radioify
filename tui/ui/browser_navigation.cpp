@@ -31,11 +31,9 @@ BrowserState::EntryIdentity browserEntryIdentity(const FileEntry& entry) {
   return identity;
 }
 
-BrowserState::Location captureBrowserLocation(const BrowserState& browser,
-                                              BrowserState::LocationKind kind) {
+BrowserState::Location captureBrowserLocation(const BrowserState& browser) {
   BrowserState::Location location;
-  location.kind = kind;
-  location.dir = browser.dir;
+  location.route = browser.location;
   location.scrollRow = browser.scrollRow;
   if (!browser.entries.empty() && browser.selected >= 0 &&
       browser.selected < static_cast<int>(browser.entries.size()) &&
@@ -59,7 +57,7 @@ bool selectBrowserEntry(BrowserState& browser,
 
 bool restoreBrowserLocation(BrowserState& browser,
                             const BrowserState::Location& location) {
-  if (browser.dir != location.dir) {
+  if (browser.location != location.route) {
     return false;
   }
 
@@ -81,7 +79,7 @@ bool restoreBrowserLocation(BrowserState& browser,
 bool recordBrowserNavigation(BrowserState& browser,
                              const BrowserState::Location& from,
                              const BrowserState::Location& to) {
-  if (from.kind == to.kind && from.dir == to.dir) {
+  if (from.route == to.route) {
     return false;
   }
 
@@ -118,6 +116,119 @@ std::optional<BrowserState::Location> browserHistoryForward(
   const BrowserState::Location target = entry.to;
   browser.backHistory.push_back(std::move(entry));
   return target;
+}
+
+BrowserNavigator::BrowserNavigator(BrowserState& browser, Callbacks callbacks)
+    : browser_(browser), callbacks_(std::move(callbacks)) {}
+
+bool BrowserNavigator::activate(const BrowserLocation& target,
+                                const std::string& initialName,
+                                const std::optional<BrowserState::EntryIdentity>&
+                                    selection) {
+  if (callbacks_.activate && !callbacks_.activate(target)) {
+    return false;
+  }
+
+  browser_.location = target;
+  browser_.selected = 0;
+  browser_.scrollRow = 0;
+  browser_.filter.clear();
+  browser_.filterActive = false;
+  browser_.pathSearch.clear();
+  browser_.pathSearchActive = false;
+  browser_.viewportRestoreMode = BrowserState::ViewportRestoreMode::None;
+  browser_.viewportRestoreScrollRow = 0;
+  if (callbacks_.refresh) {
+    callbacks_.refresh(initialName);
+  }
+  if (selection && selectBrowserEntry(browser_, *selection)) {
+    requestBrowserSelectionReveal(browser_);
+  }
+  return true;
+}
+
+bool BrowserNavigator::navigate(const BrowserLocation& target,
+                                const std::string& initialName,
+                                const std::optional<BrowserState::EntryIdentity>&
+                                    selection) {
+  if (target == browser_.location) {
+    if (callbacks_.refresh) {
+      callbacks_.refresh(initialName);
+    }
+    if (selection && selectBrowserEntry(browser_, *selection)) {
+      requestBrowserSelectionReveal(browser_);
+    }
+    if (callbacks_.changed) {
+      callbacks_.changed();
+    }
+    return true;
+  }
+  const BrowserState::Location from = captureBrowserLocation(browser_);
+  if (!activate(target, initialName, selection)) {
+    return false;
+  }
+  recordBrowserNavigation(browser_, from, captureBrowserLocation(browser_));
+  if (callbacks_.changed) {
+    callbacks_.changed();
+  }
+  return true;
+}
+
+bool BrowserNavigator::replace(const BrowserLocation& target,
+                               const std::string& initialName,
+                               const std::optional<BrowserState::EntryIdentity>&
+                                   selection) {
+  if (target == browser_.location) {
+    if (callbacks_.refresh) {
+      callbacks_.refresh(initialName);
+    }
+    if (selection && selectBrowserEntry(browser_, *selection)) {
+      requestBrowserSelectionReveal(browser_);
+    }
+    if (callbacks_.changed) {
+      callbacks_.changed();
+    }
+    return true;
+  }
+  if (!activate(target, initialName, selection)) {
+    return false;
+  }
+  if (callbacks_.changed) {
+    callbacks_.changed();
+  }
+  return true;
+}
+
+bool BrowserNavigator::restore(const BrowserState::Location& location) {
+  if (!activate(location.route, {}, std::nullopt)) {
+    return false;
+  }
+  restoreBrowserLocation(browser_, location);
+  if (callbacks_.changed) {
+    callbacks_.changed();
+  }
+  return true;
+}
+
+bool BrowserNavigator::back() {
+  const std::optional<BrowserState::Location> target =
+      browserHistoryBack(browser_, captureBrowserLocation(browser_));
+  return target && restore(*target);
+}
+
+bool BrowserNavigator::forward() {
+  const std::optional<BrowserState::Location> target =
+      browserHistoryForward(browser_, captureBrowserLocation(browser_));
+  return target && restore(*target);
+}
+
+void BrowserNavigator::reload(const std::string& initialName) {
+  if (callbacks_.refresh) {
+    callbacks_.refresh(initialName);
+  }
+  if (callbacks_.changed) {
+    callbacks_.changed();
+  }
 }
 
 void requestBrowserSelectionReveal(BrowserState& browser) {

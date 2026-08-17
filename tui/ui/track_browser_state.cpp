@@ -53,13 +53,7 @@ const std::vector<TrackEntry>& trackBrowserTracks() {
 }
 
 bool isTrackBrowserActive(const BrowserState& state) {
-  return gTrackBrowser.active && state.dir == gTrackBrowser.file;
-}
-
-BrowserState::LocationKind browserLocationKind(const BrowserState& state) {
-  return isTrackBrowserActive(state)
-             ? BrowserState::LocationKind::TrackBrowser
-             : BrowserState::LocationKind::Directory;
+  return state.location.kind == BrowserLocationKind::TrackBrowser;
 }
 
 const TrackEntry* findTrackEntry(int trackIndex) {

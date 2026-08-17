@@ -18,5 +18,4 @@ bool trackBrowserActive();
 const std::filesystem::path& trackBrowserFile();
 const std::vector<TrackEntry>& trackBrowserTracks();
 bool isTrackBrowserActive(const BrowserState& state);
-BrowserState::LocationKind browserLocationKind(const BrowserState& state);
 const TrackEntry* findTrackEntry(int trackIndex);
