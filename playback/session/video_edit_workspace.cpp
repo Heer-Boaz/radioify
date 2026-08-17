@@ -383,14 +383,26 @@ VideoEditActionResult VideoEditWorkspace::execute(
       break;
     case playback_video_edit::Command::MarkIn:
       impl_->selection.markIn(impl_->document.timeline(),
-                              context.sourcePositionUs);
-      result.message = "In point set";
+                              context.sourcePositionUs,
+                              context.frameDurationUs);
+      result.message = "Selection start set";
+      break;
+    case playback_video_edit::Command::ToggleIn:
+      if (impl_->selection.inSourceUs()) {
+        impl_->selection.clear(playback_video_edit::EditBoundary::In);
+        result.message = "Selection start cleared";
+      } else {
+        impl_->selection.markIn(impl_->document.timeline(),
+                                context.sourcePositionUs,
+                                context.frameDurationUs);
+        result.message = "Selection start set";
+      }
       break;
     case playback_video_edit::Command::ClearIn:
       result.message =
           impl_->selection.clear(playback_video_edit::EditBoundary::In)
-              ? "In point cleared"
-              : "No In point to clear";
+              ? "Selection start cleared"
+              : "No selection start to clear";
       break;
     case playback_video_edit::Command::MarkOut:
       {
@@ -403,20 +415,40 @@ VideoEditActionResult VideoEditWorkspace::execute(
         const int64_t out = frameDuration >= duration - playhead
                                 ? duration
                                 : playhead + frameDuration;
-        impl_->selection.markOut(impl_->document.timeline(), playhead, out);
+        impl_->selection.markOut(impl_->document.timeline(), playhead, out,
+                                 context.frameDurationUs);
       }
-      result.message = "Out point set";
+      result.message = "Selection end set";
+      break;
+    case playback_video_edit::Command::ToggleOut:
+      if (impl_->selection.outSourceUs()) {
+        impl_->selection.clear(playback_video_edit::EditBoundary::Out);
+        result.message = "Selection end cleared";
+      } else {
+        const int64_t duration =
+            std::max<int64_t>(0, context.sourceDurationUs);
+        const int64_t playhead =
+            std::clamp(context.sourcePositionUs, int64_t{0}, duration);
+        const int64_t frameDuration =
+            std::max<int64_t>(1, context.frameDurationUs);
+        const int64_t out = frameDuration >= duration - playhead
+                                ? duration
+                                : playhead + frameDuration;
+        impl_->selection.markOut(impl_->document.timeline(), playhead, out,
+                                 context.frameDurationUs);
+        result.message = "Selection end set";
+      }
       break;
     case playback_video_edit::Command::ClearOut:
       result.message =
           impl_->selection.clear(playback_video_edit::EditBoundary::Out)
-              ? "Out point cleared"
-              : "No Out point to clear";
+              ? "Selection end cleared"
+              : "No selection end to clear";
       break;
     case playback_video_edit::Command::ClearInAndOut:
       result.message = impl_->selection.clear()
-                           ? "In/Out points cleared"
-                           : "No In/Out points to clear";
+                           ? "Selection cleared"
+                           : "No selection to clear";
       break;
     case playback_video_edit::Command::RippleDelete:
       if (const auto remove = impl_->selection.range()) {
@@ -429,22 +461,21 @@ VideoEditActionResult VideoEditWorkspace::execute(
         if (timelineChanged) {
           nextPositionUs = editPositionUs.value_or(nextPositionUs);
         }
-        result.message = timelineChanged ? "Range deleted (ripple)"
-                                         : "That range cannot be deleted";
+        result.message = timelineChanged ? "Section removed"
+                                         : "That section cannot be removed";
       } else {
-        result.message = "Set both In and Out points first";
+        result.message = "Set the selection start and end first";
       }
       break;
     case playback_video_edit::Command::Trim:
-      if (const auto keep =
-              impl_->selection.trimRange(impl_->document.timeline())) {
+      if (const auto keep = impl_->selection.range()) {
         timelineChanged = impl_->document.trimTo(*keep);
         // A trimmed program is reviewed from its new sequence origin.
         if (timelineChanged) nextPositionUs = 0;
-        result.message = timelineChanged ? "Sequence trimmed"
-                                         : "Trim point does not change sequence";
+        result.message = timelineChanged ? "Only the selected section kept"
+                                         : "That selection changes nothing";
       } else {
-        result.message = "Set an In or Out point first";
+        result.message = "Set the selection start and end first";
       }
       break;
     case playback_video_edit::Command::ToggleSmoothCut:

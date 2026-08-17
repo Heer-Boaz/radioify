@@ -77,15 +77,14 @@ int64_t inclusiveOutDisplayUs(const EditSnapshot& edit) {
 }
 
 std::optional<int64_t> selectedDurationUs(const EditSnapshot& edit) {
-  if ((!edit.inTimelineUs && !edit.outTimelineUs) ||
+  if (!edit.inTimelineUs || !edit.outTimelineUs ||
       edit.timelineDurationUs <= 0) {
     return std::nullopt;
   }
   const int64_t startUs = std::clamp(
-      edit.inTimelineUs.value_or(0), int64_t{0}, edit.timelineDurationUs);
+      *edit.inTimelineUs, int64_t{0}, edit.timelineDurationUs);
   const int64_t endUs = std::clamp(
-      edit.outTimelineUs.value_or(edit.timelineDurationUs), int64_t{0},
-      edit.timelineDurationUs);
+      *edit.outTimelineUs, int64_t{0}, edit.timelineDurationUs);
   if (endUs <= startUs) return std::nullopt;
   return endUs - startUs;
 }
@@ -178,21 +177,29 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
     return model;
   }
   if (edit.active && edit.timelineDurationUs > 0) {
-    const bool hasTrimRange = edit.inTimelineUs || edit.outTimelineUs;
-    const int64_t trimStartUs = edit.inTimelineUs.value_or(0);
-    const int64_t trimEndUs =
-        edit.outTimelineUs.value_or(edit.timelineDurationUs);
+    const bool hasSelectedRange =
+        edit.inTimelineUs.has_value() && edit.outTimelineUs.has_value();
+    const int64_t selectionStartUs = edit.inTimelineUs.value_or(0);
+    const int64_t selectionEndUs = edit.outTimelineUs.value_or(0);
     model.cells.reserve(static_cast<size_t>(width));
+    size_t clipIndex = 0;
     for (int cell = 0; cell < width; ++cell) {
       const long double ratio =
           static_cast<long double>(2LL * cell + 1) /
           static_cast<long double>(2LL * width);
       const int64_t timelineUs = static_cast<int64_t>(
           ratio * static_cast<long double>(edit.timelineDurationUs));
-      const bool selected = hasTrimRange && timelineUs >= trimStartUs &&
-                            timelineUs < trimEndUs;
-      model.cells.push_back(selected ? TimelineCellKind::Selected
-                                     : TimelineCellKind::Kept);
+      while (clipIndex + 1 < edit.clips.size() &&
+             timelineUs >= edit.clips[clipIndex + 1].timelineStartUs) {
+        ++clipIndex;
+      }
+      const bool selected =
+          hasSelectedRange && timelineUs >= selectionStartUs &&
+          timelineUs < selectionEndUs;
+      model.cells.push_back(
+          selected ? TimelineCellKind::Selected
+                   : (clipIndex % 2 == 0 ? TimelineCellKind::Kept
+                                         : TimelineCellKind::KeptAlternate));
     }
     model.playheadCell = edit.playheadTimelineUs
                              ? timelineCell(*edit.playheadTimelineUs,
@@ -233,40 +240,34 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
   }
 
   if (edit.active) {
-    std::vector<std::string> rangeParts;
-    if (edit.inTimelineUs) {
-      rangeParts.push_back(
-          "I " + formatTimecode(*edit.inTimelineUs,
-                                  edit.timecodeFrameDurationUs, true));
-    }
-    if (edit.outTimelineUs) {
-      rangeParts.push_back(
-          "O " + formatTimecode(inclusiveOutDisplayUs(edit),
-                                  edit.timecodeFrameDurationUs, true));
-    }
+    appendStatusPart(
+        &model.status,
+        edit.hasUnexportedChanges
+            ? shortestFittingStatus({"EDITING*", "EDIT*", "*"}, width)
+            : shortestFittingStatus({"EDITING", "EDIT"}, width),
+        width);
     if (const auto durationUs = selectedDurationUs(edit)) {
-      rangeParts.push_back(
-          "D " + formatTimecode(*durationUs,
-                                  edit.timecodeFrameDurationUs, true));
+      appendStatusPart(
+          &model.status,
+          "SELECTED " + formatTimecode(*durationUs,
+                                         edit.timecodeFrameDurationUs, true),
+          width);
+    } else if (edit.inTimelineUs) {
+      appendStatusPart(
+          &model.status,
+          "START " + formatTimecode(*edit.inTimelineUs,
+                                      edit.timecodeFrameDurationUs, true),
+          width);
+    } else if (edit.outTimelineUs) {
+      appendStatusPart(
+          &model.status,
+          "END " + formatTimecode(inclusiveOutDisplayUs(edit),
+                                    edit.timecodeFrameDurationUs, true),
+          width);
     }
-    int rangeWidth = 0;
-    for (const std::string& part : rangeParts) {
-      if (rangeWidth != 0) rangeWidth += 2;
-      rangeWidth += static_cast<int>(part.size());
-    }
-    const int reservedModeWidth =
-        std::max(0, width - rangeWidth - (rangeWidth > 0 ? 2 : 0));
-    const auto fittingMode = [&](int available) {
-      return edit.hasUnexportedChanges
-                 ? shortestFittingStatus({"EDIT MODE*", "EDIT*", "*"},
-                                         available)
-                 : shortestFittingStatus({"EDIT MODE", "EDIT"}, available);
-    };
-    std::string mode = fittingMode(reservedModeWidth);
-    if (mode.empty()) mode = fittingMode(width);
-    appendStatusPart(&model.status, mode, width);
-    for (const std::string& part : rangeParts) {
-      appendStatusPart(&model.status, part, width);
+    if (!edit.cuts.empty()) {
+      appendStatusPart(&model.status,
+                       std::to_string(edit.cuts.size()) + " REMOVED", width);
     }
   }
   if (exportRunning) {
@@ -297,10 +298,6 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
             formatTimecode(edit.timelineDurationUs,
                            edit.timecodeFrameDurationUs),
         width);
-  }
-  if (edit.active && !edit.cuts.empty()) {
-    appendStatusPart(&model.status,
-                     "CUTS " + std::to_string(edit.cuts.size()), width);
   }
   return model;
 }

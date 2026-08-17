@@ -56,17 +56,6 @@ void PlaybackPresentationController::requestWindowPresentation(
 
 bool PlaybackPresentationController::toggleWindow(
     PlaybackOutputController& output, bool& redraw, bool& forceRefreshArt) {
-  VideoWindow& window = output.window();
-  if (window.IsOpen() && window.IsPictureInPicture()) {
-    clearPendingWindowPresentation();
-    playback_session_window::setTextGrid(
-        window,
-        !window.IsTextGridPresentationEnabled());
-    output.requestWindowPresent();
-    markPresentationChanged(redraw, forceRefreshArt);
-    return true;
-  }
-
   const bool enteringWindow = !isWindowPlaybackLayout(output.desiredLayout());
   if (enteringWindow) {
     const PlaybackPresentationMode target =
@@ -74,6 +63,7 @@ bool PlaybackPresentationController::toggleWindow(
     requestWindowPresentation(userRequestedWindowPresentation(target, false));
   } else {
     clearPendingWindowPresentation();
+    pictureInPictureStartedFromTerminal = false;
   }
   output.requestLayout(togglePlaybackLayout(output.desiredLayout()));
   markPresentationChanged(redraw, forceRefreshArt);

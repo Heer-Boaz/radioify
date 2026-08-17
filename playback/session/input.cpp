@@ -465,6 +465,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
     }
     switch (action) {
       case PlaybackShortcutAction::TogglePictureInPicture:
+      case PlaybackShortcutAction::DismissPictureInPicture:
         togglePictureInPicture(view, signals);
         break;
       case PlaybackShortcutAction::NavigateBackInVideoEditor:
@@ -515,6 +516,9 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
                        kPlaybackShortcutContextVideoPlayback;
     if (signals.videoEditorActive && signals.videoEditorActive()) {
       shortcutContexts |= kPlaybackShortcutContextVideoEditing;
+    }
+    if (view.videoWindow && view.videoWindow->IsPictureInPicture()) {
+      shortcutContexts |= kPlaybackShortcutContextPictureInPicture;
     }
   }
   const PlaybackInputResult playbackResult =

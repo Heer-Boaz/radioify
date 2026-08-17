@@ -21,6 +21,7 @@ enum class OverlayControlId {
   PictureInPicture,
   EditMarkIn,
   EditMarkOut,
+  EditClearSelection,
   EditRippleDelete,
   EditTrim,
   EditDone,

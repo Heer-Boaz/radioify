@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
@@ -144,6 +145,9 @@ struct PlaybackLoopRunner::Impl {
   bool timelinePreviewStarted = false;
   playback_session::VideoEditWorkspace videoEditWorkspace;
   playback_session::ContextMenuController contextMenuController;
+  mutable std::mutex publishedWindowUiMutex;
+  playback_framebuffer_presenter::PlaybackFramebufferUiSnapshot
+      publishedWindowUi;
   std::optional<PendingExit> pendingExit;
   std::atomic<int> overlayControlHover{-1};
   bool loopStopRequested = false;
@@ -219,6 +223,7 @@ struct PlaybackLoopRunner::Impl {
                     playback_session::PlaybackOsdTimeline::Clock::now(),
                     kEditMessageDuration);
     redraw = true;
+    publishWindowUiState();
     output.requestWindowPresent();
   }
 
@@ -358,6 +363,26 @@ struct PlaybackLoopRunner::Impl {
     return true;
   }
 
+  void publishWindowUiState() {
+    playback_framebuffer_presenter::PlaybackFramebufferUiSnapshot next;
+    next.osd = osdSnapshot();
+    next.timelinePreview = timelinePreviewModel.snapshotFor(
+        playback_video_timeline_preview::PresentationSurface::VideoWindow);
+    next.videoEdit = videoEditWorkspace.edit();
+    next.videoEditExport = videoEditWorkspace.exportProgress();
+    next.videoEditPrompt = videoEditPrompt();
+    next.contextMenu = contextMenuController.snapshotFor(
+        playback_session::ContextMenuSurface::VideoWindow);
+    std::lock_guard<std::mutex> lock(publishedWindowUiMutex);
+    publishedWindowUi = std::move(next);
+  }
+
+  playback_framebuffer_presenter::PlaybackFramebufferUiSnapshot
+  windowUiStateSnapshot() const {
+    std::lock_guard<std::mutex> lock(publishedWindowUiMutex);
+    return publishedWindowUi;
+  }
+
   void syncVideoEditPresentation(bool requestPresent = true) {
     contextMenuController.refresh(videoEditWorkspace.edit(),
                                   videoEditWorkspace.exportProgress());
@@ -369,6 +394,7 @@ struct PlaybackLoopRunner::Impl {
           playback_video_timeline_preview::PresentationSurface::VideoWindow);
       timelinePreviewProvider.cancelBefore(timelinePreviewModel.requestId());
     }
+    publishWindowUiState();
     if (!requestPresent) return;
     redraw = true;
     output.requestWindowPresent();
@@ -554,6 +580,7 @@ struct PlaybackLoopRunner::Impl {
     }
     if (handled) {
       redraw = true;
+      publishWindowUiState();
       output.requestWindowPresent();
     }
     return handled;
@@ -570,6 +597,7 @@ struct PlaybackLoopRunner::Impl {
 
     inputSignals.overlayControlHover = &overlayControlHover;
     inputSignals.requestWindowPresent = [this]() {
+      publishWindowUiState();
       output.requestWindowPresent();
     };
     inputSignals.copyCurrentVideoFrameToClipboard = [this]() {
@@ -586,6 +614,7 @@ struct PlaybackLoopRunner::Impl {
             kFrameCopyMessageDuration);
       }
       redraw = true;
+      publishWindowUiState();
       output.requestWindowPresent();
     };
     inputSignals.videoEditorActive =
@@ -629,6 +658,7 @@ struct PlaybackLoopRunner::Impl {
           }
           if (update.changed) {
             redraw = true;
+            publishWindowUiState();
             output.requestWindowPresent();
           }
         };
@@ -638,6 +668,7 @@ struct PlaybackLoopRunner::Impl {
             timelinePreviewProvider.cancelBefore(
                 timelinePreviewModel.requestId());
             redraw = true;
+            publishWindowUiState();
             output.requestWindowPresent();
           }
         };
@@ -717,22 +748,14 @@ struct PlaybackLoopRunner::Impl {
   }
 
   WindowUiState buildWindowUiState() {
-    WindowUiState ui =
-        playback_framebuffer_presenter::buildPlaybackFramebufferUiState(
-            windowTitle, output.window(), core.player(), subtitleManager,
-            core.playbackState(), core.audioOk(),
-            requestTransportCommand != nullptr,
-            requestTransportCommand != nullptr, hasSubtitles,
-            enableSubtitlesShared, overlayControlHover, osdSnapshot(),
-            config.debugOverlay);
-    ui.timelinePreview = timelinePreviewModel.snapshotFor(
-        playback_video_timeline_preview::PresentationSurface::VideoWindow);
-    ui.videoEdit = videoEditWorkspace.edit();
-    ui.videoEditExport = videoEditWorkspace.exportProgress();
-    ui.videoEditPrompt = videoEditPrompt();
-    ui.contextMenu = contextMenuController.snapshotFor(
-        playback_session::ContextMenuSurface::VideoWindow);
-    return ui;
+    const auto snapshot = windowUiStateSnapshot();
+    return playback_framebuffer_presenter::buildPlaybackFramebufferUiState(
+        windowTitle, output.window(), core.player(), subtitleManager,
+        core.playbackState(), core.audioOk(),
+        requestTransportCommand != nullptr,
+        requestTransportCommand != nullptr, hasSubtitles,
+        enableSubtitlesShared, overlayControlHover, snapshot,
+        config.debugOverlay);
   }
 
   bool buildTextGridPresentation(int pixelWidth, int pixelHeight,
@@ -770,14 +793,17 @@ struct PlaybackLoopRunner::Impl {
     inputs.useWindowPresenter = false;
     const bool audioOnlyPlayback =
         core.player().sourceWidth() <= 0 || core.player().sourceHeight() <= 0;
-    inputs.osd = osdSnapshot();
-    inputs.timelinePreview = timelinePreviewModel.snapshotFor(
-        playback_video_timeline_preview::PresentationSurface::VideoWindow);
-    inputs.videoEdit = videoEditWorkspace.edit();
-    inputs.videoEditExport = videoEditWorkspace.exportProgress();
-    inputs.videoEditPrompt = videoEditPrompt();
-    inputs.contextMenu = contextMenuController.snapshotFor(
-        playback_session::ContextMenuSurface::VideoWindow);
+    const auto windowUi = windowUiStateSnapshot();
+    inputs.osd = windowUi.osd;
+    inputs.timelinePreview = windowUi.timelinePreview;
+    inputs.videoEdit = windowUi.videoEdit;
+    if (inputs.videoEdit.active) {
+      inputs.videoEdit.playheadTimelineUs =
+          core.player().timelineSnapshot().positionUs;
+    }
+    inputs.videoEditExport = windowUi.videoEditExport;
+    inputs.videoEditPrompt = windowUi.videoEditPrompt;
+    inputs.contextMenu = windowUi.contextMenu;
     inputs.osd.controlsVisible =
         inputs.osd.controlsVisible || audioOnlyPlayback;
     inputs.clearHistory = false;
@@ -1270,11 +1296,13 @@ struct PlaybackLoopRunner::Impl {
               timelinePreviewProvider.takeResult()) {
         if (timelinePreviewModel.apply(*result)) {
           redraw = true;
+          publishWindowUiState();
           output.requestWindowPresent();
         }
       }
       if (osd.expire(playback_session::PlaybackOsdTimeline::Clock::now())) {
         redraw = true;
+        publishWindowUiState();
         output.requestWindowPresent();
       }
       finalizeAudioStart();

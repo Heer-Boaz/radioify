@@ -251,22 +251,74 @@ bool Selection::clear(EditBoundary boundary) {
   return true;
 }
 
-void Selection::markIn(const Timeline& timeline, int64_t sourceUs) {
-  const int64_t nextIn = std::clamp(
+void Selection::markIn(const Timeline& timeline, int64_t sourceUs,
+                       int64_t minimumSelectionDurationUs) {
+  int64_t nextIn = std::clamp(
       sourceUs, int64_t{0}, timeline.sourceDurationUs());
-  const bool clearsOut = outUs_ && *outUs_ <= nextIn;
-  if (inUs_ == nextIn && !clearsOut) return;
-  inUs_ = nextIn;
-  if (clearsOut) {
-    outUs_.reset();
-    outFrameUs_.reset();
+  if (outUs_) {
+    const auto sequence = playback_video_sequence::Timeline::create(
+        timeline.sourceDurationUs(), timeline.keptRanges());
+    if (sequence) {
+      const auto requested = sequence->pointForSource(
+          nextIn, playback_video_sequence::SourceBias::Forward);
+      const auto end = sequence->pointForSource(
+          *outUs_, playback_video_sequence::SourceBias::Backward);
+      if (requested && end) {
+        const int64_t minimumDurationUs =
+            std::max<int64_t>(1, minimumSelectionDurationUs);
+        const int64_t latestStartUs =
+            end->presentationUs -
+            std::min(minimumDurationUs, end->presentationUs);
+        nextIn = sequence->pointAt(
+            std::min(requested->presentationUs, latestStartUs)).sourceUs;
+      }
+    }
   }
+  if (inUs_ == nextIn) return;
+  inUs_ = nextIn;
 }
 
 void Selection::markOut(const Timeline& timeline,
                         int64_t sourceFrameStartUs,
-                        int64_t sourceFrameEndUs) {
-  setOutBoundary(timeline, sourceFrameEndUs, sourceFrameStartUs);
+                        int64_t sourceFrameEndUs,
+                        int64_t minimumSelectionDurationUs) {
+  int64_t nextOut = std::clamp(
+      sourceFrameEndUs, int64_t{0}, timeline.sourceDurationUs());
+  int64_t nextOutFrame =
+      std::clamp(sourceFrameStartUs, int64_t{0}, nextOut);
+  if (inUs_) {
+    const auto sequence = playback_video_sequence::Timeline::create(
+        timeline.sourceDurationUs(), timeline.keptRanges());
+    if (sequence) {
+      const auto start = sequence->pointForSource(
+          *inUs_, playback_video_sequence::SourceBias::Forward);
+      const auto requested = sequence->pointForSource(
+          nextOut, playback_video_sequence::SourceBias::Backward);
+      if (start && requested) {
+        const int64_t minimumDurationUs =
+            std::max<int64_t>(1, minimumSelectionDurationUs);
+        const int64_t earliestEndUs =
+            start->presentationUs +
+            std::min(minimumDurationUs,
+                     sequence->durationUs() - start->presentationUs);
+        const int64_t targetUs =
+            std::max(requested->presentationUs, earliestEndUs);
+        if (targetUs != requested->presentationUs) {
+          if (targetUs <= 0) {
+            nextOut = sequence->pointAt(0).sourceUs;
+            nextOutFrame = nextOut;
+          } else {
+            const playback_video_sequence::Point beforeBoundary =
+                sequence->pointAt(targetUs - 1);
+            nextOut = std::min(timeline.sourceDurationUs(),
+                               beforeBoundary.sourceUs + 1);
+            nextOutFrame = beforeBoundary.sourceUs;
+          }
+        }
+      }
+    }
+  }
+  setOutBoundary(timeline, nextOut, nextOutFrame);
 }
 
 void Selection::setOutBoundary(const Timeline& timeline,
@@ -276,11 +328,9 @@ void Selection::setOutBoundary(const Timeline& timeline,
       sourceUsExclusive, int64_t{0}, timeline.sourceDurationUs());
   const int64_t nextOutFrame =
       std::clamp(sourceFrameStartUs, int64_t{0}, nextOut);
-  const bool clearsIn = inUs_ && *inUs_ >= nextOut;
-  if (outUs_ == nextOut && outFrameUs_ == nextOutFrame && !clearsIn) return;
+  if (outUs_ == nextOut && outFrameUs_ == nextOutFrame) return;
   outUs_ = nextOut;
   outFrameUs_ = nextOutFrame;
-  if (clearsIn) inUs_.reset();
 }
 
 bool Selection::moveBoundary(const Timeline& timeline, EditBoundary boundary,
@@ -319,7 +369,8 @@ bool Selection::moveBoundary(const Timeline& timeline, EditBoundary boundary,
   const std::optional<int64_t> previousOut = outUs_;
   const std::optional<int64_t> previousOutFrame = outFrameUs_;
   if (boundary == EditBoundary::In) {
-    markIn(timeline, sequence->pointAt(targetUs).sourceUs);
+    markIn(timeline, sequence->pointAt(targetUs).sourceUs,
+           minimumDurationUs);
   } else if (targetUs <= 0) {
     const int64_t sourceUs = sequence->pointAt(0).sourceUs;
     setOutBoundary(timeline, sourceUs, sourceUs);
@@ -338,18 +389,6 @@ bool Selection::moveBoundary(const Timeline& timeline, EditBoundary boundary,
 std::optional<SourceRange> Selection::range() const {
   if (!inUs_ || !outUs_ || *outUs_ <= *inUs_) return std::nullopt;
   return SourceRange{*inUs_, *outUs_};
-}
-
-std::optional<SourceRange> Selection::trimRange(
-    const Timeline& timeline) const {
-  if (!hasMarks()) return std::nullopt;
-  const int64_t startUs = std::clamp(
-      inUs_.value_or(0), int64_t{0}, timeline.sourceDurationUs());
-  const int64_t endUs = std::clamp(
-      outUs_.value_or(timeline.sourceDurationUs()), int64_t{0},
-      timeline.sourceDurationUs());
-  if (endUs <= startUs) return std::nullopt;
-  return SourceRange{startUs, endUs};
 }
 
 bool Document::commit(Timeline next) {
@@ -425,7 +464,7 @@ EditSnapshot buildSnapshot(const Document& document,
   if (const auto remove = selection.range()) {
     out.canRippleDelete = timeline.canRippleDelete(*remove);
   }
-  if (const auto keep = selection.trimRange(timeline)) {
+  if (const auto keep = selection.range()) {
     out.canTrim = timeline.canTrimTo(*keep);
   }
   out.canUndo = document.canUndo();

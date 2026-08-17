@@ -1452,6 +1452,7 @@ int runTui(Options o) {
             case playback_overlay::OverlayControlId::Subtitles:
             case playback_overlay::OverlayControlId::EditMarkIn:
             case playback_overlay::OverlayControlId::EditMarkOut:
+            case playback_overlay::OverlayControlId::EditClearSelection:
             case playback_overlay::OverlayControlId::EditRippleDelete:
             case playback_overlay::OverlayControlId::EditTrim:
             case playback_overlay::OverlayControlId::EditDone:

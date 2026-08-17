@@ -219,6 +219,8 @@ int main() {
       kPlaybackShortcutContextVideoPlayback;
   const uint32_t videoEditingContexts =
       videoPlaybackContexts | kPlaybackShortcutContextVideoEditing;
+  const uint32_t videoEditingPictureInPictureContexts =
+      videoEditingContexts | kPlaybackShortcutContextPictureInPicture;
   const uint32_t videoEditExitContexts =
       kPlaybackShortcutContextVideoEditExitConfirmation;
   const uint32_t videoEditLeaveContexts =
@@ -302,6 +304,18 @@ int main() {
                    videoEditingContexts)
                    .value() == PlaybackShortcutAction::TogglePictureInPicture,
                "Ctrl+P must retain its PiP meaning while editing");
+  ok &= expect(resolvePlaybackShortcutAction(
+                   makeKey('P'), videoEditingPictureInPictureContexts)
+                   .value() ==
+                   PlaybackShortcutAction::DismissPictureInPicture,
+               "Bare P must remain able to close PiP while editing");
+  ok &= expect(resolvePlaybackShortcutAction(
+                   makeKey(VK_ESCAPE),
+                   videoEditingPictureInPictureContexts)
+                   .value() ==
+                   PlaybackShortcutAction::NavigateBackInVideoEditor,
+               "Escape in editor PiP must preserve the local selection and "
+               "leave hierarchy");
   ok &= expect(resolvePlaybackShortcutAction(
                    makeKey('E', 0, kPlaybackShortcutCtrlMask),
                    videoEditingContexts)

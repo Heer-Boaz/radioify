@@ -17,6 +17,18 @@ class ThreadDispatchQueue;
 
 namespace playback_framebuffer_presenter {
 
+// Immutable session-owned state published to the presenter thread as one
+// revision. Controls are projected only after this complete snapshot exists.
+struct PlaybackFramebufferUiSnapshot {
+  playback_overlay::PlaybackOsdSnapshot osd;
+  playback_video_timeline_preview::Snapshot timelinePreview;
+  playback_video_edit::EditSnapshot videoEdit;
+  playback_video_edit::ExportProgress videoEditExport;
+  playback_video_edit::Prompt videoEditPrompt =
+      playback_video_edit::Prompt::None;
+  playback_overlay::ContextMenuSnapshot contextMenu;
+};
+
 using TextGridPresentationProvider =
     std::function<bool(int pixelWidth, int pixelHeight, int cellPixelWidth,
                        int cellPixelHeight,
@@ -32,7 +44,7 @@ WindowUiState buildPlaybackFramebufferUiState(
     bool audioOk, bool canPlayPrevious, bool canPlayNext, bool hasSubtitles,
     std::atomic<bool>& enableSubtitlesShared,
     std::atomic<int>& overlayControlHover,
-    const playback_overlay::PlaybackOsdSnapshot& osd, bool debugOverlay);
+    const PlaybackFramebufferUiSnapshot& snapshot, bool debugOverlay);
 
 void runFramebufferPresenterLoop(
     Player& player, VideoWindow& videoWindow, GpuVideoFrameCache& frameCache,

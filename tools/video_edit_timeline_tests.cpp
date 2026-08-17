@@ -377,6 +377,14 @@ int main() {
   ok &= expect(timeline.cutTransitions()[0] ==
                    playback_video_edit::CutTransition::motionSmooth(),
                "trimming clip edges must preserve an unchanged edit point");
+  ok &= expect(timeline.rippleDelete({6'000'000, 7'000'000}) &&
+                   timeline.keptRanges() ==
+                       std::vector<SourceRange>{{1'000'000, 3'000'000},
+                                                {5'000'000, 6'000'000},
+                                                {7'000'000, 9'000'000}} &&
+                   timeline.cutTransitions().size() == 2,
+               "a second non-adjacent removal must remain an independent "
+               "ripple edit in the same document");
   ok &= expect(!timeline.rippleDelete({0, 10'000'000}),
                "an edit must not publish an empty sequence");
 
@@ -401,7 +409,7 @@ int main() {
                "workspace activation must be projected without changing the document");
   const auto emptySelectionSnapshot = playback_video_edit::buildSnapshot(
       document, selection, true);
-  ok &= expect(!selection.trimRange(document.timeline()) &&
+  ok &= expect(!selection.range() &&
                    !emptySelectionSnapshot.canTrim &&
                    !emptySelectionSnapshot.canRippleDelete,
                "an unmarked timeline must not advertise an edit operation");
@@ -417,41 +425,37 @@ int main() {
 
   Selection inOnlySelection;
   inOnlySelection.markIn(document.timeline(), 2'000'000);
-  const auto inOnlyRange = inOnlySelection.trimRange(document.timeline());
   const auto inOnlySnapshot = playback_video_edit::buildSnapshot(
       document, inOnlySelection, true);
-  ok &= expect(inOnlyRange == std::optional<SourceRange>{
-                                      SourceRange{2'000'000, 10'000'000}} &&
-                   !inOnlySelection.range() && inOnlySnapshot.canTrim &&
+  ok &= expect(!inOnlySelection.range() &&
+                   !inOnlySnapshot.canTrim &&
                    !inOnlySnapshot.canRippleDelete,
-               "an In point must trim to the existing sequence end without "
-               "becoming a ripple-delete range");
+               "a selection start alone must not imply a hidden end or an "
+               "edit operation");
 
   Selection outOnlySelection;
   outOnlySelection.markOut(document.timeline(), 7'966'667, 8'000'000);
-  const auto outOnlyRange = outOnlySelection.trimRange(document.timeline());
   const auto outOnlySnapshot = playback_video_edit::buildSnapshot(
       document, outOnlySelection, true);
-  ok &= expect(outOnlyRange == std::optional<SourceRange>{
-                                       SourceRange{0, 8'000'000}} &&
-                   !outOnlySelection.range() && outOnlySnapshot.canTrim &&
+  ok &= expect(!outOnlySelection.range() &&
+                   !outOnlySnapshot.canTrim &&
                    !outOnlySnapshot.canRippleDelete &&
                    outOnlySnapshot.outFrameTimelineUs ==
                        std::optional<int64_t>(7'966'667),
-               "an Out point must trim from the existing sequence start "
-               "without losing the exact inclusive frame position");
+               "a selection end alone must not imply a hidden start while "
+               "retaining its exact inclusive frame position");
 
   Document oneSidedDocument;
   oneSidedDocument.load(10'000'000);
   ok &= expect(oneSidedDocument.trimTo({2'000'000, 10'000'000}) &&
                    oneSidedDocument.timeline().keptRanges() ==
                        std::vector<SourceRange>{{2'000'000, 10'000'000}},
-               "committing an In-only trim must preserve the unmarked end");
+               "the document must support trimming only its leading edge");
   ok &= expect(oneSidedDocument.discardAllChanges() &&
                    oneSidedDocument.trimTo({0, 8'000'000}) &&
                    oneSidedDocument.timeline().keptRanges() ==
                        std::vector<SourceRange>{{0, 8'000'000}},
-               "committing an Out-only trim must preserve the unmarked start");
+               "the document must support trimming only its trailing edge");
 
   Selection completeSelection;
   completeSelection.markIn(document.timeline(), 0);
@@ -482,6 +486,32 @@ int main() {
                    !clearableSelection.hasMarks() &&
                    !clearableSelection.clear(),
                "Escape-style selection cancellation must clear all marks once");
+
+  Selection crossedStart;
+  crossedStart.markOut(document.timeline(), 4'966'667, 5'000'000,
+                       100'000);
+  crossedStart.markIn(document.timeline(), 7'000'000, 100'000);
+  const auto crossedStartSnapshot = playback_video_edit::buildSnapshot(
+      document, crossedStart, true);
+  ok &= expect(crossedStartSnapshot.inTimelineUs ==
+                       std::optional<int64_t>(4'900'000) &&
+                   crossedStartSnapshot.outTimelineUs ==
+                       std::optional<int64_t>(5'000'000),
+               "setting Start beyond End must clamp Start without clearing "
+               "or swapping End");
+
+  Selection crossedEnd;
+  crossedEnd.markIn(document.timeline(), 5'000'000, 100'000);
+  crossedEnd.markOut(document.timeline(), 3'000'000, 3'100'000,
+                     100'000);
+  const auto crossedEndSnapshot = playback_video_edit::buildSnapshot(
+      document, crossedEnd, true);
+  ok &= expect(crossedEndSnapshot.inTimelineUs ==
+                       std::optional<int64_t>(5'000'000) &&
+                   crossedEndSnapshot.outTimelineUs ==
+                       std::optional<int64_t>(5'100'000),
+               "setting End before Start must clamp End without clearing or "
+               "swapping Start");
   selection.markIn(document.timeline(), 3'000'000);
   selection.markOut(document.timeline(), 4'966'667, 5'000'000);
   const auto initialRemoval = selection.range();
@@ -713,7 +743,7 @@ int main() {
                    smoothOverlayModel.smoothCutCells == std::vector<int>{2},
                "a smooth cut must remain distinct in the shared timeline "
                "projection");
-  ok &= expect(overlayModel.status == "EDIT MODE*" &&
+  ok &= expect(overlayModel.status == "EDITING*" &&
                     overlayModel.status.size() <= 10,
                "narrow editor status must keep the active mode visible");
   playback_video_edit::EditSnapshot inOnlyOverlay = overlayEdit;
@@ -724,28 +754,26 @@ int main() {
   ok &= expect(inOnlyOverlayModel.cells[1] ==
                        playback_video_edit::TimelineCellKind::Kept &&
                    inOnlyOverlayModel.cells[2] ==
-                       playback_video_edit::TimelineCellKind::Selected &&
+                       playback_video_edit::TimelineCellKind::KeptAlternate &&
                    inOnlyOverlayModel.cells[9] ==
-                       playback_video_edit::TimelineCellKind::Selected &&
+                       playback_video_edit::TimelineCellKind::KeptAlternate &&
                    inOnlyOverlayModel.inCell == std::optional<int>(2) &&
                    !inOnlyOverlayModel.outCell,
-               "an In-only trim must visualize its implicit sequence-end "
-               "boundary without inventing an Out handle");
+               "a lone Start handle must not imply or paint a hidden End");
   playback_video_edit::EditSnapshot outOnlyOverlay = overlayEdit;
   outOnlyOverlay.inTimelineUs.reset();
   const playback_video_edit::OverlayModel outOnlyOverlayModel =
       playback_video_edit::buildOverlayModel(
           outOnlyOverlay, nullptr, Prompt::None, 10, 0.5);
   ok &= expect(outOnlyOverlayModel.cells[0] ==
-                       playback_video_edit::TimelineCellKind::Selected &&
-                   outOnlyOverlayModel.cells[4] ==
-                       playback_video_edit::TimelineCellKind::Selected &&
-                   outOnlyOverlayModel.cells[5] ==
                        playback_video_edit::TimelineCellKind::Kept &&
+                   outOnlyOverlayModel.cells[4] ==
+                       playback_video_edit::TimelineCellKind::KeptAlternate &&
+                   outOnlyOverlayModel.cells[5] ==
+                       playback_video_edit::TimelineCellKind::KeptAlternate &&
                    !outOnlyOverlayModel.inCell &&
                    outOnlyOverlayModel.outCell == std::optional<int>(5),
-               "an Out-only trim must visualize its implicit sequence-start "
-               "boundary without inventing an In handle");
+               "a lone End handle must not imply or paint a hidden Start");
   const playback_video_edit::OverlayModel tinyExportModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
                                               Prompt::None, 6, 0.5);
@@ -763,48 +791,49 @@ int main() {
                         std::string::npos &&
                     wideOverlayModel.status.find("TC 00:00:04:00") !=
                         std::string::npos &&
-                    wideOverlayModel.status.find("I 00:02:00") !=
+                    wideOverlayModel.status.find("SELECTED 00:02:00") !=
                         std::string::npos &&
-                    wideOverlayModel.status.find("O 00:03:29") !=
+                    wideOverlayModel.status.find("1 REMOVED") !=
                         std::string::npos &&
-                    wideOverlayModel.status.find("D 00:02:00") !=
-                        std::string::npos &&
-                    wideOverlayModel.status.find("EDIT MODE*") !=
+                    wideOverlayModel.status.find("EDITING*") !=
                         std::string::npos &&
                     wideOverlayModel.status.find("Ctrl+") ==
                         std::string::npos &&
                     wideOverlayModel.status.size() <= 96,
-               "wide editor status must prioritize inclusive range marks "
-               "and its frame-accurate duration without duplicating controls");
+               "wide editor status must identify the selection and prior "
+               "removals without duplicating controls");
   const playback_video_edit::OverlayModel rangeOverlayModel =
       playback_video_edit::buildOverlayModel(overlayEdit, nullptr,
                                               Prompt::None, 34, 0.5);
   ok &= expect(rangeOverlayModel.status ==
-                   "EDIT MODE*  I 00:02:00  O 00:03:29",
-               "compact editor status must retain both frame-accurate range "
-               "marks before general playhead time");
+                   "EDITING*  SELECTED 00:02:00",
+               "compact editor status must describe the selected section "
+               "without exposing In/Out jargon");
   playback_video_edit::EditSnapshot vfrOutOverlay = overlayEdit;
   vfrOutOverlay.outFrameTimelineUs = 3'950'000;
   const playback_video_edit::OverlayModel vfrOutOverlayModel =
       playback_video_edit::buildOverlayModel(
           vfrOutOverlay, nullptr, Prompt::None, 64, 0.5);
-  ok &= expect(vfrOutOverlayModel.status.find("O 00:03:28") !=
+  ok &= expect(vfrOutOverlayModel.status.find("SELECTED 00:02:00") !=
                    std::string::npos,
-               "the inclusive Out label must use its retained frame PTS "
-               "instead of subtracting the current playhead frame duration");
+               "selection duration must remain stable when the exact VFR end "
+               "frame PTS differs from nominal cadence");
   const playback_video_edit::OverlayModel inOnlyDurationModel =
       playback_video_edit::buildOverlayModel(
           inOnlyOverlay, nullptr, Prompt::None, 64, 0.5);
-  ok &= expect(inOnlyDurationModel.status.find("D 00:06:00") !=
-                   std::string::npos,
-               "an In-only range duration must use the implicit program end");
+  ok &= expect(inOnlyDurationModel.status.find("START 00:02:00") !=
+                       std::string::npos &&
+                   inOnlyDurationModel.status.find("SELECTED") ==
+                       std::string::npos,
+               "a lone Start must remain an incomplete selection");
   const playback_video_edit::OverlayModel outOnlyDurationModel =
       playback_video_edit::buildOverlayModel(
           outOnlyOverlay, nullptr, Prompt::None, 64, 0.5);
-  ok &= expect(outOnlyDurationModel.status.find("D 00:04:00") !=
-                    std::string::npos,
-                "an Out-only range duration must use the implicit program "
-                "start");
+  ok &= expect(outOnlyDurationModel.status.find("END 00:03:29") !=
+                       std::string::npos &&
+                   outOnlyDurationModel.status.find("SELECTED") ==
+                       std::string::npos,
+               "a lone End must remain an incomplete selection");
 
   playback_video_edit::ExportProgress failedExport;
   failedExport.status = playback_video_edit::ExportStatus::Failed;
@@ -858,14 +887,12 @@ int main() {
   editorControlState.videoEdit.active = true;
   editorControlState.playPauseAvailable = true;
   editorControlState.paused = true;
-  const auto unavailableEditControls =
+  const auto emptyEditControls =
       playback_overlay::buildOverlayControlSpecs(editorControlState, -1);
-  const std::vector<playback_overlay::OverlayControlId> expectedEditControls{
-      playback_overlay::OverlayControlId::PlayPause,
+  const std::vector<playback_overlay::OverlayControlId> expectedEmptyControls{
       playback_overlay::OverlayControlId::EditMarkIn,
       playback_overlay::OverlayControlId::EditMarkOut,
-      playback_overlay::OverlayControlId::EditRippleDelete,
-      playback_overlay::OverlayControlId::EditTrim,
+      playback_overlay::OverlayControlId::PlayPause,
       playback_overlay::OverlayControlId::EditDone,
   };
   const auto controlIds = [](const auto& specs) {
@@ -879,46 +906,65 @@ int main() {
     return std::find_if(specs.begin(), specs.end(),
                         [&](const auto& spec) { return spec.id == id; });
   };
-  ok &= expect(controlIds(unavailableEditControls) == expectedEditControls,
-               "the edit toolbar must keep one stable command order before "
-               "a range or history exists");
-  for (const auto id : {
-           playback_overlay::OverlayControlId::EditRippleDelete,
-           playback_overlay::OverlayControlId::EditTrim,
-       }) {
-    const auto control = controlFor(unavailableEditControls, id);
-    ok &= expect(control != unavailableEditControls.end() &&
-                     !control->enabled,
-                 "unavailable edit commands must stay visible but disabled");
-  }
+  const auto startControl = controlFor(
+      emptyEditControls, playback_overlay::OverlayControlId::EditMarkIn);
+  const auto endControl = controlFor(
+      emptyEditControls, playback_overlay::OverlayControlId::EditMarkOut);
+  ok &= expect(controlIds(emptyEditControls) == expectedEmptyControls &&
+                   startControl != emptyEditControls.end() &&
+                   startControl->normalText == " [Start] " &&
+                   endControl != emptyEditControls.end() &&
+                   endControl->normalText == " [End] ",
+               "an empty range tool must offer plain-language Start and End "
+               "before transport or document actions");
 
   editorControlState.videoEdit.inTimelineUs = 1'000'000;
-  editorControlState.videoEdit.canTrim = true;
-  const auto oneSidedEditControls =
+  const auto partialEditControls =
       playback_overlay::buildOverlayControlSpecs(editorControlState, -1);
-  const auto oneSidedDelete = controlFor(
-      oneSidedEditControls,
-      playback_overlay::OverlayControlId::EditRippleDelete);
-  const auto oneSidedTrimControl = controlFor(
-      oneSidedEditControls, playback_overlay::OverlayControlId::EditTrim);
-  ok &= expect(controlIds(oneSidedEditControls) == expectedEditControls &&
-                   oneSidedDelete != oneSidedEditControls.end() &&
-                   !oneSidedDelete->enabled &&
-                   oneSidedTrimControl != oneSidedEditControls.end() &&
-                   oneSidedTrimControl->enabled,
-               "one mark must enable trim in place while ripple delete still "
-               "requires an explicit range");
+  const std::vector<playback_overlay::OverlayControlId>
+      expectedPartialControls{
+          playback_overlay::OverlayControlId::EditMarkIn,
+          playback_overlay::OverlayControlId::EditMarkOut,
+          playback_overlay::OverlayControlId::EditClearSelection,
+          playback_overlay::OverlayControlId::PlayPause,
+          playback_overlay::OverlayControlId::EditDone,
+      };
+  const auto activeStart = controlFor(
+      partialEditControls, playback_overlay::OverlayControlId::EditMarkIn);
+  ok &= expect(controlIds(partialEditControls) == expectedPartialControls &&
+                   activeStart != partialEditControls.end() &&
+                   activeStart->active &&
+                   std::none_of(
+                       partialEditControls.begin(), partialEditControls.end(),
+                       [](const auto& control) {
+                         return control.id == playback_overlay::OverlayControlId::
+                                                  EditRippleDelete ||
+                                control.id == playback_overlay::OverlayControlId::
+                                                  EditTrim;
+                       }),
+               "one endpoint must remain an incomplete, cancellable "
+               "selection instead of implying a hidden trim range");
 
   editorControlState.videoEdit.outTimelineUs = 2'000'000;
   editorControlState.videoEdit.canRippleDelete = true;
+  editorControlState.videoEdit.canTrim = true;
   editorControlState.videoEdit.canUndo = true;
   editorControlState.videoEdit.canRedo = true;
   editorControlState.videoEdit.hasEdits = true;
   editorControlState.videoEdit.hasUnexportedChanges = false;
   const auto availableEditControls =
       playback_overlay::buildOverlayControlSpecs(editorControlState, -1);
-  ok &= expect(controlIds(availableEditControls) == expectedEditControls,
-               "enabling editor commands must not move or replace controls");
+  const std::vector<playback_overlay::OverlayControlId>
+      expectedCompleteControls{
+          playback_overlay::OverlayControlId::EditRippleDelete,
+          playback_overlay::OverlayControlId::EditTrim,
+          playback_overlay::OverlayControlId::EditClearSelection,
+          playback_overlay::OverlayControlId::PlayPause,
+          playback_overlay::OverlayControlId::EditDone,
+      };
+  ok &= expect(controlIds(availableEditControls) == expectedCompleteControls,
+               "a complete range must replace endpoint tools with its two "
+               "explicit operations and a local Cancel action");
   for (const auto id : {
            playback_overlay::OverlayControlId::EditRippleDelete,
            playback_overlay::OverlayControlId::EditTrim,
@@ -927,18 +973,24 @@ int main() {
     ok &= expect(control != availableEditControls.end() && control->enabled,
                  "available edit commands must enable in their existing slots");
   }
-  const int pausedControlWidth = availableEditControls.front().width;
+  const auto pausedControl = controlFor(
+      availableEditControls, playback_overlay::OverlayControlId::PlayPause);
+  const int pausedControlWidth =
+      pausedControl != availableEditControls.end() ? pausedControl->width : -1;
   editorControlState.paused = false;
   const auto playingEditControls =
       playback_overlay::buildOverlayControlSpecs(editorControlState, -1);
-  ok &= expect(!playingEditControls.empty() &&
-                   playingEditControls.front().width == pausedControlWidth,
+  const auto playingControl = controlFor(
+      playingEditControls, playback_overlay::OverlayControlId::PlayPause);
+  ok &= expect(playingControl != playingEditControls.end() &&
+                   playingControl->width == pausedControlWidth,
                "Play and Pause labels must reserve one stable toolbar slot");
   editorControlState.videoEditExport.status =
       playback_video_edit::ExportStatus::Running;
   const auto exportingEditControls =
       playback_overlay::buildOverlayControlSpecs(editorControlState, -1);
-  ok &= expect(controlIds(exportingEditControls) == expectedEditControls,
+  ok &= expect(controlIds(exportingEditControls) ==
+                   expectedCompleteControls,
                "background export state must not repurpose the monitor bar");
   std::optional<playback_video_edit::Command> dispatchedEditCommand;
   playback_overlay::OverlayControlActions editControlActions;
@@ -953,6 +1005,23 @@ int main() {
                        playback_video_edit::Command::Finish,
                "Done must only leave the edit tools instead of entering the "
                "Escape confirmation path or implying an export");
+  ok &= expect(playback_overlay::dispatchOverlayControl(
+                   playback_overlay::OverlayControlId::EditMarkIn,
+                   editControlActions) &&
+                   dispatchedEditCommand ==
+                       playback_video_edit::Command::ToggleIn &&
+                   playback_overlay::dispatchOverlayControl(
+                       playback_overlay::OverlayControlId::EditMarkOut,
+                       editControlActions) &&
+                   dispatchedEditCommand ==
+                       playback_video_edit::Command::ToggleOut &&
+                   playback_overlay::dispatchOverlayControl(
+                       playback_overlay::OverlayControlId::EditClearSelection,
+                       editControlActions) &&
+                   dispatchedEditCommand ==
+                       playback_video_edit::Command::ClearInAndOut,
+               "endpoint buttons must toggle and Cancel must clear only the "
+               "local range-selection tool");
   ok &= expect(playback_overlay::dispatchOverlayControl(
                    playback_overlay::OverlayControlId::EditStartExport,
                    editControlActions) &&
@@ -977,6 +1046,36 @@ int main() {
                    waitedForExport && !dispatchedEditCommand,
                "waiting for an exit export must remain a session action, not "
                "an encoder command");
+
+  editorControlState.pictureInPictureAvailable = true;
+  editorControlState.pictureInPictureActive = true;
+  const auto pictureInPictureEditControls =
+      playback_overlay::buildOverlayControlSpecs(editorControlState, -1);
+  const std::vector<playback_overlay::OverlayControlId>
+      expectedPictureInPictureEditControls{
+          playback_overlay::OverlayControlId::PictureInPicture,
+          playback_overlay::OverlayControlId::EditRippleDelete,
+          playback_overlay::OverlayControlId::EditTrim,
+          playback_overlay::OverlayControlId::EditClearSelection,
+          playback_overlay::OverlayControlId::PlayPause,
+          playback_overlay::OverlayControlId::EditDone,
+      };
+  ok &= expect(
+      controlIds(pictureInPictureEditControls) ==
+              expectedPictureInPictureEditControls &&
+          pictureInPictureEditControls.front().normalText ==
+              " [Close PiP] " &&
+          std::none_of(
+              pictureInPictureEditControls.begin(),
+              pictureInPictureEditControls.end(), [](const auto& control) {
+                return control.id == playback_overlay::OverlayControlId::Radio ||
+                       control.id ==
+                           playback_overlay::OverlayControlId::AudioTrack ||
+                       control.id ==
+                           playback_overlay::OverlayControlId::Subtitles;
+              }),
+      "PiP must project the same editor command model, with an immediately "
+      "reachable close action and no playback-only toolbar");
 
   playback_overlay::PlaybackOverlayState pendingExitControlState;
   pendingExitControlState.videoEditPrompt = Prompt::LeavePlayback;
@@ -1034,6 +1133,8 @@ int main() {
   playback_overlay::PlaybackOverlayState disabledControlState;
   disabledControlState.playPauseAvailable = true;
   disabledControlState.videoEdit.active = true;
+  disabledControlState.videoEdit.inTimelineUs = 1'000'000;
+  disabledControlState.videoEdit.outTimelineUs = 2'000'000;
   const auto disabledHoverSpecs = playback_overlay::buildOverlayControlSpecs(
       disabledControlState, disabledDeleteToken);
   const auto disabledInputs = playback_overlay::buildOverlayCellControlInputs(
@@ -1048,10 +1149,11 @@ int main() {
         return item.id ==
                playback_overlay::OverlayControlId::EditRippleDelete;
       });
-  const auto enabledIn = std::find_if(
+  const auto enabledCancel = std::find_if(
       disabledLayout.controls.begin(), disabledLayout.controls.end(),
       [](const auto& item) {
-        return item.id == playback_overlay::OverlayControlId::EditMarkIn;
+        return item.id ==
+               playback_overlay::OverlayControlId::EditClearSelection;
       });
   ok &= expect(disabledDelete != disabledLayout.controls.end() &&
                    !disabledDelete->enabled && !disabledDelete->hovered &&
@@ -1059,11 +1161,12 @@ int main() {
                        disabledMap, disabledDelete->x + 0.5,
                        disabledDelete->y + 0.5),
                "disabled controls must render without accepting hover or clicks");
-  ok &= expect(enabledIn != disabledLayout.controls.end() &&
+  ok &= expect(enabledCancel != disabledLayout.controls.end() &&
                    playback_overlay::overlayControlAt(
-                       disabledMap, enabledIn->x + 0.5,
-                       enabledIn->y + 0.5) ==
-                       playback_overlay::OverlayControlId::EditMarkIn,
+                       disabledMap, enabledCancel->x + 0.5,
+                       enabledCancel->y + 0.5) ==
+                       playback_overlay::OverlayControlId::
+                           EditClearSelection,
                "enabled controls must retain normal semantic hit-testing");
 
   playback_overlay::OverlayCellLayoutInput shortSurface;
@@ -1073,22 +1176,20 @@ int main() {
   shortSurface.suffix = "00:04 / 00:08";
   shortSurface.reservedRowsAboveProgress = 1;
   shortSurface.controls = {
+      {playback_overlay::OverlayControlId::EditMarkIn, "[Start]", 7},
+      {playback_overlay::OverlayControlId::EditMarkOut, "[End]", 5},
       {playback_overlay::OverlayControlId::PlayPause, "[Play]", 6},
-      {playback_overlay::OverlayControlId::EditMarkIn, "[In]", 4},
-      {playback_overlay::OverlayControlId::EditMarkOut, "[Out]", 5},
-      {playback_overlay::OverlayControlId::EditRippleDelete, "[Delete]", 8},
-      {playback_overlay::OverlayControlId::EditTrim, "[Trim]", 6},
       {playback_overlay::OverlayControlId::EditDone, "[Done]", 6},
   };
   const playback_overlay::OverlayCellLayout shortLayout =
       playback_overlay::layoutOverlayCells(shortSurface);
   ok &= expect(shortLayout.controls.size() == 3 &&
                    shortLayout.controls[0].id ==
-                       playback_overlay::OverlayControlId::PlayPause &&
-                   shortLayout.controls[1].id ==
                        playback_overlay::OverlayControlId::EditMarkIn &&
-                   shortLayout.controls[2].id ==
+                   shortLayout.controls[1].id ==
                        playback_overlay::OverlayControlId::EditMarkOut &&
+                   shortLayout.controls[2].id ==
+                       playback_overlay::OverlayControlId::PlayPause &&
                    std::all_of(shortLayout.controls.begin(),
                                shortLayout.controls.end(),
                                [](const auto& control) {
@@ -1109,16 +1210,53 @@ int main() {
       playback_video_edit::buildOverlayModel(
           overlayEdit, nullptr, Prompt::None, 10, 0.0);
   ok &= expect(unselectedOverlayModel.cells[2] ==
-                   playback_video_edit::TimelineCellKind::Kept &&
+                   playback_video_edit::TimelineCellKind::KeptAlternate &&
                    unselectedOverlayModel.cutCells == std::vector<int>{2},
-                "removed source gaps must collapse to explicit cut points");
+               "removed sections must remain visible as distinct adjacent "
+               "clips separated by explicit cut points");
   const playback_video_edit::OverlayModel unselectedWideOverlayModel =
       playback_video_edit::buildOverlayModel(
           overlayEdit, nullptr, Prompt::None, 64, 0.0);
-  ok &= expect(unselectedWideOverlayModel.status.find("D ") ==
-                   std::string::npos,
-               "the normal program duration must not be duplicated when no "
-               "range is marked");
+  ok &= expect(unselectedWideOverlayModel.status.find("SELECTED") ==
+                       std::string::npos &&
+                   unselectedWideOverlayModel.status.find("1 REMOVED") !=
+                       std::string::npos,
+               "an unselected edited program must show accumulated removals "
+               "without implying an active range");
+  playback_video_edit::EditSnapshot multipleRemovalOverlay = overlayEdit;
+  multipleRemovalOverlay.timelineDurationUs = 6'000'000;
+  multipleRemovalOverlay.keptRanges = {
+      {0, 2'000'000}, {4'000'000, 6'000'000}, {8'000'000, 10'000'000}};
+  multipleRemovalOverlay.clips = {
+      {{0, 2'000'000}, 0},
+      {{4'000'000, 6'000'000}, 2'000'000},
+      {{8'000'000, 10'000'000}, 4'000'000},
+  };
+  multipleRemovalOverlay.cuts = {
+      {2'000'000, playback_video_edit::CutTransition::hard()},
+      {4'000'000, playback_video_edit::CutTransition::hard()},
+  };
+  multipleRemovalOverlay.inTimelineUs.reset();
+  multipleRemovalOverlay.outTimelineUs.reset();
+  multipleRemovalOverlay.outFrameTimelineUs.reset();
+  const playback_video_edit::OverlayModel multipleRemovalModel =
+      playback_video_edit::buildOverlayModel(
+          multipleRemovalOverlay, nullptr, Prompt::None, 12, 0.0);
+  const playback_video_edit::OverlayModel multipleRemovalStatusModel =
+      playback_video_edit::buildOverlayModel(
+          multipleRemovalOverlay, nullptr, Prompt::None, 64, 0.0);
+  ok &= expect(
+      multipleRemovalModel.cells[0] ==
+              playback_video_edit::TimelineCellKind::Kept &&
+          multipleRemovalModel.cells[4] ==
+              playback_video_edit::TimelineCellKind::KeptAlternate &&
+          multipleRemovalModel.cells[8] ==
+              playback_video_edit::TimelineCellKind::Kept &&
+          multipleRemovalModel.cutCells == std::vector<int>({4, 7}) &&
+          multipleRemovalStatusModel.status.find("2 REMOVED") !=
+              std::string::npos,
+      "multiple removals must stay visibly separate as alternating clips, "
+      "cut markers, and an accumulated count");
   overlayEdit.active = false;
   playback_video_edit::ExportProgress olderOverlayExport = overlayExport;
   olderOverlayExport.targetsCurrentRevision = false;
@@ -1312,6 +1450,8 @@ int main() {
   cleanEdit.hasUnexportedChanges = true;
   cleanEdit.inTimelineUs = 1'000'000;
   cleanEdit.outTimelineUs = 2'000'000;
+  cleanEdit.canRippleDelete = true;
+  cleanEdit.canTrim = true;
   cleanEdit.canUndo = true;
   cleanEdit.canRedo = true;
   cleanEdit.canToggleSmoothCut = true;
@@ -1322,7 +1462,15 @@ int main() {
       playback_session::ContextMenuSurface::Terminal);
   const auto clearAllItem = std::find_if(
       dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
-        return item.label == "Clear In and Out";
+        return item.label == "Cancel selection";
+      });
+  const auto removeItem = std::find_if(
+      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
+        return item.label == "Remove selected section";
+      });
+  const auto keepOnlyItem = std::find_if(
+      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
+        return item.label == "Keep only selected section";
       });
   const auto undoItem = std::find_if(
       dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
@@ -1353,6 +1501,8 @@ int main() {
         return item.label == "Smooth cut";
       });
   ok &= expect(clearAllItem != dirtyMenu.items.end() &&
+                   removeItem != dirtyMenu.items.end() &&
+                   keepOnlyItem != dirtyMenu.items.end() &&
                    undoItem != dirtyMenu.items.end() &&
                    redoItem != dirtyMenu.items.end() &&
                    resetItem != dirtyMenu.items.end() &&

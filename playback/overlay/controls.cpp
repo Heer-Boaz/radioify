@@ -106,9 +106,11 @@ bool dispatchOverlayControl(OverlayControlId id,
     case OverlayControlId::PictureInPicture:
       return invoke(actions.pictureInPicture);
     case OverlayControlId::EditMarkIn:
-      return invokeEdit(playback_video_edit::Command::MarkIn);
+      return invokeEdit(playback_video_edit::Command::ToggleIn);
     case OverlayControlId::EditMarkOut:
-      return invokeEdit(playback_video_edit::Command::MarkOut);
+      return invokeEdit(playback_video_edit::Command::ToggleOut);
+    case OverlayControlId::EditClearSelection:
+      return invokeEdit(playback_video_edit::Command::ClearInAndOut);
     case OverlayControlId::EditRippleDelete:
       return invokeEdit(playback_video_edit::Command::RippleDelete);
     case OverlayControlId::EditTrim:
@@ -191,19 +193,36 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
   }
 
   if (state.videoEdit.active) {
-    // The monitor bar contains only transport and direct timeline operations.
-    // Document history and output live in the context menu and shortcuts.
+    // Range selection is a local tool mode. Its operations lead the toolbar
+    // only while a complete range exists; transport and document completion
+    // remain available without turning the bar into a shortcut legend.
+    const bool hasStart = state.videoEdit.inTimelineUs.has_value();
+    const bool hasEnd = state.videoEdit.outTimelineUs.has_value();
+    const bool hasMarks = hasStart || hasEnd;
+    const bool completeRange = hasStart && hasEnd;
+    const bool showPictureInPicture =
+        options.includePictureInPicture &&
+        state.pictureInPictureAvailable;
+
+    if (showPictureInPicture && state.pictureInPictureActive) {
+      add(OverlayControlId::PictureInPicture, "Close PiP", true);
+    }
+    if (completeRange) {
+      add(OverlayControlId::EditRippleDelete, "Remove", false,
+          state.videoEdit.canRippleDelete);
+      add(OverlayControlId::EditTrim, "Keep only", false,
+          state.videoEdit.canTrim);
+    } else {
+      add(OverlayControlId::EditMarkIn, "Start", hasStart);
+      add(OverlayControlId::EditMarkOut, "End", hasEnd);
+    }
+    if (hasMarks) {
+      add(OverlayControlId::EditClearSelection, "Cancel", false);
+    }
     out.push_back(makePlayPauseSpec(state));
-    add(OverlayControlId::EditMarkIn, "In", false);
-    add(OverlayControlId::EditMarkOut, "Out", false);
-    add(OverlayControlId::EditRippleDelete, "Delete", false,
-        state.videoEdit.canRippleDelete);
-    add(OverlayControlId::EditTrim, "Trim", false,
-        state.videoEdit.canTrim);
     add(OverlayControlId::EditDone, "Done", false);
-    if (options.includePictureInPicture && state.pictureInPictureAvailable) {
-      add(OverlayControlId::PictureInPicture, "PiP",
-          state.pictureInPictureActive);
+    if (showPictureInPicture && !state.pictureInPictureActive) {
+      add(OverlayControlId::PictureInPicture, "PiP", false);
     }
     finish();
     return out;

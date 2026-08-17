@@ -92,18 +92,18 @@ class Selection {
   bool hasMarks() const { return inUs_.has_value() || outUs_.has_value(); }
   bool clear();
   bool clear(EditBoundary boundary);
-  void markIn(const Timeline& timeline, int64_t sourceUs);
+  void markIn(const Timeline& timeline, int64_t sourceUs,
+              int64_t minimumSelectionDurationUs = 1);
   void markOut(const Timeline& timeline, int64_t sourceFrameStartUs,
-               int64_t sourceFrameEndUs);
+               int64_t sourceFrameEndUs,
+               int64_t minimumSelectionDurationUs = 1);
   bool moveBoundary(const Timeline& timeline, EditBoundary boundary,
                     int64_t timelineUs,
                     int64_t minimumSelectionDurationUs);
 
-  // Ripple delete consumes an explicit two-sided range. Trim accepts either
-  // boundary independently and uses the current sequence edge for the side
-  // the editor did not mark.
+  // Both edit operations consume one explicit two-sided range. This keeps the
+  // range-selection tool independent from the operation chosen afterwards.
   std::optional<SourceRange> range() const;
-  std::optional<SourceRange> trimRange(const Timeline& timeline) const;
   std::optional<int64_t> inSourceUs() const { return inUs_; }
   std::optional<int64_t> outSourceUs() const { return outUs_; }
   std::optional<int64_t> outFrameSourceUs() const { return outFrameUs_; }

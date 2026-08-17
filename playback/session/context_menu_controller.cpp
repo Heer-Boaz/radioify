@@ -41,14 +41,24 @@ void ContextMenuController::refresh(
                     edit.hasEdits ? "Resume editing" : "Edit video"});
   } else {
     if (edit.inTimelineUs) {
-      next.push_back({playback_video_edit::Command::ClearIn, "Clear In"});
+      next.push_back(
+          {playback_video_edit::Command::ClearIn, "Clear selection start"});
     }
     if (edit.outTimelineUs) {
-      next.push_back({playback_video_edit::Command::ClearOut, "Clear Out"});
+      next.push_back(
+          {playback_video_edit::Command::ClearOut, "Clear selection end"});
     }
     if (edit.inTimelineUs && edit.outTimelineUs) {
       next.push_back({playback_video_edit::Command::ClearInAndOut,
-                      "Clear In and Out"});
+                      "Cancel selection"});
+      if (edit.canRippleDelete) {
+        next.push_back({playback_video_edit::Command::RippleDelete,
+                        "Remove selected section"});
+      }
+      if (edit.canTrim) {
+        next.push_back({playback_video_edit::Command::Trim,
+                        "Keep only selected section"});
+      }
     }
     if (edit.canToggleSmoothCut && edit.selectedCutTransition) {
       const bool smooth = edit.selectedCutTransition->kind ==

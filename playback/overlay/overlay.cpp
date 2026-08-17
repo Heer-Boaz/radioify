@@ -588,6 +588,8 @@ void renderVideoEditTimelineToTarget(
                                               editPrompt, width,
                                               progress);
   const Style keptStyle{styles.progressStart, styles.progressEmptyStyle.bg};
+  const Style alternateKeptStyle{styles.progressEnd,
+                                 styles.progressEmptyStyle.bg};
   const Style selectedStyle{styles.accentStyle.bg, styles.accentStyle.fg};
   const Style cutStyle{{255, 145, 96}, styles.progressEmptyStyle.bg};
   const Style playheadStyle{styles.baseStyle.bg, styles.baseStyle.fg};
@@ -597,14 +599,18 @@ void renderVideoEditTimelineToTarget(
         model.cells[static_cast<size_t>(cell)];
     const bool selected =
         kind == playback_video_edit::TimelineCellKind::Selected;
-    const wchar_t glyph = selected ? L'=' : L'─';
-    const Style& style = selected ? selectedStyle : keptStyle;
+    const bool alternate =
+        kind == playback_video_edit::TimelineCellKind::KeptAlternate;
+    const wchar_t glyph = selected ? L'=' : (alternate ? L'━' : L'─');
+    const Style& style = selected
+                             ? selectedStyle
+                             : (alternate ? alternateKeptStyle : keptStyle);
     target.writeChar(layout.progressBarX + cell, layout.progressBarY, glyph,
                      style);
   }
 
   for (const int cutCell : model.cutCells) {
-    target.writeChar(layout.progressBarX + cutCell, layout.progressBarY, L'|',
+    target.writeChar(layout.progressBarX + cutCell, layout.progressBarY, L'╫',
                      cutStyle);
   }
   for (const int cutCell : model.smoothCutCells) {
@@ -618,12 +624,12 @@ void renderVideoEditTimelineToTarget(
   }
   if (edit.active && model.inCell) {
     target.writeChar(layout.progressBarX + *model.inCell,
-                     layout.progressBarY, L'I',
+                     layout.progressBarY, L'[',
                      styles.accentStyle);
   }
   if (edit.active && model.outCell) {
     target.writeChar(layout.progressBarX + *model.outCell,
-                     layout.progressBarY, L'O',
+                     layout.progressBarY, L']',
                      styles.accentStyle);
   }
 

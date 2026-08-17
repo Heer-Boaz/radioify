@@ -71,7 +71,7 @@ WindowUiState buildPlaybackFramebufferUiState(
     bool audioOk, bool canPlayPrevious, bool canPlayNext, bool hasSubtitles,
     std::atomic<bool>& enableSubtitlesShared,
     std::atomic<int>& overlayControlHover,
-    const playback_overlay::PlaybackOsdSnapshot& osd, bool debugOverlay) {
+    const PlaybackFramebufferUiSnapshot& snapshot, bool debugOverlay) {
   const PlayerTimelineSnapshot timeline = player.timelineSnapshot();
   const int64_t clockUs = timeline.positionUs;
   double displaySec = 0.0;
@@ -123,17 +123,25 @@ WindowUiState buildPlaybackFramebufferUiState(
   overlayInputs.displaySec = displaySec;
   overlayInputs.totalSec = totalSec;
   overlayInputs.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
-  overlayInputs.osd = osd;
+  overlayInputs.osd = snapshot.osd;
   overlayInputs.paused = pausedNow;
   overlayInputs.pictureInPictureAvailable = videoWindow.IsOpen();
   overlayInputs.pictureInPictureActive =
       overlayInputs.pictureInPictureAvailable &&
       videoWindow.IsPictureInPicture();
   overlayInputs.subtitleRenderError = videoWindow.GetSubtitleRenderError();
+  overlayInputs.contextMenu = snapshot.contextMenu;
+  overlayInputs.videoEdit = snapshot.videoEdit;
+  if (overlayInputs.videoEdit.active) {
+    overlayInputs.videoEdit.playheadTimelineUs = timeline.positionUs;
+  }
+  overlayInputs.videoEditExport = snapshot.videoEditExport;
+  overlayInputs.videoEditPrompt = snapshot.videoEditPrompt;
   playback_overlay::PlaybackOverlayState overlayState =
       playback_overlay::buildPlaybackOverlayState(overlayInputs);
   WindowUiState ui = playback_overlay::buildWindowUiState(
       overlayState, overlayControlHover.load(std::memory_order_relaxed));
+  ui.timelinePreview = snapshot.timelinePreview;
   if (debugOverlay) {
     ui.debugLines.push_back(videoWindow.OutputColorDebugLine());
     ui.debugLines.push_back(

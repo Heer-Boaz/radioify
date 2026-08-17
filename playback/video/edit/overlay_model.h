@@ -11,6 +11,7 @@ namespace playback_video_edit {
 
 enum class TimelineCellKind : uint8_t {
   Kept,
+  KeptAlternate,
   Selected,
 };
 
