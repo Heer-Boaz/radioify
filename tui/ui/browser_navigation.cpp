@@ -140,27 +140,6 @@ bool BrowserNavigator::navigate(const BrowserLocation& target,
   return true;
 }
 
-bool BrowserNavigator::replace(const BrowserLocation& target,
-                               const std::string& initialName,
-                               const std::optional<BrowserState::EntryIdentity>&
-                                   selection) {
-  if (target == browser_.location) {
-    if (callbacks_.refresh) {
-      callbacks_.refresh(initialName);
-    }
-    if (selection && selectBrowserEntry(browser_, *selection)) {
-      requestBrowserSelectionReveal(browser_);
-    }
-    notifyChanged();
-    return true;
-  }
-  if (!activate(target, initialName, selection)) {
-    return false;
-  }
-  notifyChanged();
-  return true;
-}
-
 bool BrowserNavigator::restoreLocation(
     const BrowserState::Location& location) {
   if (!activate(location.route, {}, std::nullopt)) {

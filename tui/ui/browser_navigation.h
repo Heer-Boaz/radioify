@@ -36,10 +36,6 @@ class BrowserNavigator {
                 const std::string& initialName = {},
                 const std::optional<BrowserState::EntryIdentity>& selection =
                     std::nullopt);
-  bool replace(const BrowserLocation& target,
-               const std::string& initialName = {},
-               const std::optional<BrowserState::EntryIdentity>& selection =
-                   std::nullopt);
   bool restore(const BrowserState::Location& location);
   bool back();
   bool forward();

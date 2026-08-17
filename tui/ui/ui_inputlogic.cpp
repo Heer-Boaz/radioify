@@ -366,17 +366,16 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
     return true;
   };
 
-  auto applyPathSearch = [&]() {
-    if (!browser.pathSearchActive) return;
+  auto commitPathSearch = [&]() {
     std::filesystem::path target;
-    if (!resolvePathSearchTarget(browser.pathSearch, target)) return;
-    if (browser.location.kind != BrowserLocationKind::Directory ||
-        target != browser.location.path) {
-      navigator.replace(browserDirectoryLocation(target));
+    if (!resolvePathSearchTarget(browser.pathSearch, target)) return false;
+    if (navigator.navigate(browserDirectoryLocation(target))) {
+      setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
       breadcrumbHover = -1;
-    } else {
       dirty = true;
+      return true;
     }
+    return false;
   };
 
   if (ev.type == InputEvent::Type::Resize) {
@@ -433,25 +432,25 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
     }
 
     if (browserInteractionEnabled && browser.pathSearchActive) {
-      if (key.vk == VK_ESCAPE || key.vk == VK_RETURN) {
+      if (key.vk == VK_ESCAPE) {
         setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
         dirty = true;
+        return;
+      }
+      if (key.vk == VK_RETURN) {
+        commitPathSearch();
         return;
       }
       if (backspaceKey) {
         if (!browser.pathSearch.empty()) {
           browser.pathSearch.pop_back();
-          if (browser.pathSearch.empty()) {
-            dirty = true;
-          } else {
-            applyPathSearch();
-          }
+          dirty = true;
         }
         return;
       }
       if (key.ch >= 32) {
         browser.pathSearch.push_back(key.ch);
-        applyPathSearch();
+        dirty = true;
         return;
       }
       return;
