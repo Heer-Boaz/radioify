@@ -16,10 +16,7 @@ bool expect(bool condition, const char* message) {
 
 FileEntry fileEntry(const std::string& name, const std::filesystem::path& path,
                     bool isDir = false, int trackIndex = -1) {
-  FileEntry entry;
-  entry.name = name;
-  entry.path = path;
-  entry.isDir = isDir;
+  FileEntry entry{name, path, isDir};
   entry.trackIndex = trackIndex;
   return entry;
 }
@@ -47,6 +44,14 @@ int main() {
   ok &= expect(
       browserEntryMatchesPlaybackTarget(files[0], {"C:/Media/./A.flac", -1}),
       "lexically equivalent playback paths must match");
+#ifdef _WIN32
+  ok &= expect(browserEntryMatchesPlaybackTarget(
+                   files[0], {"c:\\media\\a.FLAC", -1}),
+               "Windows playback matching must use ordinal path identity");
+  ok &= expect(browserDirectoryLocation("C:/Media/") ==
+                   browserDirectoryLocation("c:\\media"),
+               "Windows routes must ignore casing and trailing separators");
+#endif
 
   const PlaybackTarget playingContainerTrack{songA, 3};
   ok &=
@@ -103,6 +108,19 @@ int main() {
   applyBrowserViewportRestore(browser, verticalLayout(30, 5));
   ok &= expect(browser.selected == 23 && browser.scrollRow == 19,
                "the departed folder must be visible after Up navigation");
+
+#ifdef _WIN32
+  BrowserState caseChangedBrowser;
+  caseChangedBrowser.location = browserDirectoryLocation("C:/Media");
+  caseChangedBrowser.entries = {
+      fileEntry("Album", "C:/Media/Album", true)};
+  const BrowserState::EntryIdentity caseStableIdentity =
+      browserEntryIdentity(caseChangedBrowser.entries.front());
+  caseChangedBrowser.entries = {
+      fileEntry("ALBUM", "c:\\media\\album", true)};
+  ok &= expect(selectBrowserEntry(caseChangedBrowser, caseStableIdentity),
+               "selection restore must survive Windows path casing changes");
+#endif
 
   browser.viewMode = BrowserState::ViewMode::ListOnly;
   browser.selected = 23;

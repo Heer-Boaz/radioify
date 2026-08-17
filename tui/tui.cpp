@@ -48,6 +48,7 @@
 #include "m4adecoder.h"
 #include "miniaudio.h"
 #include "optionsbrowser.h"
+#include "path_identity.h"
 #include "playback_dialog.h"
 #include "calibration_report.h"
 #include "radio.h"
@@ -352,6 +353,7 @@ static void refreshBrowser(BrowserState& state,
       FileEntry entry;
       entry.name = formatTrackLabel(track, digits);
       entry.path = state.location.path;
+      entry.pathIdentity = state.location.pathIdentity;
       entry.isDir = false;
       entry.trackIndex = track.index;
       state.entries.push_back(std::move(entry));
@@ -519,7 +521,7 @@ static std::optional<int> findImageViewerEntryIndex(
     const BrowserState& browser, const std::filesystem::path& currentFile) {
   for (int i = 0; i < static_cast<int>(browser.entries.size()); ++i) {
     const auto& entry = browser.entries[static_cast<size_t>(i)];
-    if (isImageViewerEntry(entry) && entry.path == currentFile) {
+    if (isImageViewerEntry(entry) && samePath(entry.path, currentFile)) {
       return i;
     }
   }

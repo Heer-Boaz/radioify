@@ -2,30 +2,16 @@
 
 namespace {
 
-std::filesystem::path comparablePlaybackPath(
-    const std::filesystem::path& path) {
-  return path.lexically_normal();
+PathIdentity entryPathIdentity(const FileEntry& entry) {
+  return !entry.pathIdentity.empty() || entry.path.empty()
+             ? entry.pathIdentity
+             : makePathIdentity(entry.path);
 }
 
-bool samePlaybackPath(const std::filesystem::path& left,
-                      const std::filesystem::path& right) {
-  if (left == right) {
-    return true;
-  }
-  if (left.filename() != right.filename()) {
-    return false;
-  }
-  return comparablePlaybackPath(left) == comparablePlaybackPath(right);
-}
-
-}  // namespace
-
-bool browserEntryMatchesPlaybackTarget(const FileEntry& entry,
-                                       const PlaybackTarget& target) {
-  if (target.file.empty() || entry.isSectionHeader || entry.isDir) {
-    return false;
-  }
-  if (!samePlaybackPath(entry.path, target.file)) {
+bool entryMatchesTarget(const FileEntry& entry, const PlaybackTarget& target,
+                        const PathIdentity& targetIdentity) {
+  if (target.file.empty() || entry.path.empty() || entry.isSectionHeader ||
+      entry.isDir || entryPathIdentity(entry) != targetIdentity) {
     return false;
   }
 
@@ -35,10 +21,21 @@ bool browserEntryMatchesPlaybackTarget(const FileEntry& entry,
   return entry.trackIndex < 0 || entry.trackIndex == target.trackIndex;
 }
 
+}  // namespace
+
+bool browserEntryMatchesPlaybackTarget(const FileEntry& entry,
+                                       const PlaybackTarget& target) {
+  return entryMatchesTarget(entry, target, makePathIdentity(target.file));
+}
+
 int findBrowserPlaybackTargetEntry(const std::vector<FileEntry>& entries,
                                    const PlaybackTarget& target) {
+  if (target.file.empty()) {
+    return -1;
+  }
+  const PathIdentity targetIdentity = makePathIdentity(target.file);
   for (size_t i = 0; i < entries.size(); ++i) {
-    if (browserEntryMatchesPlaybackTarget(entries[i], target)) {
+    if (entryMatchesTarget(entries[i], target, targetIdentity)) {
       return static_cast<int>(i);
     }
   }

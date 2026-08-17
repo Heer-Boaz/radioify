@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <utility>
 
+#include "path_identity.h"
+
 enum class BrowserLocationKind {
   Directory,
   TrackBrowser,
@@ -21,6 +23,7 @@ enum class BrowserOptionsPage {
 struct BrowserLocation {
   BrowserLocationKind kind = BrowserLocationKind::Directory;
   std::filesystem::path path;
+  PathIdentity pathIdentity;
   BrowserOptionsPage optionsPage = BrowserOptionsPage::Root;
   int trackIndex = -1;
   uint32_t deviceId = 0;
@@ -29,6 +32,7 @@ struct BrowserLocation {
 inline BrowserLocation browserDirectoryLocation(std::filesystem::path dir) {
   BrowserLocation location;
   location.path = std::move(dir);
+  location.pathIdentity = makePathIdentity(location.path);
   return location;
 }
 
@@ -36,6 +40,7 @@ inline BrowserLocation browserTrackLocation(std::filesystem::path file) {
   BrowserLocation location;
   location.kind = BrowserLocationKind::TrackBrowser;
   location.path = std::move(file);
+  location.pathIdentity = makePathIdentity(location.path);
   return location;
 }
 
@@ -46,6 +51,7 @@ inline BrowserLocation browserOptionsLocation(
   BrowserLocation location;
   location.kind = BrowserLocationKind::OptionsBrowser;
   location.path = std::move(file);
+  location.pathIdentity = makePathIdentity(location.path);
   location.optionsPage = page;
   location.trackIndex = trackIndex;
   location.deviceId = deviceId;
@@ -54,7 +60,7 @@ inline BrowserLocation browserOptionsLocation(
 
 inline bool operator==(const BrowserLocation& left,
                        const BrowserLocation& right) {
-  if (left.kind != right.kind || left.path != right.path) {
+  if (left.kind != right.kind || left.pathIdentity != right.pathIdentity) {
     return false;
   }
   if (left.kind != BrowserLocationKind::OptionsBrowser) {

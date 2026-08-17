@@ -15,11 +15,13 @@ struct FileEntry {
             bool directory, bool sectionHeader = false)
       : name(std::move(entryName)),
         path(std::move(entryPath)),
+        pathIdentity(makePathIdentity(path)),
         isDir(directory),
         isSectionHeader(sectionHeader) {}
 
   std::string name;
   std::filesystem::path path;
+  PathIdentity pathIdentity;
   bool isDir = false;
   bool isSectionHeader = false;
   int trackIndex = -1;
@@ -35,6 +37,7 @@ struct FileEntry {
 struct BrowserState {
   struct EntryIdentity {
     std::filesystem::path path;
+    PathIdentity pathIdentity;
     std::string name;
     bool isDir = false;
     int trackIndex = -1;

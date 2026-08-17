@@ -381,7 +381,7 @@ void buildInstrumentEntries(std::vector<FileEntry>& entries,
   int trackIndex = std::max(0, location.trackIndex);
   if (!auditionActive) {
     std::filesystem::path nowPlaying = audioGetNowPlaying();
-    if (!nowPlaying.empty() && nowPlaying == location.path) {
+    if (!nowPlaying.empty() && samePath(nowPlaying, location.path)) {
       int currentTrack = audioGetTrackIndex();
       if (currentTrack >= 0) {
         trackIndex = currentTrack;
@@ -389,7 +389,7 @@ void buildInstrumentEntries(std::vector<FileEntry>& entries,
     }
   }
 
-  if (gOptionsBrowser.instrumentFile != location.path ||
+  if (!samePath(gOptionsBrowser.instrumentFile, location.path) ||
       gOptionsBrowser.instrumentTrack != trackIndex) {
     gOptionsBrowser.instruments.clear();
     std::string error;
@@ -440,7 +440,7 @@ void buildVgmMetadataEntries(std::vector<FileEntry>& entries,
 
   if (targetForPath(location.path) != OptionsTarget::Vgm) return;
 
-  if (gOptionsBrowser.vgmMetadataFile != location.path) {
+  if (!samePath(gOptionsBrowser.vgmMetadataFile, location.path)) {
     gOptionsBrowser.vgmMetadata.clear();
     std::string error;
     bool ok = audioScanVgmMetadata(location.path,
@@ -478,7 +478,7 @@ void buildVgmDeviceEntries(std::vector<FileEntry>& entries,
 
   if (targetForPath(location.path) != OptionsTarget::Vgm) return;
 
-  if (gOptionsBrowser.vgmDevicesFile != location.path) {
+  if (!samePath(gOptionsBrowser.vgmDevicesFile, location.path)) {
     gOptionsBrowser.vgmDevices.clear();
     std::string error;
     bool ok =
@@ -600,12 +600,12 @@ std::optional<BrowserLocation> optionsBrowserOpenLocation(
     const int idx = std::clamp(
         browser.selected, 0, static_cast<int>(browser.entries.size()) - 1);
     const auto& entry = browser.entries[static_cast<size_t>(idx)];
-    if (!entry.isDir && entry.path == file && entry.trackIndex >= 0) {
+    if (!entry.isDir && samePath(entry.path, file) && entry.trackIndex >= 0) {
       trackIndex = entry.trackIndex;
     }
   }
   const std::filesystem::path nowPlaying = audioGetNowPlaying();
-  if (!nowPlaying.empty() && nowPlaying == file) {
+  if (!nowPlaying.empty() && samePath(nowPlaying, file)) {
     const int currentTrack = audioGetTrackIndex();
     if (currentTrack >= 0) {
       trackIndex = currentTrack;

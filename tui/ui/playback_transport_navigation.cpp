@@ -34,7 +34,7 @@ bool Navigator::syncBrowserToPlaybackTarget(const PlaybackTarget& target) {
     const std::filesystem::path trackPath =
         normalizeTrackBrowserPath(target.file);
     const bool requiresRefresh =
-        !isTrackBrowserActive(browser_) || browser_.location.path != trackPath;
+        browser_.location != browserTrackLocation(trackPath);
     if (requiresRefresh && !activateTrackBrowser(target.file)) {
       return false;
     }
@@ -53,8 +53,7 @@ bool Navigator::syncBrowserToPlaybackTarget(const PlaybackTarget& target) {
       target.file.has_parent_path() ? target.file.parent_path()
                                     : std::filesystem::path(".");
   const bool requiresRefresh =
-      browser_.location.kind != BrowserLocationKind::Directory ||
-      browser_.location.path != targetDir;
+      browser_.location != browserDirectoryLocation(targetDir);
   if (requiresRefresh) {
     if (!browserNavigator_.navigate(
             browserDirectoryLocation(targetDir),

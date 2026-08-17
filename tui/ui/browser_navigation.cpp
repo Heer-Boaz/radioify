@@ -7,10 +7,22 @@
 
 namespace {
 
+const PathIdentity& cachedPathIdentity(const FileEntry& entry,
+                                       PathIdentity& fallback) {
+  if (!entry.pathIdentity.empty() || entry.path.empty()) {
+    return entry.pathIdentity;
+  }
+  fallback = makePathIdentity(entry.path);
+  return fallback;
+}
+
 bool matchesIdentity(const FileEntry& entry,
                      const BrowserState::EntryIdentity& identity) {
+  PathIdentity fallback;
   if (entry.isSectionHeader || entry.isDir != identity.isDir ||
-      entry.trackIndex != identity.trackIndex || entry.path != identity.path) {
+      entry.trackIndex != identity.trackIndex ||
+      entry.path.empty() != identity.path.empty() ||
+      cachedPathIdentity(entry, fallback) != identity.pathIdentity) {
     return false;
   }
   return !entry.path.empty() || entry.name == identity.name;
@@ -25,6 +37,9 @@ int rowFromIndex(int idx, const GridLayout& layout) {
 BrowserState::EntryIdentity browserEntryIdentity(const FileEntry& entry) {
   BrowserState::EntryIdentity identity;
   identity.path = entry.path;
+  identity.pathIdentity = entry.pathIdentity.empty() && !entry.path.empty()
+                              ? makePathIdentity(entry.path)
+                              : entry.pathIdentity;
   identity.name = entry.name;
   identity.isDir = entry.isDir;
   identity.trackIndex = entry.trackIndex;
