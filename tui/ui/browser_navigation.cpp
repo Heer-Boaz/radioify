@@ -32,6 +32,19 @@ int rowFromIndex(int idx, const GridLayout& layout) {
   return idx / std::max(1, layout.cols);
 }
 
+bool recordNavigation(
+    std::vector<BrowserState::NavigationHistoryEntry>& backHistory,
+    std::vector<BrowserState::NavigationHistoryEntry>& forwardHistory,
+    const BrowserState::Location& from, const BrowserState::Location& to) {
+  if (from.route == to.route) {
+    return false;
+  }
+
+  backHistory.push_back({from, to});
+  forwardHistory.clear();
+  return true;
+}
+
 }  // namespace
 
 BrowserState::EntryIdentity browserEntryIdentity(const FileEntry& entry) {
@@ -94,13 +107,8 @@ bool restoreBrowserLocation(BrowserState& browser,
 bool recordBrowserNavigation(BrowserState& browser,
                              const BrowserState::Location& from,
                              const BrowserState::Location& to) {
-  if (from.route == to.route) {
-    return false;
-  }
-
-  browser.backHistory.push_back({from, to});
-  browser.forwardHistory.clear();
-  return true;
+  return recordNavigation(browser.backHistory, browser.forwardHistory, from,
+                          to);
 }
 
 BrowserNavigator::BrowserNavigator(BrowserState& browser, Callbacks callbacks)
@@ -132,6 +140,60 @@ bool BrowserNavigator::activate(const BrowserLocation& target,
   return true;
 }
 
+bool BrowserNavigator::beginContext(
+    const BrowserLocation& target, const std::string& initialName,
+    const std::optional<BrowserState::EntryIdentity>& selection) {
+  if (browser_.navigationContext ||
+      !browserLocationIsContextual(target) ||
+      browserLocationIsContextual(browser_.location)) {
+    return false;
+  }
+
+  const BrowserState::Location origin = captureBrowserLocation(browser_);
+  if (!activate(target, initialName, selection)) {
+    return false;
+  }
+
+  BrowserState::NavigationContext context;
+  context.kind = target.kind;
+  context.origin = origin;
+  browser_.navigationContext = std::move(context);
+  notifyChanged();
+  return true;
+}
+
+bool BrowserNavigator::navigateFromContext(
+    const BrowserLocation& target, const std::string& initialName,
+    const std::optional<BrowserState::EntryIdentity>& selection) {
+  if (!browser_.navigationContext) {
+    return false;
+  }
+
+  if (target.kind == browser_.navigationContext->kind) {
+    const BrowserState::Location from = captureBrowserLocation(browser_);
+    if (!activate(target, initialName, selection)) {
+      return false;
+    }
+    BrowserState::NavigationContext& context = *browser_.navigationContext;
+    recordNavigation(context.backHistory, context.forwardHistory, from,
+                     captureBrowserLocation(browser_));
+    notifyChanged();
+    return true;
+  }
+
+  const BrowserState::Location origin = browser_.navigationContext->origin;
+  if (!activate(target, initialName, selection)) {
+    return false;
+  }
+  if (browser_.location == origin.route && initialName.empty() && !selection) {
+    restoreBrowserLocation(browser_, origin);
+  }
+  browser_.navigationContext.reset();
+  recordBrowserNavigation(browser_, origin, captureBrowserLocation(browser_));
+  notifyChanged();
+  return true;
+}
+
 bool BrowserNavigator::navigate(const BrowserLocation& target,
                                 const std::string& initialName,
                                 const std::optional<BrowserState::EntryIdentity>&
@@ -145,6 +207,13 @@ bool BrowserNavigator::navigate(const BrowserLocation& target,
     }
     notifyChanged();
     return true;
+  }
+  if (browser_.navigationContext) {
+    return navigateFromContext(target, initialName, selection);
+  }
+  if (browserLocationIsContextual(target) &&
+      !browserLocationIsContextual(browser_.location)) {
+    return beginContext(target, initialName, selection);
   }
   const BrowserState::Location from = captureBrowserLocation(browser_);
   if (!activate(target, initialName, selection)) {
@@ -168,44 +237,75 @@ bool BrowserNavigator::restore(const BrowserState::Location& location) {
   if (!restoreLocation(location)) {
     return false;
   }
+  if (browser_.navigationContext &&
+      location.route.kind != browser_.navigationContext->kind) {
+    browser_.navigationContext.reset();
+  }
+  notifyChanged();
+  return true;
+}
+
+bool BrowserNavigator::traverseHistory(
+    std::vector<BrowserState::NavigationHistoryEntry>& source,
+    std::vector<BrowserState::NavigationHistoryEntry>& destination,
+    bool backward) {
+  if (source.empty()) {
+    return false;
+  }
+
+  BrowserState::NavigationHistoryEntry entry = source.back();
+  const BrowserState::Location current = captureBrowserLocation(browser_);
+  const BrowserState::Location& target = backward ? entry.from : entry.to;
+  if (!restoreLocation(target)) {
+    return false;
+  }
+
+  source.pop_back();
+  if (backward) {
+    entry.to = current;
+  } else {
+    entry.from = current;
+  }
+  destination.push_back(std::move(entry));
   notifyChanged();
   return true;
 }
 
 bool BrowserNavigator::back() {
-  if (browser_.backHistory.empty()) {
+  if (browser_.navigationContext) {
+    BrowserState::NavigationContext& context = *browser_.navigationContext;
+    if (context.backHistory.empty()) {
+      return closeContext();
+    }
+    return traverseHistory(context.backHistory, context.forwardHistory, true);
+  }
+  return traverseHistory(browser_.backHistory, browser_.forwardHistory, true);
+}
+
+bool BrowserNavigator::forward() {
+  if (browser_.navigationContext) {
+    BrowserState::NavigationContext& context = *browser_.navigationContext;
+    return traverseHistory(context.forwardHistory, context.backHistory, false);
+  }
+  return traverseHistory(browser_.forwardHistory, browser_.backHistory, false);
+}
+
+bool BrowserNavigator::closeContext() {
+  if (!browser_.navigationContext) {
     return false;
   }
 
-  BrowserState::NavigationHistoryEntry entry = browser_.backHistory.back();
-  const BrowserState::Location current = captureBrowserLocation(browser_);
-  if (!restoreLocation(entry.from)) {
+  const BrowserState::Location origin = browser_.navigationContext->origin;
+  if (!restoreLocation(origin)) {
     return false;
   }
-
-  browser_.backHistory.pop_back();
-  entry.to = current;
-  browser_.forwardHistory.push_back(std::move(entry));
+  browser_.navigationContext.reset();
   notifyChanged();
   return true;
 }
 
-bool BrowserNavigator::forward() {
-  if (browser_.forwardHistory.empty()) {
-    return false;
-  }
-
-  BrowserState::NavigationHistoryEntry entry = browser_.forwardHistory.back();
-  const BrowserState::Location current = captureBrowserLocation(browser_);
-  if (!restoreLocation(entry.to)) {
-    return false;
-  }
-
-  browser_.forwardHistory.pop_back();
-  entry.from = current;
-  browser_.backHistory.push_back(std::move(entry));
-  notifyChanged();
-  return true;
+bool BrowserNavigator::contextActive() const {
+  return browser_.navigationContext.has_value();
 }
 
 void BrowserNavigator::reload(const std::string& initialName) {

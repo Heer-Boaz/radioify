@@ -218,26 +218,102 @@ int main() {
   BrowserState routedBrowser;
   routedBrowser.location = browserDirectoryLocation("C:/Media");
   routedBrowser.entries = files;
+  routedBrowser.selected = 1;
+  routedBrowser.scrollRow = 4;
   int activated = 0;
   int refreshed = 0;
+  bool rejectRoutedDirectory = false;
   BrowserNavigator::Callbacks navigatorCallbacks;
-  navigatorCallbacks.activate = [&](const BrowserLocation&) {
+  navigatorCallbacks.activate = [&](const BrowserLocation& location) {
     ++activated;
-    return true;
+    return location.kind != BrowserLocationKind::Directory ||
+           !rejectRoutedDirectory;
   };
   navigatorCallbacks.refresh = [&](const std::string&) { ++refreshed; };
   BrowserNavigator navigator(routedBrowser, std::move(navigatorCallbacks));
+  const BrowserLocation otherDirectory = browserDirectoryLocation("C:/Other");
+  ok &= expect(navigator.navigate(otherDirectory) && navigator.back(),
+               "the main navigator must create a Forward destination");
+  routedBrowser.selected = 1;
+  routedBrowser.scrollRow = 4;
+  const BrowserState::Location contextOrigin =
+      captureBrowserLocation(routedBrowser);
+  const size_t mainBackSize = routedBrowser.backHistory.size();
+  const size_t mainForwardSize = routedBrowser.forwardHistory.size();
+
+  const BrowserLocation optionsRoot =
+      browserOptionsLocation(songA, 3, BrowserOptionsPage::Root);
+  const int activatedBeforeContext = activated;
+  const int refreshedBeforeContext = refreshed;
+  ok &= expect(navigator.navigate(optionsRoot),
+               "a contextual route must activate successfully");
+  ok &= expect(routedBrowser.location == optionsRoot &&
+                   navigator.contextActive() &&
+                   routedBrowser.backHistory.size() == mainBackSize &&
+                   routedBrowser.forwardHistory.size() == mainForwardSize &&
+                   activated == activatedBeforeContext + 1 &&
+                   refreshed == refreshedBeforeContext + 1,
+               "opening a context must preserve the main history");
+
   const BrowserLocation optionsLocation = browserOptionsLocation(
       songA, 3, BrowserOptionsPage::VgmDevices);
-  ok &= expect(navigator.navigate(optionsLocation),
-               "the navigator must activate a typed content route");
-  ok &= expect(routedBrowser.location == optionsLocation && activated == 1 &&
-                   refreshed == 1 && routedBrowser.backHistory.size() == 1,
-               "one navigation owner must update route, content and history");
+  ok &= expect(navigator.navigate(optionsLocation) &&
+                   routedBrowser.navigationContext &&
+                   routedBrowser.navigationContext->backHistory.size() == 1 &&
+                   routedBrowser.backHistory.size() == mainBackSize,
+               "context navigation must use its own Back stack");
   const BrowserLocation deviceLocation = browserOptionsLocation(
       songA, 3, BrowserOptionsPage::VgmDevice, 0x2612);
   ok &= expect(optionsLocation != deviceLocation,
                "typed options pages must be distinct browser locations");
+  ok &= expect(navigator.navigate(deviceLocation) && navigator.back() &&
+                   routedBrowser.location == optionsLocation &&
+                   routedBrowser.navigationContext &&
+                   routedBrowser.navigationContext->forwardHistory.size() ==
+                       1 &&
+                   navigator.forward() &&
+                   routedBrowser.location == deviceLocation,
+               "Back and Forward must stay inside the active context");
+
+  const std::optional<BrowserLocation> deviceParent =
+      browserOptionsParentLocation(deviceLocation);
+  ok &= expect(deviceParent && *deviceParent == optionsLocation &&
+                   navigator.navigate(*deviceParent) &&
+                   routedBrowser.location == optionsLocation,
+               "Options Up must follow the typed parent route");
+  const std::optional<BrowserLocation> optionsParent =
+      browserOptionsParentLocation(optionsLocation);
+  ok &= expect(optionsParent && *optionsParent == optionsRoot &&
+                   navigator.navigate(*optionsParent) &&
+                   !browserOptionsParentLocation(optionsRoot),
+               "the Options root must be the top of the context hierarchy");
+
+  rejectRoutedDirectory = true;
+  ok &= expect(!navigator.closeContext() && navigator.contextActive() &&
+                   routedBrowser.location == optionsRoot &&
+                   routedBrowser.backHistory.size() == mainBackSize &&
+                   routedBrowser.forwardHistory.size() == mainForwardSize,
+               "a rejected context close must preserve both contexts");
+  rejectRoutedDirectory = false;
+  ok &= expect(navigator.closeContext() && !navigator.contextActive() &&
+                   routedBrowser.location == contextOrigin.route &&
+                   routedBrowser.selected == 1 &&
+                   routedBrowser.scrollRow == 4 &&
+                   routedBrowser.backHistory.size() == mainBackSize &&
+                   routedBrowser.forwardHistory.size() == mainForwardSize,
+               "closing a context must atomically restore its origin");
+
+  ok &= expect(navigator.navigate(optionsRoot) && navigator.back() &&
+                   !navigator.contextActive() &&
+                   routedBrowser.location == contextOrigin.route,
+               "Back at a context root must close to the origin");
+  ok &= expect(navigator.navigate(optionsRoot) &&
+                   navigator.navigate(otherDirectory) &&
+                   !navigator.contextActive() &&
+                   routedBrowser.location == otherDirectory &&
+                   routedBrowser.backHistory.size() == mainBackSize + 1 &&
+                   routedBrowser.forwardHistory.empty(),
+               "leaving a context must record one main navigation from its origin");
 
   BrowserState rejectedBrowser;
   rejectedBrowser.location = browserDirectoryLocation("C:/Media");

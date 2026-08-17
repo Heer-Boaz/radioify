@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <utility>
 
 #include "path_identity.h"
@@ -56,6 +57,32 @@ inline BrowserLocation browserOptionsLocation(
   location.trackIndex = trackIndex;
   location.deviceId = deviceId;
   return location;
+}
+
+inline bool browserLocationIsContextual(const BrowserLocation& location) {
+  return location.kind == BrowserLocationKind::OptionsBrowser;
+}
+
+inline std::optional<BrowserLocation> browserOptionsParentLocation(
+    const BrowserLocation& location) {
+  if (location.kind != BrowserLocationKind::OptionsBrowser) {
+    return std::nullopt;
+  }
+
+  BrowserOptionsPage parent = BrowserOptionsPage::Root;
+  switch (location.optionsPage) {
+    case BrowserOptionsPage::Root:
+      return std::nullopt;
+    case BrowserOptionsPage::Instruments:
+    case BrowserOptionsPage::VgmDevices:
+    case BrowserOptionsPage::VgmMetadata:
+      parent = BrowserOptionsPage::Root;
+      break;
+    case BrowserOptionsPage::VgmDevice:
+      parent = BrowserOptionsPage::VgmDevices;
+      break;
+  }
+  return browserOptionsLocation(location.path, location.trackIndex, parent);
 }
 
 inline bool operator==(const BrowserLocation& left,

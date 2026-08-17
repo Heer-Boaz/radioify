@@ -1768,8 +1768,7 @@ int runTui(Options o) {
   };
   callbacks.onToggleOptions = [&]() {
     if (optionsBrowserIsActive(browser)) {
-      while (optionsBrowserIsActive(browser) && browserNavigator.back()) {
-      }
+      browserNavigator.closeContext();
       return;
     }
     if (const auto location = optionsBrowserOpenLocation(browser)) {

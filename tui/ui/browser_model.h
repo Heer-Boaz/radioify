@@ -51,6 +51,12 @@ struct BrowserState {
     Location from;
     Location to;
   };
+  struct NavigationContext {
+    BrowserLocationKind kind = BrowserLocationKind::Directory;
+    Location origin;
+    std::vector<NavigationHistoryEntry> backHistory;
+    std::vector<NavigationHistoryEntry> forwardHistory;
+  };
   enum class ViewportRestoreMode {
     None,
     RevealSelection,
@@ -79,6 +85,7 @@ struct BrowserState {
   std::string filterBackup;
   std::string pathSearch;
   bool pathSearchActive = false;
+  std::optional<NavigationContext> navigationContext;
   std::vector<NavigationHistoryEntry> backHistory;
   std::vector<NavigationHistoryEntry> forwardHistory;
   ViewportRestoreMode viewportRestoreMode = ViewportRestoreMode::None;

@@ -39,12 +39,24 @@ class BrowserNavigator {
   bool restore(const BrowserState::Location& location);
   bool back();
   bool forward();
+  bool closeContext();
+  bool contextActive() const;
   void reload(const std::string& initialName = {});
 
  private:
   bool activate(const BrowserLocation& target,
                 const std::string& initialName,
                 const std::optional<BrowserState::EntryIdentity>& selection);
+  bool beginContext(
+      const BrowserLocation& target, const std::string& initialName,
+      const std::optional<BrowserState::EntryIdentity>& selection);
+  bool navigateFromContext(
+      const BrowserLocation& target, const std::string& initialName,
+      const std::optional<BrowserState::EntryIdentity>& selection);
+  bool traverseHistory(
+      std::vector<BrowserState::NavigationHistoryEntry>& source,
+      std::vector<BrowserState::NavigationHistoryEntry>& destination,
+      bool backward);
   bool restoreLocation(const BrowserState::Location& location);
   void notifyChanged();
 

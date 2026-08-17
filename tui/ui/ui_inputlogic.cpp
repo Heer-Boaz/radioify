@@ -280,9 +280,12 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
     if (navigated) breadcrumbHover = -1;
     return navigated;
   };
-  auto navigateUpWithHistory = [&]() {
+  auto navigateUp = [&]() {
     if (optionsBrowserIsActive(browser)) {
-      const bool navigated = navigator.back();
+      const std::optional<BrowserLocation> parent =
+          browserOptionsParentLocation(browser.location);
+      const bool navigated = parent ? navigator.navigate(*parent)
+                                    : navigator.closeContext();
       if (navigated) breadcrumbHover = -1;
       return navigated;
     }
@@ -544,7 +547,7 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       return;
     }
     if (backspaceKey) {
-      navigateUpWithHistory();
+      navigateUp();
       return;
     }
     if (key.vk == VK_RETURN) {
@@ -560,10 +563,10 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
           return;
         }
         if (pick.isDir) {
-          if (pick.name == "..") {
-            navigateUpWithHistory();
-          } else if (pick.targetLocation) {
+          if (pick.targetLocation) {
             navigator.navigate(*pick.targetLocation);
+          } else if (pick.name == "..") {
+            navigateUp();
           } else {
             navigateDirectoryWithHistory(pick.path);
           }
@@ -825,10 +828,10 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       }
       const auto& pick = browser.entries[static_cast<size_t>(browser.selected)];
       if (pick.isDir) {
-        if (pick.name == "..") {
-          navigateUpWithHistory();
-        } else if (pick.targetLocation) {
+        if (pick.targetLocation) {
           navigator.navigate(*pick.targetLocation);
+        } else if (pick.name == "..") {
+          navigateUp();
         } else {
           navigateDirectoryWithHistory(pick.path);
         }
