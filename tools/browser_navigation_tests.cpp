@@ -122,14 +122,24 @@ int main() {
   const BrowserState::Location parentLocation =
       captureBrowserLocation(historyBrowser);
 
-  historyBrowser.location = browserTrackLocation(songA);
-  historyBrowser.entries = tracks;
-  historyBrowser.selected = 0;
-  historyBrowser.scrollRow = 0;
-  BrowserState::Location trackBrowserLocation =
-      captureBrowserLocation(historyBrowser);
-  ok &= expect(recordBrowserNavigation(historyBrowser, parentLocation,
-                                       trackBrowserLocation),
+  bool rejectDirectory = false;
+  bool rejectTracks = false;
+  BrowserNavigator::Callbacks historyCallbacks;
+  historyCallbacks.activate = [&](const BrowserLocation& location) {
+    return (location.kind != BrowserLocationKind::Directory ||
+            !rejectDirectory) &&
+           (location.kind != BrowserLocationKind::TrackBrowser ||
+            !rejectTracks);
+  };
+  historyCallbacks.refresh = [&](const std::string&) {
+    historyBrowser.entries =
+        historyBrowser.location.kind == BrowserLocationKind::TrackBrowser
+            ? tracks
+            : files;
+  };
+  BrowserNavigator historyNavigator(historyBrowser,
+                                    std::move(historyCallbacks));
+  ok &= expect(historyNavigator.navigate(browserTrackLocation(songA)),
                "a real location change must create one history entry");
   ok &= expect(historyBrowser.backHistory.size() == 1 &&
                    historyBrowser.forwardHistory.empty(),
@@ -137,36 +147,48 @@ int main() {
 
   historyBrowser.selected = 1;
   historyBrowser.scrollRow = 6;
-  BrowserState::Location currentTrackLocation =
+  const BrowserState::Location trackBrowserLocation =
       captureBrowserLocation(historyBrowser);
-  const std::optional<BrowserState::Location> backTarget =
-      browserHistoryBack(historyBrowser, currentTrackLocation);
-  ok &= expect(backTarget && backTarget->route == parentLocation.route &&
-                   backTarget->selectedEntry &&
-                   backTarget->selectedEntry->path == songB &&
-                   backTarget->scrollRow == 4,
-               "Back must return the exact source location");
+  ok &= expect(historyNavigator.back() &&
+                   historyBrowser.location == parentLocation.route &&
+                   historyBrowser.selected == 1 &&
+                   historyBrowser.scrollRow == 4 &&
+                   historyBrowser.backHistory.empty() &&
+                   historyBrowser.forwardHistory.size() == 1,
+               "Back must atomically restore the exact source location");
 
-  historyBrowser.location = parentLocation.route;
-  historyBrowser.entries = files;
-  historyBrowser.selected = 1;
-  historyBrowser.scrollRow = 4;
-  const std::optional<BrowserState::Location> forwardTarget =
-      browserHistoryForward(historyBrowser,
-                            captureBrowserLocation(historyBrowser));
-  ok &= expect(
-      forwardTarget &&
-          forwardTarget->route.kind == BrowserLocationKind::TrackBrowser &&
-          forwardTarget->route.path == songA && forwardTarget->selectedEntry &&
-          forwardTarget->selectedEntry->trackIndex == 3 &&
-          forwardTarget->scrollRow == 6,
-      "Forward must restore the destination as it was left");
-  if (forwardTarget) {
-    ok &=
-        expect(!recordBrowserNavigation(historyBrowser, *forwardTarget,
-                                        *forwardTarget),
+  ok &= expect(historyNavigator.forward() &&
+                   historyBrowser.location == trackBrowserLocation.route &&
+                   historyBrowser.selected == 1 &&
+                   historyBrowser.scrollRow == 6 &&
+                   historyBrowser.backHistory.size() == 1 &&
+                   historyBrowser.forwardHistory.empty(),
+               "Forward must restore the destination as it was left");
+  const BrowserState::Location restoredTrackLocation =
+      captureBrowserLocation(historyBrowser);
+  ok &= expect(!recordBrowserNavigation(historyBrowser,
+                                        restoredTrackLocation,
+                                        restoredTrackLocation),
                "playback inside one location must not pollute browser history");
-  }
+
+  rejectDirectory = true;
+  ok &= expect(!historyNavigator.back() &&
+                   historyBrowser.location == trackBrowserLocation.route &&
+                   historyBrowser.backHistory.size() == 1 &&
+                   historyBrowser.forwardHistory.empty(),
+               "a failed Back restore must leave both history stacks intact");
+  rejectDirectory = false;
+  ok &= expect(historyNavigator.back(),
+               "Back must remain usable after a rejected restore");
+  rejectTracks = true;
+  ok &= expect(!historyNavigator.forward() &&
+                   historyBrowser.location == parentLocation.route &&
+                   historyBrowser.backHistory.empty() &&
+                   historyBrowser.forwardHistory.size() == 1,
+               "a failed Forward restore must leave both history stacks intact");
+  rejectTracks = false;
+  ok &= expect(historyNavigator.forward(),
+               "Forward must remain usable after a rejected restore");
 
   BrowserState locationKindBrowser;
   BrowserState::Location physicalLocation = trackBrowserLocation;

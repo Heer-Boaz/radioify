@@ -18,10 +18,6 @@ bool restoreBrowserLocation(BrowserState& browser,
 bool recordBrowserNavigation(BrowserState& browser,
                              const BrowserState::Location& from,
                              const BrowserState::Location& to);
-std::optional<BrowserState::Location> browserHistoryBack(
-    BrowserState& browser, const BrowserState::Location& current);
-std::optional<BrowserState::Location> browserHistoryForward(
-    BrowserState& browser, const BrowserState::Location& current);
 
 class BrowserNavigator {
  public:
@@ -53,6 +49,8 @@ class BrowserNavigator {
   bool activate(const BrowserLocation& target,
                 const std::string& initialName,
                 const std::optional<BrowserState::EntryIdentity>& selection);
+  bool restoreLocation(const BrowserState::Location& location);
+  void notifyChanged();
 
   BrowserState& browser_;
   Callbacks callbacks_;

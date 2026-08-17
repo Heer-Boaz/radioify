@@ -88,36 +88,6 @@ bool recordBrowserNavigation(BrowserState& browser,
   return true;
 }
 
-std::optional<BrowserState::Location> browserHistoryBack(
-    BrowserState& browser, const BrowserState::Location& current) {
-  if (browser.backHistory.empty()) {
-    return std::nullopt;
-  }
-
-  BrowserState::NavigationHistoryEntry entry =
-      std::move(browser.backHistory.back());
-  browser.backHistory.pop_back();
-  entry.to = current;
-  const BrowserState::Location target = entry.from;
-  browser.forwardHistory.push_back(std::move(entry));
-  return target;
-}
-
-std::optional<BrowserState::Location> browserHistoryForward(
-    BrowserState& browser, const BrowserState::Location& current) {
-  if (browser.forwardHistory.empty()) {
-    return std::nullopt;
-  }
-
-  BrowserState::NavigationHistoryEntry entry =
-      std::move(browser.forwardHistory.back());
-  browser.forwardHistory.pop_back();
-  entry.from = current;
-  const BrowserState::Location target = entry.to;
-  browser.backHistory.push_back(std::move(entry));
-  return target;
-}
-
 BrowserNavigator::BrowserNavigator(BrowserState& browser, Callbacks callbacks)
     : browser_(browser), callbacks_(std::move(callbacks)) {}
 
@@ -158,9 +128,7 @@ bool BrowserNavigator::navigate(const BrowserLocation& target,
     if (selection && selectBrowserEntry(browser_, *selection)) {
       requestBrowserSelectionReveal(browser_);
     }
-    if (callbacks_.changed) {
-      callbacks_.changed();
-    }
+    notifyChanged();
     return true;
   }
   const BrowserState::Location from = captureBrowserLocation(browser_);
@@ -168,9 +136,7 @@ bool BrowserNavigator::navigate(const BrowserLocation& target,
     return false;
   }
   recordBrowserNavigation(browser_, from, captureBrowserLocation(browser_));
-  if (callbacks_.changed) {
-    callbacks_.changed();
-  }
+  notifyChanged();
   return true;
 }
 
@@ -185,47 +151,77 @@ bool BrowserNavigator::replace(const BrowserLocation& target,
     if (selection && selectBrowserEntry(browser_, *selection)) {
       requestBrowserSelectionReveal(browser_);
     }
-    if (callbacks_.changed) {
-      callbacks_.changed();
-    }
+    notifyChanged();
     return true;
   }
   if (!activate(target, initialName, selection)) {
     return false;
   }
-  if (callbacks_.changed) {
-    callbacks_.changed();
-  }
+  notifyChanged();
   return true;
 }
 
-bool BrowserNavigator::restore(const BrowserState::Location& location) {
+bool BrowserNavigator::restoreLocation(
+    const BrowserState::Location& location) {
   if (!activate(location.route, {}, std::nullopt)) {
     return false;
   }
   restoreBrowserLocation(browser_, location);
-  if (callbacks_.changed) {
-    callbacks_.changed();
+  return true;
+}
+
+bool BrowserNavigator::restore(const BrowserState::Location& location) {
+  if (!restoreLocation(location)) {
+    return false;
   }
+  notifyChanged();
   return true;
 }
 
 bool BrowserNavigator::back() {
-  const std::optional<BrowserState::Location> target =
-      browserHistoryBack(browser_, captureBrowserLocation(browser_));
-  return target && restore(*target);
+  if (browser_.backHistory.empty()) {
+    return false;
+  }
+
+  BrowserState::NavigationHistoryEntry entry = browser_.backHistory.back();
+  const BrowserState::Location current = captureBrowserLocation(browser_);
+  if (!restoreLocation(entry.from)) {
+    return false;
+  }
+
+  browser_.backHistory.pop_back();
+  entry.to = current;
+  browser_.forwardHistory.push_back(std::move(entry));
+  notifyChanged();
+  return true;
 }
 
 bool BrowserNavigator::forward() {
-  const std::optional<BrowserState::Location> target =
-      browserHistoryForward(browser_, captureBrowserLocation(browser_));
-  return target && restore(*target);
+  if (browser_.forwardHistory.empty()) {
+    return false;
+  }
+
+  BrowserState::NavigationHistoryEntry entry = browser_.forwardHistory.back();
+  const BrowserState::Location current = captureBrowserLocation(browser_);
+  if (!restoreLocation(entry.to)) {
+    return false;
+  }
+
+  browser_.forwardHistory.pop_back();
+  entry.from = current;
+  browser_.backHistory.push_back(std::move(entry));
+  notifyChanged();
+  return true;
 }
 
 void BrowserNavigator::reload(const std::string& initialName) {
   if (callbacks_.refresh) {
     callbacks_.refresh(initialName);
   }
+  notifyChanged();
+}
+
+void BrowserNavigator::notifyChanged() {
   if (callbacks_.changed) {
     callbacks_.changed();
   }
