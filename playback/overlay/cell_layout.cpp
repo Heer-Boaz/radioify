@@ -1,6 +1,8 @@
 #include "playback/overlay/overlay.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -130,6 +132,43 @@ OverlayCellControlLayoutItem placeControl(const PendingControl& item, int y) {
 }
 
 }  // namespace
+
+std::string buildWindowOverlayProgressSuffix(
+    const PlaybackOverlayState& state) {
+  // Edit mode owns the row above the timeline, including frame-accurate
+  // timecode.  A modal prompt owns it exclusively.  Do not add a second,
+  // rounded playback clock to either state.
+  if (state.videoEdit.active ||
+      state.videoEditPrompt != playback_video_edit::Prompt::None) {
+    return {};
+  }
+
+  const auto formatTime = [](double seconds) -> std::string {
+    if (!(seconds >= 0.0) || !std::isfinite(seconds)) return "--:--";
+    const int total = static_cast<int>(std::llround(seconds));
+    const int hours = total / 3600;
+    const int minutes = (total % 3600) / 60;
+    const int remainingSeconds = total % 60;
+    char buffer[64];
+    if (hours > 0) {
+      std::snprintf(buffer, sizeof(buffer), "%d:%02d:%02d", hours,
+                    minutes, remainingSeconds);
+    } else {
+      std::snprintf(buffer, sizeof(buffer), "%02d:%02d", minutes,
+                    remainingSeconds);
+    }
+    return std::string(buffer);
+  };
+
+  std::string suffix =
+      state.totalSec > 0.0
+          ? formatTime(state.displaySec) + " / " + formatTime(state.totalSec)
+          : formatTime(state.displaySec);
+  if (state.audioOk) {
+    suffix += " Vol: " + std::to_string(state.volPct) + "%";
+  }
+  return suffix;
+}
 
 OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input) {
   OverlayCellLayout layout;

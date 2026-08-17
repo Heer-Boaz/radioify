@@ -139,43 +139,10 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
        !exportFailed)) {
     return model;
   }
-  if (prompt == Prompt::LeaveEditMode) {
-    model.status = shortestFittingStatus(
-        {"LEAVE EDIT MODE?", "LEAVE EDIT?", "LEAVE?"}, width);
-    return model;
-  }
-  if (prompt == Prompt::DiscardEdits) {
-    model.status = shortestFittingStatus(
-        {"DISCARD ALL EDITS?", "DISCARD EDITS?", "DISCARD?"}, width);
-    return model;
-  }
-  if (prompt == Prompt::LeavePlayback) {
-    const ExitExportAction exportAction = exitExportAction({
-        edit.hasUnexportedChanges,
-        exportRunning,
-        editExport && editExport->targetsCurrentRevision,
-    });
-    if (exportFailed) {
-      model.status =
-          shortestFittingStatus({"EXPORT FAILED", "FAILED", "!"}, width);
-    } else if (exportAction == ExitExportAction::CancelBlockingExport) {
-      model.status = shortestFittingStatus(
-          {"UNEXPORTED EDITS  EXPORT BUSY", "UNEXPORTED  BUSY",
-           "UNEXPORTED", "EDIT*", "*"},
-          width);
-    } else if (exportRunning) {
-      model.status = shortestFittingStatus(
-          {"EXPORT RUNNING", "EXPORTING", "EXPORT"}, width);
-    } else if (edit.hasUnexportedChanges) {
-      model.status = shortestFittingStatus(
-          {"UNEXPORTED EDITS", "UNEXPORTED", "EDIT*", "*"}, width);
-    } else {
-      model.status =
-          shortestFittingStatus({"LEAVE PLAYBACK?", "LEAVE?", "EXIT?"},
-                                width);
-    }
-    return model;
-  }
+
+  // Timeline geometry is independent from the status shown above it.  Keep
+  // the current program projection behind modal editor prompts so opening a
+  // confirmation never replaces the editor timeline with the playback bar.
   if (edit.active && edit.timelineDurationUs > 0) {
     const bool hasSelectedRange =
         edit.inTimelineUs.has_value() && edit.outTimelineUs.has_value();
@@ -230,6 +197,44 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
         destination.push_back(cutCell);
       }
     }
+  }
+
+  if (prompt == Prompt::LeaveEditMode) {
+    model.status = shortestFittingStatus(
+        {"LEAVE EDIT MODE?", "LEAVE EDIT?", "LEAVE?"}, width);
+    return model;
+  }
+  if (prompt == Prompt::DiscardEdits) {
+    model.status = shortestFittingStatus(
+        {"DISCARD ALL EDITS?", "DISCARD EDITS?", "DISCARD?"}, width);
+    return model;
+  }
+  if (prompt == Prompt::LeavePlayback) {
+    const ExitExportAction exportAction = exitExportAction({
+        edit.hasUnexportedChanges,
+        exportRunning,
+        editExport && editExport->targetsCurrentRevision,
+    });
+    if (exportFailed) {
+      model.status =
+          shortestFittingStatus({"EXPORT FAILED", "FAILED", "!"}, width);
+    } else if (exportAction == ExitExportAction::CancelBlockingExport) {
+      model.status = shortestFittingStatus(
+          {"UNEXPORTED EDITS  EXPORT BUSY", "UNEXPORTED  BUSY",
+           "UNEXPORTED", "EDIT*", "*"},
+          width);
+    } else if (exportRunning) {
+      model.status = shortestFittingStatus(
+          {"EXPORT RUNNING", "EXPORTING", "EXPORT"}, width);
+    } else if (edit.hasUnexportedChanges) {
+      model.status = shortestFittingStatus(
+          {"UNEXPORTED EDITS", "UNEXPORTED", "EDIT*", "*"}, width);
+    } else {
+      model.status =
+          shortestFittingStatus({"LEAVE PLAYBACK?", "LEAVE?", "EXIT?"},
+                                width);
+    }
+    return model;
   }
 
   if (exportFailed) {

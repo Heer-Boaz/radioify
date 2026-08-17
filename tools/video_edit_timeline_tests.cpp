@@ -887,6 +887,30 @@ int main() {
   editorControlState.videoEdit.active = true;
   editorControlState.playPauseAvailable = true;
   editorControlState.paused = true;
+  playback_overlay::PlaybackOverlayState playbackSuffixState;
+  playbackSuffixState.displaySec = 4.0;
+  playbackSuffixState.totalSec = 8.0;
+  playbackSuffixState.volPct = 100;
+  ok &= expect(playback_overlay::buildWindowOverlayProgressSuffix(
+                   playbackSuffixState) == "00:04 / 00:08",
+               "playback chrome must not claim a volume when audio is "
+               "unavailable");
+  playbackSuffixState.audioOk = true;
+  ok &= expect(playback_overlay::buildWindowOverlayProgressSuffix(
+                   playbackSuffixState) == "00:04 / 00:08 Vol: 100%",
+               "playback chrome must retain volume for an active audio "
+               "output");
+  playbackSuffixState.videoEdit.active = true;
+  ok &= expect(playback_overlay::buildWindowOverlayProgressSuffix(
+                   playbackSuffixState).empty(),
+               "edit mode must own its frame-accurate timeline row without "
+               "a duplicate rounded playback clock");
+  playbackSuffixState.videoEdit.active = false;
+  playbackSuffixState.videoEditPrompt = Prompt::LeavePlayback;
+  ok &= expect(playback_overlay::buildWindowOverlayProgressSuffix(
+                   playbackSuffixState).empty(),
+               "a modal editor prompt must own its chrome without an "
+               "unrelated playback suffix");
   const auto emptyEditControls =
       playback_overlay::buildOverlayControlSpecs(editorControlState, -1);
   const std::vector<playback_overlay::OverlayControlId> expectedEmptyControls{
@@ -1257,6 +1281,22 @@ int main() {
               std::string::npos,
       "multiple removals must stay visibly separate as alternating clips, "
       "cut markers, and an accumulated count");
+  const playback_video_edit::OverlayModel multipleRemovalPromptBaseline =
+      playback_video_edit::buildOverlayModel(
+          multipleRemovalOverlay, nullptr, Prompt::None, 20, 0.0);
+  const playback_video_edit::OverlayModel multipleRemovalPromptModel =
+      playback_video_edit::buildOverlayModel(
+          multipleRemovalOverlay, nullptr, Prompt::LeaveEditMode, 20, 0.0);
+  ok &= expect(
+      multipleRemovalPromptModel.status == "LEAVE EDIT MODE?" &&
+          multipleRemovalPromptModel.cells ==
+              multipleRemovalPromptBaseline.cells &&
+          multipleRemovalPromptModel.playheadCell ==
+              multipleRemovalPromptBaseline.playheadCell &&
+          multipleRemovalPromptModel.cutCells ==
+              multipleRemovalPromptBaseline.cutCells,
+      "opening a modal editor prompt must preserve the current program "
+      "timeline instead of revealing the playback progress bar");
   overlayEdit.active = false;
   playback_video_edit::ExportProgress olderOverlayExport = overlayExport;
   olderOverlayExport.targetsCurrentRevision = false;

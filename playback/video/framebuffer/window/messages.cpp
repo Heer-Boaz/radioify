@@ -51,7 +51,7 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     }
 
     if (!pThis) {
-        return DefWindowProc(hWnd, uMsg, wParam, lParam);
+        return DefWindowProcW(hWnd, uMsg, wParam, lParam);
     }
 
     if (uMsg == kTogglePictureInPictureMessage) {
@@ -85,7 +85,7 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     }
     if (uMsg == WM_NCHITTEST &&
         pThis->m_pictureInPicture.load(std::memory_order_relaxed)) {
-        LRESULT hit = DefWindowProc(hWnd, uMsg, wParam, lParam);
+        LRESULT hit = DefWindowProcW(hWnd, uMsg, wParam, lParam);
         if (hit != HTCLIENT) {
             return hit;
         }
@@ -140,7 +140,7 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
             pThis->OnDisplayChangedByWindow(
                 rect.right - rect.left, rect.bottom - rect.top);
         }
-        return DefWindowProc(hWnd, uMsg, wParam, lParam);
+        return DefWindowProcW(hWnd, uMsg, wParam, lParam);
     }
 
     if (uMsg == WM_CLOSE) {
@@ -315,5 +315,5 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         return 0;
     }
 
-    return DefWindowProc(hWnd, uMsg, wParam, lParam);
+    return DefWindowProcW(hWnd, uMsg, wParam, lParam);
 }

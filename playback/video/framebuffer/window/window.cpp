@@ -1605,8 +1605,9 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
     RECT wr = { 0, 0, width, height };
     AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE);
 
+    const std::wstring windowTitle = utf8ToWide(title);
     m_hWnd = CreateWindowExW(
-        0, className, std::wstring(title.begin(), title.end()).c_str(),
+        0, className, windowTitle.c_str(),
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
         wr.right - wr.left, wr.bottom - wr.top,

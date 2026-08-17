@@ -346,29 +346,6 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
   return layoutOverlayCells(input);
 }
 
-std::string buildWindowOverlayProgressSuffix(
-    const PlaybackOverlayState& state) {
-  auto formatTime = [](double s) -> std::string {
-    if (!(s >= 0.0) || !std::isfinite(s)) return "--:--";
-    int total = static_cast<int>(std::llround(s));
-    int h = total / 3600;
-    int m = (total % 3600) / 60;
-    int sec = total % 60;
-    char buf[64];
-    if (h > 0)
-      std::snprintf(buf, sizeof(buf), "%d:%02d:%02d", h, m, sec);
-    else
-      std::snprintf(buf, sizeof(buf), "%02d:%02d", m, sec);
-    return std::string(buf);
-  };
-  std::string timeLabel = state.totalSec > 0.0
-                              ? (formatTime(state.displaySec) + " / " +
-                                 formatTime(state.totalSec))
-                              : formatTime(state.displaySec);
-  std::string volStr = " Vol: " + std::to_string(state.volPct) + "%";
-  return timeLabel + volStr;
-}
-
 std::string buildWindowOverlayTopLine(const PlaybackOverlayState& state) {
   const std::string badge =
       playback_video_edit::retainedProgramBadge(state.videoEdit);
@@ -610,7 +587,7 @@ void renderVideoEditTimelineToTarget(
   }
 
   for (const int cutCell : model.cutCells) {
-    target.writeChar(layout.progressBarX + cutCell, layout.progressBarY, L'╫',
+    target.writeChar(layout.progressBarX + cutCell, layout.progressBarY, L'|',
                      cutStyle);
   }
   for (const int cutCell : model.smoothCutCells) {
