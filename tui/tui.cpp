@@ -34,6 +34,7 @@
 #include "audio_picture_in_picture_window.h"
 #include "asciiart.h"
 #include "audioplayback.h"
+#include "browser_navigation.h"
 #include "browser_model.h"
 #include "browsermeta.h"
 #include "consoleinput.h"
@@ -58,6 +59,7 @@
 #include "playback/overlay/overlay.h"
 #include "playback/system_media_transport/controls.h"
 #include "playback_route.h"
+#include "playback_target_match.h"
 #include "playback_transport_navigation.h"
 #include "tracklist.h"
 #include "track_browser_state.h"
@@ -471,6 +473,7 @@ static void refreshBrowser(BrowserState& state,
       if (state.entries[i].isSectionHeader) continue;
       if (toLower(state.entries[i].name) == toLower(initialName)) {
         state.selected = static_cast<int>(i);
+        requestBrowserSelectionReveal(state);
         break;
       }
     }
@@ -1613,12 +1616,7 @@ int runTui(Options o) {
     }
     listHeight = std::max(1, height - listTop - footerLayout.reservedLines);
     layout = buildLayout(browser, width, listHeight);
-    if (layout.totalRows <= layout.rowsVisible) {
-      browser.scrollRow = 0;
-    } else {
-      int maxScroll = layout.totalRows - layout.rowsVisible;
-      browser.scrollRow = std::clamp(browser.scrollRow, 0, maxScroll);
-    }
+    applyBrowserViewportRestore(browser, layout);
     breadcrumbLine = buildBreadcrumbLine(browser.dir, width);
     if (!browserInteractionEnabled) {
       breadcrumbHover = -1;
@@ -2032,6 +2030,12 @@ int runTui(Options o) {
                           optionsBrowserToggle(browser);
                           refreshBrowser(browser, "");
                           markLayoutDirty();
+                        }});
+      }
+      if (!audioGetNowPlaying().empty()) {
+        cmds.push_back({"Show Playing File", "", true, [&]() {
+                          transportNavigator.syncBrowserToPlaybackTarget(
+                              {audioGetNowPlaying(), audioGetTrackIndex()});
                         }});
       }
     }
@@ -2985,10 +2989,13 @@ int runTui(Options o) {
         pushMelodyHistory(melodyInfo);
       }
       if (browserInteractionEnabled) {
+        const int playingEntryIndex = findBrowserPlaybackTargetEntry(
+            browser.entries, {nowPlaying, nowPlayingTrackIndex});
         drawBrowserEntries(screen, browser, layout, listTop, listHeight,
                            kStyleNormal, kStyleNormal, kStyleDir,
-                           kStyleHighlight, kStyleDim, isSupportedImageExt,
-                           isVideoExt, isSupportedAudioExt);
+                           kStyleHighlight, kStyleDim, kStyleAccent,
+                           playingEntryIndex, isSupportedImageExt, isVideoExt,
+                           isSupportedAudioExt);
       } else {
         drawMelodyPanel(listTop, listHeight, width, melodyInfo,
                         melodyAnalysisState);

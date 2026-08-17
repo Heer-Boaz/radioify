@@ -2,13 +2,16 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <optional>
 
+#include "browser_navigation.h"
 #include "browser_grid_index.h"
 #include "consolescreen.h"
 #include "optionsbrowser.h"
 #include "playback/input/shortcuts.h"
 #include "playback/overlay/interaction.h"
 #include "runtime_helpers.h"
+#include "track_browser_state.h"
 #include "ui_helpers.h"
 
 namespace {
@@ -76,44 +79,6 @@ void getRowColFromIndex(int idx, const GridLayout& layout,
   }
 }
 
-void ensureSelectionVisible(BrowserState& state, const GridLayout& layout) {
-  if (state.entries.empty() || layout.totalRows <= 0) {
-    state.scrollRow = 0;
-    return;
-  }
-  if (layout.totalRows <= layout.rowsVisible) {
-    state.scrollRow = 0;
-    return;
-  }
-  if (state.viewMode == BrowserState::ViewMode::ListOnly) {
-    int visibleCapacity = browserGridVisibleCapacity(layout);
-    int maxScroll = std::max(0, layout.totalRows - layout.rowsVisible);
-    if (visibleCapacity <= 0 || maxScroll <= 0) {
-      state.scrollRow = 0;
-      return;
-    }
-    if (state.selected < state.scrollRow) {
-      state.scrollRow = state.selected;
-    } else if (state.selected >= state.scrollRow + visibleCapacity) {
-      state.scrollRow = state.selected - visibleCapacity + 1;
-    }
-    state.scrollRow = std::clamp(state.scrollRow, 0, maxScroll);
-    return;
-  }
-
-  int row = 0;
-  int col = 0;
-  getRowColFromIndex(state.selected, layout, state.viewMode, row, col);
-
-  int maxScroll = std::max(0, layout.totalRows - layout.rowsVisible);
-  if (row < state.scrollRow) {
-    state.scrollRow = row;
-  } else if (row >= state.scrollRow + layout.rowsVisible) {
-    state.scrollRow = row - layout.rowsVisible + 1;
-  }
-  state.scrollRow = std::clamp(state.scrollRow, 0, maxScroll);
-}
-
 void moveSelection(BrowserState& browser, const GridLayout& layout,
                    int deltaCol, int deltaRow, bool& dirty) {
   int count = static_cast<int>(browser.entries.size());
@@ -131,7 +96,7 @@ void moveSelection(BrowserState& browser, const GridLayout& layout,
     idx = nearestSelectableEntry(browser.entries, idx, direction);
     if (idx != browser.selected) {
       browser.selected = idx;
-      ensureSelectionVisible(browser, layout);
+      ensureBrowserSelectionVisible(browser, layout);
       dirty = true;
     }
     return;
@@ -158,7 +123,7 @@ void moveSelection(BrowserState& browser, const GridLayout& layout,
 
   if (idx != browser.selected) {
     browser.selected = idx;
-    ensureSelectionVisible(browser, layout);
+    ensureBrowserSelectionVisible(browser, layout);
     dirty = true;
   }
 }
@@ -175,7 +140,7 @@ void pageSelection(BrowserState& browser, const GridLayout& layout,
     idx = nearestSelectableEntry(browser.entries, idx, direction);
     if (idx != browser.selected) {
       browser.selected = idx;
-      ensureSelectionVisible(browser, layout);
+      ensureBrowserSelectionVisible(browser, layout);
       dirty = true;
     }
     return;
@@ -195,7 +160,7 @@ void pageSelection(BrowserState& browser, const GridLayout& layout,
 
   if (idx != browser.selected) {
     browser.selected = idx;
-    ensureSelectionVisible(browser, layout);
+    ensureBrowserSelectionVisible(browser, layout);
     dirty = true;
   }
 }
@@ -310,89 +275,67 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
                       bool& searchBarHover, bool& dirty, bool& running,
                       const InputCallbacks& callbacks) {
   auto clearForwardHistory = [&]() { browser.forwardHistory.clear(); };
-  auto pushBackHistory = [&](BrowserState::HistoryActionType type,
-                             const std::filesystem::path& from,
-                             const std::filesystem::path& to) {
-    BrowserState::HistoryAction action;
-    action.type = type;
-    action.fromPath = from;
-    action.toPath = to;
-    browser.backHistory.push_back(action);
-    clearForwardHistory();
+  auto captureLocation = [&]() {
+    return captureBrowserLocation(browser, browserLocationKind(browser));
   };
-  auto navigateToDir = [&](const std::filesystem::path& dir) {
+  auto loadBrowserPath = [&](const std::filesystem::path& dir) {
     browser.dir = dir;
     setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
     browser.selected = 0;
+    browser.scrollRow = 0;
+    browser.viewportRestoreMode = BrowserState::ViewportRestoreMode::None;
+    browser.viewportRestoreScrollRow = 0;
     if (callbacks.onRefreshBrowser) {
       callbacks.onRefreshBrowser(browser, "");
     }
     breadcrumbHover = -1;
     dirty = true;
   };
-  auto undoBrowserBack = [&]() -> bool {
-    // Prefer navigating back to the most recent EnterDirectory action
-    // (if any) regardless of whether playback is currently active.
-    // Pop play-file actions and move them to forwardHistory while searching
-    // for an EnterDirectory to navigate to. If none is found and playback is
-    // active, stop playback and push the current playback as a PlayFile
-    // action onto forwardHistory.
-    std::vector<BrowserState::HistoryAction> popped;
-    BrowserState::HistoryAction enterAction;
-    bool foundEnter = false;
-    while (!browser.backHistory.empty()) {
-      BrowserState::HistoryAction action = browser.backHistory.back();
-      browser.backHistory.pop_back();
-      if (action.type == BrowserState::HistoryActionType::EnterDirectory &&
-          !action.fromPath.empty()) {
-        enterAction = action;
-        foundEnter = true;
-        break;
-      }
-      // collect other actions (PlayFile) to move to forwardHistory
-      popped.push_back(action);
+  auto navigateToLocation = [&](const BrowserState::Location& location) {
+    if (location.kind == BrowserState::LocationKind::TrackBrowser &&
+        !loadTrackBrowserForFile(location.dir)) {
+      return false;
     }
-
-    // Move popped actions onto forward history in the order they were popped.
-    for (const auto& a : popped) browser.forwardHistory.push_back(a);
-
-    if (foundEnter) {
-      navigateToDir(enterAction.fromPath);
-      browser.forwardHistory.push_back(enterAction);
-      dirty = true;
-      return true;
-    }
-
-    // No EnterDirectory found in backHistory: prefer to leave playback
-    // unaffected. Do not stop playback or add the current playback file to
-    // forward history when the back action cannot navigate the browser.
-    return false;
+    loadBrowserPath(location.dir);
+    restoreBrowserLocation(browser, location);
+    return true;
   };
-  auto redoBrowserForward = [&]() -> bool {
-    if (browser.forwardHistory.empty()) {
-      return false;
-    }
-    BrowserState::HistoryAction action = browser.forwardHistory.back();
-    browser.forwardHistory.pop_back();
+  auto navigateDirectoryWithHistory = [&](const std::filesystem::path& dir) {
+    if (dir == browser.dir) return false;
+    const BrowserState::Location from = captureLocation();
+    loadBrowserPath(dir);
+    recordBrowserNavigation(browser, from, captureLocation());
+    return true;
+  };
+  auto navigateUpWithHistory = [&]() {
+    const std::optional<std::filesystem::path> parent =
+        browserParentDirectory(browser.dir);
+    if (!parent) return false;
 
-    if (action.type == BrowserState::HistoryActionType::EnterDirectory) {
-      if (!action.toPath.empty()) {
-        navigateToDir(action.toPath);
-      }
-      browser.backHistory.push_back(action);
-      return true;
-    }
+    const bool leavingTrackBrowser = isTrackBrowserActive(browser);
+    FileEntry departedEntry;
+    departedEntry.path = leavingTrackBrowser ? trackBrowserFile() : browser.dir;
+    departedEntry.name = toUtf8String(departedEntry.path.filename());
+    departedEntry.isDir = !leavingTrackBrowser;
+    const BrowserState::EntryIdentity departed =
+        browserEntryIdentity(departedEntry);
+    const BrowserState::Location from = captureLocation();
 
-    if (action.type == BrowserState::HistoryActionType::PlayFile) {
-      if (playMode && !action.toPath.empty() && callbacks.onPlayFile &&
-          callbacks.onPlayFile(action.toPath)) {
-        browser.backHistory.push_back(action);
-        dirty = true;
-        return true;
-      }
-      return false;
-    }
-    return false;
+    loadBrowserPath(*parent);
+    selectBrowserEntry(browser, departed);
+    requestBrowserSelectionReveal(browser);
+    recordBrowserNavigation(browser, from, captureLocation());
+    return true;
+  };
+  auto navigateBack = [&]() {
+    const std::optional<BrowserState::Location> target =
+        browserHistoryBack(browser, captureLocation());
+    return target && navigateToLocation(*target);
+  };
+  auto navigateForward = [&]() {
+    const std::optional<BrowserState::Location> target =
+        browserHistoryForward(browser, captureLocation());
+    return target && navigateToLocation(*target);
   };
 
   auto resolvePathSearchTarget = [&](const std::string& query,
@@ -456,7 +399,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     std::filesystem::path target;
     if (!resolvePathSearchTarget(browser.pathSearch, target)) return;
     if (target != browser.dir) {
-      navigateToDir(target);
+      loadBrowserPath(target);
     } else {
       dirty = true;
     }
@@ -480,11 +423,11 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     // not inadvertently trigger playback shortcuts (ExitPlaybackSession, etc.).
     if (browserInteractionEnabled) {
       if (browserBackAction) {
-        undoBrowserBack();
+        navigateBack();
         return;
       }
       if (browserForwardAction) {
-        redoBrowserForward();
+        navigateForward();
         return;
       }
     }
@@ -625,15 +568,14 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
     }
     if (key.vk == VK_ESCAPE) {
       if (callbacks.onStopPlayback) {
-        clearForwardHistory();
         callbacks.onStopPlayback();
         dirty = true;
       }
       return;
     }
     if (backspaceKey) {
-      clearForwardHistory();
       if (optionsBrowserIsActive(browser)) {
+        clearForwardHistory();
         if (optionsBrowserNavigateUp(browser)) {
           if (callbacks.onRefreshBrowser) {
             callbacks.onRefreshBrowser(browser, "");
@@ -643,9 +585,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
         }
         return;
       }
-      if (browser.dir.has_parent_path()) {
-        navigateToDir(browser.dir.parent_path());
-      }
+      navigateUpWithHistory();
       return;
     }
     if (key.vk == VK_RETURN) {
@@ -661,17 +601,17 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
           return;
         }
         if (pick.isDir) {
-          pushBackHistory(BrowserState::HistoryActionType::EnterDirectory,
-                          browser.dir, pick.path);
-          navigateToDir(pick.path);
+          if (pick.name == "..") {
+            navigateUpWithHistory();
+          } else {
+            navigateDirectoryWithHistory(pick.path);
+          }
         } else if (playMode) {
-          if (callbacks.onPlayFile && callbacks.onPlayFile(pick.path)) {
-            pushBackHistory(BrowserState::HistoryActionType::PlayFile, browser.dir,
-                            pick.path);
+          const std::filesystem::path file = pick.path;
+          if (callbacks.onPlayFile && callbacks.onPlayFile(file)) {
             dirty = true;
           }
         } else {
-          clearForwardHistory();
           if (callbacks.onRenderFile) {
             callbacks.onRenderFile(pick.path);
           }
@@ -773,9 +713,7 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       const auto& crumb =
           breadcrumbLine.crumbs[static_cast<size_t>(breadcrumbHover)];
       if (browser.dir != crumb.path) {
-        pushBackHistory(BrowserState::HistoryActionType::EnterDirectory, browser.dir,
-                        crumb.path);
-        navigateToDir(crumb.path);
+        navigateDirectoryWithHistory(crumb.path);
         breadcrumbHover = -1;
         dirty = true;
       }
@@ -927,17 +865,17 @@ void handleInputEvent(const InputEvent& ev, BrowserState& browser,
       }
       const auto& pick = browser.entries[static_cast<size_t>(browser.selected)];
       if (pick.isDir) {
-        pushBackHistory(BrowserState::HistoryActionType::EnterDirectory, browser.dir,
-                        pick.path);
-        navigateToDir(pick.path);
+        if (pick.name == "..") {
+          navigateUpWithHistory();
+        } else {
+          navigateDirectoryWithHistory(pick.path);
+        }
       } else if (playMode) {
-        if (callbacks.onPlayFile && callbacks.onPlayFile(pick.path)) {
-          pushBackHistory(BrowserState::HistoryActionType::PlayFile, browser.dir,
-                          pick.path);
+        const std::filesystem::path file = pick.path;
+        if (callbacks.onPlayFile && callbacks.onPlayFile(file)) {
           dirty = true;
         }
       } else {
-        clearForwardHistory();
         if (callbacks.onRenderFile) {
           callbacks.onRenderFile(pick.path);
         }

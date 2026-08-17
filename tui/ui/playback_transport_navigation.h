@@ -28,8 +28,7 @@ class Navigator {
       const PlaybackTarget& current, int direction);
 
  private:
-  bool isTransportPlayableEntry(const FileEntry& entry) const;
-  int findPlaybackTargetEntryIndex(const PlaybackTarget& target) const;
+  BrowserState::Location captureLocation() const;
   bool selectPlaybackTarget(const PlaybackTarget& target);
 
   BrowserState& browser_;

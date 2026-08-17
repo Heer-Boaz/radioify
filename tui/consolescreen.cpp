@@ -547,7 +547,7 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
     std::string name = e.name;
     if (e.isDir && name != "..") name += "/";
     layout.names.push_back(name);
-    maxName = std::max(maxName, utf8DisplayWidth(name) + 2);
+    maxName = std::max(maxName, utf8DisplayWidth(name) + 4);
   }
 
   constexpr int kThumbMinWidth = 20;
@@ -677,7 +677,8 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
                         const GridLayout& layout, int listTop, int listHeight,
                         const Style& baseStyle, const Style& normalStyle,
                         const Style& dirStyle, const Style& highlightStyle,
-                        const Style& dimStyle,
+                        const Style& dimStyle, const Style& playbackStyle,
+                        int playingEntryIndex,
                         bool (*isImage)(const std::filesystem::path&),
                         bool (*isVideo)(const std::filesystem::path&),
                         bool (*isAudio)(const std::filesystem::path&)) {
@@ -796,18 +797,25 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
           continue;
         }
 
+        const int cellLeft = c * layout.colWidth;
+        const int contentX = cellLeft + 2;
+        const int contentWidth = std::max(1, layout.colWidth - 2);
         std::string cell = fitName(entryPrefix(entry) +
                                        layout.names[static_cast<size_t>(idx)],
-                                   layout.colWidth);
+                                   contentWidth);
         int cellWidth = utf8DisplayWidth(cell);
-        if (cellWidth < layout.colWidth) {
-          cell.append(static_cast<size_t>(layout.colWidth - cellWidth), ' ');
-        } else if (cellWidth > layout.colWidth) {
-          cell = utf8TakeDisplayWidth(cell, layout.colWidth);
+        if (cellWidth < contentWidth) {
+          cell.append(static_cast<size_t>(contentWidth - cellWidth), ' ');
+        } else if (cellWidth > contentWidth) {
+          cell = utf8TakeDisplayWidth(cell, contentWidth);
         }
         Style attr =
             isSelected ? highlightStyle : (entry.isDir ? dirStyle : normalStyle);
-        screen.writeText(c * layout.colWidth, y, cell, attr);
+        screen.writeRun(cellLeft, y, layout.colWidth, L' ', attr);
+        if (idx == playingEntryIndex) {
+          screen.writeChar(cellLeft, y, L'\u258C', playbackStyle);
+        }
+        screen.writeText(contentX, y, cell, attr);
       }
     }
     if (layout.showPreview && !browser.entries.empty()) {
@@ -923,16 +931,21 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
 
       int labelY = cellTop + layout.thumbHeight;
       if (labelY < listTop + listHeight) {
+        const int contentX = cellLeft + 2;
+        const int contentWidth = std::max(1, layout.colWidth - 2);
         std::string label = fitName(entryPrefix(entry) +
                                         layout.names[static_cast<size_t>(idx)],
-                                    layout.colWidth);
+                                    contentWidth);
         int labelWidth = utf8DisplayWidth(label);
         int labelX =
-            cellLeft + std::max(0, (layout.colWidth - labelWidth) / 2);
+            contentX + std::max(0, (contentWidth - labelWidth) / 2);
         Style labelStyle =
             isSelected ? highlightStyle : (entry.isDir ? dirStyle : normalStyle);
         if (isSelected) {
           screen.writeRun(cellLeft, labelY, layout.colWidth, L' ', labelStyle);
+        }
+        if (idx == playingEntryIndex) {
+          screen.writeChar(cellLeft, labelY, L'\u258C', playbackStyle);
         }
         screen.writeText(labelX, labelY, label, labelStyle);
       }

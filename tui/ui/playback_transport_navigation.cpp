@@ -1,9 +1,9 @@
 #include "playback_transport_navigation.h"
 
-#include <algorithm>
 #include <utility>
-#include <vector>
 
+#include "browser_navigation.h"
+#include "playback_target_match.h"
 #include "playback_target_resolver.h"
 #include "runtime_helpers.h"
 #include "track_browser_state.h"
@@ -15,7 +15,12 @@ namespace playback_transport_navigation {
 Navigator::Navigator(BrowserState& browser, Callbacks callbacks)
     : browser_(browser), callbacks_(std::move(callbacks)) {}
 
+BrowserState::Location Navigator::captureLocation() const {
+  return captureBrowserLocation(browser_, browserLocationKind(browser_));
+}
+
 bool Navigator::activateTrackBrowser(const std::filesystem::path& file) {
+  const BrowserState::Location from = captureLocation();
   if (!loadTrackBrowserForFile(file)) {
     return false;
   }
@@ -32,6 +37,7 @@ bool Navigator::activateTrackBrowser(const std::filesystem::path& file) {
   if (callbacks_.markLayoutDirty) {
     callbacks_.markLayoutDirty();
   }
+  recordBrowserNavigation(browser_, from, captureLocation());
   return true;
 }
 
@@ -71,6 +77,7 @@ bool Navigator::syncBrowserToPlaybackTarget(const PlaybackTarget& target) {
   std::filesystem::path targetDir =
       target.file.has_parent_path() ? target.file.parent_path()
                                     : std::filesystem::path(".");
+  const BrowserState::Location from = captureLocation();
   const bool requiresRefresh =
       isTrackBrowserActive(browser_) || browser_.dir != targetDir;
   if (requiresRefresh) {
@@ -89,6 +96,7 @@ bool Navigator::syncBrowserToPlaybackTarget(const PlaybackTarget& target) {
     }
   }
   if (selectPlaybackTarget(target)) {
+    recordBrowserNavigation(browser_, from, captureLocation());
     return true;
   }
   browser_.filter.clear();
@@ -101,7 +109,9 @@ bool Navigator::syncBrowserToPlaybackTarget(const PlaybackTarget& target) {
   if (callbacks_.markLayoutDirty) {
     callbacks_.markLayoutDirty();
   }
-  return selectPlaybackTarget(target);
+  const bool selected = selectPlaybackTarget(target);
+  recordBrowserNavigation(browser_, from, captureLocation());
+  return selected;
 }
 
 std::optional<PlaybackTarget> Navigator::resolveAdjacentPlaybackTarget(
@@ -109,7 +119,8 @@ std::optional<PlaybackTarget> Navigator::resolveAdjacentPlaybackTarget(
   if (direction == 0 || !syncBrowserToPlaybackTarget(current)) {
     return std::nullopt;
   }
-  const int start = findPlaybackTargetEntryIndex(current);
+  const int start =
+      findBrowserPlaybackTargetEntry(browser_.entries, current);
   if (start < 0) {
     return std::nullopt;
   }
@@ -124,35 +135,8 @@ std::optional<PlaybackTarget> Navigator::resolveAdjacentPlaybackTarget(
   return std::nullopt;
 }
 
-bool Navigator::isTransportPlayableEntry(const FileEntry& entry) const {
-  return playback_target_resolver::isPlayableEntry(entry);
-}
-
-int Navigator::findPlaybackTargetEntryIndex(const PlaybackTarget& target) const {
-  const std::filesystem::path trackPath =
-      (target.trackIndex >= 0) ? normalizeTrackBrowserPath(target.file)
-                               : std::filesystem::path();
-  for (size_t i = 0; i < browser_.entries.size(); ++i) {
-    const auto& entry = browser_.entries[i];
-    if (target.trackIndex >= 0) {
-      if (!isTransportPlayableEntry(entry)) {
-        continue;
-      }
-      if (entry.trackIndex == target.trackIndex && entry.path == trackPath) {
-        return static_cast<int>(i);
-      }
-      continue;
-    }
-    if (!entry.isSectionHeader && !entry.isDir && entry.trackIndex < 0 &&
-        entry.path == target.file) {
-      return static_cast<int>(i);
-    }
-  }
-  return -1;
-}
-
 bool Navigator::selectPlaybackTarget(const PlaybackTarget& target) {
-  const int idx = findPlaybackTargetEntryIndex(target);
+  const int idx = findBrowserPlaybackTargetEntry(browser_.entries, target);
   if (idx < 0) {
     return false;
   }
@@ -161,6 +145,10 @@ bool Navigator::selectPlaybackTarget(const PlaybackTarget& target) {
     if (callbacks_.markDirty) {
       callbacks_.markDirty();
     }
+  }
+  requestBrowserSelectionReveal(browser_);
+  if (callbacks_.markLayoutDirty) {
+    callbacks_.markLayoutDirty();
   }
   return true;
 }

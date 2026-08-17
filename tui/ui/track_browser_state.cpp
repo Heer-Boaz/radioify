@@ -56,6 +56,12 @@ bool isTrackBrowserActive(const BrowserState& state) {
   return gTrackBrowser.active && state.dir == gTrackBrowser.file;
 }
 
+BrowserState::LocationKind browserLocationKind(const BrowserState& state) {
+  return isTrackBrowserActive(state)
+             ? BrowserState::LocationKind::TrackBrowser
+             : BrowserState::LocationKind::Directory;
+}
+
 const TrackEntry* findTrackEntry(int trackIndex) {
   return findPlaybackTrack(gTrackBrowser.tracks, trackIndex);
 }

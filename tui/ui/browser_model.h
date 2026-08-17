@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -21,14 +22,30 @@ struct FileEntry {
 };
 
 struct BrowserState {
-  enum class HistoryActionType {
-    EnterDirectory,
-    PlayFile,
+  struct EntryIdentity {
+    std::filesystem::path path;
+    std::string name;
+    bool isDir = false;
+    int trackIndex = -1;
   };
-  struct HistoryAction {
-    HistoryActionType type = HistoryActionType::EnterDirectory;
-    std::filesystem::path fromPath;
-    std::filesystem::path toPath;
+  enum class LocationKind {
+    Directory,
+    TrackBrowser,
+  };
+  struct Location {
+    LocationKind kind = LocationKind::Directory;
+    std::filesystem::path dir;
+    std::optional<EntryIdentity> selectedEntry;
+    int scrollRow = 0;
+  };
+  struct NavigationHistoryEntry {
+    Location from;
+    Location to;
+  };
+  enum class ViewportRestoreMode {
+    None,
+    RevealSelection,
+    RestoreScroll,
   };
 
   std::filesystem::path dir;
@@ -53,8 +70,10 @@ struct BrowserState {
   std::string filterBackup;
   std::string pathSearch;
   bool pathSearchActive = false;
-  std::vector<HistoryAction> backHistory;
-  std::vector<HistoryAction> forwardHistory;
+  std::vector<NavigationHistoryEntry> backHistory;
+  std::vector<NavigationHistoryEntry> forwardHistory;
+  ViewportRestoreMode viewportRestoreMode = ViewportRestoreMode::None;
+  int viewportRestoreScrollRow = 0;
 };
 
 struct GridLayout {
@@ -95,6 +114,8 @@ void drawBrowserEntries(ConsoleScreen& screen,
                         const Style& dirStyle,
                         const Style& highlightStyle,
                         const Style& dimStyle,
+                        const Style& playbackStyle,
+                        int playingEntryIndex,
                         bool (*isImage)(const std::filesystem::path&),
                         bool (*isVideo)(const std::filesystem::path&),
                         bool (*isAudio)(const std::filesystem::path&));
