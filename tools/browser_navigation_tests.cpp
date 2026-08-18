@@ -2,6 +2,7 @@
 #include <string>
 
 #include "browser_navigation.h"
+#include "kssoptions.h"
 #include "playback_target_match.h"
 #include "track_browser_state.h"
 
@@ -15,11 +16,19 @@ bool expect(bool condition, const char* message) {
   return true;
 }
 
-FileEntry fileEntry(const std::string& name, const std::filesystem::path& path,
-                    bool isDir = false, int trackIndex = -1) {
-  FileEntry entry{name, path, isDir};
-  entry.trackIndex = trackIndex;
-  return entry;
+BrowserEntry fileEntry(const std::string& name,
+                       const std::filesystem::path& path) {
+  return {name, path, browser_entry::OpenFile{}};
+}
+
+BrowserEntry directoryEntry(const std::string& name,
+                            const std::filesystem::path& path) {
+  return {name, path, browser_entry::OpenDirectory{}};
+}
+
+BrowserEntry trackEntry(const std::string& name,
+                        const std::filesystem::path& path, int trackIndex) {
+  return {name, path, browser_entry::PlayTrack{trackIndex}};
 }
 
 GridLayout verticalLayout(int totalRows, int visibleRows) {
@@ -46,8 +55,16 @@ int main() {
 
   const std::filesystem::path songA = "C:/Media/A.flac";
   const std::filesystem::path songB = "C:/Media/B.flac";
-  std::vector<FileEntry> files{fileEntry("A.flac", songA),
-                               fileEntry("B.flac", songB)};
+  const BrowserEntry status{"Scan failed", {}, browser_entry::Status{}};
+  const BrowserEntry information{"Title: Example", {},
+                                 browser_entry::Information{}};
+  ok &= expect(!status.isSelectable() && !status.isActivatable(),
+               "status rows must not masquerade as interactive files");
+  ok &= expect(information.isSelectable() && !information.isActivatable(),
+               "informational rows must be focusable without being actions");
+
+  std::vector<BrowserEntry> files{fileEntry("A.flac", songA),
+                                  fileEntry("B.flac", songB)};
   const PlaybackTarget playingA{songA, -1};
   ok &= expect(findBrowserPlaybackTargetEntry(files, playingA) == 0,
                "the playing item must be found independently of selection");
@@ -67,23 +84,37 @@ int main() {
   ok &=
       expect(browserEntryMatchesPlaybackTarget(files[0], playingContainerTrack),
              "a container file must remain active for an internal track");
-  std::vector<FileEntry> tracks{fileEntry("Track 1", songA, false, 0),
-                                fileEntry("Track 4", songA, false, 3)};
+  std::vector<BrowserEntry> tracks{trackEntry("Track 1", songA, 0),
+                                   trackEntry("Track 4", songA, 3)};
   ok &=
       expect(findBrowserPlaybackTargetEntry(tracks, playingContainerTrack) == 1,
              "a track browser must mark only the exact playing track");
   ok &= expect(!browserEntryMatchesPlaybackTarget(
-                   fileEntry("Media", "C:/Media", true), playingA),
+                   directoryEntry("Media", "C:/Media"), playingA),
                "directories must never receive a playback marker");
+
+  BrowserState optionIdentityBrowser;
+  optionIdentityBrowser.location =
+      browserOptionsLocation(songA, 0, BrowserOptionsPage::Root);
+  optionIdentityBrowser.entries.emplace_back(
+      "50Hz: auto", std::filesystem::path{},
+      browser_entry::AdjustKssOption{KssOptionId::Force50Hz});
+  const BrowserState::Location optionIdentity =
+      captureBrowserLocation(optionIdentityBrowser);
+  optionIdentityBrowser.entries.front() = BrowserEntry{
+      "50Hz: forced", {},
+      browser_entry::AdjustKssOption{KssOptionId::Force50Hz}};
+  ok &= expect(restoreBrowserLocation(optionIdentityBrowser, optionIdentity),
+               "entry identity must use the typed option action, not its label");
 
   BrowserState browser;
   browser.viewMode = BrowserState::ViewMode::Thumbnails;
   browser.location = browserDirectoryLocation("C:/Media");
   for (int i = 0; i < 30; ++i) {
     browser.entries.push_back(
-        fileEntry("Folder " + std::to_string(i),
-                  browser.location.path / ("Folder " + std::to_string(i)),
-                  true));
+        directoryEntry(
+            "Folder " + std::to_string(i),
+            browser.location.path / ("Folder " + std::to_string(i))));
   }
   browser.selected = 17;
   browser.scrollRow = 13;
@@ -97,7 +128,7 @@ int main() {
   ok &= expect(browser.selected == 17 && browser.scrollRow == 13,
                "history must restore an unchanged selection and viewport");
 
-  const FileEntry moved = browser.entries[17];
+  const BrowserEntry moved = browser.entries[17];
   browser.entries.erase(browser.entries.begin() + 17);
   browser.entries.insert(browser.entries.begin() + 23, moved);
   browser.selected = 0;
@@ -123,11 +154,11 @@ int main() {
   BrowserState caseChangedBrowser;
   caseChangedBrowser.location = browserDirectoryLocation("C:/Media");
   caseChangedBrowser.entries = {
-      fileEntry("Album", "C:/Media/Album", true)};
+      directoryEntry("Album", "C:/Media/Album")};
   const BrowserState::EntryIdentity caseStableIdentity =
       browserEntryIdentity(caseChangedBrowser.entries.front());
   caseChangedBrowser.entries = {
-      fileEntry("ALBUM", "c:\\media\\album", true)};
+      directoryEntry("ALBUM", "c:\\media\\album")};
   ok &= expect(selectBrowserEntry(caseChangedBrowser, caseStableIdentity),
                "selection restore must survive Windows path casing changes");
 #endif
@@ -206,7 +237,11 @@ int main() {
   ok &= expect(!historyNavigator.back() &&
                    historyBrowser.location == trackBrowserLocation.route &&
                    historyBrowser.entries.size() == tracks.size() &&
-                   historyBrowser.entries[1].trackIndex == 3 &&
+                   historyBrowser.entries[1]
+                           .actionAs<browser_entry::PlayTrack>() &&
+                   historyBrowser.entries[1]
+                           .actionAs<browser_entry::PlayTrack>()
+                           ->trackIndex == 3 &&
                    historyBrowser.backHistory.size() == 1 &&
                    historyBrowser.forwardHistory.empty(),
                "a failed Back restore must leave content and history intact");

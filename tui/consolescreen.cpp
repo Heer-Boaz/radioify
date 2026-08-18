@@ -269,10 +269,10 @@ static ThumbCacheState& thumbCache() {
   return cache;
 }
 
-static std::string thumbnailCacheKey(const FileEntry& entry) {
+static std::string thumbnailCacheKey(const BrowserEntry& entry) {
   std::string key = toUtf8String(entry.path);
-  if (entry.trackIndex >= 0) {
-    key += "#track=" + std::to_string(entry.trackIndex);
+  if (const auto* track = entry.actionAs<browser_entry::PlayTrack>()) {
+    key += "#track=" + std::to_string(track->trackIndex);
   }
   return key;
 }
@@ -539,13 +539,15 @@ GridLayout buildLayout(const BrowserState& state, int width, int listHeight) {
   GridLayout layout;
   layout.names.reserve(state.entries.size());
   bool hasSectionHeaders = std::any_of(state.entries.begin(), state.entries.end(),
-                                       [](const FileEntry& entry) {
-                                         return entry.isSectionHeader;
+                                       [](const BrowserEntry& entry) {
+                                         return entry.isSectionHeader();
                                        });
   int maxName = 0;
   for (const auto& e : state.entries) {
     std::string name = e.name;
-    if (e.isDir && name != "..") name += "/";
+    if (e.isDirectory() && !e.actionAs<browser_entry::NavigateUp>()) {
+      name += "/";
+    }
     layout.names.push_back(name);
     maxName = std::max(maxName, utf8DisplayWidth(name) + 4);
   }
@@ -708,9 +710,9 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
     }
   }
 
-  auto entryPrefix = [&](const FileEntry& entry) -> std::string {
-    if (entry.isDir) return "\xF0\x9F\x93\x81 ";
-    if (entry.trackIndex >= 0) return "\xE2\x99\xAA ";
+  auto entryPrefix = [&](const BrowserEntry& entry) -> std::string {
+    if (entry.isDirectory()) return "\xF0\x9F\x93\x81 ";
+    if (entry.actionAs<browser_entry::PlayTrack>()) return "\xE2\x99\xAA ";
     if (isAudio && isAudio(entry.path)) return "\xE2\x99\xAA ";
     if (isVideo && isVideo(entry.path)) return "\xE2\x96\xB6 ";
     if (isImage && isImage(entry.path)) return "\xE2\x96\xA1 ";
@@ -727,7 +729,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
     bool pending = false;
   };
 
-  auto fetchThumb = [&](const FileEntry& entry, int width, int height,
+  auto fetchThumb = [&](const BrowserEntry& entry, int width, int height,
                         bool wantImage, bool wantVideo,
                         bool wantAudio) -> ThumbLookup {
     ThumbLookup result;
@@ -756,7 +758,8 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
       job.isImage = wantImage;
       job.isVideo = wantVideo;
       job.isAudio = wantAudio;
-      job.trackIndex = entry.trackIndex;
+      const auto* track = entry.actionAs<browser_entry::PlayTrack>();
+      job.trackIndex = track ? track->trackIndex : -1;
       job.width = width;
       job.height = height;
       job.generation = cache.generation;
@@ -781,7 +784,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
         const auto& entry = browser.entries[static_cast<size_t>(idx)];
         bool isSelected = (idx == browser.selected);
 
-        if (entry.isSectionHeader) {
+        if (entry.isSectionHeader()) {
           std::string cell = fitName("[" + entry.name + "]", layout.colWidth);
           int cellWidth = utf8DisplayWidth(cell);
           if (cellWidth < layout.colWidth) {
@@ -809,8 +812,11 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
         } else if (cellWidth > contentWidth) {
           cell = utf8TakeDisplayWidth(cell, contentWidth);
         }
-        Style attr =
-            isSelected ? highlightStyle : (entry.isDir ? dirStyle : normalStyle);
+        Style attr = isSelected ? highlightStyle
+                                : (entry.isStatus()
+                                       ? dimStyle
+                                       : (entry.isDirectory() ? dirStyle
+                                                              : normalStyle));
         screen.writeRun(cellLeft, y, layout.colWidth, L' ', attr);
         if (idx == playingEntryIndex) {
           screen.writeChar(cellLeft, y, L'\u258C', playbackStyle);
@@ -823,9 +829,9 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
           browser.selected, 0,
           static_cast<int>(browser.entries.size()) - 1);
       const auto& entry = browser.entries[static_cast<size_t>(idx)];
-      bool img = !entry.isDir && isImage && isImage(entry.path);
-      bool vid = !entry.isDir && isVideo && isVideo(entry.path);
-      bool aud = !entry.isDir && isAudio && isAudio(entry.path);
+      bool img = entry.isMedia() && isImage && isImage(entry.path);
+      bool vid = entry.isMedia() && isVideo && isVideo(entry.path);
+      bool aud = entry.isMedia() && isAudio && isAudio(entry.path);
       int previewW = std::max(1, layout.previewWidth);
       int previewH = std::max(1, layout.previewHeight);
       int previewX = layout.previewX;
@@ -848,7 +854,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
         }
       } else {
         std::string placeholder;
-        if (entry.isDir) {
+        if (entry.isDirectory()) {
           placeholder = "\xF0\x9F\x93\x81";
         } else if (img) {
           placeholder = "\xE2\x96\xA1";
@@ -889,9 +895,9 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
       int thumbY = cellTop;
       int thumbW = std::max(1, layout.thumbWidth);
       int thumbH = std::max(1, layout.thumbHeight);
-      bool img = !entry.isDir && isImage && isImage(entry.path);
-      bool vid = !entry.isDir && isVideo && isVideo(entry.path);
-      bool aud = !entry.isDir && isAudio && isAudio(entry.path);
+      bool img = entry.isMedia() && isImage && isImage(entry.path);
+      bool vid = entry.isMedia() && isVideo && isVideo(entry.path);
+      bool aud = entry.isMedia() && isAudio && isAudio(entry.path);
 
       ThumbLookup lookup = fetchThumb(entry, thumbW, thumbH, img, vid, aud);
       const Thumbnail* thumb = lookup.thumb.get();
@@ -910,7 +916,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
         }
       } else {
         std::string placeholder;
-        if (entry.isDir) {
+        if (entry.isDirectory()) {
           placeholder = "\xF0\x9F\x93\x81";
         } else if (img) {
           placeholder = "\xE2\x96\xA1";
@@ -940,7 +946,10 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
         int labelX =
             contentX + std::max(0, (contentWidth - labelWidth) / 2);
         Style labelStyle =
-            isSelected ? highlightStyle : (entry.isDir ? dirStyle : normalStyle);
+            isSelected ? highlightStyle
+                       : (entry.isStatus()
+                              ? dimStyle
+                              : (entry.isDirectory() ? dirStyle : normalStyle));
         if (isSelected) {
           screen.writeRun(cellLeft, labelY, layout.colWidth, L' ', labelStyle);
         }

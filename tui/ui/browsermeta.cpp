@@ -72,15 +72,17 @@ std::string buildSelectionMeta(const BrowserState& browser,
                        static_cast<int>(browser.entries.size()) - 1);
   const auto& entry = browser.entries[static_cast<size_t>(idx)];
   std::string name = entry.name;
-  if (entry.isDir && name != "..") name += "/";
+  if (entry.isDirectory() && !entry.actionAs<browser_entry::NavigateUp>()) {
+    name += "/";
+  }
 
   std::string key = toUtf8String(entry.path);
   auto it = cache.find(key);
   if (it == cache.end()) {
     SelectionMetaCacheEntry fresh;
-    fresh.isDir = entry.isDir;
+    fresh.isDir = entry.isDirectory();
     try {
-      if (entry.isDir) {
+      if (entry.isDirectory()) {
         fresh.sizeLabel = "<DIR>";
       } else {
         uintmax_t size = std::filesystem::file_size(entry.path);
@@ -100,7 +102,7 @@ std::string buildSelectionMeta(const BrowserState& browser,
   }
 
   SelectionMetaCacheEntry& meta = it->second;
-  if (!meta.videoAttempted && !entry.isDir && isVideo &&
+  if (!meta.videoAttempted && entry.isMedia() && isVideo &&
       isVideo(entry.path)) {
     VideoMetadata vmeta;
     std::string error;

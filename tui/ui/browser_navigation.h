@@ -8,7 +8,7 @@
 
 #include "browser_model.h"
 
-BrowserState::EntryIdentity browserEntryIdentity(const FileEntry& entry);
+BrowserState::EntryIdentity browserEntryIdentity(const BrowserEntry& entry);
 BrowserState::Location captureBrowserLocation(const BrowserState& browser);
 
 bool selectBrowserEntry(BrowserState& browser,
@@ -30,7 +30,7 @@ struct BrowserContentRequest {
 };
 
 struct PreparedBrowserContent {
-  std::vector<FileEntry> entries;
+  std::vector<BrowserEntry> entries;
   BrowserContent content;
   int selected = 0;
   int scrollRow = 0;

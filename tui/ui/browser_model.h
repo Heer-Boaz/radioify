@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -11,6 +13,11 @@
 #include "browser_location.h"
 #include "consolescreen.h"
 
+enum class KssOptionId : std::uint8_t;
+enum class NsfOptionId : std::uint8_t;
+enum class VgmDeviceOptionId : std::uint8_t;
+enum class VgmOptionId : std::uint8_t;
+
 struct OptionsBrowserContent;
 struct TrackBrowserContent;
 
@@ -19,29 +26,92 @@ using BrowserContent =
                  std::shared_ptr<const TrackBrowserContent>,
                  std::shared_ptr<const OptionsBrowserContent>>;
 
-struct FileEntry {
-  FileEntry() = default;
-  FileEntry(std::string entryName, std::filesystem::path entryPath,
-            bool directory, bool sectionHeader = false)
+namespace browser_entry {
+
+struct Information {};
+struct Status {};
+struct SectionHeader {};
+struct NavigateUp {};
+struct OpenDirectory {};
+struct OpenLocation {
+  BrowserLocation target;
+};
+struct OpenFile {};
+struct PlayTrack {
+  int trackIndex = 0;
+};
+struct AdjustKssOption {
+  KssOptionId option;
+};
+struct AdjustNsfOption {
+  NsfOptionId option;
+};
+struct AdjustVgmOption {
+  VgmOptionId option;
+};
+struct AdjustVgmDeviceOption {
+  VgmDeviceOptionId option;
+};
+struct StartInstrumentAudition {
+  std::size_t profileIndex = 0;
+};
+struct StopInstrumentAudition {};
+
+using Action =
+    std::variant<Information, Status, SectionHeader, NavigateUp,
+                 OpenDirectory, OpenLocation, OpenFile, PlayTrack,
+                 AdjustKssOption, AdjustNsfOption, AdjustVgmOption,
+                 AdjustVgmDeviceOption, StartInstrumentAudition,
+                 StopInstrumentAudition>;
+
+}  // namespace browser_entry
+
+struct BrowserEntry {
+  BrowserEntry() = delete;
+  BrowserEntry(std::string entryName, std::filesystem::path entryPath,
+               browser_entry::Action entryAction)
       : name(std::move(entryName)),
         path(std::move(entryPath)),
         pathIdentity(makePathIdentity(path)),
-        isDir(directory),
-        isSectionHeader(sectionHeader) {}
+        action(std::move(entryAction)) {}
+
+  template <typename T>
+  const T* actionAs() const {
+    return std::get_if<T>(&action);
+  }
+
+  bool isDirectory() const {
+    return actionAs<browser_entry::NavigateUp>() ||
+           actionAs<browser_entry::OpenDirectory>() ||
+           actionAs<browser_entry::OpenLocation>();
+  }
+
+  bool isMedia() const {
+    return actionAs<browser_entry::OpenFile>() ||
+           actionAs<browser_entry::PlayTrack>();
+  }
+
+  bool isSectionHeader() const {
+    return actionAs<browser_entry::SectionHeader>() != nullptr;
+  }
+
+  bool isStatus() const {
+    return actionAs<browser_entry::Status>() != nullptr;
+  }
+
+  bool isSelectable() const {
+    return !isSectionHeader() && !isStatus();
+  }
+
+  bool isActivatable() const {
+    return isSelectable() &&
+           !actionAs<browser_entry::Information>();
+  }
 
   std::string name;
   std::filesystem::path path;
   PathIdentity pathIdentity;
-  bool isDir = false;
-  bool isSectionHeader = false;
-  int trackIndex = -1;
-  int optionId = -1;
-  int instrumentDevice = -1;
-  int instrumentChannel = -1;
-  int auditionDevice = -1;
-  int auditionChannel = -1;
-  int auditionIndex = -1;
-  std::optional<BrowserLocation> targetLocation;
+  browser_entry::Action action;
 };
 
 struct BrowserState {
@@ -49,8 +119,7 @@ struct BrowserState {
     std::filesystem::path path;
     PathIdentity pathIdentity;
     std::string name;
-    bool isDir = false;
-    int trackIndex = -1;
+    browser_entry::Action action;
   };
   struct Location {
     BrowserLocation route;
@@ -74,7 +143,7 @@ struct BrowserState {
   };
 
   BrowserLocation location;
-  std::vector<FileEntry> entries;
+  std::vector<BrowserEntry> entries;
   BrowserContent content;
   int selected = 0;
   int scrollRow = 0;

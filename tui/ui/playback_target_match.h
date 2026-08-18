@@ -5,8 +5,8 @@
 #include "browser_model.h"
 #include "playback_target.h"
 
-bool browserEntryMatchesPlaybackTarget(const FileEntry& entry,
+bool browserEntryMatchesPlaybackTarget(const BrowserEntry& entry,
                                        const PlaybackTarget& target);
 
-int findBrowserPlaybackTargetEntry(const std::vector<FileEntry>& entries,
+int findBrowserPlaybackTargetEntry(const std::vector<BrowserEntry>& entries,
                                    const PlaybackTarget& target);

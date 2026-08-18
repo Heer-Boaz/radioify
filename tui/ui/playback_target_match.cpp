@@ -2,33 +2,34 @@
 
 namespace {
 
-PathIdentity entryPathIdentity(const FileEntry& entry) {
+PathIdentity entryPathIdentity(const BrowserEntry& entry) {
   return !entry.pathIdentity.empty() || entry.path.empty()
              ? entry.pathIdentity
              : makePathIdentity(entry.path);
 }
 
-bool entryMatchesTarget(const FileEntry& entry, const PlaybackTarget& target,
+bool entryMatchesTarget(const BrowserEntry& entry, const PlaybackTarget& target,
                         const PathIdentity& targetIdentity) {
-  if (target.file.empty() || entry.path.empty() || entry.isSectionHeader ||
-      entry.isDir || entryPathIdentity(entry) != targetIdentity) {
+  if (target.file.empty() || entry.path.empty() || !entry.isMedia() ||
+      entryPathIdentity(entry) != targetIdentity) {
     return false;
   }
 
   // A regular file entry represents its whole container, so it remains the
   // active item while one of that file's internal tracks is playing. Inside
   // the virtual track browser, only the exact track receives the marker.
-  return entry.trackIndex < 0 || entry.trackIndex == target.trackIndex;
+  const auto* track = entry.actionAs<browser_entry::PlayTrack>();
+  return !track || track->trackIndex == target.trackIndex;
 }
 
 }  // namespace
 
-bool browserEntryMatchesPlaybackTarget(const FileEntry& entry,
+bool browserEntryMatchesPlaybackTarget(const BrowserEntry& entry,
                                        const PlaybackTarget& target) {
   return entryMatchesTarget(entry, target, makePathIdentity(target.file));
 }
 
-int findBrowserPlaybackTargetEntry(const std::vector<FileEntry>& entries,
+int findBrowserPlaybackTargetEntry(const std::vector<BrowserEntry>& entries,
                                    const PlaybackTarget& target) {
   if (target.file.empty()) {
     return -1;

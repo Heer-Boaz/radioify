@@ -15,25 +15,8 @@
 #include "ui_helpers.h"
 
 namespace {
-bool isSelectableEntry(const FileEntry& entry) {
-  return !entry.isSectionHeader;
-}
-
-int nearestSelectableEntryAny(const std::vector<FileEntry>& entries, int start) {
-  if (entries.empty()) return -1;
-  int n = static_cast<int>(entries.size());
-  int idx = std::clamp(start, 0, n - 1);
-  if (isSelectableEntry(entries[static_cast<size_t>(idx)])) return idx;
-  for (int delta = 1; delta < n; ++delta) {
-    int forward = idx + delta;
-    if (forward >= n) forward -= n;
-    if (isSelectableEntry(entries[static_cast<size_t>(forward)])) return forward;
-
-    int backward = idx - delta;
-    if (backward < 0) backward += n;
-    if (isSelectableEntry(entries[static_cast<size_t>(backward)])) return backward;
-  }
-  return -1;
+bool isSelectableEntry(const BrowserEntry& entry) {
+  return entry.isSelectable();
 }
 
 bool isMouseInSearchBar(const MouseEvent& mouse, int searchBarY,
@@ -42,8 +25,8 @@ bool isMouseInSearchBar(const MouseEvent& mouse, int searchBarY,
          mouse.pos.X >= 0 && mouse.pos.X < searchBarWidth;
 }
 
-int nearestSelectableEntry(const std::vector<FileEntry>& entries, int start,
-                          int direction) {
+int nearestSelectableEntry(const std::vector<BrowserEntry>& entries, int start,
+                           int direction) {
   if (entries.empty()) return 0;
   int n = static_cast<int>(entries.size());
   int idx = std::clamp(start, 0, n - 1);
@@ -296,10 +279,11 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
         browserParentDirectory(departedPath);
     if (!parent) return false;
 
-    FileEntry departedEntry;
-    departedEntry.path = departedPath;
-    departedEntry.name = toUtf8String(departedEntry.path.filename());
-    departedEntry.isDir = !leavingTrackBrowser;
+    BrowserEntry departedEntry{
+        toUtf8String(departedPath.filename()), departedPath,
+        leavingTrackBrowser
+            ? browser_entry::Action{browser_entry::OpenFile{}}
+            : browser_entry::Action{browser_entry::OpenDirectory{}}};
     const BrowserState::EntryIdentity departed =
         browserEntryIdentity(departedEntry);
 
@@ -307,6 +291,36 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
                                                {}, departed);
     if (navigated) breadcrumbHover = -1;
     return navigated;
+  };
+  auto activateEntry = [&](const BrowserEntry& entry) {
+    if (entry.actionAs<browser_entry::NavigateUp>()) {
+      navigateUp();
+      return;
+    }
+    if (entry.actionAs<browser_entry::OpenDirectory>()) {
+      navigateDirectoryWithHistory(entry.path);
+      return;
+    }
+    if (const auto* location =
+            entry.actionAs<browser_entry::OpenLocation>()) {
+      navigator.navigate(location->target);
+      return;
+    }
+    if (!entry.isActivatable()) {
+      return;
+    }
+    if (playMode) {
+      if (callbacks.onActivateEntry && callbacks.onActivateEntry(entry)) {
+        dirty = true;
+      }
+      return;
+    }
+    if (entry.isMedia()) {
+      if (callbacks.onRenderFile) {
+        callbacks.onRenderFile(entry.path);
+      }
+      running = false;
+    }
   };
 
   auto resolvePathSearchTarget = [&](const std::string& query,
@@ -554,33 +568,15 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       int count = static_cast<int>(browser.entries.size());
       if (count > 0) {
         const auto& pick = browser.entries[static_cast<size_t>(browser.selected)];
-        if (pick.isSectionHeader) return;
-        if (ctrl && playMode && !pick.isDir) {
+        if (!pick.isSelectable()) return;
+        if (ctrl && playMode && pick.isMedia()) {
           if (callbacks.onOpenFileContextMenu) {
             callbacks.onOpenFileContextMenu(pick, -1, -1);
             dirty = true;
           }
           return;
         }
-        if (pick.isDir) {
-          if (pick.targetLocation) {
-            navigator.navigate(*pick.targetLocation);
-          } else if (pick.name == "..") {
-            navigateUp();
-          } else {
-            navigateDirectoryWithHistory(pick.path);
-          }
-        } else if (playMode) {
-          const std::filesystem::path file = pick.path;
-          if (callbacks.onPlayFile && callbacks.onPlayFile(file)) {
-            dirty = true;
-          }
-        } else {
-          if (callbacks.onRenderFile) {
-            callbacks.onRenderFile(pick.path);
-          }
-          running = false;
-        }
+        activateEntry(pick);
       }
       return;
     }
@@ -791,28 +787,26 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
     if (idx < 0 || idx >= count) return;
 
     if (mouse.eventFlags == MOUSE_MOVED && !leftPressed) {
-      int hoverIdx = nearestSelectableEntryAny(browser.entries, idx);
-      if (hoverIdx >= 0 && browser.selected != hoverIdx) {
-        browser.selected = hoverIdx;
+      if (!browser.entries[static_cast<size_t>(idx)].isSelectable()) {
+        return;
+      }
+      if (browser.selected != idx) {
+        browser.selected = idx;
         dirty = true;
       }
       return;
     }
 
     if (mouse.eventFlags == 0 && rightPressed) {
-      if (browser.selected != idx) {
-        int hoverIdx = nearestSelectableEntryAny(browser.entries, idx);
-        if (hoverIdx < 0) return;
-        if (browser.selected != hoverIdx) {
-          browser.selected = hoverIdx;
-          dirty = true;
-        }
-      }
-      if (!isSelectableEntry(browser.entries[static_cast<size_t>(browser.selected)])) {
+      if (!browser.entries[static_cast<size_t>(idx)].isSelectable()) {
         return;
       }
+      if (browser.selected != idx) {
+        browser.selected = idx;
+        dirty = true;
+      }
       const auto& pick = browser.entries[static_cast<size_t>(browser.selected)];
-      if (!pick.isDir && callbacks.onOpenFileContextMenu) {
+      if (pick.isMedia() && callbacks.onOpenFileContextMenu) {
         callbacks.onOpenFileContextMenu(pick, mouse.pos.X, mouse.pos.Y);
         dirty = true;
       }
@@ -820,32 +814,15 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
     }
 
     if (mouse.eventFlags == 0 && leftPressed) {
-      int clickIdx = nearestSelectableEntryAny(browser.entries, idx);
-      if (clickIdx < 0) return;
-      if (browser.selected != clickIdx) {
-        browser.selected = clickIdx;
+      if (!browser.entries[static_cast<size_t>(idx)].isSelectable()) {
+        return;
+      }
+      if (browser.selected != idx) {
+        browser.selected = idx;
         dirty = true;
       }
       const auto& pick = browser.entries[static_cast<size_t>(browser.selected)];
-      if (pick.isDir) {
-        if (pick.targetLocation) {
-          navigator.navigate(*pick.targetLocation);
-        } else if (pick.name == "..") {
-          navigateUp();
-        } else {
-          navigateDirectoryWithHistory(pick.path);
-        }
-      } else if (playMode) {
-        const std::filesystem::path file = pick.path;
-        if (callbacks.onPlayFile && callbacks.onPlayFile(file)) {
-          dirty = true;
-        }
-      } else {
-        if (callbacks.onRenderFile) {
-          callbacks.onRenderFile(pick.path);
-        }
-        running = false;
-      }
+      activateEntry(pick);
     }
   }
 }

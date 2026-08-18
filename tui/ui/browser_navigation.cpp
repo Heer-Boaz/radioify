@@ -1,13 +1,14 @@
 #include "browser_navigation.h"
 
 #include <algorithm>
+#include <type_traits>
 #include <utility>
 
 #include "browser_grid_index.h"
 
 namespace {
 
-const PathIdentity& cachedPathIdentity(const FileEntry& entry,
+const PathIdentity& cachedPathIdentity(const BrowserEntry& entry,
                                        PathIdentity& fallback) {
   if (!entry.pathIdentity.empty() || entry.path.empty()) {
     return entry.pathIdentity;
@@ -16,16 +17,53 @@ const PathIdentity& cachedPathIdentity(const FileEntry& entry,
   return fallback;
 }
 
-bool matchesIdentity(const FileEntry& entry,
-                     const BrowserState::EntryIdentity& identity) {
-  PathIdentity fallback;
-  if (entry.isSectionHeader || entry.isDir != identity.isDir ||
-      entry.trackIndex != identity.trackIndex ||
-      entry.path.empty() != identity.path.empty() ||
-      cachedPathIdentity(entry, fallback) != identity.pathIdentity) {
+bool actionsMatch(const browser_entry::Action& left,
+                  const browser_entry::Action& right) {
+  if (left.index() != right.index()) {
     return false;
   }
-  return !entry.path.empty() || entry.name == identity.name;
+  return std::visit(
+      [&](const auto& action) {
+        using T = std::decay_t<decltype(action)>;
+        const T* other = std::get_if<T>(&right);
+        if (!other) return false;
+        if constexpr (std::is_same_v<T, browser_entry::OpenLocation>) {
+          return action.target == other->target;
+        } else if constexpr (std::is_same_v<T, browser_entry::PlayTrack>) {
+          return action.trackIndex == other->trackIndex;
+        } else if constexpr (
+            std::is_same_v<T, browser_entry::AdjustKssOption> ||
+            std::is_same_v<T, browser_entry::AdjustNsfOption> ||
+            std::is_same_v<T, browser_entry::AdjustVgmOption> ||
+            std::is_same_v<T, browser_entry::AdjustVgmDeviceOption>) {
+          return action.option == other->option;
+        } else if constexpr (
+            std::is_same_v<T, browser_entry::StartInstrumentAudition>) {
+          return action.profileIndex == other->profileIndex;
+        } else {
+          return true;
+        }
+      },
+      left);
+}
+
+bool actionUsesNameForIdentity(const browser_entry::Action& action) {
+  return std::holds_alternative<browser_entry::Information>(action) ||
+         std::holds_alternative<browser_entry::Status>(action) ||
+         std::holds_alternative<browser_entry::SectionHeader>(action);
+}
+
+bool matchesIdentity(const BrowserEntry& entry,
+                     const BrowserState::EntryIdentity& identity) {
+  PathIdentity fallback;
+  if (!entry.isSelectable() ||
+      entry.path.empty() != identity.path.empty() ||
+      cachedPathIdentity(entry, fallback) != identity.pathIdentity ||
+      !actionsMatch(entry.action, identity.action)) {
+    return false;
+  }
+  return !entry.path.empty() || !actionUsesNameForIdentity(entry.action) ||
+         entry.name == identity.name;
 }
 
 int rowFromIndex(int idx, const GridLayout& layout) {
@@ -47,15 +85,14 @@ bool recordNavigation(
 
 }  // namespace
 
-BrowserState::EntryIdentity browserEntryIdentity(const FileEntry& entry) {
+BrowserState::EntryIdentity browserEntryIdentity(const BrowserEntry& entry) {
   BrowserState::EntryIdentity identity;
   identity.path = entry.path;
   identity.pathIdentity = entry.pathIdentity.empty() && !entry.path.empty()
                               ? makePathIdentity(entry.path)
                               : entry.pathIdentity;
   identity.name = entry.name;
-  identity.isDir = entry.isDir;
-  identity.trackIndex = entry.trackIndex;
+  identity.action = entry.action;
   return identity;
 }
 
@@ -65,7 +102,7 @@ BrowserState::Location captureBrowserLocation(const BrowserState& browser) {
   location.scrollRow = browser.scrollRow;
   if (!browser.entries.empty() && browser.selected >= 0 &&
       browser.selected < static_cast<int>(browser.entries.size()) &&
-      !browser.entries[static_cast<size_t>(browser.selected)].isSectionHeader) {
+      browser.entries[static_cast<size_t>(browser.selected)].isSelectable()) {
     location.selectedEntry = browserEntryIdentity(
         browser.entries[static_cast<size_t>(browser.selected)]);
   }

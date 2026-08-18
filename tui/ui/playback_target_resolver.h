@@ -18,13 +18,13 @@ resolvePathTarget(const std::filesystem::path& path,
                   PlaybackTargetResolveOptions options = {});
 
 std::optional<PlaybackTarget>
-resolveEntryTarget(const FileEntry& entry,
+resolveEntryTarget(const BrowserEntry& entry,
                    PlaybackTargetResolveOptions options = {});
 
 std::optional<PlaybackTarget>
 resolveDroppedTarget(const std::vector<std::filesystem::path>& files);
 
-bool isPlayableEntry(const FileEntry& entry,
+bool isPlayableEntry(const BrowserEntry& entry,
                      PlaybackTargetResolveOptions options = {});
 
 }  // namespace playback_target_resolver

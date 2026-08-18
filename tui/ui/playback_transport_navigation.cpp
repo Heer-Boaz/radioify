@@ -22,7 +22,7 @@ bool Navigator::activateTrackBrowser(const std::filesystem::path& file) {
 }
 
 std::optional<PlaybackTarget> Navigator::resolveEntryTarget(
-    const FileEntry& entry) const {
+    const BrowserEntry& entry) const {
   return playback_target_resolver::resolveEntryTarget(entry);
 }
 

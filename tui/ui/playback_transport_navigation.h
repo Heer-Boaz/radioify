@@ -22,7 +22,8 @@ class Navigator {
   Navigator(BrowserNavigator& browserNavigator, Callbacks callbacks);
 
   bool activateTrackBrowser(const std::filesystem::path& file);
-  std::optional<PlaybackTarget> resolveEntryTarget(const FileEntry& entry) const;
+  std::optional<PlaybackTarget> resolveEntryTarget(
+      const BrowserEntry& entry) const;
   bool syncBrowserToPlaybackTarget(const PlaybackTarget& target);
   std::optional<PlaybackTarget> resolveAdjacentPlaybackTarget(
       const PlaybackTarget& current, int direction);

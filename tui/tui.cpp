@@ -234,11 +234,11 @@ static bool shouldHideBrowserMediaMetadataFile(
 #endif
 }
 
-static std::optional<std::vector<FileEntry>> listEntries(
+static std::optional<std::vector<BrowserEntry>> listEntries(
     const std::filesystem::path& dir) {
-  std::vector<FileEntry> entries;
-  std::vector<FileEntry> items;
-  std::vector<FileEntry> knownFolders;
+  std::vector<BrowserEntry> entries;
+  std::vector<BrowserEntry> items;
+  std::vector<BrowserEntry> knownFolders;
 #ifdef _WIN32
   std::filesystem::path browseDir = dir;
   if (browseDir.has_root_name() && !browseDir.has_root_directory() &&
@@ -258,11 +258,12 @@ static std::optional<std::vector<FileEntry>> listEntries(
     if (!std::filesystem::is_directory(path, ec) || ec) {
       return;
     }
-    knownFolders.push_back(FileEntry{name, path, true});
+    knownFolders.emplace_back(name, path, browser_entry::OpenDirectory{});
   };
 
   auto appendSectionHeader = [&](const std::string& name) {
-    entries.push_back(FileEntry{name, std::filesystem::path(), false, true});
+    entries.emplace_back(name, std::filesystem::path{},
+                         browser_entry::SectionHeader{});
   };
 
   auto addWindowsKnownFolders = [&]() {
@@ -295,7 +296,8 @@ static std::optional<std::vector<FileEntry>> listEntries(
     if (!drives.empty()) {
       appendSectionHeader("Drives");
       for (const auto& drive : drives) {
-        entries.push_back(FileEntry{drive.label, drive.path, true});
+        entries.emplace_back(drive.label, drive.path,
+                             browser_entry::OpenDirectory{});
       }
     }
     addWindowsKnownFolders();
@@ -305,12 +307,14 @@ static std::optional<std::vector<FileEntry>> listEntries(
     }
     return entries;
   } else if (browseDir == browseDir.root_path()) {
-    entries.push_back(FileEntry{"..", std::filesystem::path(), true});
+    entries.emplace_back("..", std::filesystem::path{},
+                         browser_entry::NavigateUp{});
   }
 #endif
 
   if (browseDir.has_parent_path() && browseDir != browseDir.root_path()) {
-    entries.push_back(FileEntry{"..", browseDir.parent_path(), true});
+    entries.emplace_back("..", browseDir.parent_path(),
+                         browser_entry::NavigateUp{});
   }
 
   std::error_code iteratorError;
@@ -326,10 +330,12 @@ static std::optional<std::vector<FileEntry>> listEntries(
     const auto& p = entry.path();
     std::error_code ec;
     if (entry.is_directory(ec) && !ec) {
-      items.push_back(FileEntry{toUtf8String(p.filename()), p, true});
+      items.emplace_back(toUtf8String(p.filename()), p,
+                         browser_entry::OpenDirectory{});
     } else if (entry.is_regular_file(ec) && !ec && isSupportedMediaExt(p) &&
                !shouldHideBrowserMediaMetadataFile(entry)) {
-      items.push_back(FileEntry{toUtf8String(p.filename()), p, false});
+      items.emplace_back(toUtf8String(p.filename()), p,
+                         browser_entry::OpenFile{});
     }
     iterator.increment(iteratorError);
     if (iteratorError) {
@@ -358,21 +364,18 @@ static bool populateBrowser(BrowserState& state,
     state.content = content;
     state.entries.clear();
     if (content->file.has_parent_path()) {
-      state.entries.push_back(
-          FileEntry{"..", content->file.parent_path(), true});
+      state.entries.emplace_back("..", content->file.parent_path(),
+                                 browser_entry::NavigateUp{});
     }
     int digits = trackLabelDigits(content->tracks.size());
     for (const auto& track : content->tracks) {
-      FileEntry entry;
-      entry.name = formatTrackLabel(track, digits);
-      entry.path = content->file;
+      BrowserEntry entry{formatTrackLabel(track, digits), content->file,
+                         browser_entry::PlayTrack{track.index}};
       entry.pathIdentity = content->fileIdentity;
-      entry.isDir = false;
-      entry.trackIndex = track.index;
       state.entries.push_back(std::move(entry));
     }
   } else {
-    std::optional<std::vector<FileEntry>> entries =
+    std::optional<std::vector<BrowserEntry>> entries =
         listEntries(state.location.path);
     if (!entries) {
       return false;
@@ -385,8 +388,11 @@ static bool populateBrowser(BrowserState& state,
     std::string lowFilter = toLower(state.filter);
     state.entries.erase(
         std::remove_if(state.entries.begin(), state.entries.end(),
-                       [&](const FileEntry& e) {
-                         if (e.isSectionHeader || e.name == "..") return false;
+                       [&](const BrowserEntry& e) {
+                         if (e.isSectionHeader() || e.isStatus() ||
+                             e.actionAs<browser_entry::NavigateUp>()) {
+                           return false;
+                         }
                          return toLower(e.name).find(lowFilter) ==
                                 std::string::npos;
                        }),
@@ -396,20 +402,25 @@ static bool populateBrowser(BrowserState& state,
   if (!state.entries.empty() && !optionsActive) {
     const bool sortingRootLevel = state.location.path.empty();
 #ifdef _WIN32
-    auto isDriveEntry = [](const FileEntry& entry) {
+    auto isDriveEntry = [](const BrowserEntry& entry) {
       if (entry.path.empty()) return false;
       return entry.path.has_root_name() &&
              entry.path.has_root_directory() &&
              entry.path.relative_path().empty();
     };
 #else
-    auto isDriveEntry = [](const FileEntry&) { return false; };
+    auto isDriveEntry = [](const BrowserEntry&) { return false; };
 #endif
     const bool hasSectionHeaders =
         std::any_of(state.entries.begin(), state.entries.end(),
-                    [](const FileEntry& e) { return e.isSectionHeader; });
-    auto sectionComparator = [&](const FileEntry& a, const FileEntry& b) {
-      if (a.isDir != b.isDir) return a.isDir > b.isDir;
+                    [](const BrowserEntry& e) {
+                      return e.isSectionHeader();
+                    });
+    auto sectionComparator = [&](const BrowserEntry& a,
+                                 const BrowserEntry& b) {
+      if (a.isDirectory() != b.isDirectory()) {
+        return a.isDirectory() > b.isDirectory();
+      }
       if (sortingRootLevel && !hasSectionHeaders && isDriveEntry(a) != isDriveEntry(b)) {
         return isDriveEntry(a);
       }
@@ -423,7 +434,7 @@ static bool populateBrowser(BrowserState& state,
         }
       } else if (state.sortMode == BrowserState::SortMode::Size) {
         try {
-          if (!a.isDir && !b.isDir) {
+          if (!a.isDirectory() && !b.isDirectory()) {
             aLessB = std::filesystem::file_size(a.path) <
                      std::filesystem::file_size(b.path);
           } else {
@@ -447,15 +458,17 @@ static bool populateBrowser(BrowserState& state,
     };
 
     size_t sectionStart = 0;
-    if (state.entries.front().name == "..") ++sectionStart;
+    if (state.entries.front().actionAs<browser_entry::NavigateUp>()) {
+      ++sectionStart;
+    }
     while (sectionStart < state.entries.size()) {
-      if (state.entries[sectionStart].isSectionHeader) {
+      if (state.entries[sectionStart].isSectionHeader()) {
         ++sectionStart;
         continue;
       }
       size_t sectionEnd = sectionStart;
       while (sectionEnd < state.entries.size() &&
-             !state.entries[sectionEnd].isSectionHeader) {
+             !state.entries[sectionEnd].isSectionHeader()) {
         ++sectionEnd;
       }
       sortSection(sectionStart, sectionEnd);
@@ -469,8 +482,8 @@ static bool populateBrowser(BrowserState& state,
     return true;
   }
 
-  auto isSelectable = [](const FileEntry& entry) {
-    return !entry.isSectionHeader;
+  auto isSelectable = [](const BrowserEntry& entry) {
+    return entry.isSelectable();
   };
   if (state.selected < 0 || state.selected >= static_cast<int>(state.entries.size()) ||
       !isSelectable(state.entries[static_cast<size_t>(state.selected)])) {
@@ -489,7 +502,7 @@ static bool populateBrowser(BrowserState& state,
 
   if (!initialName.empty()) {
     for (size_t i = 0; i < state.entries.size(); ++i) {
-      if (state.entries[i].isSectionHeader) continue;
+      if (!state.entries[i].isSelectable()) continue;
       if (toLower(state.entries[i].name) == toLower(initialName)) {
         state.selected = static_cast<int>(i);
         requestBrowserSelectionReveal(state);
@@ -529,7 +542,9 @@ static std::string buildTrackSelectionMeta(const BrowserState& browser) {
                        static_cast<int>(browser.entries.size()) - 1);
   const auto& entry = browser.entries[static_cast<size_t>(idx)];
   std::string name = entry.name;
-  if (entry.isDir && name != "..") name += "/";
+  if (entry.isDirectory() && !entry.actionAs<browser_entry::NavigateUp>()) {
+    name += "/";
+  }
 
   std::string sortLabel = "Name";
   if (browser.sortMode == BrowserState::SortMode::Date) sortLabel = "Date";
@@ -539,22 +554,25 @@ static std::string buildTrackSelectionMeta(const BrowserState& browser) {
   std::string metaLine = " [" + sortLabel + dirArrow + "]";
 
   metaLine += " Selected: " + name;
-  if (entry.trackIndex >= 0) {
+  if (const auto* selectedTrack =
+          entry.actionAs<browser_entry::PlayTrack>()) {
     const TrackBrowserContent* content = trackBrowserContent(browser);
-    const TrackEntry* track = findTrackEntry(browser, entry.trackIndex);
+    const TrackEntry* track =
+        findTrackEntry(browser, selectedTrack->trackIndex);
     if (track && track->lengthMs > 0) {
       metaLine += "  " + formatTime(static_cast<double>(track->lengthMs) / 1000.0);
     }
     if (content && !content->tracks.empty()) {
-      metaLine += "  Track " + std::to_string(entry.trackIndex + 1) + "/" +
+      metaLine += "  Track " +
+                  std::to_string(selectedTrack->trackIndex + 1) + "/" +
                   std::to_string(content->tracks.size());
     }
   }
   return metaLine;
 }
 
-static bool isImageViewerEntry(const FileEntry& entry) {
-  return !entry.isSectionHeader && !entry.isDir &&
+static bool isImageViewerEntry(const BrowserEntry& entry) {
+  return entry.actionAs<browser_entry::OpenFile>() &&
          isSupportedImageExt(entry.path);
 }
 
@@ -1416,7 +1434,7 @@ int runTui(Options o) {
 
   struct FileContextMenuState {
     bool active = false;
-    FileEntry entry{};
+    std::optional<BrowserEntry> entry;
     std::vector<FileContextMenuItem> items;
     int selected = 0;
     int anchorX = -1;
@@ -1684,9 +1702,9 @@ int runTui(Options o) {
 
   InputCallbacks callbacks;
   callbacks.onQuit = [&]() { running = false; };
-  callbacks.onPlayFile = [&](const std::filesystem::path& file) {
+  callbacks.onActivateEntry = [&](const BrowserEntry& entry) {
     OptionsBrowserResult optionsResult =
-        optionsBrowserActivateSelection(browser);
+        optionsBrowserActivateEntry(browser, entry);
     if (optionsResult == OptionsBrowserResult::Changed) {
       browserNavigator.reload();
       return true;
@@ -1694,31 +1712,27 @@ int runTui(Options o) {
     if (optionsResult == OptionsBrowserResult::Handled) {
       return true;
     }
-    if (isTrackBrowserActive(browser)) {
-      if (!browser.entries.empty()) {
-        int idx = std::clamp(browser.selected, 0,
-                             static_cast<int>(browser.entries.size()) - 1);
-        const auto& entry = browser.entries[static_cast<size_t>(idx)];
-        if (entry.trackIndex >= 0) {
-          return playPlaybackTarget({file, entry.trackIndex});
-        }
-      }
+    if (const auto* track = entry.actionAs<browser_entry::PlayTrack>()) {
+      return playPlaybackTarget({entry.path, track->trackIndex});
+    }
+    if (!entry.actionAs<browser_entry::OpenFile>()) {
+      return false;
+    }
+    if (isSupportedImageExt(entry.path) || isVideoExt(entry.path)) {
+      return playPlaybackTarget({entry.path, -1});
+    }
+    if (transportNavigator.activateTrackBrowser(entry.path)) {
       return true;
     }
-    if (isSupportedImageExt(file) || isVideoExt(file)) {
-      return playPlaybackTarget({file, -1});
-    }
-    if (transportNavigator.activateTrackBrowser(file)) {
-      return true;
-    }
-    return tryStartAudioFile(file);
+    return tryStartAudioFile(entry.path);
   };
   callbacks.onPlayFiles =
       [&](const std::vector<std::filesystem::path>& files) {
         return playOpenFilesRequest({files});
       };
-  callbacks.onOpenFileContextMenu = [&](const FileEntry& entry, int x, int y) {
-    if (!o.play || entry.isDir) {
+  callbacks.onOpenFileContextMenu = [&](const BrowserEntry& entry, int x,
+                                        int y) {
+    if (!o.play || !entry.isMedia()) {
       return;
     }
     std::vector<FileContextMenuItem> items;
@@ -2148,12 +2162,12 @@ int runTui(Options o) {
         std::clamp(paletteScroll, 0, std::max(0, count - visibleRows));
   };
 
-  auto buildMelodyOutputPath = [&](const FileEntry& entry) {
+  auto buildMelodyOutputPath = [&](const BrowserEntry& entry) {
     std::filesystem::path output = entry.path;
-    int trackIndex = entry.trackIndex;
-    if (trackIndex >= 0) {
+    if (const auto* track = entry.actionAs<browser_entry::PlayTrack>()) {
       char suffix[32];
-      std::snprintf(suffix, sizeof(suffix), ".track%03d.melody", trackIndex);
+      std::snprintf(suffix, sizeof(suffix), ".track%03d.melody",
+                    track->trackIndex);
       output += suffix;
       return output;
     }
@@ -2179,8 +2193,8 @@ int runTui(Options o) {
     }
   };
 
-  auto startMelodyExport = [&](const FileEntry& entry) {
-    if (entry.isDir || !isSupportedAudioExt(entry.path)) {
+  auto startMelodyExport = [&](const BrowserEntry& entry) {
+    if (!entry.isMedia() || !isSupportedAudioExt(entry.path)) {
       return;
     }
     if (isBackgroundTaskRunning()) {
@@ -2189,7 +2203,8 @@ int runTui(Options o) {
 
     cleanupMelodyExportWorker();
 
-    int trackIndex = entry.trackIndex >= 0 ? entry.trackIndex : 0;
+    const auto* track = entry.actionAs<browser_entry::PlayTrack>();
+    int trackIndex = track ? track->trackIndex : 0;
     std::filesystem::path outputFile = buildMelodyOutputPath(entry);
 
     {
@@ -2262,23 +2277,20 @@ int runTui(Options o) {
   };
 
   auto runFileContextAction = [&](int actionIndex) {
-    if (!fileContextMenu.active || actionIndex < 0 ||
+    if (!fileContextMenu.active || !fileContextMenu.entry || actionIndex < 0 ||
         actionIndex >= static_cast<int>(fileContextMenu.items.size())) {
       return;
     }
-    const FileEntry entry = fileContextMenu.entry;
+    const BrowserEntry entry = *fileContextMenu.entry;
     const FileContextAction action =
         fileContextMenu.items[static_cast<size_t>(actionIndex)].action;
     fileContextMenu.active = false;
+    fileContextMenu.entry.reset();
     fileContextMenu.items.clear();
     dirty = true;
     if (action == FileContextAction::Play) {
-      bool played = false;
-      if (entry.trackIndex >= 0) {
-        played = tryStartAudioFile(entry.path, entry.trackIndex);
-      } else if (callbacks.onPlayFile) {
-        played = callbacks.onPlayFile(entry.path);
-      }
+      const bool played =
+          callbacks.onActivateEntry && callbacks.onActivateEntry(entry);
       (void)played;
     } else if (action == FileContextAction::EditVideo) {
       playback_route::Route route =
@@ -2288,12 +2300,13 @@ int runTui(Options o) {
     } else if (action == FileContextAction::Analyze) {
       startMelodyExport(entry);
     } else if (action == FileContextAction::SplitLoop) {
-      if (!entry.isDir && isSupportedAudioExt(entry.path) &&
+      if (entry.isMedia() && isSupportedAudioExt(entry.path) &&
           !isBackgroundTaskRunning()) {
         LoopSplitConfig splitConfig;
         splitConfig.channels = 2;
         splitConfig.sampleRate = 48000;
-        splitConfig.trackIndex = std::max(0, entry.trackIndex);
+        const auto* track = entry.actionAs<browser_entry::PlayTrack>();
+        splitConfig.trackIndex = track ? track->trackIndex : 0;
         splitConfig.kssOptions = audioGetKssOptionState();
         splitConfig.nsfOptions = audioGetNsfOptionState();
         splitConfig.vgmOptions = audioGetVgmOptionState();

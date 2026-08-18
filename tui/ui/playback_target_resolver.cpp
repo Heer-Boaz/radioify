@@ -39,15 +39,14 @@ resolvePathTarget(const std::filesystem::path& path,
 }
 
 std::optional<PlaybackTarget>
-resolveEntryTarget(const FileEntry& entry,
+resolveEntryTarget(const BrowserEntry& entry,
                    PlaybackTargetResolveOptions options) {
-  if (entry.isSectionHeader || entry.isDir) {
-    return std::nullopt;
+  if (const auto* track = entry.actionAs<browser_entry::PlayTrack>()) {
+    return PlaybackTarget{entry.path, track->trackIndex};
   }
-  if (entry.trackIndex >= 0) {
-    return PlaybackTarget{entry.path, entry.trackIndex};
-  }
-  return resolvePathTarget(entry.path, options);
+  return entry.actionAs<browser_entry::OpenFile>()
+             ? resolvePathTarget(entry.path, options)
+             : std::nullopt;
 }
 
 std::optional<PlaybackTarget>
@@ -62,7 +61,7 @@ resolveDroppedTarget(const std::vector<std::filesystem::path>& files) {
   return std::nullopt;
 }
 
-bool isPlayableEntry(const FileEntry& entry,
+bool isPlayableEntry(const BrowserEntry& entry,
                      PlaybackTargetResolveOptions options) {
   return resolveEntryTarget(entry, options).has_value();
 }
