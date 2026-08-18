@@ -654,6 +654,16 @@ radioify_link_repo_target(browser_navigation_tests)
 add_test(NAME browser_navigation_tests
          COMMAND $<TARGET_FILE:browser_navigation_tests>)
 
+add_executable(playback_sequence_tests)
+target_sources(playback_sequence_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_playback_sequence_tests>
+  ${CMAKE_SOURCE_DIR}/tui/ui/path_identity.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/playback_sequence.cpp
+)
+radioify_link_repo_target(playback_sequence_tests)
+add_test(NAME playback_sequence_tests
+         COMMAND $<TARGET_FILE:playback_sequence_tests>)
+
 add_executable(windows_console_window_tests)
 target_sources(windows_console_window_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_windows_console_window_tests>
