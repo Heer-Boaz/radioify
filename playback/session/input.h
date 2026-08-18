@@ -63,7 +63,7 @@ struct PlaybackInputSignals {
   std::function<playback_video_edit::Prompt()> videoEditPrompt;
   std::function<bool(playback_video_edit::Command)> executeVideoEditCommand;
   std::function<bool()> waitForVideoEditExportAndExit;
-  std::function<bool()> navigateBack;
+  std::function<void()> navigateBack;
   std::function<bool()> confirmPendingExit;
   std::function<bool()> cancelPendingExit;
   std::function<bool()> contextMenuVisible;
@@ -71,7 +71,7 @@ struct PlaybackInputSignals {
       handleContextMenuInput;
   std::function<bool(playback_video_edit::EditBoundary, int64_t timelineUs)>
       moveVideoEditBoundary;
-  std::function<bool(bool quitApplication)> requestPlaybackExit;
+  std::function<void(bool quitApplication)> requestPlaybackExit;
   std::function<void(playback_video_timeline_preview::PresentationSurface,
                      double ratio, int progressUnits)>
       requestTimelinePreview;
@@ -80,7 +80,6 @@ struct PlaybackInputSignals {
   playback_session::PlaybackOsdTimeline* osd = nullptr;
 
   bool* loopStopRequested = nullptr;
-  bool* quitApplicationRequested = nullptr;
   bool* redraw = nullptr;
   bool* forceRefreshArt = nullptr;
 };

@@ -122,19 +122,9 @@ void triggerOverlay(const PlaybackInputView& view,
   requestWindowRefresh(signals);
 }
 
-void requestPlaybackExit(const PlaybackInputView& view,
-                         PlaybackInputSignals& signals, bool quitApp) {
-  if (signals.requestPlaybackExit &&
-      !signals.requestPlaybackExit(quitApp)) {
-    return;
-  }
-  *view.playbackState = PlaybackSessionState::Exiting;
-  *signals.loopStopRequested = true;
-  signals.osd->clear();
-  *signals.redraw = true;
-  *signals.forceRefreshArt = true;
-  if (quitApp && signals.quitApplicationRequested) {
-    *signals.quitApplicationRequested = true;
+void requestPlaybackExit(PlaybackInputSignals& signals, bool quitApp) {
+  if (signals.requestPlaybackExit) {
+    signals.requestPlaybackExit(quitApp);
   }
 }
 
@@ -431,7 +421,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
     }
   }
   InputCallbacks cb;
-  cb.onQuit = [&]() { requestPlaybackExit(view, signals, true); };
+  cb.onQuit = [&]() { requestPlaybackExit(signals, true); };
   cb.onPlay = [&]() {
     setPlaybackPaused(view, signals, seekState, false);
   };
@@ -441,7 +431,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
   cb.onTogglePause = [&]() {
     setPlaybackPaused(view, signals, seekState, pauseRequestedByToggle(view));
   };
-  cb.onStopPlayback = [&]() { requestPlaybackExit(view, signals, false); };
+  cb.onStopPlayback = [&]() { requestPlaybackExit(signals, false); };
   cb.onPlayPrevious = [&]() {
     playback_session_handoff::requestTransportHandoff(
         view, signals, PlaybackTransportCommand::Previous);
@@ -469,8 +459,10 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
         togglePictureInPicture(view, signals);
         break;
       case PlaybackShortcutAction::NavigateBackInVideoEditor:
-      case PlaybackShortcutAction::ExitPlaybackSession:
         if (signals.navigateBack) signals.navigateBack();
+        break;
+      case PlaybackShortcutAction::ExitPlaybackSession:
+        requestPlaybackExit(signals, false);
         break;
       case PlaybackShortcutAction::DiscardVideoEditsAndExit:
         if (signals.confirmPendingExit) {
@@ -556,7 +548,7 @@ void handlePlaybackControlCommand(const PlaybackInputView& view,
       break;
     }
     case PlaybackControlCommand::Stop:
-      requestPlaybackExit(view, signals, false);
+      requestPlaybackExit(signals, false);
       break;
     case PlaybackControlCommand::Previous:
       playback_session_handoff::requestTransportHandoff(

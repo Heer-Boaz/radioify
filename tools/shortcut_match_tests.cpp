@@ -17,10 +17,12 @@
 #include "clock.h"
 #include "queues.h"
 
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <optional>
 #include <string>
+#include <type_traits>
 
 namespace {
 
@@ -50,6 +52,12 @@ bool expect(bool condition, const char* message) {
 
 int main() {
   bool ok = true;
+
+  using PlaybackExitRequest = decltype(
+      playback_session_input::PlaybackInputSignals{}.requestPlaybackExit);
+  static_assert(std::is_same_v<PlaybackExitRequest,
+                               std::function<void(bool)>>,
+                "the playback loop must own session-exit completion");
 
   using BoundaryCommitState =
       playback_session_input::VideoEditBoundaryCommitState;

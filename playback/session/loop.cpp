@@ -80,7 +80,6 @@ struct PlaybackLoopRunner::Impl {
       Transport,
       OpenFiles,
       DeferredOpenRequest,
-      NotificationQuit,
     };
 
     Kind kind = Kind::Session;
@@ -267,11 +266,13 @@ struct PlaybackLoopRunner::Impl {
     return false;
   }
 
-  bool requestPlaybackExit(bool quitApplication) {
+  void requestPlaybackExit(bool quitApplication) {
     PendingExit request;
     request.kind = quitApplication ? PendingExit::Kind::QuitApplication
                                    : PendingExit::Kind::Session;
-    return beginPendingExit(std::move(request));
+    if (beginPendingExit(std::move(request))) {
+      finishLoopExit(quitApplication);
+    }
   }
 
   bool requestTransportExit(PlaybackTransportCommand command) {
@@ -306,7 +307,6 @@ struct PlaybackLoopRunner::Impl {
         finishLoopExit(false);
         break;
       case PendingExit::Kind::QuitApplication:
-      case PendingExit::Kind::NotificationQuit:
         finishLoopExit(true);
         break;
       case PendingExit::Kind::Transport:
@@ -352,15 +352,20 @@ struct PlaybackLoopRunner::Impl {
     return true;
   }
 
-  bool navigateBack() {
-    if (pendingExit) return cancelPendingExit();
+  void navigateBack() {
+    if (pendingExit) {
+      cancelPendingExit();
+      return;
+    }
     const playback_session::VideoEditActionResult result =
         videoEditWorkspace.navigateBack();
-    if (!result.handled) return requestPlaybackExit(false);
+    if (!result.handled) {
+      requestPlaybackExit(false);
+      return;
+    }
     overlayControlHover.store(-1, std::memory_order_relaxed);
     syncVideoEditPresentation();
     if (!result.message.empty()) showEditMessage(result.message);
-    return true;
   }
 
   void publishWindowUiState() {
@@ -626,7 +631,7 @@ struct PlaybackLoopRunner::Impl {
         };
     inputSignals.waitForVideoEditExportAndExit =
         [this]() { return waitForVideoEditExportAndExit(); };
-    inputSignals.navigateBack = [this]() { return navigateBack(); };
+    inputSignals.navigateBack = [this]() { navigateBack(); };
     inputSignals.confirmPendingExit =
         [this]() { return completePendingExit(); };
     inputSignals.cancelPendingExit =
@@ -688,7 +693,7 @@ struct PlaybackLoopRunner::Impl {
     };
     inputSignals.requestPlaybackExit =
         [this](bool quitApplication) {
-          return requestPlaybackExit(quitApplication);
+          requestPlaybackExit(quitApplication);
         };
     inputSignals.requestTransportCommand =
         [this](PlaybackTransportCommand cmd) {
@@ -700,7 +705,6 @@ struct PlaybackLoopRunner::Impl {
     };
     inputSignals.osd = &osd;
     inputSignals.loopStopRequested = &loopStopRequested;
-    inputSignals.quitApplicationRequested = quitApplicationRequested;
     inputSignals.redraw = &redraw;
     inputSignals.forceRefreshArt = &forceRefreshArt;
   }
@@ -1100,13 +1104,7 @@ struct PlaybackLoopRunner::Impl {
           applyPresenterSync(syncPresentation());
           break;
         case PlaybackNotificationAreaCommand::Kind::Quit:
-          {
-            PendingExit request;
-            request.kind = PendingExit::Kind::NotificationQuit;
-            if (beginPendingExit(std::move(request))) {
-              finishLoopExit(true);
-            }
-          }
+          requestPlaybackExit(true);
           break;
       }
       if (loopStopRequested) {
