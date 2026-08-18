@@ -16,7 +16,7 @@ bool optionsBrowserCanToggle(const BrowserState& browser);
 std::optional<BrowserLocation> optionsBrowserOpenLocation(
     const BrowserState& browser);
 bool optionsBrowserSupportsLocation(const BrowserLocation& location);
-bool optionsBrowserRefresh(BrowserState& browser);
+bool prepareOptionsBrowserContent(BrowserState& browser);
 OptionsBrowserResult optionsBrowserActivateSelection(BrowserState& browser);
 std::string optionsBrowserSelectionMeta(const BrowserState& browser);
 std::string optionsBrowserShowingLabel(const BrowserState& browser);

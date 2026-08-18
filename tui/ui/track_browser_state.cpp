@@ -2,20 +2,7 @@
 
 #include <utility>
 
-#include "consoleinput.h"
 #include "playback/media/track_catalog.h"
-
-namespace {
-
-struct TrackBrowserState {
-  bool active = false;
-  std::filesystem::path file;
-  std::vector<TrackEntry> tracks;
-};
-
-TrackBrowserState gTrackBrowser;
-
-}  // namespace
 
 std::filesystem::path normalizeTrackBrowserPath(std::filesystem::path path) {
   return normalizePlaybackTrackPath(std::move(path));
@@ -27,35 +14,32 @@ bool listTracksForFile(const std::filesystem::path& path,
   return listPlaybackTracks(path, tracks, error);
 }
 
-bool loadTrackBrowserForFile(const std::filesystem::path& file) {
+std::shared_ptr<const TrackBrowserContent> prepareTrackBrowserContent(
+    const std::filesystem::path& file) {
   std::filesystem::path trackPath = normalizeTrackBrowserPath(file);
   std::vector<TrackEntry> tracks;
   std::string error;
-  bool listed = listTracksForFile(trackPath, &tracks, &error);
-  if (!listed) {
-    gTrackBrowser = TrackBrowserState{};
-    return false;
+  if (!listTracksForFile(trackPath, &tracks, &error) || tracks.size() <= 1) {
+    return {};
   }
-  gTrackBrowser.file = trackPath;
-  gTrackBrowser.tracks = std::move(tracks);
-  gTrackBrowser.active = gTrackBrowser.tracks.size() > 1;
-  return gTrackBrowser.active;
-}
-
-void clearTrackBrowserState() { gTrackBrowser = TrackBrowserState{}; }
-
-bool trackBrowserActive() { return gTrackBrowser.active; }
-
-const std::filesystem::path& trackBrowserFile() { return gTrackBrowser.file; }
-
-const std::vector<TrackEntry>& trackBrowserTracks() {
-  return gTrackBrowser.tracks;
+  auto content = std::make_shared<TrackBrowserContent>();
+  content->file = std::move(trackPath);
+  content->fileIdentity = makePathIdentity(content->file);
+  content->tracks = std::move(tracks);
+  return content;
 }
 
 bool isTrackBrowserActive(const BrowserState& state) {
   return state.location.kind == BrowserLocationKind::TrackBrowser;
 }
 
-const TrackEntry* findTrackEntry(int trackIndex) {
-  return findPlaybackTrack(gTrackBrowser.tracks, trackIndex);
+const TrackBrowserContent* trackBrowserContent(const BrowserState& state) {
+  const auto* content =
+      std::get_if<std::shared_ptr<const TrackBrowserContent>>(&state.content);
+  return content && *content ? content->get() : nullptr;
+}
+
+const TrackEntry* findTrackEntry(const BrowserState& state, int trackIndex) {
+  const TrackBrowserContent* content = trackBrowserContent(state);
+  return content ? findPlaybackTrack(content->tracks, trackIndex) : nullptr;
 }

@@ -3,6 +3,7 @@
 
 #include "browser_navigation.h"
 #include "playback_target_match.h"
+#include "track_browser_state.h"
 
 namespace {
 
@@ -27,6 +28,15 @@ GridLayout verticalLayout(int totalRows, int visibleRows) {
   layout.rowsVisible = visibleRows;
   layout.cols = 1;
   return layout;
+}
+
+bool hasTrackContent(
+    const BrowserState& browser,
+    const std::shared_ptr<const TrackBrowserContent>& expected) {
+  const auto* content =
+      std::get_if<std::shared_ptr<const TrackBrowserContent>>(
+          &browser.content);
+  return content && content->get() == expected.get();
 }
 
 }  // namespace
@@ -143,17 +153,20 @@ int main() {
   bool rejectDirectory = false;
   bool rejectTracks = false;
   BrowserNavigator::Callbacks historyCallbacks;
-  historyCallbacks.activate = [&](const BrowserLocation& location) {
-    return (location.kind != BrowserLocationKind::Directory ||
-            !rejectDirectory) &&
-           (location.kind != BrowserLocationKind::TrackBrowser ||
-            !rejectTracks);
-  };
-  historyCallbacks.refresh = [&](const std::string&) {
-    historyBrowser.entries =
-        historyBrowser.location.kind == BrowserLocationKind::TrackBrowser
-            ? tracks
-            : files;
+  historyCallbacks.prepare = [&](const BrowserContentRequest& request)
+      -> std::optional<PreparedBrowserContent> {
+    if ((request.location.kind == BrowserLocationKind::Directory &&
+         rejectDirectory) ||
+        (request.location.kind == BrowserLocationKind::TrackBrowser &&
+         rejectTracks)) {
+      return std::nullopt;
+    }
+    PreparedBrowserContent prepared;
+    prepared.entries =
+        request.location.kind == BrowserLocationKind::TrackBrowser ? tracks
+                                                                   : files;
+    prepared.selected = request.selected;
+    return prepared;
   };
   BrowserNavigator historyNavigator(historyBrowser,
                                     std::move(historyCallbacks));
@@ -192,9 +205,11 @@ int main() {
   rejectDirectory = true;
   ok &= expect(!historyNavigator.back() &&
                    historyBrowser.location == trackBrowserLocation.route &&
+                   historyBrowser.entries.size() == tracks.size() &&
+                   historyBrowser.entries[1].trackIndex == 3 &&
                    historyBrowser.backHistory.size() == 1 &&
                    historyBrowser.forwardHistory.empty(),
-               "a failed Back restore must leave both history stacks intact");
+               "a failed Back restore must leave content and history intact");
   rejectDirectory = false;
   ok &= expect(historyNavigator.back(),
                "Back must remain usable after a rejected restore");
@@ -220,16 +235,21 @@ int main() {
   routedBrowser.entries = files;
   routedBrowser.selected = 1;
   routedBrowser.scrollRow = 4;
-  int activated = 0;
-  int refreshed = 0;
+  int preparedCount = 0;
   bool rejectRoutedDirectory = false;
   BrowserNavigator::Callbacks navigatorCallbacks;
-  navigatorCallbacks.activate = [&](const BrowserLocation& location) {
-    ++activated;
-    return location.kind != BrowserLocationKind::Directory ||
-           !rejectRoutedDirectory;
+  navigatorCallbacks.prepare = [&](const BrowserContentRequest& request)
+      -> std::optional<PreparedBrowserContent> {
+    ++preparedCount;
+    if (request.location.kind == BrowserLocationKind::Directory &&
+        rejectRoutedDirectory) {
+      return std::nullopt;
+    }
+    PreparedBrowserContent prepared;
+    prepared.entries = routedBrowser.entries;
+    prepared.selected = request.selected;
+    return prepared;
   };
-  navigatorCallbacks.refresh = [&](const std::string&) { ++refreshed; };
   BrowserNavigator navigator(routedBrowser, std::move(navigatorCallbacks));
   const BrowserLocation otherDirectory = browserDirectoryLocation("C:/Other");
   ok &= expect(navigator.navigate(otherDirectory) && navigator.back(),
@@ -243,16 +263,14 @@ int main() {
 
   const BrowserLocation optionsRoot =
       browserOptionsLocation(songA, 3, BrowserOptionsPage::Root);
-  const int activatedBeforeContext = activated;
-  const int refreshedBeforeContext = refreshed;
+  const int preparedBeforeContext = preparedCount;
   ok &= expect(navigator.navigate(optionsRoot),
                "a contextual route must activate successfully");
   ok &= expect(routedBrowser.location == optionsRoot &&
                    navigator.contextActive() &&
                    routedBrowser.backHistory.size() == mainBackSize &&
                    routedBrowser.forwardHistory.size() == mainForwardSize &&
-                   activated == activatedBeforeContext + 1 &&
-                   refreshed == refreshedBeforeContext + 1,
+                   preparedCount == preparedBeforeContext + 1,
                "opening a context must preserve the main history");
 
   const BrowserLocation optionsLocation = browserOptionsLocation(
@@ -317,15 +335,44 @@ int main() {
 
   BrowserState rejectedBrowser;
   rejectedBrowser.location = browserDirectoryLocation("C:/Media");
+  rejectedBrowser.entries = files;
+  rejectedBrowser.selected = 1;
+  rejectedBrowser.scrollRow = 3;
+  rejectedBrowser.filter = "B";
+  auto committedTrackContent = std::make_shared<TrackBrowserContent>();
+  committedTrackContent->file = songB;
+  rejectedBrowser.content =
+      std::shared_ptr<const TrackBrowserContent>(committedTrackContent);
+  int rejectedChangedCount = 0;
   BrowserNavigator::Callbacks rejectedCallbacks;
-  rejectedCallbacks.activate = [](const BrowserLocation&) { return false; };
+  rejectedCallbacks.prepare = [](const BrowserContentRequest&)
+      -> std::optional<PreparedBrowserContent> {
+    return std::nullopt;
+  };
+  rejectedCallbacks.changed = [&]() { ++rejectedChangedCount; };
   BrowserNavigator rejectedNavigator(rejectedBrowser,
                                      std::move(rejectedCallbacks));
   ok &= expect(!rejectedNavigator.navigate(browserTrackLocation(songA)) &&
                    rejectedBrowser.location ==
                        browserDirectoryLocation("C:/Media") &&
-                   rejectedBrowser.backHistory.empty(),
-               "a rejected content route must not mutate browser state");
+                   rejectedBrowser.entries.size() == files.size() &&
+                   rejectedBrowser.entries[1].pathIdentity ==
+                       files[1].pathIdentity &&
+                   rejectedBrowser.selected == 1 &&
+                   rejectedBrowser.scrollRow == 3 &&
+                   rejectedBrowser.filter == "B" &&
+                   hasTrackContent(rejectedBrowser, committedTrackContent) &&
+                   rejectedBrowser.backHistory.empty() &&
+                   rejectedChangedCount == 0,
+               "a rejected content snapshot must not mutate browser state");
+  ok &= expect(!rejectedNavigator.reload() &&
+                   rejectedBrowser.entries.size() == files.size() &&
+                   rejectedBrowser.selected == 1 &&
+                   rejectedBrowser.scrollRow == 3 &&
+                   rejectedBrowser.filter == "B" &&
+                   hasTrackContent(rejectedBrowser, committedTrackContent) &&
+                   rejectedChangedCount == 0,
+               "a failed reload must preserve the committed snapshot");
 
 #ifdef _WIN32
   const std::optional<std::filesystem::path> driveParent =

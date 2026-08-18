@@ -234,7 +234,8 @@ static bool shouldHideBrowserMediaMetadataFile(
 #endif
 }
 
-static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
+static std::optional<std::vector<FileEntry>> listEntries(
+    const std::filesystem::path& dir) {
   std::vector<FileEntry> entries;
   std::vector<FileEntry> items;
   std::vector<FileEntry> knownFolders;
@@ -253,12 +254,8 @@ static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
   auto appendKnownFolder = [&](const std::string& name,
                               const std::filesystem::path& path) {
     if (path.empty()) return;
-    try {
-      if (!std::filesystem::exists(path) ||
-          !std::filesystem::is_directory(path)) {
-        return;
-      }
-    } catch (...) {
+    std::error_code ec;
+    if (!std::filesystem::is_directory(path, ec) || ec) {
       return;
     }
     knownFolders.push_back(FileEntry{name, path, true});
@@ -298,7 +295,7 @@ static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
     if (!drives.empty()) {
       appendSectionHeader("Drives");
       for (const auto& drive : drives) {
-      entries.push_back(FileEntry{drive.label, drive.path, true});
+        entries.push_back(FileEntry{drive.label, drive.path, true});
       }
     }
     addWindowsKnownFolders();
@@ -306,6 +303,7 @@ static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
       appendSectionHeader("Locations");
       entries.insert(entries.end(), knownFolders.begin(), knownFolders.end());
     }
+    return entries;
   } else if (browseDir == browseDir.root_path()) {
     entries.push_back(FileEntry{"..", std::filesystem::path(), true});
   }
@@ -315,54 +313,72 @@ static std::vector<FileEntry> listEntries(const std::filesystem::path& dir) {
     entries.push_back(FileEntry{"..", browseDir.parent_path(), true});
   }
 
-  try {
-    for (const auto& entry :
-         std::filesystem::directory_iterator(
-             browseDir,
-             std::filesystem::directory_options::skip_permission_denied)) {
-      const auto& p = entry.path();
-      std::error_code ec;
-      if (entry.is_directory(ec) && !ec) {
-        items.push_back(FileEntry{toUtf8String(p.filename()), p, true});
-      } else {
-        if (entry.is_regular_file(ec) && !ec && isSupportedMediaExt(p) &&
-            !shouldHideBrowserMediaMetadataFile(entry)) {
-          items.push_back(FileEntry{toUtf8String(p.filename()), p, false});
-        }
-      }
+  std::error_code iteratorError;
+  std::filesystem::directory_iterator iterator(
+      browseDir, std::filesystem::directory_options::none,
+      iteratorError);
+  if (iteratorError) {
+    return std::nullopt;
+  }
+  const std::filesystem::directory_iterator end;
+  while (iterator != end) {
+    const auto& entry = *iterator;
+    const auto& p = entry.path();
+    std::error_code ec;
+    if (entry.is_directory(ec) && !ec) {
+      items.push_back(FileEntry{toUtf8String(p.filename()), p, true});
+    } else if (entry.is_regular_file(ec) && !ec && isSupportedMediaExt(p) &&
+               !shouldHideBrowserMediaMetadataFile(entry)) {
+      items.push_back(FileEntry{toUtf8String(p.filename()), p, false});
     }
-  } catch (...) {
-    return entries;
+    iterator.increment(iteratorError);
+    if (iteratorError) {
+      return std::nullopt;
+    }
   }
 
   entries.insert(entries.end(), items.begin(), items.end());
   return entries;
 }
 
-static void refreshBrowser(BrowserState& state,
-                           const std::string& initialName) {
-  const bool optionsActive = optionsBrowserRefresh(state);
-  if (!optionsActive && isTrackBrowserActive(state)) {
-    state.entries.clear();
-    if (state.location.path.has_parent_path()) {
-      state.entries.push_back(
-          FileEntry{"..", state.location.path.parent_path(), true});
+static bool populateBrowser(BrowserState& state,
+                            const std::string& initialName) {
+  const bool optionsActive =
+      state.location.kind == BrowserLocationKind::OptionsBrowser;
+  if (optionsActive) {
+    if (!prepareOptionsBrowserContent(state)) {
+      return false;
     }
-    int digits = trackLabelDigits(trackBrowserTracks().size());
-    for (const auto& track : trackBrowserTracks()) {
+  } else if (isTrackBrowserActive(state)) {
+    std::shared_ptr<const TrackBrowserContent> content =
+        prepareTrackBrowserContent(state.location.path);
+    if (!content) {
+      return false;
+    }
+    state.content = content;
+    state.entries.clear();
+    if (content->file.has_parent_path()) {
+      state.entries.push_back(
+          FileEntry{"..", content->file.parent_path(), true});
+    }
+    int digits = trackLabelDigits(content->tracks.size());
+    for (const auto& track : content->tracks) {
       FileEntry entry;
       entry.name = formatTrackLabel(track, digits);
-      entry.path = state.location.path;
-      entry.pathIdentity = state.location.pathIdentity;
+      entry.path = content->file;
+      entry.pathIdentity = content->fileIdentity;
       entry.isDir = false;
       entry.trackIndex = track.index;
       state.entries.push_back(std::move(entry));
     }
-  } else if (!optionsActive) {
-    if (trackBrowserActive()) {
-      clearTrackBrowserState();
+  } else {
+    std::optional<std::vector<FileEntry>> entries =
+        listEntries(state.location.path);
+    if (!entries) {
+      return false;
     }
-    state.entries = listEntries(state.location.path);
+    state.content = std::monostate{};
+    state.entries = std::move(*entries);
   }
 
   if (!state.filter.empty()) {
@@ -450,7 +466,7 @@ static void refreshBrowser(BrowserState& state,
   if (state.entries.empty()) {
     state.selected = 0;
     state.scrollRow = 0;
-    return;
+    return true;
   }
 
   auto isSelectable = [](const FileEntry& entry) {
@@ -481,6 +497,30 @@ static void refreshBrowser(BrowserState& state,
       }
     }
   }
+  return true;
+}
+
+static std::optional<PreparedBrowserContent> prepareBrowserContent(
+    const BrowserContentRequest& request) {
+  BrowserState candidate;
+  candidate.location = request.location;
+  candidate.content = request.previousContent;
+  candidate.selected = request.selected;
+  candidate.sortMode = request.sortMode;
+  candidate.sortDescending = request.sortDescending;
+  candidate.filter = request.filter;
+  if (!populateBrowser(candidate, request.initialName)) {
+    return std::nullopt;
+  }
+
+  PreparedBrowserContent prepared;
+  prepared.entries = std::move(candidate.entries);
+  prepared.content = std::move(candidate.content);
+  prepared.selected = candidate.selected;
+  prepared.scrollRow = candidate.scrollRow;
+  prepared.viewportRestoreMode = candidate.viewportRestoreMode;
+  prepared.viewportRestoreScrollRow = candidate.viewportRestoreScrollRow;
+  return prepared;
 }
 
 static std::string buildTrackSelectionMeta(const BrowserState& browser) {
@@ -500,13 +540,14 @@ static std::string buildTrackSelectionMeta(const BrowserState& browser) {
 
   metaLine += " Selected: " + name;
   if (entry.trackIndex >= 0) {
-    const TrackEntry* track = findTrackEntry(entry.trackIndex);
+    const TrackBrowserContent* content = trackBrowserContent(browser);
+    const TrackEntry* track = findTrackEntry(browser, entry.trackIndex);
     if (track && track->lengthMs > 0) {
       metaLine += "  " + formatTime(static_cast<double>(track->lengthMs) / 1000.0);
     }
-    if (!trackBrowserTracks().empty()) {
+    if (content && !content->tracks.empty()) {
       metaLine += "  Track " + std::to_string(entry.trackIndex + 1) + "/" +
-                  std::to_string(trackBrowserTracks().size());
+                  std::to_string(content->tracks.size());
     }
   }
   return metaLine;
@@ -887,9 +928,37 @@ int runTui(Options o) {
     }
   }
 
+  bool dirty = true;
+  UiDirtyFlags dirtyFlags = UiDirtyFlags::Frame | UiDirtyFlags::Layout;
+  bool layoutDirty = true;
+  bool forceFullRedraw = true;
+  bool screenSizeDirty = true;
+  auto markDirty = [&](UiDirtyFlags flags = UiDirtyFlags::Frame) {
+    dirty = true;
+    dirtyFlags |= flags;
+    if (hasDirtyFlag(flags, UiDirtyFlags::Layout)) {
+      layoutDirty = true;
+      forceFullRedraw = true;
+    }
+  };
+  auto markLayoutDirty = [&]() {
+    markDirty(UiDirtyFlags::Frame | UiDirtyFlags::Layout);
+  };
+
   BrowserState browser;
   browser.location = browserDirectoryLocation(startDir);
-  refreshBrowser(browser, initialName);
+  BrowserNavigator::Callbacks browserNavigationCallbacks;
+  browserNavigationCallbacks.prepare =
+      [](const BrowserContentRequest& request) {
+        return prepareBrowserContent(request);
+      };
+  browserNavigationCallbacks.changed = [&]() { markLayoutDirty(); };
+  BrowserNavigator browserNavigator(browser,
+                                    std::move(browserNavigationCallbacks));
+  if (!browserNavigator.reload(initialName)) {
+    browser.location = browserDirectoryLocation({});
+    browserNavigator.reload();
+  }
 
   input.init();
 
@@ -1023,7 +1092,6 @@ int runTui(Options o) {
     return false;
   };
 
-  bool dirty = true;
   if (!o.input.empty() && o.play) {
     std::filesystem::path inputPath = pathFromUtf8String(o.input);
     if (std::filesystem::exists(inputPath)) {
@@ -1035,14 +1103,8 @@ int runTui(Options o) {
           pendingVideo = inputPath;
           hasPendingVideo = true;
         } else {
-          if (loadTrackBrowserForFile(inputPath)) {
-            browser.location = browserTrackLocation(trackBrowserFile());
-            browser.selected = 0;
-            browser.scrollRow = 0;
-            browser.filter.clear();
-            setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
-            refreshBrowser(browser, "");
-          } else {
+          if (!browserNavigator.navigate(browserTrackLocation(
+                  normalizeTrackBrowserPath(inputPath)))) {
             tryStartAudioFile(inputPath);
           }
         }
@@ -1087,21 +1149,8 @@ int runTui(Options o) {
   std::vector<ScreenCell> windowCells;
   AudioPictureInPictureWindow audioPictureInPicture;
   ConsoleInputPump consoleInputPump;
-  UiDirtyFlags dirtyFlags = UiDirtyFlags::Frame | UiDirtyFlags::Layout;
-  bool layoutDirty = true;
-  bool forceFullRedraw = true;
-  bool screenSizeDirty = true;
   BrowserViewport viewport;
   BrowserFooterLayout footerLayout;
-  auto markDirty = [&](UiDirtyFlags flags = UiDirtyFlags::Frame) {
-    dirty = true;
-    dirtyFlags |= flags;
-    if (hasDirtyFlag(flags, UiDirtyFlags::Layout)) {
-      layoutDirty = true;
-      forceFullRedraw = true;
-    }
-  };
-  auto markLayoutDirty = [&]() { markDirty(UiDirtyFlags::Frame | UiDirtyFlags::Layout); };
   auto midiToNoteName = [](int midi) {
     if (midi < 0 || midi > 127) return std::string("??");
     static const char* kNoteNames[] = {"C",  "C#", "D",  "D#", "E",  "F",
@@ -1135,9 +1184,11 @@ int runTui(Options o) {
       int digits = 3;
       const TrackEntry* track = nullptr;
       TrackEntry fallback{};
-      if (nowPlaying == trackBrowserFile() && !trackBrowserTracks().empty()) {
-        digits = trackLabelDigits(trackBrowserTracks().size());
-        track = findTrackEntry(trackIndex);
+      const TrackBrowserContent* content = trackBrowserContent(browser);
+      if (content && samePath(nowPlaying, content->file) &&
+          !content->tracks.empty()) {
+        digits = trackLabelDigits(content->tracks.size());
+        track = findTrackEntry(browser, trackIndex);
       }
       if (!track) {
         fallback.index = trackIndex;
@@ -1170,27 +1221,6 @@ int runTui(Options o) {
         break;
     }
   };
-
-  BrowserNavigator::Callbacks browserNavigationCallbacks;
-  browserNavigationCallbacks.activate = [&](const BrowserLocation& location) {
-    if (location.kind == BrowserLocationKind::TrackBrowser) {
-      return loadTrackBrowserForFile(location.path);
-    }
-    if (location.kind == BrowserLocationKind::OptionsBrowser) {
-      return optionsBrowserSupportsLocation(location);
-    }
-    if (location.path.empty()) {
-      return true;
-    }
-    std::error_code ec;
-    return std::filesystem::is_directory(location.path, ec) && !ec;
-  };
-  browserNavigationCallbacks.refresh = [&](const std::string& initialName) {
-    refreshBrowser(browser, initialName);
-  };
-  browserNavigationCallbacks.changed = [&]() { markLayoutDirty(); };
-  BrowserNavigator browserNavigator(browser,
-                                    std::move(browserNavigationCallbacks));
 
   playback_transport_navigation::Navigator::Callbacks transportCallbacks;
   transportCallbacks.markDirty = [&]() { markDirty(); };

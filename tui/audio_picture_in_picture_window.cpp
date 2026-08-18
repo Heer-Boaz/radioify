@@ -12,7 +12,6 @@
 #include "playback/input/shortcuts.h"
 #include "playback/session/window_presentation.h"
 #include "runtime_helpers.h"
-#include "track_browser_state.h"
 #include "tracklist.h"
 #include "ui_helpers.h"
 #include "ui_inputlogic.h"
@@ -24,29 +23,19 @@ constexpr int kDefaultWindowHeight = 260;
 constexpr int kMinCols = 28;
 constexpr int kMinRows = 8;
 
-std::string trackLabelForNowPlaying(const std::filesystem::path& nowPlaying,
-                                    int trackIndex) {
-  if (nowPlaying.empty() || trackIndex < 0) return "";
+std::string trackLabelForNowPlaying(int trackIndex) {
+  if (trackIndex < 0) return "";
 
-  int digits = 3;
-  const TrackEntry* track = nullptr;
   TrackEntry fallback{};
-  if (nowPlaying == trackBrowserFile() && !trackBrowserTracks().empty()) {
-    digits = trackLabelDigits(trackBrowserTracks().size());
-    track = findTrackEntry(trackIndex);
-  }
-  if (!track) {
-    fallback.index = trackIndex;
-    track = &fallback;
-  }
-  return formatTrackLabel(*track, digits);
+  fallback.index = trackIndex;
+  return formatTrackLabel(fallback, 3);
 }
 
 std::string buildDefaultNowPlayingLabel() {
   const std::filesystem::path nowPlaying = audioGetNowPlaying();
   if (nowPlaying.empty()) return "(none)";
   std::string label = toUtf8String(nowPlaying.filename());
-  std::string track = trackLabelForNowPlaying(nowPlaying, audioGetTrackIndex());
+  std::string track = trackLabelForNowPlaying(audioGetTrackIndex());
   if (!track.empty()) {
     label += "  |  " + track;
   }

@@ -1,13 +1,23 @@
 #pragma once
 
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "browser_location.h"
 #include "consolescreen.h"
+
+struct OptionsBrowserContent;
+struct TrackBrowserContent;
+
+using BrowserContent =
+    std::variant<std::monostate,
+                 std::shared_ptr<const TrackBrowserContent>,
+                 std::shared_ptr<const OptionsBrowserContent>>;
 
 struct FileEntry {
   FileEntry() = default;
@@ -65,6 +75,7 @@ struct BrowserState {
 
   BrowserLocation location;
   std::vector<FileEntry> entries;
+  BrowserContent content;
   int selected = 0;
   int scrollRow = 0;
   enum class ViewMode {

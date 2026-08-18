@@ -114,26 +114,52 @@ bool recordBrowserNavigation(BrowserState& browser,
 BrowserNavigator::BrowserNavigator(BrowserState& browser, Callbacks callbacks)
     : browser_(browser), callbacks_(std::move(callbacks)) {}
 
+std::optional<PreparedBrowserContent> BrowserNavigator::prepare(
+    const BrowserLocation& target, const std::string& initialName,
+    const std::string& filter, int selected) const {
+  if (!callbacks_.prepare) {
+    return std::nullopt;
+  }
+  BrowserContentRequest request;
+  request.location = target;
+  request.previousContent = browser_.content;
+  request.initialName = initialName;
+  request.filter = filter;
+  request.selected = selected;
+  request.sortMode = browser_.sortMode;
+  request.sortDescending = browser_.sortDescending;
+  return callbacks_.prepare(request);
+}
+
+void BrowserNavigator::commit(const BrowserLocation& target,
+                              PreparedBrowserContent prepared,
+                              bool resetSearch) {
+  browser_.location = target;
+  if (resetSearch) {
+    browser_.filter.clear();
+    browser_.filterActive = false;
+    browser_.pathSearch.clear();
+    browser_.pathSearchActive = false;
+  }
+  browser_.entries = std::move(prepared.entries);
+  browser_.content = std::move(prepared.content);
+  browser_.selected = prepared.selected;
+  browser_.scrollRow = prepared.scrollRow;
+  browser_.viewportRestoreMode = prepared.viewportRestoreMode;
+  browser_.viewportRestoreScrollRow = prepared.viewportRestoreScrollRow;
+}
+
 bool BrowserNavigator::activate(const BrowserLocation& target,
                                 const std::string& initialName,
                                 const std::optional<BrowserState::EntryIdentity>&
                                     selection) {
-  if (callbacks_.activate && !callbacks_.activate(target)) {
+  std::optional<PreparedBrowserContent> prepared =
+      prepare(target, initialName, {}, 0);
+  if (!prepared) {
     return false;
   }
 
-  browser_.location = target;
-  browser_.selected = 0;
-  browser_.scrollRow = 0;
-  browser_.filter.clear();
-  browser_.filterActive = false;
-  browser_.pathSearch.clear();
-  browser_.pathSearchActive = false;
-  browser_.viewportRestoreMode = BrowserState::ViewportRestoreMode::None;
-  browser_.viewportRestoreScrollRow = 0;
-  if (callbacks_.refresh) {
-    callbacks_.refresh(initialName);
-  }
+  commit(target, std::move(*prepared), true);
   if (selection && selectBrowserEntry(browser_, *selection)) {
     requestBrowserSelectionReveal(browser_);
   }
@@ -199,9 +225,12 @@ bool BrowserNavigator::navigate(const BrowserLocation& target,
                                 const std::optional<BrowserState::EntryIdentity>&
                                     selection) {
   if (target == browser_.location) {
-    if (callbacks_.refresh) {
-      callbacks_.refresh(initialName);
+    std::optional<PreparedBrowserContent> prepared = prepare(
+        target, initialName, browser_.filter, browser_.selected);
+    if (!prepared) {
+      return false;
     }
+    commit(target, std::move(*prepared), false);
     if (selection && selectBrowserEntry(browser_, *selection)) {
       requestBrowserSelectionReveal(browser_);
     }
@@ -308,11 +337,15 @@ bool BrowserNavigator::contextActive() const {
   return browser_.navigationContext.has_value();
 }
 
-void BrowserNavigator::reload(const std::string& initialName) {
-  if (callbacks_.refresh) {
-    callbacks_.refresh(initialName);
+bool BrowserNavigator::reload(const std::string& initialName) {
+  std::optional<PreparedBrowserContent> prepared = prepare(
+      browser_.location, initialName, browser_.filter, browser_.selected);
+  if (!prepared) {
+    return false;
   }
+  commit(browser_.location, std::move(*prepared), false);
   notifyChanged();
+  return true;
 }
 
 void BrowserNavigator::notifyChanged() {

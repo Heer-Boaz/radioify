@@ -17,6 +17,24 @@
 #include "vgmoptions.h"
 #include "ui_helpers.h"
 
+struct OptionsBrowserContent {
+  bool instrumentsLoaded = false;
+  std::filesystem::path instrumentFile;
+  int instrumentTrack = -1;
+  std::string instrumentError;
+  std::vector<KssInstrumentProfile> instruments;
+
+  bool vgmMetadataLoaded = false;
+  std::filesystem::path vgmMetadataFile;
+  std::string vgmMetadataError;
+  std::vector<VgmMetadataEntry> vgmMetadata;
+
+  bool vgmDevicesLoaded = false;
+  std::filesystem::path vgmDevicesFile;
+  std::string vgmDevicesError;
+  std::vector<VgmDeviceInfo> vgmDevices;
+};
+
 namespace {
 enum class OptionsTarget {
   None,
@@ -24,18 +42,6 @@ enum class OptionsTarget {
   Nsf,
   Vgm,
 };
-
-struct OptionsBrowserCache {
-  std::filesystem::path instrumentFile;
-  int instrumentTrack = -1;
-  std::vector<KssInstrumentProfile> instruments;
-  std::filesystem::path vgmMetadataFile;
-  std::vector<VgmMetadataEntry> vgmMetadata;
-  std::filesystem::path vgmDevicesFile;
-  std::vector<VgmDeviceInfo> vgmDevices;
-};
-
-OptionsBrowserCache gOptionsBrowser;
 
 OptionsTarget targetForPath(const std::filesystem::path& p) {
   if (isKssExt(p)) return OptionsTarget::Kss;
@@ -353,7 +359,8 @@ void buildOptionsEntries(std::vector<FileEntry>& entries,
 }
 
 void buildInstrumentEntries(std::vector<FileEntry>& entries,
-                            const BrowserLocation& location) {
+                            const BrowserLocation& location,
+                            OptionsBrowserContent& content) {
   entries.clear();
   entries.push_back(optionsDirectoryEntry(
       "..", optionsPageLocation(location, BrowserOptionsPage::Root)));
@@ -389,25 +396,33 @@ void buildInstrumentEntries(std::vector<FileEntry>& entries,
     }
   }
 
-  if (!samePath(gOptionsBrowser.instrumentFile, location.path) ||
-      gOptionsBrowser.instrumentTrack != trackIndex) {
-    gOptionsBrowser.instruments.clear();
+  if (!content.instrumentsLoaded ||
+      !samePath(content.instrumentFile, location.path) ||
+      content.instrumentTrack != trackIndex) {
+    content.instruments.clear();
+    content.instrumentError.clear();
     std::string error;
     bool ok = audioScanKssInstruments(location.path, trackIndex,
-                                      &gOptionsBrowser.instruments, &error);
-    gOptionsBrowser.instrumentFile = location.path;
-    gOptionsBrowser.instrumentTrack = trackIndex;
-    if (!ok && !error.empty()) {
-      FileEntry entry;
-      entry.name = "Scan failed: " + error;
-      entry.isDir = false;
-      entries.push_back(std::move(entry));
-      return;
+                                      &content.instruments, &error);
+    content.instrumentsLoaded = true;
+    content.instrumentFile = location.path;
+    content.instrumentTrack = trackIndex;
+    if (!ok) {
+      content.instrumentError =
+          error.empty() ? "Unable to scan instruments" : std::move(error);
     }
   }
 
-  for (size_t i = 0; i < gOptionsBrowser.instruments.size(); ++i) {
-    const auto& instrument = gOptionsBrowser.instruments[i];
+  if (!content.instrumentError.empty()) {
+    FileEntry entry;
+    entry.name = "Scan failed: " + content.instrumentError;
+    entry.isDir = false;
+    entries.push_back(std::move(entry));
+    return;
+  }
+
+  for (size_t i = 0; i < content.instruments.size(); ++i) {
+    const auto& instrument = content.instruments[i];
     std::string label;
     if (instrument.device == KssInstrumentDevice::Psg) {
       label = "PSG inst " + hex32(instrument.hash);
@@ -424,7 +439,7 @@ void buildInstrumentEntries(std::vector<FileEntry>& entries,
     entries.push_back(std::move(entry));
   }
 
-  if (gOptionsBrowser.instruments.empty()) {
+  if (content.instruments.empty()) {
     FileEntry entry;
     entry.name = "(no instruments found)";
     entry.isDir = false;
@@ -433,36 +448,45 @@ void buildInstrumentEntries(std::vector<FileEntry>& entries,
 }
 
 void buildVgmMetadataEntries(std::vector<FileEntry>& entries,
-                             const BrowserLocation& location) {
+                             const BrowserLocation& location,
+                             OptionsBrowserContent& content) {
   entries.clear();
   entries.push_back(optionsDirectoryEntry(
       "..", optionsPageLocation(location, BrowserOptionsPage::Root)));
 
   if (targetForPath(location.path) != OptionsTarget::Vgm) return;
 
-  if (!samePath(gOptionsBrowser.vgmMetadataFile, location.path)) {
-    gOptionsBrowser.vgmMetadata.clear();
+  if (!content.vgmMetadataLoaded ||
+      !samePath(content.vgmMetadataFile, location.path)) {
+    content.vgmMetadata.clear();
+    content.vgmMetadataError.clear();
     std::string error;
     bool ok = audioScanVgmMetadata(location.path,
-                                   &gOptionsBrowser.vgmMetadata, &error);
-    gOptionsBrowser.vgmMetadataFile = location.path;
-    if (!ok && !error.empty()) {
-      FileEntry entry;
-      entry.name = "Scan failed: " + error;
-      entry.isDir = false;
-      entries.push_back(std::move(entry));
-      return;
+                                   &content.vgmMetadata, &error);
+    content.vgmMetadataLoaded = true;
+    content.vgmMetadataFile = location.path;
+    if (!ok) {
+      content.vgmMetadataError =
+          error.empty() ? "Unable to scan metadata" : std::move(error);
     }
   }
 
-  for (const auto& meta : gOptionsBrowser.vgmMetadata) {
+  if (!content.vgmMetadataError.empty()) {
+    FileEntry entry;
+    entry.name = "Scan failed: " + content.vgmMetadataError;
+    entry.isDir = false;
+    entries.push_back(std::move(entry));
+    return;
+  }
+
+  for (const auto& meta : content.vgmMetadata) {
     FileEntry entry;
     entry.name = meta.key + ": " + meta.value;
     entry.isDir = false;
     entries.push_back(std::move(entry));
   }
 
-  if (gOptionsBrowser.vgmMetadata.empty()) {
+  if (content.vgmMetadata.empty()) {
     FileEntry entry;
     entry.name = "(no metadata)";
     entry.isDir = false;
@@ -470,31 +494,45 @@ void buildVgmMetadataEntries(std::vector<FileEntry>& entries,
   }
 }
 
+void loadVgmDevices(const std::filesystem::path& file,
+                    OptionsBrowserContent& content) {
+  if (content.vgmDevicesLoaded &&
+      samePath(content.vgmDevicesFile, file)) {
+    return;
+  }
+
+  content.vgmDevices.clear();
+  content.vgmDevicesError.clear();
+  std::string error;
+  const bool ok = audioScanVgmDevices(file, &content.vgmDevices, &error);
+  content.vgmDevicesLoaded = true;
+  content.vgmDevicesFile = file;
+  if (!ok) {
+    content.vgmDevicesError =
+        error.empty() ? "Unable to scan devices" : std::move(error);
+  }
+}
+
 void buildVgmDeviceEntries(std::vector<FileEntry>& entries,
-                           const BrowserLocation& location) {
+                           const BrowserLocation& location,
+                           OptionsBrowserContent& content) {
   entries.clear();
   entries.push_back(optionsDirectoryEntry(
       "..", optionsPageLocation(location, BrowserOptionsPage::Root)));
 
   if (targetForPath(location.path) != OptionsTarget::Vgm) return;
 
-  if (!samePath(gOptionsBrowser.vgmDevicesFile, location.path)) {
-    gOptionsBrowser.vgmDevices.clear();
-    std::string error;
-    bool ok =
-        audioScanVgmDevices(location.path, &gOptionsBrowser.vgmDevices,
-                            &error);
-    gOptionsBrowser.vgmDevicesFile = location.path;
-    if (!ok && !error.empty()) {
-      FileEntry entry;
-      entry.name = "Scan failed: " + error;
-      entry.isDir = false;
-      entries.push_back(std::move(entry));
-      return;
-    }
+  loadVgmDevices(location.path, content);
+
+  if (!content.vgmDevicesError.empty()) {
+    FileEntry entry;
+    entry.name = "Scan failed: " + content.vgmDevicesError;
+    entry.isDir = false;
+    entries.push_back(std::move(entry));
+    return;
   }
 
-  for (const auto& device : gOptionsBrowser.vgmDevices) {
+  for (const auto& device : content.vgmDevices) {
     std::string label = device.name;
     if (device.channelCount > 0) {
       label += " (" + std::to_string(device.channelCount) + " ch)";
@@ -507,7 +545,7 @@ void buildVgmDeviceEntries(std::vector<FileEntry>& entries,
     entries.push_back(std::move(entry));
   }
 
-  if (gOptionsBrowser.vgmDevices.empty()) {
+  if (content.vgmDevices.empty()) {
     FileEntry entry;
     entry.name = "(no devices found)";
     entry.isDir = false;
@@ -516,7 +554,8 @@ void buildVgmDeviceEntries(std::vector<FileEntry>& entries,
 }
 
 void buildVgmDeviceOptionEntries(std::vector<FileEntry>& entries,
-                                 const BrowserLocation& location) {
+                                 const BrowserLocation& location,
+                                 OptionsBrowserContent& content) {
   entries.clear();
   entries.push_back(optionsDirectoryEntry(
       "..", optionsPageLocation(location, BrowserOptionsPage::VgmDevices)));
@@ -524,6 +563,15 @@ void buildVgmDeviceOptionEntries(std::vector<FileEntry>& entries,
   if (targetForPath(location.path) != OptionsTarget::Vgm) return;
 
   const uint32_t deviceId = location.deviceId;
+  loadVgmDevices(location.path, content);
+
+  if (!content.vgmDevicesError.empty()) {
+    FileEntry entry;
+    entry.name = "Scan failed: " + content.vgmDevicesError;
+    entry.isDir = false;
+    entries.push_back(std::move(entry));
+    return;
+  }
 
   VgmDeviceOptions options{};
   if (!audioGetVgmDeviceOptions(deviceId, &options)) {
@@ -535,7 +583,7 @@ void buildVgmDeviceOptionEntries(std::vector<FileEntry>& entries,
   }
 
   const VgmDeviceInfo* deviceInfo = nullptr;
-  for (const auto& device : gOptionsBrowser.vgmDevices) {
+  for (const auto& device : content.vgmDevices) {
     if (device.id == deviceId) {
       deviceInfo = &device;
       break;
@@ -635,27 +683,42 @@ bool optionsBrowserSupportsLocation(const BrowserLocation& location) {
   return false;
 }
 
-bool optionsBrowserRefresh(BrowserState& browser) {
+static const OptionsBrowserContent* optionsBrowserContent(
+    const BrowserState& browser) {
+  const auto* content =
+      std::get_if<std::shared_ptr<const OptionsBrowserContent>>(
+          &browser.content);
+  return content && *content ? content->get() : nullptr;
+}
+
+bool prepareOptionsBrowserContent(BrowserState& browser) {
   if (!optionsBrowserSupportsLocation(browser.location)) {
     return false;
   }
+  auto prepared = std::make_shared<OptionsBrowserContent>();
+  if (const OptionsBrowserContent* current = optionsBrowserContent(browser)) {
+    *prepared = *current;
+  }
   switch (browser.location.optionsPage) {
     case BrowserOptionsPage::Instruments:
-      buildInstrumentEntries(browser.entries, browser.location);
+      buildInstrumentEntries(browser.entries, browser.location, *prepared);
       break;
     case BrowserOptionsPage::VgmMetadata:
-      buildVgmMetadataEntries(browser.entries, browser.location);
+      buildVgmMetadataEntries(browser.entries, browser.location, *prepared);
       break;
     case BrowserOptionsPage::VgmDevices:
-      buildVgmDeviceEntries(browser.entries, browser.location);
+      buildVgmDeviceEntries(browser.entries, browser.location, *prepared);
       break;
     case BrowserOptionsPage::VgmDevice:
-      buildVgmDeviceOptionEntries(browser.entries, browser.location);
+      buildVgmDeviceOptionEntries(browser.entries, browser.location,
+                                  *prepared);
       break;
     case BrowserOptionsPage::Root:
       buildOptionsEntries(browser.entries, browser.location);
       break;
   }
+  browser.content = std::shared_ptr<const OptionsBrowserContent>(
+      std::move(prepared));
   return true;
 }
 
@@ -670,6 +733,7 @@ OptionsBrowserResult optionsBrowserActivateSelection(BrowserState& browser) {
                        static_cast<int>(browser.entries.size()) - 1);
   const auto& entry = browser.entries[static_cast<size_t>(idx)];
   if (browser.location.optionsPage == BrowserOptionsPage::Instruments) {
+    const OptionsBrowserContent* content = optionsBrowserContent(browser);
     if (entry.auditionDevice >= 0) {
       auto device =
           static_cast<KssInstrumentDevice>(entry.auditionDevice);
@@ -678,11 +742,10 @@ OptionsBrowserResult optionsBrowserActivateSelection(BrowserState& browser) {
         return OptionsBrowserResult::Changed;
       }
     }
-    if (entry.auditionIndex >= 0 &&
-        entry.auditionIndex <
-            static_cast<int>(gOptionsBrowser.instruments.size())) {
+    if (content && entry.auditionIndex >= 0 &&
+        entry.auditionIndex < static_cast<int>(content->instruments.size())) {
       if (audioStartKssInstrumentAudition(
-              gOptionsBrowser.instruments[entry.auditionIndex])) {
+              content->instruments[entry.auditionIndex])) {
         return OptionsBrowserResult::Changed;
       }
     }
