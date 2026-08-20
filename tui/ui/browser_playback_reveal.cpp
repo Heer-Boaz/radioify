@@ -8,6 +8,23 @@
 #include "track_browser_state.h"
 #include "ui_helpers.h"
 
+namespace {
+
+BrowserState::EntryIdentity playbackSelectionIdentity(
+    const PlaybackTarget& target) {
+  const std::filesystem::path path =
+      target.trackIndex >= 0 ? normalizeTrackBrowserPath(target.file)
+                             : target.file;
+  BrowserEntry entry{
+      {}, path,
+      target.trackIndex >= 0
+          ? browser_entry::Action(browser_entry::PlayTrack{target.trackIndex})
+          : browser_entry::Action(browser_entry::OpenFile{})};
+  return browserEntryIdentity(entry);
+}
+
+}  // namespace
+
 BrowserPlaybackRevealer::BrowserPlaybackRevealer(
     BrowserNavigator& browserNavigator, Callbacks callbacks)
     : browserNavigator_(browserNavigator),
@@ -23,19 +40,15 @@ bool BrowserPlaybackRevealer::reveal(const PlaybackTarget& target) {
         normalizeTrackBrowserPath(target.file);
     const bool requiresRefresh =
         browser_.location != browserTrackLocation(trackPath);
-    if (requiresRefresh &&
-        !browserNavigator_.navigate(browserTrackLocation(trackPath))) {
-      return false;
+    if (requiresRefresh) {
+      return browserNavigator_.reveal(browserTrackLocation(trackPath), {},
+                                      playbackSelectionIdentity(target));
     }
     if (select(target)) {
       return true;
     }
-    browser_.filter.clear();
-    browser_.filterActive = false;
-    browser_.pathSearch.clear();
-    browser_.pathSearchActive = false;
-    browserNavigator_.reload();
-    return select(target);
+    return browserNavigator_.reveal(browser_.location, {},
+                                    playbackSelectionIdentity(target));
   }
 
   const std::filesystem::path targetDir = target.file.has_parent_path()
@@ -43,20 +56,18 @@ bool BrowserPlaybackRevealer::reveal(const PlaybackTarget& target) {
                                               : std::filesystem::path(".");
   const bool requiresRefresh =
       browser_.location != browserDirectoryLocation(targetDir);
-  if (requiresRefresh &&
-      !browserNavigator_.navigate(browserDirectoryLocation(targetDir),
-                                  toUtf8String(target.file.filename()))) {
-    return false;
+  if (requiresRefresh) {
+    return browserNavigator_.reveal(
+        browserDirectoryLocation(targetDir),
+        toUtf8String(target.file.filename()),
+        playbackSelectionIdentity(target));
   }
   if (select(target)) {
     return true;
   }
-  browser_.filter.clear();
-  browser_.filterActive = false;
-  browser_.pathSearch.clear();
-  browser_.pathSearchActive = false;
-  browserNavigator_.reload(toUtf8String(target.file.filename()));
-  return select(target);
+  return browserNavigator_.reveal(
+      browser_.location, toUtf8String(target.file.filename()),
+      playbackSelectionIdentity(target));
 }
 
 bool BrowserPlaybackRevealer::select(const PlaybackTarget& target) {

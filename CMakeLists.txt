@@ -645,6 +645,7 @@ add_test(NAME open_file_requests_tests
 add_executable(browser_navigation_tests)
 target_sources(browser_navigation_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_browser_navigation_tests>
+  ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
   ${CMAKE_SOURCE_DIR}/tui/browser_grid_index.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/browser_navigation.cpp
   ${CMAKE_SOURCE_DIR}/core/path_identity.cpp

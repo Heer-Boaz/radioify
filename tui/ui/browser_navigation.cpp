@@ -151,12 +151,23 @@ bool recordBrowserNavigation(BrowserState& browser,
 BrowserNavigator::BrowserNavigator(BrowserState& browser, Callbacks callbacks)
     : browser_(browser), callbacks_(std::move(callbacks)) {}
 
-std::optional<PreparedBrowserContent> BrowserNavigator::prepare(
+BrowserContentPreparation BrowserContentPreparation::pending() {
+  return {State::Pending, std::nullopt};
+}
+
+BrowserContentPreparation BrowserContentPreparation::complete(
+    std::optional<PreparedBrowserContent> content) {
+  return {State::Complete, std::move(content)};
+}
+
+bool BrowserNavigator::prepare(
     const BrowserLocation& target, const std::string& initialName,
-    const std::string& filter, int selected) const {
+    const std::string& filter, int selected,
+    CommitPrepared commitPrepared) {
   if (!callbacks_.prepare) {
-    return std::nullopt;
+    return false;
   }
+
   BrowserContentRequest request;
   request.location = target;
   request.previousContent = browser_.content;
@@ -165,7 +176,27 @@ std::optional<PreparedBrowserContent> BrowserNavigator::prepare(
   request.selected = selected;
   request.sortMode = browser_.sortMode;
   request.sortDescending = browser_.sortDescending;
-  return callbacks_.prepare(request);
+
+  const BrowserPreparationId preparationId = allocatePreparationId();
+  if (pendingPreparationId_ && callbacks_.cancelPreparation) {
+    callbacks_.cancelPreparation(preparationId);
+  }
+  pendingPreparationId_ = preparationId;
+  pendingCommit_ = std::move(commitPrepared);
+
+  BrowserContentPreparation preparation;
+  try {
+    preparation = callbacks_.prepare(preparationId, request);
+  } catch (...) {
+    return completePreparation(preparationId, std::nullopt);
+  }
+
+  if (preparation.state == BrowserContentPreparation::State::Pending) {
+    browser_.contentLoading = true;
+    notifyChanged();
+    return true;
+  }
+  return completePreparation(preparationId, std::move(preparation.content));
 }
 
 void BrowserNavigator::commit(const BrowserLocation& target,
@@ -189,18 +220,25 @@ void BrowserNavigator::commit(const BrowserLocation& target,
 bool BrowserNavigator::activate(const BrowserLocation& target,
                                 const std::string& initialName,
                                 const std::optional<BrowserState::EntryIdentity>&
-                                    selection) {
-  std::optional<PreparedBrowserContent> prepared =
-      prepare(target, initialName, {}, 0);
-  if (!prepared) {
-    return false;
-  }
-
-  commit(target, std::move(*prepared), true);
-  if (selection && selectBrowserEntry(browser_, *selection)) {
-    requestBrowserSelectionReveal(browser_);
-  }
-  return true;
+                                    selection,
+                                bool resetSearch,
+                                std::function<void()> committed) {
+  const std::string filter = resetSearch ? std::string{} : browser_.filter;
+  const int selected = resetSearch ? 0 : browser_.selected;
+  return prepare(
+      target, initialName, filter, selected,
+      [this, target, selection, resetSearch,
+       committed = std::move(committed)](
+          PreparedBrowserContent prepared) mutable {
+        commit(target, std::move(prepared), resetSearch);
+        if (selection && selectBrowserEntry(browser_, *selection)) {
+          requestBrowserSelectionReveal(browser_);
+        }
+        if (committed) {
+          committed();
+        }
+        notifyChanged();
+      });
 }
 
 bool BrowserNavigator::beginContext(
@@ -213,16 +251,13 @@ bool BrowserNavigator::beginContext(
   }
 
   const BrowserState::Location origin = captureBrowserLocation(browser_);
-  if (!activate(target, initialName, selection)) {
-    return false;
-  }
-
-  BrowserState::NavigationContext context;
-  context.kind = target.kind;
-  context.origin = origin;
-  browser_.navigationContext = std::move(context);
-  notifyChanged();
-  return true;
+  return activate(target, initialName, selection, true,
+                  [this, target, origin]() {
+                    BrowserState::NavigationContext context;
+                    context.kind = target.kind;
+                    context.origin = origin;
+                    browser_.navigationContext = std::move(context);
+                  });
 }
 
 bool BrowserNavigator::navigateFromContext(
@@ -234,27 +269,25 @@ bool BrowserNavigator::navigateFromContext(
 
   if (target.kind == browser_.navigationContext->kind) {
     const BrowserState::Location from = captureBrowserLocation(browser_);
-    if (!activate(target, initialName, selection)) {
-      return false;
-    }
-    BrowserState::NavigationContext& context = *browser_.navigationContext;
-    recordNavigation(context.backHistory, context.forwardHistory, from,
-                     captureBrowserLocation(browser_));
-    notifyChanged();
-    return true;
+    return activate(target, initialName, selection, true, [this, from]() {
+      BrowserState::NavigationContext& context = *browser_.navigationContext;
+      recordNavigation(context.backHistory, context.forwardHistory, from,
+                       captureBrowserLocation(browser_));
+    });
   }
 
   const BrowserState::Location origin = browser_.navigationContext->origin;
-  if (!activate(target, initialName, selection)) {
-    return false;
-  }
-  if (browser_.location == origin.route && initialName.empty() && !selection) {
-    restoreBrowserLocation(browser_, origin);
-  }
-  browser_.navigationContext.reset();
-  recordBrowserNavigation(browser_, origin, captureBrowserLocation(browser_));
-  notifyChanged();
-  return true;
+  return activate(
+      target, initialName, selection, true,
+      [this, origin, initialName, selection]() {
+        if (browser_.location == origin.route && initialName.empty() &&
+            !selection) {
+          restoreBrowserLocation(browser_, origin);
+        }
+        browser_.navigationContext.reset();
+        recordBrowserNavigation(browser_, origin,
+                                captureBrowserLocation(browser_));
+      });
 }
 
 bool BrowserNavigator::navigate(const BrowserLocation& target,
@@ -262,17 +295,7 @@ bool BrowserNavigator::navigate(const BrowserLocation& target,
                                 const std::optional<BrowserState::EntryIdentity>&
                                     selection) {
   if (target == browser_.location) {
-    std::optional<PreparedBrowserContent> prepared = prepare(
-        target, initialName, browser_.filter, browser_.selected);
-    if (!prepared) {
-      return false;
-    }
-    commit(target, std::move(*prepared), false);
-    if (selection && selectBrowserEntry(browser_, *selection)) {
-      requestBrowserSelectionReveal(browser_);
-    }
-    notifyChanged();
-    return true;
+    return activate(target, initialName, selection, false);
   }
   if (browser_.navigationContext) {
     return navigateFromContext(target, initialName, selection);
@@ -282,78 +305,96 @@ bool BrowserNavigator::navigate(const BrowserLocation& target,
     return beginContext(target, initialName, selection);
   }
   const BrowserState::Location from = captureBrowserLocation(browser_);
-  if (!activate(target, initialName, selection)) {
-    return false;
+  return activate(target, initialName, selection, true, [this, from]() {
+    recordBrowserNavigation(browser_, from, captureBrowserLocation(browser_));
+  });
+}
+
+bool BrowserNavigator::reveal(
+    const BrowserLocation& target, const std::string& initialName,
+    const BrowserState::EntryIdentity& selection) {
+  if (target != browser_.location) {
+    return navigate(target, initialName, selection);
   }
-  recordBrowserNavigation(browser_, from, captureBrowserLocation(browser_));
-  notifyChanged();
-  return true;
+  return activate(target, initialName, selection, true);
 }
 
 bool BrowserNavigator::restoreLocation(
-    const BrowserState::Location& location) {
-  if (!activate(location.route, {}, std::nullopt)) {
-    return false;
-  }
-  restoreBrowserLocation(browser_, location);
-  return true;
+    const BrowserState::Location& location, std::function<void()> committed) {
+  return activate(
+      location.route, {}, std::nullopt, true,
+      [this, location, committed = std::move(committed)]() mutable {
+        restoreBrowserLocation(browser_, location);
+        if (committed) {
+          committed();
+        }
+      });
 }
 
 bool BrowserNavigator::restore(const BrowserState::Location& location) {
-  if (!restoreLocation(location)) {
-    return false;
-  }
-  if (browser_.navigationContext &&
-      location.route.kind != browser_.navigationContext->kind) {
-    browser_.navigationContext.reset();
-  }
-  notifyChanged();
-  return true;
+  return restoreLocation(location, [this, location]() {
+    if (browser_.navigationContext &&
+        location.route.kind != browser_.navigationContext->kind) {
+      browser_.navigationContext.reset();
+    }
+  });
 }
 
-bool BrowserNavigator::traverseHistory(
-    std::vector<BrowserState::NavigationHistoryEntry>& source,
-    std::vector<BrowserState::NavigationHistoryEntry>& destination,
-    bool backward) {
-  if (source.empty()) {
+bool BrowserNavigator::traverseHistory(bool contextual, bool backward) {
+  auto* source = contextual ? &browser_.navigationContext->backHistory
+                            : &browser_.backHistory;
+  if (!backward) {
+    source = contextual ? &browser_.navigationContext->forwardHistory
+                        : &browser_.forwardHistory;
+  }
+  if (source->empty()) {
     return false;
   }
 
-  BrowserState::NavigationHistoryEntry entry = source.back();
+  BrowserState::NavigationHistoryEntry entry = source->back();
   const BrowserState::Location current = captureBrowserLocation(browser_);
-  const BrowserState::Location& target = backward ? entry.from : entry.to;
-  if (!restoreLocation(target)) {
-    return false;
-  }
-
-  source.pop_back();
-  if (backward) {
-    entry.to = current;
-  } else {
-    entry.from = current;
-  }
-  destination.push_back(std::move(entry));
-  notifyChanged();
-  return true;
+  const BrowserState::Location target = backward ? entry.from : entry.to;
+  return restoreLocation(
+      target, [this, contextual, backward, entry = std::move(entry),
+               current]() mutable {
+        auto* committedSource =
+            contextual ? &browser_.navigationContext->backHistory
+                       : &browser_.backHistory;
+        auto* committedDestination =
+            contextual ? &browser_.navigationContext->forwardHistory
+                       : &browser_.forwardHistory;
+        if (!backward) {
+          std::swap(committedSource, committedDestination);
+        }
+        committedSource->pop_back();
+        if (backward) {
+          entry.to = current;
+        } else {
+          entry.from = current;
+        }
+        committedDestination->push_back(std::move(entry));
+      });
 }
 
 bool BrowserNavigator::back() {
+  if (pendingPreparationId_) {
+    return cancelPreparation();
+  }
   if (browser_.navigationContext) {
     BrowserState::NavigationContext& context = *browser_.navigationContext;
     if (context.backHistory.empty()) {
       return closeContext();
     }
-    return traverseHistory(context.backHistory, context.forwardHistory, true);
+    return traverseHistory(true, true);
   }
-  return traverseHistory(browser_.backHistory, browser_.forwardHistory, true);
+  return traverseHistory(false, true);
 }
 
 bool BrowserNavigator::forward() {
   if (browser_.navigationContext) {
-    BrowserState::NavigationContext& context = *browser_.navigationContext;
-    return traverseHistory(context.forwardHistory, context.backHistory, false);
+    return traverseHistory(true, false);
   }
-  return traverseHistory(browser_.forwardHistory, browser_.backHistory, false);
+  return traverseHistory(false, false);
 }
 
 bool BrowserNavigator::closeContext() {
@@ -362,12 +403,7 @@ bool BrowserNavigator::closeContext() {
   }
 
   const BrowserState::Location origin = browser_.navigationContext->origin;
-  if (!restoreLocation(origin)) {
-    return false;
-  }
-  browser_.navigationContext.reset();
-  notifyChanged();
-  return true;
+  return restoreLocation(origin, [this]() { browser_.navigationContext.reset(); });
 }
 
 bool BrowserNavigator::contextActive() const {
@@ -375,12 +411,45 @@ bool BrowserNavigator::contextActive() const {
 }
 
 bool BrowserNavigator::reload(const std::string& initialName) {
-  std::optional<PreparedBrowserContent> prepared = prepare(
-      browser_.location, initialName, browser_.filter, browser_.selected);
-  if (!prepared) {
+  return activate(browser_.location, initialName, std::nullopt, false);
+}
+
+bool BrowserNavigator::completePreparation(
+    BrowserPreparationId preparationId,
+    std::optional<PreparedBrowserContent> prepared) {
+  if (!pendingPreparationId_ || *pendingPreparationId_ != preparationId ||
+      !pendingCommit_) {
     return false;
   }
-  commit(browser_.location, std::move(*prepared), false);
+
+  CommitPrepared commitPrepared = std::move(pendingCommit_);
+  pendingCommit_ = {};
+  pendingPreparationId_.reset();
+  const bool wasLoading = browser_.contentLoading;
+  browser_.contentLoading = false;
+  if (!prepared) {
+    if (wasLoading) {
+      notifyChanged();
+    }
+    return false;
+  }
+
+  commitPrepared(std::move(*prepared));
+  return true;
+}
+
+bool BrowserNavigator::cancelPreparation() {
+  if (!pendingPreparationId_ || !pendingCommit_) {
+    return false;
+  }
+
+  pendingCommit_ = {};
+  pendingPreparationId_.reset();
+  browser_.contentLoading = false;
+  const BrowserPreparationId cancellationId = allocatePreparationId();
+  if (callbacks_.cancelPreparation) {
+    callbacks_.cancelPreparation(cancellationId);
+  }
   notifyChanged();
   return true;
 }
@@ -389,6 +458,10 @@ void BrowserNavigator::notifyChanged() {
   if (callbacks_.changed) {
     callbacks_.changed();
   }
+}
+
+BrowserPreparationId BrowserNavigator::allocatePreparationId() {
+  return nextPreparationId_++;
 }
 
 void requestBrowserSelectionReveal(BrowserState& browser) {

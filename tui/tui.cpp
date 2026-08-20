@@ -46,6 +46,7 @@
 #include "consolescreen.h"
 #include "media_artwork_sidecar.h"
 #include "core/open_file_requests.h"
+#include "core/latest_request_worker.h"
 #include "core/windows_app_resources.h"
 #include "core/windows_message_pump.h"
 #include "core/windows_console_window.h"
@@ -118,13 +119,15 @@ inline bool hasDirtyFlag(UiDirtyFlags value, UiDirtyFlags flag) {
 
 static DWORD waitForBrowserWake(ConsoleInput& input,
                                 const OpenFileRequests& openFileRequests,
-                                NativeWaitHandle asyncWakeHandle,
+                                NativeWaitHandle thumbnailWakeHandle,
+                                NativeWaitHandle browserContentWakeHandle,
+                                NativeWaitHandle browserMetadataWakeHandle,
                                 NativeWaitHandle notificationAreaHandle,
                                 const VideoWindow& browserWindow,
                                 const AudioPictureInPictureWindow&
                                     audioPictureInPicture,
                                 DWORD timeoutMs) {
-  NativeWaitHandle handles[8];
+  NativeWaitHandle handles[10];
   DWORD handleCount = 0;
   if (NativeWaitHandle inputHandle = input.waitHandle()) {
     handles[handleCount++] = inputHandle;
@@ -132,8 +135,14 @@ static DWORD waitForBrowserWake(ConsoleInput& input,
   if (NativeWaitHandle openFilesHandle = openFileRequests.nativeWaitHandle()) {
     handles[handleCount++] = openFilesHandle;
   }
-  if (asyncWakeHandle) {
-    handles[handleCount++] = asyncWakeHandle;
+  if (thumbnailWakeHandle) {
+    handles[handleCount++] = thumbnailWakeHandle;
+  }
+  if (browserContentWakeHandle) {
+    handles[handleCount++] = browserContentWakeHandle;
+  }
+  if (browserMetadataWakeHandle) {
+    handles[handleCount++] = browserMetadataWakeHandle;
   }
   if (notificationAreaHandle) {
     handles[handleCount++] = notificationAreaHandle;
@@ -241,8 +250,12 @@ static bool shouldHideBrowserMediaMetadataFile(
 #endif
 }
 
+using BrowserContentWorker =
+    LatestRequestWorker<BrowserContentRequest, PreparedBrowserContent>;
+
 static std::optional<std::vector<BrowserEntry>> listEntries(
-    const std::filesystem::path& dir) {
+    const std::filesystem::path& dir,
+    const BrowserContentWorker::Cancellation* cancellation) {
   std::vector<BrowserEntry> entries;
   std::vector<BrowserEntry> items;
   std::vector<BrowserEntry> knownFolders;
@@ -260,6 +273,7 @@ static std::optional<std::vector<BrowserEntry>> listEntries(
 
   auto appendKnownFolder = [&](const std::string& name,
                               const std::filesystem::path& path) {
+    if (cancellation && cancellation->requested()) return;
     if (path.empty()) return;
     std::error_code ec;
     if (!std::filesystem::is_directory(path, ec) || ec) {
@@ -333,6 +347,9 @@ static std::optional<std::vector<BrowserEntry>> listEntries(
   }
   const std::filesystem::directory_iterator end;
   while (iterator != end) {
+    if (cancellation && cancellation->requested()) {
+      return std::nullopt;
+    }
     const auto& entry = *iterator;
     const auto& p = entry.path();
     std::error_code ec;
@@ -350,12 +367,21 @@ static std::optional<std::vector<BrowserEntry>> listEntries(
     }
   }
 
+  if (cancellation && cancellation->requested()) {
+    return std::nullopt;
+  }
+
   entries.insert(entries.end(), items.begin(), items.end());
   return entries;
 }
 
 static bool populateBrowser(BrowserState& state,
-                            const std::string& initialName) {
+                            const std::string& initialName,
+                            const BrowserContentWorker::Cancellation*
+                                cancellation) {
+  if (cancellation && cancellation->requested()) {
+    return false;
+  }
   const bool optionsActive =
       state.location.kind == BrowserLocationKind::OptionsBrowser;
   if (optionsActive) {
@@ -365,7 +391,7 @@ static bool populateBrowser(BrowserState& state,
   } else if (isTrackBrowserActive(state)) {
     std::shared_ptr<const TrackBrowserContent> content =
         prepareTrackBrowserContent(state.location.path);
-    if (!content) {
+    if (!content || (cancellation && cancellation->requested())) {
       return false;
     }
     state.content = content;
@@ -383,7 +409,7 @@ static bool populateBrowser(BrowserState& state,
     }
   } else {
     std::optional<std::vector<BrowserEntry>> entries =
-        listEntries(state.location.path);
+        listEntries(state.location.path, cancellation);
     if (!entries) {
       return false;
     }
@@ -404,6 +430,10 @@ static bool populateBrowser(BrowserState& state,
                                 std::string::npos;
                        }),
         state.entries.end());
+  }
+
+  if (cancellation && cancellation->requested()) {
+    return false;
   }
 
   if (!state.entries.empty() && !optionsActive) {
@@ -483,6 +513,10 @@ static bool populateBrowser(BrowserState& state,
     }
   }
 
+  if (cancellation && cancellation->requested()) {
+    return false;
+  }
+
   if (state.entries.empty()) {
     state.selected = 0;
     state.scrollRow = 0;
@@ -521,7 +555,8 @@ static bool populateBrowser(BrowserState& state,
 }
 
 static std::optional<PreparedBrowserContent> prepareBrowserContent(
-    const BrowserContentRequest& request) {
+    const BrowserContentRequest& request,
+    const BrowserContentWorker::Cancellation* cancellation = nullptr) {
   BrowserState candidate;
   candidate.location = request.location;
   candidate.content = request.previousContent;
@@ -529,7 +564,7 @@ static std::optional<PreparedBrowserContent> prepareBrowserContent(
   candidate.sortMode = request.sortMode;
   candidate.sortDescending = request.sortDescending;
   candidate.filter = request.filter;
-  if (!populateBrowser(candidate, request.initialName)) {
+  if (!populateBrowser(candidate, request.initialName, cancellation)) {
     return std::nullopt;
   }
 
@@ -1267,18 +1302,39 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
 
   BrowserState browser;
   browser.location = browserDirectoryLocation(startDir);
+  BrowserContentWorker browserContentWorker(
+      [](BrowserContentRequest request,
+         const BrowserContentWorker::Cancellation& cancellation) {
+        return prepareBrowserContent(request, &cancellation);
+      });
+  bool browserUiActive = false;
   BrowserNavigator::Callbacks browserNavigationCallbacks;
   browserNavigationCallbacks.prepare =
-      [](const BrowserContentRequest& request) {
-        return prepareBrowserContent(request);
+      [&](BrowserPreparationId preparationId,
+          const BrowserContentRequest& request) {
+        if (!browserUiActive ||
+            request.location.kind == BrowserLocationKind::OptionsBrowser) {
+          return BrowserContentPreparation::complete(
+              prepareBrowserContent(request));
+        }
+        if (!browserContentWorker.submit(preparationId, request)) {
+          return BrowserContentPreparation::complete(std::nullopt);
+        }
+        return BrowserContentPreparation::pending();
+      };
+  browserNavigationCallbacks.cancelPreparation =
+      [&](BrowserPreparationId cancellationId) {
+        browserContentWorker.cancel(cancellationId);
       };
   browserNavigationCallbacks.changed = [&]() { markLayoutDirty(); };
   BrowserNavigator browserNavigator(browser,
                                     std::move(browserNavigationCallbacks));
+  BrowserSelectionMetadata browserSelectionMetadata(isVideoExt);
   if (!browserNavigator.reload(initialName)) {
     browser.location = browserDirectoryLocation({});
     browserNavigator.reload();
   }
+  browserUiActive = true;
 
   input.init();
 
@@ -2637,6 +2693,15 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   };
 
   while (running) {
+    while (std::optional<BrowserContentWorker::Completion>
+               browserContentCompletion = browserContentWorker.poll()) {
+      browserNavigator.completePreparation(
+          browserContentCompletion->generation,
+          std::move(browserContentCompletion->result));
+    }
+    if (browserSelectionMetadata.poll()) {
+      markDirty(UiDirtyFlags::Async);
+    }
     if (layoutDirty) {
       rebuildLayout();
     }
@@ -3076,6 +3141,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       DWORD waitTimeout = computeWakeTimeout(now);
       DWORD waitResult = waitForBrowserWake(
           input, openFileRequests, browserThumbnailWakeHandle(),
+          browserContentWorker.nativeWaitHandle(),
+          browserSelectionMetadata.nativeWaitHandle(),
           notificationAreaControls.nativeWaitHandle(), tuiWindow,
           audioPictureInPicture, waitTimeout);
       if (consumeBrowserThumbnailWake()) {
@@ -3246,12 +3313,14 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       int line = footerStart;
       if (line < height && footerLayout.showMeta) {
         std::string meta;
-        if (optionsMode) {
+        if (browser.contentLoading) {
+          meta = " Loading...";
+        } else if (optionsMode) {
           meta = optionsBrowserSelectionMeta(browser);
         } else if (trackMode) {
           meta = buildTrackSelectionMeta(browser);
         } else {
-          meta = buildSelectionMeta(browser, isVideoExt);
+          meta = browserSelectionMetadata.describe(browser);
         }
         if (!meta.empty()) {
           screen.writeText(0, line++, fitLine(meta, width), kStyleDim);

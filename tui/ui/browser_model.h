@@ -170,6 +170,7 @@ struct BrowserState {
   std::vector<NavigationHistoryEntry> forwardHistory;
   ViewportRestoreMode viewportRestoreMode = ViewportRestoreMode::None;
   int viewportRestoreScrollRow = 0;
+  bool contentLoading = false;
 };
 
 struct GridLayout {

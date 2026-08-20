@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -39,12 +40,29 @@ struct PreparedBrowserContent {
   int viewportRestoreScrollRow = 0;
 };
 
+using BrowserPreparationId = std::uint64_t;
+
+struct BrowserContentPreparation {
+  enum class State {
+    Pending,
+    Complete,
+  };
+
+  static BrowserContentPreparation pending();
+  static BrowserContentPreparation complete(
+      std::optional<PreparedBrowserContent> content);
+
+  State state = State::Pending;
+  std::optional<PreparedBrowserContent> content;
+};
+
 class BrowserNavigator {
  public:
   struct Callbacks {
-    std::function<std::optional<PreparedBrowserContent>(
-        const BrowserContentRequest&)>
+    std::function<BrowserContentPreparation(
+        BrowserPreparationId, const BrowserContentRequest&)>
         prepare;
+    std::function<void(BrowserPreparationId)> cancelPreparation;
     std::function<void()> changed;
   };
 
@@ -57,38 +75,50 @@ class BrowserNavigator {
                 const std::string& initialName = {},
                 const std::optional<BrowserState::EntryIdentity>& selection =
                     std::nullopt);
+  bool reveal(const BrowserLocation& target, const std::string& initialName,
+              const BrowserState::EntryIdentity& selection);
   bool restore(const BrowserState::Location& location);
   bool back();
   bool forward();
   bool closeContext();
   bool contextActive() const;
   bool reload(const std::string& initialName = {});
+  bool completePreparation(
+      BrowserPreparationId preparationId,
+      std::optional<PreparedBrowserContent> prepared);
+  bool cancelPreparation();
 
  private:
-  std::optional<PreparedBrowserContent> prepare(
+  using CommitPrepared =
+      std::function<void(PreparedBrowserContent prepared)>;
+
+  bool prepare(
       const BrowserLocation& target, const std::string& initialName,
-      const std::string& filter, int selected) const;
+      const std::string& filter, int selected, CommitPrepared commitPrepared);
   void commit(const BrowserLocation& target,
               PreparedBrowserContent prepared,
               bool resetSearch);
   bool activate(const BrowserLocation& target,
                 const std::string& initialName,
-                const std::optional<BrowserState::EntryIdentity>& selection);
+                const std::optional<BrowserState::EntryIdentity>& selection,
+                bool resetSearch, std::function<void()> committed = {});
   bool beginContext(
       const BrowserLocation& target, const std::string& initialName,
       const std::optional<BrowserState::EntryIdentity>& selection);
   bool navigateFromContext(
       const BrowserLocation& target, const std::string& initialName,
       const std::optional<BrowserState::EntryIdentity>& selection);
-  bool traverseHistory(
-      std::vector<BrowserState::NavigationHistoryEntry>& source,
-      std::vector<BrowserState::NavigationHistoryEntry>& destination,
-      bool backward);
-  bool restoreLocation(const BrowserState::Location& location);
+  bool traverseHistory(bool contextual, bool backward);
+  bool restoreLocation(const BrowserState::Location& location,
+                       std::function<void()> committed = {});
   void notifyChanged();
+  BrowserPreparationId allocatePreparationId();
 
   BrowserState& browser_;
   Callbacks callbacks_;
+  BrowserPreparationId nextPreparationId_ = 1;
+  std::optional<BrowserPreparationId> pendingPreparationId_;
+  CommitPrepared pendingCommit_;
 };
 
 void requestBrowserSelectionReveal(BrowserState& browser);
