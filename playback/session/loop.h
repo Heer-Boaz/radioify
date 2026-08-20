@@ -14,9 +14,14 @@
 #include "log.h"
 #include "playback/video/playback.h"
 
+class ConsoleInput;
+class ConsoleScreen;
+class OpenFileRequests;
 class Player;
 class PlaybackNotificationAreaControls;
 class SubtitleManager;
+struct Color;
+struct Style;
 
 class PlaybackLoopRunner {
  public:

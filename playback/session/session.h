@@ -7,7 +7,21 @@
 
 #include "playback/control/transport.h"
 #include "playback/session/state.h"
-#include "playback/video/playback.h"
+
+class ConsoleInput;
+class ConsoleScreen;
+class OpenFileRequests;
+class PlaybackNotificationAreaControls;
+class PlaybackSystemControls;
+struct Color;
+struct Style;
+struct VideoPlaybackConfig;
+
+enum class PlaybackSessionOpenOutcome {
+  Ready,
+  HandledWithoutPlayback,
+  AudioFallbackRequested,
+};
 
 class PlaybackSession {
  public:
@@ -42,7 +56,8 @@ class PlaybackSession {
   PlaybackSession(const PlaybackSession&) = delete;
   PlaybackSession& operator=(const PlaybackSession&) = delete;
 
-  VideoPlaybackOutcome run();
+  PlaybackSessionOpenOutcome open();
+  void run();
 
  private:
   struct Impl;

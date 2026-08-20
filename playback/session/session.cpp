@@ -1,11 +1,13 @@
 #include "session.h"
 
 #include <atomic>
+#include <cassert>
 #include <functional>
 #include <memory>
 #include <utility>
 
 #include "audioplayback.h"
+#include "playback/video/playback.h"
 #include "playback/video/player.h"
 #include "bootstrap.h"
 #include "host.h"
@@ -13,6 +15,12 @@
 #include "playback/video/subtitle/manager.h"
 
 struct PlaybackSession::Impl {
+  enum class Lifecycle {
+    Created,
+    Ready,
+    Finished,
+  };
+
   explicit Impl(Args args)
       : file(args.file),
         input(args.input),
@@ -113,27 +121,37 @@ struct PlaybackSession::Impl {
     loop->renderFailureScreen();
   }
 
-  VideoPlaybackOutcome run() {
+  PlaybackSessionOpenOutcome open() {
+    assert(lifecycle == Lifecycle::Created);
     if (!host.initialize()) {
-      return VideoPlaybackOutcome::HandledWithoutPlayback;
+      lifecycle = Lifecycle::Finished;
+      return PlaybackSessionOpenOutcome::HandledWithoutPlayback;
     }
 
     const PlaybackSessionBootstrapOutcome bootstrapOutcome = bootstrap();
     if (bootstrapOutcome == PlaybackSessionBootstrapOutcome::PlayAudioOnly) {
-      return VideoPlaybackOutcome::AudioFallbackRequested;
+      lifecycle = Lifecycle::Finished;
+      return PlaybackSessionOpenOutcome::AudioFallbackRequested;
     }
     if (bootstrapOutcome == PlaybackSessionBootstrapOutcome::Handled) {
-      return VideoPlaybackOutcome::HandledWithoutPlayback;
+      lifecycle = Lifecycle::Finished;
+      return PlaybackSessionOpenOutcome::HandledWithoutPlayback;
     }
 
     prepareSubtitles();
     createLoop();
+    lifecycle = Lifecycle::Ready;
+    return PlaybackSessionOpenOutcome::Ready;
+  }
+
+  void run() {
+    assert(lifecycle == Lifecycle::Ready);
     loop->run();
     if (continuityState) {
       *continuityState = loop->continuationState();
     }
     finalizeRun();
-    return VideoPlaybackOutcome::Played;
+    lifecycle = Lifecycle::Finished;
   }
 
   const std::filesystem::path& file;
@@ -162,6 +180,7 @@ struct PlaybackSession::Impl {
   std::atomic<bool> enableSubtitlesShared{false};
   bool hasSubtitles = false;
   bool loopShutdown = false;
+  Lifecycle lifecycle = Lifecycle::Created;
   std::unique_ptr<PlaybackLoopRunner> loop;
 };
 
@@ -175,4 +194,6 @@ PlaybackSession::PlaybackSession(PlaybackSession&&) noexcept = default;
 PlaybackSession& PlaybackSession::operator=(PlaybackSession&&) noexcept =
     default;
 
-VideoPlaybackOutcome PlaybackSession::run() { return impl_->run(); }
+PlaybackSessionOpenOutcome PlaybackSession::open() { return impl_->open(); }
+
+void PlaybackSession::run() { impl_->run(); }

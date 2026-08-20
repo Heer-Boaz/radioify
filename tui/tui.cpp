@@ -64,6 +64,7 @@
 #include "playback/input/shortcuts.h"
 #include "playback/notification_area/controls.h"
 #include "playback/overlay/overlay.h"
+#include "playback/session/session.h"
 #include "playback/system_media_transport/controls.h"
 #include "playback_target_match.h"
 #include "playback/target.h"
@@ -1276,59 +1277,83 @@ int runTui(Options o,
         std::move(route), playback_controller::sourceFromFiles(files)});
   };
 
+  enum class MediaPresentationOutcome {
+    Activated,
+    Handled,
+    Rejected,
+  };
+
+  struct PlaybackPresentationResult {
+    MediaPresentationOutcome outcome = MediaPresentationOutcome::Rejected;
+    std::optional<playback_controller::Controller::PreparedActivation>
+        nextActivation;
+  };
+
   std::optional<MediaActivation> pendingMediaActivation;
   PlaybackSessionContinuationState videoContinuationState;
-  playback_controller::Controller::Presenter presentPlaybackRoute =
-      [&](const playback_route::Route& route,
-          playback_controller::Handoff& handoff) {
+  auto presentPlaybackActivation =
+      [&](playback_controller::Controller::PreparedActivation activation)
+      -> PlaybackPresentationResult {
+        const playback_route::Route& route = activation.route();
         if (route.videoContinuation) {
           videoContinuationState = *route.videoContinuation;
         }
         applyAudioPictureInPicturePlan(route.audioPictureInPicture);
-        const PlaybackTarget& target = route.target;
+        const PlaybackTarget target = route.target;
         if (target.trackIndex >= 0) {
-          return tryStartAudioFile(target.file, target.trackIndex)
-                     ? playback_controller::PresentationOutcome::Activated
-                     : playback_controller::PresentationOutcome::Rejected;
+          if (!tryStartAudioFile(target.file, target.trackIndex)) {
+            return {MediaPresentationOutcome::Rejected, std::nullopt};
+          }
+          playbackController.commit(std::move(activation));
+          return {MediaPresentationOutcome::Activated, std::nullopt};
         }
         if (isSupportedImageExt(target.file)) {
-          return playback_controller::PresentationOutcome::Rejected;
+          return {MediaPresentationOutcome::Rejected, std::nullopt};
         }
         if (isVideoExt(target.file)) {
           bool quitAppRequested = false;
           std::optional<std::filesystem::path> pendingOpenDirectory;
-          auto requestMediaHandoff =
+          std::optional<playback_controller::Controller::PreparedActivation>
+              pendingTransportActivation;
+          auto requestMediaActivation =
               [&](playback_route::Route nextRoute,
                   const std::vector<std::filesystem::path>& files) {
-                if (isSupportedImageExt(nextRoute.target.file)) {
-                  if (pendingMediaActivation) {
-                    return false;
-                  }
-                  pendingMediaActivation = mediaActivationFromFiles(
-                      std::move(nextRoute), files);
-                  return pendingMediaActivation.has_value();
+                if (pendingMediaActivation || pendingTransportActivation ||
+                    pendingOpenDirectory) {
+                  return false;
                 }
-                return handoff.start(
-                    std::move(nextRoute),
-                    playback_controller::sourceFromFiles(files));
+                pendingMediaActivation = mediaActivationFromFiles(
+                    std::move(nextRoute), files);
+                return pendingMediaActivation.has_value();
               };
           auto requestTransportCommand =
               [&](PlaybackTransportCommand command) {
+                if (pendingMediaActivation || pendingTransportActivation ||
+                    pendingOpenDirectory) {
+                  return false;
+                }
                 const playback_controller::Direction direction =
                     (command == PlaybackTransportCommand::Previous)
                         ? playback_controller::Direction::Previous
                         : playback_controller::Direction::Next;
-                return handoff.transport(direction);
+                pendingTransportActivation =
+                    playbackController.prepareTransport(direction);
+                return pendingTransportActivation.has_value();
               };
           auto requestOpenFiles =
               [&](const std::vector<std::filesystem::path>& files) {
                 if (auto dir = resolveOpenDirectory(files)) {
+                  if (pendingMediaActivation || pendingTransportActivation ||
+                      pendingOpenDirectory) {
+                    return false;
+                  }
                   pendingOpenDirectory = *dir;
                   return true;
                 }
                 if (auto resolvedRoute =
                         playback_route::resolveDroppedTarget(files)) {
-                  return requestMediaHandoff(std::move(*resolvedRoute), files);
+                  return requestMediaActivation(std::move(*resolvedRoute),
+                                                files);
                 }
                 return false;
               };
@@ -1337,66 +1362,99 @@ int runTui(Options o,
             sessionVideoConfig.enableAscii =
                 videoContinuationState.asciiRenderingEnabled;
           }
-          const VideoPlaybackOutcome videoOutcome = showAsciiVideo(
-              target.file, input, screen, kStyleNormal, kStyleAccent, kStyleDim,
-              kStyleProgressEmpty, kStyleProgressFrame, kProgressStart,
-              kProgressEnd, sessionVideoConfig, openFileRequests,
-              &quitAppRequested, &systemControls, &notificationAreaControls,
-              requestTransportCommand, requestOpenFiles,
-              &videoContinuationState, route.sessionIntent);
-          const playback_controller::PresentationOutcome completedVideoOutcome =
-              videoOutcome == VideoPlaybackOutcome::Played
-                  ? playback_controller::PresentationOutcome::Activated
-                  : playback_controller::PresentationOutcome::Handled;
+          PlaybackSession session(
+              {target.file,
+               input,
+               screen,
+               kStyleNormal,
+               kStyleAccent,
+               kStyleDim,
+               kStyleProgressEmpty,
+               kStyleProgressFrame,
+               kProgressStart,
+               kProgressEnd,
+               sessionVideoConfig,
+               openFileRequests,
+               &quitAppRequested,
+               &systemControls,
+               &notificationAreaControls,
+               requestTransportCommand,
+               requestOpenFiles,
+               &videoContinuationState,
+               route.sessionIntent});
+          const PlaybackSessionOpenOutcome openOutcome = session.open();
+          MediaPresentationOutcome presentationOutcome =
+              MediaPresentationOutcome::Handled;
+          if (openOutcome == PlaybackSessionOpenOutcome::Ready) {
+            playbackController.commit(std::move(activation));
+            presentationOutcome = MediaPresentationOutcome::Activated;
+            session.run();
+          } else if (openOutcome ==
+                     PlaybackSessionOpenOutcome::AudioFallbackRequested) {
+            if (!tryStartAudioFile(target.file)) {
+              return {MediaPresentationOutcome::Rejected, std::nullopt};
+            }
+            playbackController.commit(std::move(activation));
+            return {MediaPresentationOutcome::Activated, std::nullopt};
+          }
           if (quitAppRequested) {
             running = false;
             pendingMediaActivation.reset();
-            return completedVideoOutcome;
+            return {presentationOutcome, std::nullopt};
           }
-          OpenFilesRequest activation;
-          if (openFileRequests.poll(activation)) {
-            if (auto dir = resolveOpenDirectory(activation.files)) {
+          OpenFilesRequest openRequest;
+          if (openFileRequests.poll(openRequest)) {
+            if (auto dir = resolveOpenDirectory(openRequest.files)) {
+              pendingMediaActivation.reset();
+              pendingTransportActivation.reset();
               openBrowserDirectory(*dir);
-              return completedVideoOutcome;
+              return {presentationOutcome, std::nullopt};
             }
             if (auto resolvedRoute =
-                    resolveOpenFilesPlaybackRoute(activation)) {
-              bool accepted = false;
-              if (videoOutcome == VideoPlaybackOutcome::Played) {
-                accepted = requestMediaHandoff(std::move(*resolvedRoute),
-                                               activation.files);
-              } else if (!pendingMediaActivation) {
-                pendingMediaActivation = mediaActivationFromFiles(
-                    std::move(*resolvedRoute), activation.files);
-                accepted = pendingMediaActivation.has_value();
+                    resolveOpenFilesPlaybackRoute(openRequest)) {
+              pendingMediaActivation.reset();
+              pendingTransportActivation.reset();
+              if (!requestMediaActivation(std::move(*resolvedRoute),
+                                          openRequest.files)) {
+                return {MediaPresentationOutcome::Rejected, std::nullopt};
               }
-              if (!accepted) {
-                return playback_controller::PresentationOutcome::Rejected;
-              }
-              return completedVideoOutcome;
+              return {presentationOutcome, std::nullopt};
             }
           }
           if (pendingOpenDirectory) {
+            pendingMediaActivation.reset();
+            pendingTransportActivation.reset();
             openBrowserDirectory(*pendingOpenDirectory);
-            return completedVideoOutcome;
+            return {presentationOutcome, std::nullopt};
           }
-          switch (videoOutcome) {
-            case VideoPlaybackOutcome::Played:
-              markDirty();
-              return playback_controller::PresentationOutcome::Activated;
-            case VideoPlaybackOutcome::HandledWithoutPlayback:
-              markDirty();
-              return playback_controller::PresentationOutcome::Handled;
-            case VideoPlaybackOutcome::AudioFallbackRequested:
-              return tryStartAudioFile(target.file)
-                         ? playback_controller::PresentationOutcome::Activated
-                         : playback_controller::PresentationOutcome::Rejected;
-          }
-          return playback_controller::PresentationOutcome::Rejected;
+          markDirty();
+          return {presentationOutcome,
+                  std::move(pendingTransportActivation)};
         }
-        return tryStartAudioFile(target.file)
-                   ? playback_controller::PresentationOutcome::Activated
-                   : playback_controller::PresentationOutcome::Rejected;
+        if (!tryStartAudioFile(target.file)) {
+          return {MediaPresentationOutcome::Rejected, std::nullopt};
+        }
+        playbackController.commit(std::move(activation));
+        return {MediaPresentationOutcome::Activated, std::nullopt};
+      };
+
+  auto activatePreparedPlayback =
+      [&](playback_controller::Controller::PreparedActivation
+              initialActivation) {
+        std::optional<playback_controller::Controller::PreparedActivation>
+            activation(std::move(initialActivation));
+        MediaPresentationOutcome outcome = MediaPresentationOutcome::Rejected;
+        while (activation) {
+          PlaybackPresentationResult result =
+              presentPlaybackActivation(std::move(*activation));
+          outcome = result.outcome;
+          if (outcome == MediaPresentationOutcome::Rejected ||
+              pendingMediaActivation) {
+            return outcome;
+          }
+          activation = std::move(result.nextActivation);
+        }
+        return outcome;
       };
 
   auto activateMedia = [&](MediaActivation initialActivation) {
@@ -1406,11 +1464,14 @@ int runTui(Options o,
     while (activation) {
       pendingMediaActivation.reset();
       if (auto* playback = std::get_if<PlaybackActivation>(&*activation)) {
-        const playback_controller::PresentationOutcome outcome =
-            playbackController.start(
-                std::move(playback->route), std::move(playback->source),
-                presentPlaybackRoute);
-        handled = outcome != playback_controller::PresentationOutcome::Rejected;
+        std::optional<playback_controller::Controller::PreparedActivation>
+            prepared = playbackController.prepareStart(
+                std::move(playback->route), std::move(playback->source));
+        if (!prepared) {
+          return false;
+        }
+        handled = activatePreparedPlayback(std::move(*prepared)) !=
+                  MediaPresentationOutcome::Rejected;
       } else {
         ImageActivation image =
             std::move(std::get<ImageActivation>(*activation));
@@ -1462,8 +1523,11 @@ int runTui(Options o,
   };
   auto transportPlayback = [&](playback_controller::Direction direction) {
     pendingMediaActivation.reset();
-    if (playbackController.transport(direction, presentPlaybackRoute) ==
-        playback_controller::PresentationOutcome::Rejected) {
+    std::optional<playback_controller::Controller::PreparedActivation>
+        activation = playbackController.prepareTransport(direction);
+    if (!activation ||
+        activatePreparedPlayback(std::move(*activation)) ==
+            MediaPresentationOutcome::Rejected) {
       return false;
     }
     std::optional<MediaActivation> handoff =

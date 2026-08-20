@@ -1,18 +1,8 @@
 #pragma once
 
 #include <filesystem>
-#include <functional>
-#include <vector>
 
 #include "core/runtime_defaults.h"
-#include "consoleinput.h"
-#include "consolescreen.h"
-#include "playback/system_media_transport/controls.h"
-#include "playback/control/transport.h"
-#include "playback/session/state.h"
-
-class OpenFileRequests;
-class PlaybackNotificationAreaControls;
 
 struct VideoPlaybackConfig {
   bool enableAscii = kDefaultAsciiPlaybackEnabled;
@@ -21,34 +11,4 @@ struct VideoPlaybackConfig {
   bool enableWindow = kDefaultWindowPlaybackEnabled;
 };
 
-enum class VideoPlaybackOutcome {
-  Played,
-  HandledWithoutPlayback,
-  AudioFallbackRequested,
-};
-
 void configureFfmpegVideoLog(const std::filesystem::path& path);
-
-VideoPlaybackOutcome showAsciiVideo(const std::filesystem::path& file,
-                                    ConsoleInput& input,
-                                    ConsoleScreen& screen,
-                                    const Style& baseStyle,
-                                    const Style& accentStyle,
-                                    const Style& dimStyle,
-                                    const Style& progressEmptyStyle,
-                                    const Style& progressFrameStyle,
-                                    const Color& progressStart,
-                                    const Color& progressEnd,
-                                    const VideoPlaybackConfig& config,
-                                    OpenFileRequests& openFileRequests,
-                                    bool* quitAppRequested = nullptr,
-                                    PlaybackSystemControls* systemControls = nullptr,
-                                    PlaybackNotificationAreaControls* notificationAreaControls =
-                                        nullptr,
-                                    std::function<bool(PlaybackTransportCommand)>
-                                        requestTransportCommand = {},
-                                    std::function<bool(const std::vector<std::filesystem::path>&)>
-                                        requestOpenFiles = {},
-                                    PlaybackSessionContinuationState* continuityState = nullptr,
-                                    PlaybackSessionIntent sessionIntent =
-                                        PlaybackSessionIntent::View);
