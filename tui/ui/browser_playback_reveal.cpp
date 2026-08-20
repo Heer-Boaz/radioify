@@ -1,4 +1,4 @@
-#include "browser_playback_navigation.h"
+#include "browser_playback_reveal.h"
 
 #include <utility>
 
@@ -8,36 +8,13 @@
 #include "track_browser_state.h"
 #include "ui_helpers.h"
 
-BrowserPlaybackNavigator::BrowserPlaybackNavigator(
+BrowserPlaybackRevealer::BrowserPlaybackRevealer(
     BrowserNavigator& browserNavigator, Callbacks callbacks)
-    : browserNavigator_(browserNavigator), browser_(browserNavigator.state()),
+    : browserNavigator_(browserNavigator),
+      browser_(browserNavigator.state()),
       callbacks_(std::move(callbacks)) {}
 
-std::vector<PlaybackTarget>
-BrowserPlaybackNavigator::snapshotPlaybackTargets() const {
-  std::vector<PlaybackTarget> targets;
-  targets.reserve(browser_.entries.size());
-  for (const BrowserEntry& entry : browser_.entries) {
-    if (const auto* track = entry.actionAs<browser_entry::PlayTrack>()) {
-      targets.push_back({entry.path, track->trackIndex});
-    } else if (entry.actionAs<browser_entry::OpenFile>()) {
-      // Container tracks are intentionally resolved only when transport reaches
-      // this item. Capturing the sequence must remain a cheap immutable
-      // snapshot of browser order, not a scan of every file in the directory.
-      targets.push_back({entry.path, -1});
-    }
-  }
-  return targets;
-}
-
-bool BrowserPlaybackNavigator::activateTrackBrowser(
-    const std::filesystem::path& file) {
-  return browserNavigator_.navigate(
-      browserTrackLocation(normalizeTrackBrowserPath(file)));
-}
-
-bool BrowserPlaybackNavigator::revealPlaybackTarget(
-    const PlaybackTarget& target) {
+bool BrowserPlaybackRevealer::reveal(const PlaybackTarget& target) {
   if (target.file.empty()) {
     return false;
   }
@@ -46,10 +23,11 @@ bool BrowserPlaybackNavigator::revealPlaybackTarget(
         normalizeTrackBrowserPath(target.file);
     const bool requiresRefresh =
         browser_.location != browserTrackLocation(trackPath);
-    if (requiresRefresh && !activateTrackBrowser(target.file)) {
+    if (requiresRefresh &&
+        !browserNavigator_.navigate(browserTrackLocation(trackPath))) {
       return false;
     }
-    if (selectPlaybackTarget(target)) {
+    if (select(target)) {
       return true;
     }
     browser_.filter.clear();
@@ -57,7 +35,7 @@ bool BrowserPlaybackNavigator::revealPlaybackTarget(
     browser_.pathSearch.clear();
     browser_.pathSearchActive = false;
     browserNavigator_.reload();
-    return selectPlaybackTarget(target);
+    return select(target);
   }
 
   const std::filesystem::path targetDir = target.file.has_parent_path()
@@ -70,7 +48,7 @@ bool BrowserPlaybackNavigator::revealPlaybackTarget(
                                   toUtf8String(target.file.filename()))) {
     return false;
   }
-  if (selectPlaybackTarget(target)) {
+  if (select(target)) {
     return true;
   }
   browser_.filter.clear();
@@ -78,11 +56,10 @@ bool BrowserPlaybackNavigator::revealPlaybackTarget(
   browser_.pathSearch.clear();
   browser_.pathSearchActive = false;
   browserNavigator_.reload(toUtf8String(target.file.filename()));
-  return selectPlaybackTarget(target);
+  return select(target);
 }
 
-bool BrowserPlaybackNavigator::selectPlaybackTarget(
-    const PlaybackTarget& target) {
+bool BrowserPlaybackRevealer::select(const PlaybackTarget& target) {
   const int index = findBrowserPlaybackTargetEntry(browser_.entries, target);
   if (index < 0) {
     return false;

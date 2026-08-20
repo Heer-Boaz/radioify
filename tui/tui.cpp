@@ -34,7 +34,8 @@
 #include "audio_picture_in_picture_window.h"
 #include "asciiart.h"
 #include "audioplayback.h"
-#include "browser_playback_navigation.h"
+#include "browser_playback_reveal.h"
+#include "browser_playback_source.h"
 #include "browser_navigation.h"
 #include "browser_model.h"
 #include "browsermeta.h"
@@ -61,7 +62,7 @@
 #include "playback/overlay/overlay.h"
 #include "playback/system_media_transport/controls.h"
 #include "playback_route.h"
-#include "playback_sequence.h"
+#include "playback_queue.h"
 #include "playback_target_match.h"
 #include "playback_target_resolver.h"
 #include "tracklist.h"
@@ -1112,7 +1113,10 @@ int runTui(Options o) {
     return false;
   };
 
-  PlaybackSequence playbackSequence;
+  playback_queue::Queue playbackQueue(
+      [](const std::filesystem::path& file) {
+        return playback_target_resolver::resolvePathTarget(file);
+      });
 
   if (!o.input.empty() && o.play) {
     std::filesystem::path inputPath = pathFromUtf8String(o.input);
@@ -1126,9 +1130,11 @@ int runTui(Options o) {
           hasPendingVideo = true;
         } else {
           if (!browserNavigator.navigate(
-                  browserTrackLocation(normalizeTrackBrowserPath(inputPath))) &&
-              tryStartAudioFile(inputPath)) {
-            playbackSequence.replaceWithSingle({inputPath, -1});
+                  browserTrackLocation(normalizeTrackBrowserPath(inputPath)))) {
+            const PlaybackTarget target{inputPath, -1};
+            if (playbackQueue.activate(playback_queue::single(target), target)) {
+              tryStartAudioFile(inputPath);
+            }
           }
         }
       }
@@ -1245,48 +1251,11 @@ int runTui(Options o) {
     }
   };
 
-  BrowserPlaybackNavigator::Callbacks browserPlaybackCallbacks;
+  BrowserPlaybackRevealer::Callbacks browserPlaybackCallbacks;
   browserPlaybackCallbacks.markDirty = [&]() { markDirty(); };
   browserPlaybackCallbacks.markLayoutDirty = [&]() { markLayoutDirty(); };
-  BrowserPlaybackNavigator browserPlaybackNavigator(
+  BrowserPlaybackRevealer browserPlaybackRevealer(
       browserNavigator, std::move(browserPlaybackCallbacks));
-
-  auto replacePlaybackSequenceFromPaths =
-      [&](const std::vector<std::filesystem::path>& files,
-          const PlaybackTarget& current) {
-        std::vector<PlaybackTarget> targets;
-        targets.reserve(files.size());
-        for (const std::filesystem::path& file : files) {
-          if (!file.empty() && isSupportedMediaExt(file)) {
-            targets.push_back({file, -1});
-          }
-        }
-        playbackSequence.replace(std::move(targets), current);
-      };
-
-  auto resolveAdjacentPlaybackTarget =
-      [&](const PlaybackTarget& current,
-          int direction) -> std::optional<PlaybackTarget> {
-    if (direction == 0 || !playbackSequence.select(current)) {
-      return std::nullopt;
-    }
-    for (std::size_t distance = 1; distance <= playbackSequence.size();
-         ++distance) {
-      std::optional<PlaybackTarget> candidate =
-          playbackSequence.adjacent(direction, distance);
-      if (!candidate) {
-        break;
-      }
-      if (candidate->trackIndex >= 0) {
-        return candidate;
-      }
-      if (std::optional<PlaybackTarget> resolved =
-              playback_target_resolver::resolvePathTarget(candidate->file)) {
-        return resolved;
-      }
-    }
-    return std::nullopt;
-  };
 
   auto openBrowserDirectory = [&](const std::filesystem::path& dir) {
     browserNavigator.navigate(browserDirectoryLocation(dir));
@@ -1313,8 +1282,8 @@ int runTui(Options o) {
       }
       applyAudioPictureInPicturePlan(route.audioPictureInPicture);
       const PlaybackTarget& target = route.target;
-      if (!playbackSequence.select(target)) {
-        playbackSequence.replaceWithSingle(target);
+      if (!playbackQueue.select(target)) {
+        return false;
       }
       if (target.trackIndex >= 0) {
         return tryStartAudioFile(target.file, target.trackIndex);
@@ -1329,8 +1298,11 @@ int runTui(Options o) {
             return true;
           }
           if (auto resolvedRoute = resolveOpenFilesPlaybackRoute(request)) {
-            replacePlaybackSequenceFromPaths(request.files,
-                                             resolvedRoute->target);
+            if (!playbackQueue.activate(
+                    playback_queue::fromFiles(request.files),
+                    resolvedRoute->target)) {
+              return false;
+            }
             pendingOpenRoute = *resolvedRoute;
             return true;
           }
@@ -1360,10 +1332,12 @@ int runTui(Options o) {
         std::optional<playback_route::Route> pendingTransportRoute;
         std::optional<std::filesystem::path> pendingOpenDirectory;
         auto requestTransportCommand = [&](PlaybackTransportCommand command) {
-          const int direction =
-              (command == PlaybackTransportCommand::Previous) ? -1 : 1;
+          const playback_queue::Direction direction =
+              (command == PlaybackTransportCommand::Previous)
+                  ? playback_queue::Direction::Previous
+                  : playback_queue::Direction::Next;
           std::optional<PlaybackTarget> adjacentTarget =
-              resolveAdjacentPlaybackTarget(target, direction);
+              playbackQueue.adjacent(direction);
           if (adjacentTarget) {
             pendingTransportRoute = playback_route::resolveTarget(
                 *adjacentTarget);
@@ -1378,7 +1352,10 @@ int runTui(Options o) {
               }
               if (auto resolvedRoute = playback_route::resolveDroppedTarget(
                       files)) {
-                replacePlaybackSequenceFromPaths(files, resolvedRoute->target);
+                if (!playbackQueue.activate(playback_queue::fromFiles(files),
+                                            resolvedRoute->target)) {
+                  return false;
+                }
                 pendingTransportRoute = *resolvedRoute;
                 return true;
               }
@@ -1409,8 +1386,11 @@ int runTui(Options o) {
             return true;
           }
           if (auto resolvedRoute = resolveOpenFilesPlaybackRoute(activation)) {
-            replacePlaybackSequenceFromPaths(activation.files,
-                                             resolvedRoute->target);
+            if (!playbackQueue.activate(
+                    playback_queue::fromFiles(activation.files),
+                    resolvedRoute->target)) {
+              return false;
+            }
             route = *resolvedRoute;
             continue;
           }
@@ -1438,8 +1418,10 @@ int runTui(Options o) {
         playback_route::resolveTarget(initialTarget));
   };
   auto playBrowserPlaybackTarget = [&](const PlaybackTarget& target) {
-    playbackSequence.replace(
-        browserPlaybackNavigator.snapshotPlaybackTargets(), target);
+    if (!playbackQueue.activate(
+            browser_playback_source::capture(browser.entries), target)) {
+      return false;
+    }
     return playPlaybackTarget(target);
   };
   auto playOpenFilesRequest = [&](const OpenFilesRequest& request) {
@@ -1448,14 +1430,20 @@ int runTui(Options o) {
       return true;
     }
     if (auto route = resolveOpenFilesPlaybackRoute(request)) {
-      replacePlaybackSequenceFromPaths(request.files, route->target);
+      if (!playbackQueue.activate(playback_queue::fromFiles(request.files),
+                                  route->target)) {
+        return false;
+      }
       return playPlaybackRoute(*route);
     }
     return false;
   };
 
   if (hasPendingImage) {
-    playPlaybackTarget({pendingImage, -1});
+    const PlaybackTarget target{pendingImage, -1};
+    if (playbackQueue.activate(playback_queue::single(target), target)) {
+      playPlaybackTarget(target);
+    }
   }
   if (hasPendingVideo) {
     OpenFilesRequest initialVideoRequest;
@@ -1773,7 +1761,8 @@ int runTui(Options o) {
     if (isSupportedImageExt(entry.path) || isVideoExt(entry.path)) {
       return playBrowserPlaybackTarget({entry.path, -1});
     }
-    if (browserPlaybackNavigator.activateTrackBrowser(entry.path)) {
+    if (browserNavigator.navigate(
+            browserTrackLocation(normalizeTrackBrowserPath(entry.path)))) {
       return true;
     }
     return playBrowserPlaybackTarget({entry.path, -1});
@@ -1833,22 +1822,21 @@ int runTui(Options o) {
   };
   callbacks.onCurrentPlaybackFile = [&]() { return audioGetNowPlaying(); };
   callbacks.onPlayPrevious = [&]() {
-    PlaybackTarget current{audioGetNowPlaying(), audioGetTrackIndex()};
-    if (current.file.empty()) {
+    if (audioGetNowPlaying().empty()) {
       return;
     }
-    if (auto target = resolveAdjacentPlaybackTarget(current, -1)) {
+    if (auto target =
+            playbackQueue.adjacent(playback_queue::Direction::Previous)) {
       if (playPlaybackTarget(*target)) {
         markDirty();
       }
     }
   };
   callbacks.onPlayNext = [&]() {
-    PlaybackTarget current{audioGetNowPlaying(), audioGetTrackIndex()};
-    if (current.file.empty()) {
+    if (audioGetNowPlaying().empty()) {
       return;
     }
-    if (auto target = resolveAdjacentPlaybackTarget(current, 1)) {
+    if (auto target = playbackQueue.adjacent(playback_queue::Direction::Next)) {
       if (playPlaybackTarget(*target)) {
         markDirty();
       }
@@ -1972,7 +1960,10 @@ int runTui(Options o) {
     if (!route) {
       return false;
     }
-    replacePlaybackSequenceFromPaths(files, route->target);
+    if (!playbackQueue.activate(playback_queue::fromFiles(files),
+                                route->target)) {
+      return false;
+    }
     return playPlaybackRoute(*route);
   };
   audioPictureInPictureCallbacks.onClose =
@@ -2142,7 +2133,7 @@ int runTui(Options o) {
       }
       if (!audioGetNowPlaying().empty()) {
         cmds.push_back({"Show Playing File", "", true, [&]() {
-                          browserPlaybackNavigator.revealPlaybackTarget(
+                          browserPlaybackRevealer.reveal(
                               {audioGetNowPlaying(), audioGetTrackIndex()});
                         }});
       }
@@ -2351,8 +2342,10 @@ int runTui(Options o) {
       playback_route::Route route =
           playback_route::resolveTarget({entry.path, -1});
       route.sessionIntent = PlaybackSessionIntent::EditVideo;
-      playbackSequence.replaceWithSingle(route.target);
-      playPlaybackRoute(route);
+      if (playbackQueue.activate(playback_queue::single(route.target),
+                                 route.target)) {
+        playPlaybackRoute(route);
+      }
     } else if (action == FileContextAction::Analyze) {
       startMelodyExport(entry);
     } else if (action == FileContextAction::SplitLoop) {

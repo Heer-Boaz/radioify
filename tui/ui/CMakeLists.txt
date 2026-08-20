@@ -1,5 +1,6 @@
 radioify_add_module_object_library(radioify_ui
-  ${CMAKE_CURRENT_SOURCE_DIR}/browser_playback_navigation.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/browser_playback_reveal.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/browser_playback_source.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_navigation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browsermeta.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_model.cpp
@@ -8,7 +9,7 @@ radioify_add_module_object_library(radioify_ui
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_target_resolver.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_target_match.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_target_kind.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/playback_sequence.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/playback_queue.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/track_browser_state.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/tracklist.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ui_footer_layout.cpp
