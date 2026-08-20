@@ -61,11 +61,12 @@
 #include "audiofilter/radio1938/radio_buffer_io.h"
 #include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
 #include "playback/control/command.h"
+#include "playback/control/transport.h"
 #include "playback/input/shortcuts.h"
 #include "playback/notification_area/controls.h"
 #include "playback/overlay/overlay.h"
+#include "playback/session/session.h"
 #include "playback/system_media_transport/controls.h"
-#include "playback_coordinator.h"
 #include "playback_target_match.h"
 #include "playback/target.h"
 #include "tracklist.h"
@@ -590,6 +591,17 @@ imageSequenceFromFiles(const std::vector<std::filesystem::path>& files,
   return image_viewer_sequence::Sequence::create(std::move(images), current);
 }
 
+static std::optional<std::filesystem::path> openDirectoryFromFiles(
+    const std::vector<std::filesystem::path>& files) {
+  for (const std::filesystem::path& file : files) {
+    std::error_code ec;
+    if (std::filesystem::is_directory(file, ec) && !ec) {
+      return file;
+    }
+  }
+  return std::nullopt;
+}
+
 static std::optional<image_viewer_sequence::Sequence>
 imageSequenceFromBrowserEntries(const std::vector<BrowserEntry>& entries,
                                 const std::filesystem::path& current) {
@@ -604,14 +616,16 @@ imageSequenceFromBrowserEntries(const std::vector<BrowserEntry>& entries,
   return image_viewer_sequence::Sequence::create(std::move(images), current);
 }
 
-static bool showAsciiArt(image_viewer_sequence::Sequence sequence,
-                         ConsoleInput& input, ConsoleScreen& screen,
-                         const Style& baseStyle, const Style& accentStyle,
-                         const Style& dimStyle,
-                         OpenFileRequests& openFileRequests,
-                         bool* quitAppRequested,
-                         std::function<bool(const OpenFilesRequest&)>
-                             requestOpenFiles) {
+enum class ImageViewerExit {
+  Closed,
+  QuitRequested,
+};
+
+static ImageViewerExit showAsciiArt(
+    image_viewer_sequence::Sequence sequence, ConsoleInput& input,
+    ConsoleScreen& screen, const Style& baseStyle, const Style& accentStyle,
+    const Style& dimStyle, OpenFileRequests& openFileRequests,
+    std::function<bool(const OpenFilesRequest&)> requestOpenFiles) {
   AsciiArt art;
   std::string error;
   int hoverControlToken = -1;
@@ -737,7 +751,7 @@ static bool showAsciiArt(image_viewer_sequence::Sequence sequence,
   while (true) {
     while (openFileRequests.poll(openRequest)) {
       if (requestOpenFiles(openRequest)) {
-        return ok;
+        return ImageViewerExit::Closed;
       }
     }
     while (input.poll(ev)) {
@@ -754,7 +768,7 @@ static bool showAsciiArt(image_viewer_sequence::Sequence sequence,
                                FROM_LEFT_3RD_BUTTON_PRESSED |
                                FROM_LEFT_4TH_BUTTON_PRESSED;
         if ((mouse.buttonState & backMask) != 0) {
-          return ok;
+          return ImageViewerExit::Closed;
         }
 
         const int width = std::max(1, screen.width());
@@ -793,7 +807,7 @@ static bool showAsciiArt(image_viewer_sequence::Sequence sequence,
       if (ev.type == InputEvent::Type::FileDrop &&
           isCommittedFileDropEvent(ev.fileDrop) &&
           requestOpenFiles({ev.fileDrop.files})) {
-        return ok;
+        return ImageViewerExit::Closed;
       }
       if (ev.type == InputEvent::Type::Key ||
           ev.type == InputEvent::Type::Action) {
@@ -803,12 +817,9 @@ static bool showAsciiArt(image_viewer_sequence::Sequence sequence,
                         kPlaybackShortcutContextImageViewer)) {
           switch (*shortcut) {
             case PlaybackShortcutAction::Quit:
-              if (quitAppRequested) {
-                *quitAppRequested = true;
-              }
-              return ok;
+              return ImageViewerExit::QuitRequested;
             case PlaybackShortcutAction::CloseViewer:
-              return ok;
+              return ImageViewerExit::Closed;
             case PlaybackShortcutAction::Previous:
               if (navigateImage(image_viewer_sequence::Direction::Previous)) {
                 renderFrame();
@@ -840,6 +851,313 @@ static bool showAsciiArt(image_viewer_sequence::Sequence sequence,
         handleCount, handleCount > 0 ? handles : nullptr, 10);
   }
 }
+
+class TuiMediaCoordinator {
+ public:
+  struct Services {
+    playback_queue::Queue& queue;
+    ConsoleInput& input;
+    ConsoleScreen& screen;
+    const Style& baseStyle;
+    const Style& accentStyle;
+    const Style& dimStyle;
+    const Style& progressEmptyStyle;
+    const Style& progressFrameStyle;
+    const Color& progressStart;
+    const Color& progressEnd;
+    const VideoPlaybackConfig& videoConfig;
+    OpenFileRequests& openFileRequests;
+    PlaybackSystemControls& systemControls;
+    PlaybackNotificationAreaControls& notificationAreaControls;
+    std::function<bool(const std::filesystem::path&, int)> startAudio;
+    std::function<void(playback_route::AudioPictureInPicturePlan)>
+        applyAudioPictureInPicturePlan;
+    std::function<void(const std::filesystem::path&)> openBrowserDirectory;
+    std::function<void()> requestQuit;
+    std::function<void()> presentationFinished;
+  };
+
+  explicit TuiMediaCoordinator(Services services)
+      : services_(std::move(services)) {}
+
+  [[nodiscard]] bool startPlayback(playback_route::Route route,
+                                   playback_queue::Source source) {
+    std::optional<playback_queue::Queue::PreparedActivation> activation =
+        services_.queue.prepareStart(std::move(route), std::move(source));
+    return activation && drive(PreparedPlayback{std::move(*activation)});
+  }
+
+  [[nodiscard]] bool startImage(playback_route::Route route,
+                                image_viewer_sequence::Sequence sequence) {
+    return drive(ImageActivation{std::move(route), std::move(sequence)});
+  }
+
+  [[nodiscard]] bool startFiles(
+      playback_route::Route route,
+      const std::vector<std::filesystem::path>& files) {
+    std::optional<Command> command =
+        mediaCommandFromFiles(std::move(route), files);
+    return command && drive(std::move(*command));
+  }
+
+  [[nodiscard]] bool openFiles(const OpenFilesRequest& request) {
+    std::optional<Command> command = commandFromOpenFiles(request);
+    return command && drive(std::move(*command));
+  }
+
+  [[nodiscard]] bool transport(playback_queue::Direction direction) {
+    std::optional<playback_queue::Queue::PreparedActivation> activation =
+        services_.queue.prepareTransport(direction);
+    return activation && drive(PreparedPlayback{std::move(*activation)});
+  }
+
+ private:
+  struct PreparedPlayback {
+    playback_queue::Queue::PreparedActivation activation;
+  };
+
+  struct ImageActivation {
+    playback_route::Route route;
+    image_viewer_sequence::Sequence sequence;
+  };
+
+  struct OpenDirectory {
+    std::filesystem::path path;
+  };
+
+  struct Quit {};
+
+  using Command =
+      std::variant<PreparedPlayback, ImageActivation, OpenDirectory, Quit>;
+
+  class DriveScope {
+   public:
+    explicit DriveScope(bool& driving) : driving_(driving) { driving_ = true; }
+    ~DriveScope() { driving_ = false; }
+
+    DriveScope(const DriveScope&) = delete;
+    DriveScope& operator=(const DriveScope&) = delete;
+
+   private:
+    bool& driving_;
+  };
+
+  std::optional<Command> mediaCommandFromFiles(
+      playback_route::Route route,
+      const std::vector<std::filesystem::path>& files) const {
+    if (isSupportedImageExt(route.target.file)) {
+      std::optional<image_viewer_sequence::Sequence> sequence =
+          imageSequenceFromFiles(files, route.target.file);
+      if (!sequence) {
+        return std::nullopt;
+      }
+      return Command(ImageActivation{std::move(route), std::move(*sequence)});
+    }
+    std::optional<playback_queue::Queue::PreparedActivation> activation =
+        services_.queue.prepareStart(std::move(route),
+                                     playback_queue::sourceFromFiles(files));
+    if (!activation) {
+      return std::nullopt;
+    }
+    return Command(PreparedPlayback{std::move(*activation)});
+  }
+
+  std::optional<Command> commandFromOpenFiles(
+      const OpenFilesRequest& request) const {
+    if (std::optional<std::filesystem::path> directory =
+            openDirectoryFromFiles(request.files)) {
+      return Command(OpenDirectory{std::move(*directory)});
+    }
+    std::optional<playback_route::Route> route =
+        resolveOpenFilesPlaybackRoute(request);
+    if (!route) {
+      return std::nullopt;
+    }
+    return mediaCommandFromFiles(std::move(*route), request.files);
+  }
+
+  bool enqueueOpenFiles(const OpenFilesRequest& request) {
+    if (!driving_ || pendingCommand_) {
+      return false;
+    }
+    std::optional<Command> command = commandFromOpenFiles(request);
+    if (!command) {
+      return false;
+    }
+    pendingCommand_.emplace(std::move(*command));
+    return true;
+  }
+
+  void enqueueQuit() {
+    if (driving_) {
+      pendingCommand_.emplace(Quit{});
+    }
+  }
+
+  bool drive(Command initialCommand) {
+    if (driving_) {
+      return false;
+    }
+
+    DriveScope driveScope(driving_);
+    pendingCommand_.reset();
+    std::optional<Command> command(std::move(initialCommand));
+    bool handled = false;
+    while (command) {
+      handled = dispatch(std::move(*command));
+      if (!handled) {
+        pendingCommand_.reset();
+        return false;
+      }
+      command = std::exchange(pendingCommand_, std::nullopt);
+    }
+    return handled;
+  }
+
+  static VideoPlaybackConfig sessionConfig(
+      const VideoPlaybackConfig& base,
+      const PlaybackSessionContinuationState& continuation) {
+    VideoPlaybackConfig config = base;
+    if (continuation.hasLayout) {
+      config.enableAscii = continuation.asciiRenderingEnabled;
+    }
+    return config;
+  }
+
+  static playback_queue::Direction transportDirection(
+      PlaybackTransportCommand command) {
+    return command == PlaybackTransportCommand::Previous
+               ? playback_queue::Direction::Previous
+               : playback_queue::Direction::Next;
+  }
+
+  bool presentPlayback(playback_queue::Queue::PreparedActivation activation) {
+    const playback_route::Route& route = activation.route();
+    if (route.videoContinuation) {
+      continuationState_ = *route.videoContinuation;
+    }
+    services_.applyAudioPictureInPicturePlan(route.audioPictureInPicture);
+
+    const PlaybackTarget target = route.target;
+    if (target.trackIndex >= 0) {
+      if (!services_.startAudio(target.file, target.trackIndex)) {
+        return false;
+      }
+      services_.queue.commit(std::move(activation));
+      return true;
+    }
+    if (isSupportedImageExt(target.file)) {
+      return false;
+    }
+    if (!isSupportedVideoExt(target.file)) {
+      if (!services_.startAudio(target.file, 0)) {
+        return false;
+      }
+      services_.queue.commit(std::move(activation));
+      return true;
+    }
+
+    bool quitRequested = false;
+    bool sessionActive = false;
+    auto requestTransport = [&](PlaybackTransportCommand command) {
+      if (!sessionActive || pendingCommand_) {
+        return false;
+      }
+      std::optional<playback_queue::Queue::PreparedActivation> successor =
+          services_.queue.prepareTransport(transportDirection(command));
+      if (!successor) {
+        return false;
+      }
+      pendingCommand_.emplace(PreparedPlayback{std::move(*successor)});
+      return true;
+    };
+    auto requestDroppedFiles =
+        [&](const std::vector<std::filesystem::path>& files) {
+          OpenFilesRequest request;
+          request.files = files;
+          return enqueueOpenFiles(request);
+        };
+
+    const VideoPlaybackConfig videoConfig =
+        sessionConfig(services_.videoConfig, continuationState_);
+    std::optional<PlaybackSession> session;
+    session.emplace(PlaybackSession::Args{
+        target.file, services_.input, services_.screen, services_.baseStyle,
+        services_.accentStyle, services_.dimStyle, services_.progressEmptyStyle,
+        services_.progressFrameStyle, services_.progressStart,
+        services_.progressEnd, videoConfig, services_.openFileRequests,
+        &quitRequested, &services_.systemControls,
+        &services_.notificationAreaControls, requestTransport,
+        requestDroppedFiles, &continuationState_, route.sessionIntent});
+
+    const PlaybackSessionOpenOutcome openOutcome = session->open();
+    if (openOutcome == PlaybackSessionOpenOutcome::Ready) {
+      services_.queue.commit(std::move(activation));
+      sessionActive = true;
+      session->run();
+      sessionActive = false;
+    } else if (openOutcome ==
+               PlaybackSessionOpenOutcome::AudioFallbackRequested) {
+      session.reset();
+      if (!services_.startAudio(target.file, 0)) {
+        return false;
+      }
+      services_.queue.commit(std::move(activation));
+      return true;
+    }
+
+    if (quitRequested) {
+      enqueueQuit();
+    } else if (!pendingCommand_) {
+      OpenFilesRequest request;
+      if (services_.openFileRequests.poll(request)) {
+        enqueueOpenFiles(request);
+      }
+    }
+    services_.presentationFinished();
+    return true;
+  }
+
+  bool dispatch(PreparedPlayback playback) {
+    return presentPlayback(std::move(playback.activation));
+  }
+
+  bool dispatch(ImageActivation image) {
+    services_.applyAudioPictureInPicturePlan(image.route.audioPictureInPicture);
+    const ImageViewerExit exit = showAsciiArt(
+        std::move(image.sequence), services_.input, services_.screen,
+        services_.baseStyle, services_.accentStyle, services_.dimStyle,
+        services_.openFileRequests, [this](const OpenFilesRequest& request) {
+          return enqueueOpenFiles(request);
+        });
+    if (exit == ImageViewerExit::QuitRequested) {
+      enqueueQuit();
+    }
+    services_.presentationFinished();
+    return true;
+  }
+
+  bool dispatch(OpenDirectory directory) {
+    services_.openBrowserDirectory(directory.path);
+    return true;
+  }
+
+  bool dispatch(Quit) {
+    services_.requestQuit();
+    return true;
+  }
+
+  bool dispatch(Command command) {
+    return std::visit(
+        [this](auto action) { return dispatch(std::move(action)); },
+        std::move(command));
+  }
+
+  Services services_;
+  PlaybackSessionContinuationState continuationState_;
+  std::optional<Command> pendingCommand_;
+  bool driving_ = false;
+};
 
 int runTui(Options o, playback_queue::Queue& playbackQueue) {
   const ShellOpenMode shellOpenMode = resolveWindowsShellOpenMode(o);
@@ -1237,182 +1555,36 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     browserNavigator.navigate(browserDirectoryLocation(dir));
   };
 
-  auto resolveOpenDirectory =
-      [](const std::vector<std::filesystem::path>& files)
-      -> std::optional<std::filesystem::path> {
-    for (const auto& file : files) {
-      std::error_code ec;
-      if (std::filesystem::is_directory(file, ec) && !ec) {
-        return file;
-      }
-    }
-    return std::nullopt;
-  };
-
-  struct PlaybackActivation {
-    playback_route::Route route;
-    playback_queue::Source source;
-  };
-  struct ImageActivation {
-    playback_route::Route route;
-    image_viewer_sequence::Sequence sequence;
-  };
-  using MediaActivation = std::variant<PlaybackActivation, ImageActivation>;
-
-  auto mediaActivationFromFiles =
-      [&](playback_route::Route route,
-          const std::vector<std::filesystem::path>& files)
-      -> std::optional<MediaActivation> {
-    if (isSupportedImageExt(route.target.file)) {
-      std::optional<image_viewer_sequence::Sequence> sequence =
-          imageSequenceFromFiles(files, route.target.file);
-      if (!sequence) {
-        return std::nullopt;
-      }
-      return MediaActivation(
-          ImageActivation{std::move(route), std::move(*sequence)});
-    }
-    return MediaActivation(PlaybackActivation{
-        std::move(route), playback_queue::sourceFromFiles(files)});
-  };
-
-  std::optional<MediaActivation> pendingMediaActivation;
-  std::optional<std::filesystem::path> pendingBrowserDirectory;
-  TuiPlaybackCoordinator playbackCoordinator(
+  TuiMediaCoordinator mediaCoordinator(
       {playbackQueue, input, screen, kStyleNormal, kStyleAccent, kStyleDim,
        kStyleProgressEmpty, kStyleProgressFrame, kProgressStart, kProgressEnd,
        videoConfig, openFileRequests, systemControls, notificationAreaControls,
        [&](const std::filesystem::path& file, int trackIndex) {
          return tryStartAudioFile(file, trackIndex);
        },
-       applyAudioPictureInPicturePlan,
-       [&](const OpenFilesRequest& request) {
-         if (pendingMediaActivation || pendingBrowserDirectory) {
-           return false;
-         }
-         if (std::optional<std::filesystem::path> directory =
-                 resolveOpenDirectory(request.files)) {
-           pendingBrowserDirectory = std::move(*directory);
-           return true;
-         }
-         std::optional<playback_route::Route> route =
-             resolveOpenFilesPlaybackRoute(request);
-         if (!route) {
-           return false;
-         }
-         pendingMediaActivation =
-             mediaActivationFromFiles(std::move(*route), request.files);
-         return pendingMediaActivation.has_value();
-       },
-       [&]() {
-         running = false;
-         pendingMediaActivation.reset();
-         pendingBrowserDirectory.reset();
-       },
-       [&]() { markDirty(); }});
-
-  auto activateMedia = [&](MediaActivation initialActivation) {
-    std::optional<MediaActivation> activation(std::move(initialActivation));
-    bool handled = false;
-    while (activation) {
-      pendingMediaActivation.reset();
-      if (auto* playback = std::get_if<PlaybackActivation>(&*activation)) {
-        handled = playbackCoordinator.start(std::move(playback->route),
-                                            std::move(playback->source));
-      } else {
-        ImageActivation image =
-            std::move(std::get<ImageActivation>(*activation));
-        applyAudioPictureInPicturePlan(image.route.audioPictureInPicture);
-        bool quitAppRequested = false;
-        std::optional<std::filesystem::path> pendingOpenDirectory;
-        auto requestImageViewerOpenFiles =
-            [&](const OpenFilesRequest& request) {
-              if (auto dir = resolveOpenDirectory(request.files)) {
-                pendingOpenDirectory = *dir;
-                return true;
-              }
-              if (pendingMediaActivation) {
-                return false;
-              }
-              if (auto route = resolveOpenFilesPlaybackRoute(request)) {
-                pendingMediaActivation =
-                    mediaActivationFromFiles(std::move(*route), request.files);
-                return pendingMediaActivation.has_value();
-              }
-              return false;
-            };
-        showAsciiArt(std::move(image.sequence), input, screen, kStyleNormal,
-                     kStyleAccent, kStyleDim, openFileRequests,
-                     &quitAppRequested, requestImageViewerOpenFiles);
-        handled = true;
-        if (quitAppRequested) {
-          running = false;
-          pendingMediaActivation.reset();
-        } else if (pendingOpenDirectory) {
-          pendingMediaActivation.reset();
-          openBrowserDirectory(*pendingOpenDirectory);
-        }
-        markDirty();
-      }
-      if (!handled) {
-        return false;
-      }
-      if (pendingBrowserDirectory) {
-        pendingMediaActivation.reset();
-        std::filesystem::path directory = std::move(*pendingBrowserDirectory);
-        pendingBrowserDirectory.reset();
-        openBrowserDirectory(directory);
-        return true;
-      }
-      activation = std::exchange(pendingMediaActivation, std::nullopt);
-    }
-    return handled;
-  };
+       applyAudioPictureInPicturePlan, openBrowserDirectory,
+       [&]() { running = false; }, [&]() { markDirty(); }});
 
   auto startPlayback = [&](playback_route::Route route,
                            playback_queue::Source source) {
-    return activateMedia(MediaActivation(
-        PlaybackActivation{std::move(route), std::move(source)}));
+    return mediaCoordinator.startPlayback(std::move(route), std::move(source));
   };
   auto transportPlayback = [&](playback_queue::Direction direction) {
-    pendingMediaActivation.reset();
-    pendingBrowserDirectory.reset();
-    if (!playbackCoordinator.transport(direction)) {
-      return false;
-    }
-    if (pendingBrowserDirectory) {
-      std::filesystem::path directory = std::move(*pendingBrowserDirectory);
-      pendingBrowserDirectory.reset();
-      pendingMediaActivation.reset();
-      openBrowserDirectory(directory);
-      return true;
-    }
-    std::optional<MediaActivation> handoff =
-        std::exchange(pendingMediaActivation, std::nullopt);
-    return !handoff || activateMedia(std::move(*handoff));
+    return mediaCoordinator.transport(direction);
   };
   auto openBrowserMediaTarget = [&](const PlaybackTarget& target) {
     playback_route::Route route = playback_route::resolveTarget(target);
     if (isSupportedImageExt(target.file)) {
       std::optional<image_viewer_sequence::Sequence> sequence =
           imageSequenceFromBrowserEntries(browser.entries, target.file);
-      return sequence && activateMedia(MediaActivation(ImageActivation{
-                             std::move(route), std::move(*sequence)}));
+      return sequence && mediaCoordinator.startImage(std::move(route),
+                                                     std::move(*sequence));
     }
     return startPlayback(std::move(route),
                          browser_playback_source::capture(browser.entries));
   };
   auto playOpenFilesRequest = [&](const OpenFilesRequest& request) {
-    if (auto dir = resolveOpenDirectory(request.files)) {
-      openBrowserDirectory(*dir);
-      return true;
-    }
-    if (auto route = resolveOpenFilesPlaybackRoute(request)) {
-      std::optional<MediaActivation> activation =
-          mediaActivationFromFiles(std::move(*route), request.files);
-      return activation && activateMedia(std::move(*activation));
-    }
-    return false;
+    return mediaCoordinator.openFiles(request);
   };
 
   if (hasPendingAudio) {
@@ -1935,9 +2107,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     if (!route) {
       return false;
     }
-    std::optional<MediaActivation> activation =
-        mediaActivationFromFiles(std::move(*route), files);
-    return activation && activateMedia(std::move(*activation));
+    return mediaCoordinator.startFiles(std::move(*route), files);
   };
   audioPictureInPictureCallbacks.onClose =
       [&]() { markDirty(UiDirtyFlags::Async); };
