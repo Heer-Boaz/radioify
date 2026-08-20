@@ -161,15 +161,15 @@ std::optional<Controller::PreparedActivation> Controller::prepareTransport(
   return activation;
 }
 
-bool Controller::drive(PreparedActivation activation,
-                       const Presenter& presenter) {
+PresentationOutcome Controller::drive(PreparedActivation activation,
+                                      const Presenter& presenter) {
   if (driving_ || !presenter) {
-    return false;
+    return PresentationOutcome::Rejected;
   }
 
   DrivingGuard drivingGuard(driving_);
-  std::optional<PreparedActivation> current(std::move(activation));
-  while (current) {
+  PreparedActivation current(std::move(activation));
+  while (true) {
     std::optional<PreparedActivation> pending;
     Handoff handoff(
         [&](playback_route::Route route, Source source) {
@@ -183,34 +183,46 @@ bool Controller::drive(PreparedActivation activation,
           if (pending) {
             return false;
           }
-          pending = prepareTransport(current->state, direction);
+          pending = prepareTransport(current.state, direction);
           return pending.has_value();
         });
 
-    if (!presenter(current->route, handoff)) {
-      return false;
+    const PresentationOutcome outcome = presenter(current.route, handoff);
+    if (outcome == PresentationOutcome::Rejected) {
+      return PresentationOutcome::Rejected;
+    }
+    if (outcome == PresentationOutcome::Handled) {
+      return pending ? PresentationOutcome::Rejected
+                     : PresentationOutcome::Handled;
     }
 
-    activeState_ = current->state;
-    current = std::move(pending);
+    activeState_ = current.state;
+    if (!pending) {
+      return PresentationOutcome::Activated;
+    }
+
+    current = std::move(*pending);
   }
-  return true;
 }
 
-bool Controller::start(playback_route::Route route, Source source,
-                       const Presenter& presenter) {
+PresentationOutcome Controller::start(playback_route::Route route,
+                                      Source source,
+                                      const Presenter& presenter) {
   std::optional<PreparedActivation> activation =
       prepareStart(std::move(route), std::move(source));
-  return activation && drive(std::move(*activation), presenter);
+  return activation ? drive(std::move(*activation), presenter)
+                    : PresentationOutcome::Rejected;
 }
 
-bool Controller::transport(Direction direction, const Presenter& presenter) {
+PresentationOutcome Controller::transport(Direction direction,
+                                          const Presenter& presenter) {
   if (!activeState_) {
-    return false;
+    return PresentationOutcome::Rejected;
   }
   std::optional<PreparedActivation> activation =
       prepareTransport(*activeState_, direction);
-  return activation && drive(std::move(*activation), presenter);
+  return activation ? drive(std::move(*activation), presenter)
+                    : PresentationOutcome::Rejected;
 }
 
 }  // namespace playback_controller

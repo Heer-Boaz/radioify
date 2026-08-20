@@ -19,6 +19,12 @@ enum class Direction {
   Next,
 };
 
+enum class PresentationOutcome {
+  Activated,
+  Handled,
+  Rejected,
+};
+
 class Source {
  public:
   Source(const Source&) = default;
@@ -70,7 +76,8 @@ class Controller {
       const std::filesystem::path&)>;
   using ResolveRoute =
       std::function<playback_route::Route(const PlaybackTarget&)>;
-  using Presenter = std::function<bool(const playback_route::Route&, Handoff&)>;
+  using Presenter = std::function<PresentationOutcome(
+      const playback_route::Route&, Handoff&)>;
 
   struct Services {
     ResolvePathTarget resolvePathTarget;
@@ -79,9 +86,11 @@ class Controller {
 
   explicit Controller(Services services);
 
-  [[nodiscard]] bool start(playback_route::Route route, Source source,
-                           const Presenter& presenter);
-  [[nodiscard]] bool transport(Direction direction, const Presenter& presenter);
+  [[nodiscard]] PresentationOutcome start(playback_route::Route route,
+                                          Source source,
+                                          const Presenter& presenter);
+  [[nodiscard]] PresentationOutcome transport(Direction direction,
+                                              const Presenter& presenter);
 
  private:
   struct Entry {
@@ -122,8 +131,8 @@ class Controller {
                                                      Direction direction) const;
   std::optional<AdjacentTarget> adjacent(const PlaybackState& state,
                                          Direction direction) const;
-  [[nodiscard]] bool drive(PreparedActivation activation,
-                           const Presenter& presenter);
+  [[nodiscard]] PresentationOutcome drive(PreparedActivation activation,
+                                          const Presenter& presenter);
 
   ResolvePathTarget resolvePathTarget_;
   ResolveRoute resolveRoute_;

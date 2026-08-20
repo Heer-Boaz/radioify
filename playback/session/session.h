@@ -42,7 +42,7 @@ class PlaybackSession {
   PlaybackSession(const PlaybackSession&) = delete;
   PlaybackSession& operator=(const PlaybackSession&) = delete;
 
-  bool run();
+  VideoPlaybackOutcome run();
 
  private:
   struct Impl;

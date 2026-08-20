@@ -98,33 +98,32 @@ struct PlaybackSession::Impl {
     }
   }
 
-  bool finalizeRun() {
+  void finalizeRun() {
     if (!loop) {
-      return true;
+      return;
     }
 
     shutdownLoop();
     if (!loop->hasRenderFailure()) {
-      return true;
+      return;
     }
 
-    const bool ok = host.reportVideoError(loop->renderFailureMessage(),
-                                          loop->renderFailureDetail());
+    host.reportVideoError(loop->renderFailureMessage(),
+                          loop->renderFailureDetail());
     loop->renderFailureScreen();
-    return ok;
   }
 
-  bool run() {
+  VideoPlaybackOutcome run() {
     if (!host.initialize()) {
-      return true;
+      return VideoPlaybackOutcome::HandledWithoutPlayback;
     }
 
     const PlaybackSessionBootstrapOutcome bootstrapOutcome = bootstrap();
-    if (bootstrapOutcome != PlaybackSessionBootstrapOutcome::ContinueVideo) {
-      return bootstrapOutcome ==
-             PlaybackSessionBootstrapOutcome::PlayAudioOnly
-                 ? false
-                 : true;
+    if (bootstrapOutcome == PlaybackSessionBootstrapOutcome::PlayAudioOnly) {
+      return VideoPlaybackOutcome::AudioFallbackRequested;
+    }
+    if (bootstrapOutcome == PlaybackSessionBootstrapOutcome::Handled) {
+      return VideoPlaybackOutcome::HandledWithoutPlayback;
     }
 
     prepareSubtitles();
@@ -133,7 +132,8 @@ struct PlaybackSession::Impl {
     if (continuityState) {
       *continuityState = loop->continuationState();
     }
-    return finalizeRun();
+    finalizeRun();
+    return VideoPlaybackOutcome::Played;
   }
 
   const std::filesystem::path& file;
@@ -175,4 +175,4 @@ PlaybackSession::PlaybackSession(PlaybackSession&&) noexcept = default;
 PlaybackSession& PlaybackSession::operator=(PlaybackSession&&) noexcept =
     default;
 
-bool PlaybackSession::run() { return impl_->run(); }
+VideoPlaybackOutcome PlaybackSession::run() { return impl_->run(); }

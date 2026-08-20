@@ -1287,10 +1287,12 @@ int runTui(Options o,
         applyAudioPictureInPicturePlan(route.audioPictureInPicture);
         const PlaybackTarget& target = route.target;
         if (target.trackIndex >= 0) {
-          return tryStartAudioFile(target.file, target.trackIndex);
+          return tryStartAudioFile(target.file, target.trackIndex)
+                     ? playback_controller::PresentationOutcome::Activated
+                     : playback_controller::PresentationOutcome::Rejected;
         }
         if (isSupportedImageExt(target.file)) {
-          return false;
+          return playback_controller::PresentationOutcome::Rejected;
         }
         if (isVideoExt(target.file)) {
           bool quitAppRequested = false;
@@ -1335,41 +1337,66 @@ int runTui(Options o,
             sessionVideoConfig.enableAscii =
                 videoContinuationState.asciiRenderingEnabled;
           }
-          bool handled = showAsciiVideo(
+          const VideoPlaybackOutcome videoOutcome = showAsciiVideo(
               target.file, input, screen, kStyleNormal, kStyleAccent, kStyleDim,
               kStyleProgressEmpty, kStyleProgressFrame, kProgressStart,
               kProgressEnd, sessionVideoConfig, openFileRequests,
               &quitAppRequested, &systemControls, &notificationAreaControls,
               requestTransportCommand, requestOpenFiles,
               &videoContinuationState, route.sessionIntent);
+          const playback_controller::PresentationOutcome completedVideoOutcome =
+              videoOutcome == VideoPlaybackOutcome::Played
+                  ? playback_controller::PresentationOutcome::Activated
+                  : playback_controller::PresentationOutcome::Handled;
           if (quitAppRequested) {
             running = false;
             pendingMediaActivation.reset();
-            return true;
+            return completedVideoOutcome;
           }
           OpenFilesRequest activation;
           if (openFileRequests.poll(activation)) {
             if (auto dir = resolveOpenDirectory(activation.files)) {
               openBrowserDirectory(*dir);
-              return true;
+              return completedVideoOutcome;
             }
             if (auto resolvedRoute =
                     resolveOpenFilesPlaybackRoute(activation)) {
-              return requestMediaHandoff(std::move(*resolvedRoute),
-                                         activation.files);
+              bool accepted = false;
+              if (videoOutcome == VideoPlaybackOutcome::Played) {
+                accepted = requestMediaHandoff(std::move(*resolvedRoute),
+                                               activation.files);
+              } else if (!pendingMediaActivation) {
+                pendingMediaActivation = mediaActivationFromFiles(
+                    std::move(*resolvedRoute), activation.files);
+                accepted = pendingMediaActivation.has_value();
+              }
+              if (!accepted) {
+                return playback_controller::PresentationOutcome::Rejected;
+              }
+              return completedVideoOutcome;
             }
           }
           if (pendingOpenDirectory) {
             openBrowserDirectory(*pendingOpenDirectory);
-            return true;
+            return completedVideoOutcome;
           }
-          if (handled) {
-            markDirty();
-            return true;
+          switch (videoOutcome) {
+            case VideoPlaybackOutcome::Played:
+              markDirty();
+              return playback_controller::PresentationOutcome::Activated;
+            case VideoPlaybackOutcome::HandledWithoutPlayback:
+              markDirty();
+              return playback_controller::PresentationOutcome::Handled;
+            case VideoPlaybackOutcome::AudioFallbackRequested:
+              return tryStartAudioFile(target.file)
+                         ? playback_controller::PresentationOutcome::Activated
+                         : playback_controller::PresentationOutcome::Rejected;
           }
-          return tryStartAudioFile(target.file);
+          return playback_controller::PresentationOutcome::Rejected;
         }
-        return tryStartAudioFile(target.file);
+        return tryStartAudioFile(target.file)
+                   ? playback_controller::PresentationOutcome::Activated
+                   : playback_controller::PresentationOutcome::Rejected;
       };
 
   auto activateMedia = [&](MediaActivation initialActivation) {
@@ -1379,9 +1406,11 @@ int runTui(Options o,
     while (activation) {
       pendingMediaActivation.reset();
       if (auto* playback = std::get_if<PlaybackActivation>(&*activation)) {
-        handled = playbackController.start(
-            std::move(playback->route), std::move(playback->source),
-            presentPlaybackRoute);
+        const playback_controller::PresentationOutcome outcome =
+            playbackController.start(
+                std::move(playback->route), std::move(playback->source),
+                presentPlaybackRoute);
+        handled = outcome != playback_controller::PresentationOutcome::Rejected;
       } else {
         ImageActivation image =
             std::move(std::get<ImageActivation>(*activation));
@@ -1433,7 +1462,8 @@ int runTui(Options o,
   };
   auto transportPlayback = [&](playback_controller::Direction direction) {
     pendingMediaActivation.reset();
-    if (!playbackController.transport(direction, presentPlaybackRoute)) {
+    if (playbackController.transport(direction, presentPlaybackRoute) ==
+        playback_controller::PresentationOutcome::Rejected) {
       return false;
     }
     std::optional<MediaActivation> handoff =

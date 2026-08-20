@@ -28,6 +28,18 @@ bool isTarget(const PlaybackTarget& actual, const std::filesystem::path& file,
   return samePath(actual.file, file) && actual.trackIndex == trackIndex;
 }
 
+bool activated(playback_controller::PresentationOutcome outcome) {
+  return outcome == playback_controller::PresentationOutcome::Activated;
+}
+
+bool handled(playback_controller::PresentationOutcome outcome) {
+  return outcome == playback_controller::PresentationOutcome::Handled;
+}
+
+bool rejected(playback_controller::PresentationOutcome outcome) {
+  return outcome == playback_controller::PresentationOutcome::Rejected;
+}
+
 }  // namespace
 
 int main() {
@@ -54,7 +66,7 @@ int main() {
   const playback_controller::Controller::Presenter accept =
       [&](const playback_route::Route& route, playback_controller::Handoff&) {
         presented.push_back(route.target);
-        return true;
+        return playback_controller::PresentationOutcome::Activated;
       };
 
   std::vector<std::filesystem::path> requestedFiles{songA, skipped, songB,
@@ -62,7 +74,8 @@ int main() {
   playback_controller::Source files =
       playback_controller::sourceFromFiles(requestedFiles);
   requestedFiles.clear();
-  ok &= expect(controller.start(routeFor({songB, 0}), std::move(files), accept),
+  ok &= expect(activated(controller.start(routeFor({songB, 0}),
+                                          std::move(files), accept)),
                "a source containing its target must start");
   ok &= expect(resolveCalls == 0,
                "starting playback must not eagerly resolve source items");
@@ -70,55 +83,73 @@ int main() {
                "the controller must present the requested source item");
 
   presented.clear();
-  ok &= expect(
-      controller.transport(playback_controller::Direction::Previous, accept) &&
-          presented.size() == 1 && isTarget(presented.back(), songA, 0),
-      "previous must lazily skip an unresolvable source item");
+  ok &=
+      expect(activated(controller.transport(
+                 playback_controller::Direction::Previous, accept)) &&
+                 presented.size() == 1 && isTarget(presented.back(), songA, 0),
+             "previous must lazily skip an unresolvable source item");
   ok &= expect(resolveCalls > 0,
                "transport must resolve path-only items at the playback owner");
 
   ok &= expect(
-      controller.transport(playback_controller::Direction::Next, accept) &&
+      activated(
+          controller.transport(playback_controller::Direction::Next, accept)) &&
           isTarget(presented.back(), songB, 0),
       "transport must advance from the controller-owned current position");
 
   const std::size_t presentationsBeforeInvalidStart = presented.size();
-  ok &= expect(!controller.start(
+  ok &= expect(rejected(controller.start(
                    routeFor({songB, 0}),
-                   playback_controller::sourceFromFiles({unrelated}), accept),
+                   playback_controller::sourceFromFiles({unrelated}), accept)),
                "a source missing its requested target must be rejected");
   ok &= expect(presented.size() == presentationsBeforeInvalidStart,
                "an invalid source must never reach the presenter");
-  ok &= expect(
-      controller.transport(playback_controller::Direction::Next, accept) &&
-          isTarget(presented.back(), songC, 0),
-      "a rejected source must leave the active source intact");
+  ok &= expect(activated(controller.transport(
+                   playback_controller::Direction::Next, accept)) &&
+                   isTarget(presented.back(), songC, 0),
+               "a rejected source must leave the active source intact");
 
-  ok &= expect(controller.start(routeFor({songB, 0}),
-                                playback_controller::sourceFromFiles(
-                                    {songA, skipped, songB, songC}),
-                                accept),
+  ok &= expect(activated(controller.start(routeFor({songB, 0}),
+                                          playback_controller::sourceFromFiles(
+                                              {songA, skipped, songB, songC}),
+                                          accept)),
                "the original source must be restorable");
+  PlaybackTarget handledTarget;
+  const playback_controller::Controller::Presenter handleWithoutPlayback =
+      [&](const playback_route::Route& route, playback_controller::Handoff&) {
+        handledTarget = route.target;
+        return playback_controller::PresentationOutcome::Handled;
+      };
+  ok &= expect(
+      handled(
+          controller.start(routeFor({unrelated, 0}),
+                           playback_controller::singleSource({unrelated, 0}),
+                           handleWithoutPlayback)) &&
+          isTarget(handledTarget, unrelated, 0),
+      "a handled presentation must report that no playback was activated");
   PlaybackTarget failedTarget;
   const playback_controller::Controller::Presenter reject =
       [&](const playback_route::Route& route, playback_controller::Handoff&) {
         failedTarget = route.target;
-        return false;
+        return playback_controller::PresentationOutcome::Rejected;
       };
-  ok &= expect(!controller.start(
-                   routeFor({unrelated, 0}),
-                   playback_controller::singleSource({unrelated, 0}), reject) &&
-                   isTarget(failedTarget, unrelated, 0),
-               "a presenter failure must reject a valid replacement source");
+  ok &=
+      expect(rejected(controller.start(
+                 routeFor({unrelated, 0}),
+                 playback_controller::singleSource({unrelated, 0}), reject)) &&
+                 isTarget(failedTarget, unrelated, 0),
+             "a presenter failure must reject a valid replacement source");
   ok &= expect(
-      !controller.transport(playback_controller::Direction::Next, reject) &&
+      rejected(
+          controller.transport(playback_controller::Direction::Next, reject)) &&
           isTarget(failedTarget, songC, 0),
       "a failed replacement must preserve the previous source and position");
   presented.clear();
-  ok &= expect(
-      controller.transport(playback_controller::Direction::Next, accept) &&
-          presented.size() == 1 && isTarget(presented.back(), songC, 0),
-      "a failed activation must not commit its candidate position");
+  ok &=
+      expect(activated(controller.transport(
+                 playback_controller::Direction::Next, accept)) &&
+                 presented.size() == 1 && isTarget(presented.back(), songC, 0),
+             "a failed activation must not commit its candidate position");
 
   std::vector<PlaybackTarget> handoffTargets;
   const playback_controller::Controller::Presenter handoffNext =
@@ -126,14 +157,16 @@ int main() {
           playback_controller::Handoff& handoff) {
         handoffTargets.push_back(route.target);
         if (isTarget(route.target, songB, 0)) {
-          return handoff.transport(playback_controller::Direction::Next);
+          return handoff.transport(playback_controller::Direction::Next)
+                     ? playback_controller::PresentationOutcome::Activated
+                     : playback_controller::PresentationOutcome::Rejected;
         }
-        return true;
+        return playback_controller::PresentationOutcome::Activated;
       };
-  ok &= expect(controller.start(routeFor({songB, 0}),
-                                playback_controller::sourceFromFiles(
-                                    {songA, skipped, songB, songC}),
-                                handoffNext),
+  ok &= expect(activated(controller.start(routeFor({songB, 0}),
+                                          playback_controller::sourceFromFiles(
+                                              {songA, skipped, songB, songC}),
+                                          handoffNext)),
                "an accepted transport handoff must complete");
   ok &= expect(handoffTargets.size() == 2 &&
                    isTarget(handoffTargets[0], songB, 0) &&
@@ -145,18 +178,19 @@ int main() {
         invalidHandoffAccepted =
             handoff.start(routeFor({songB, 0}),
                           playback_controller::sourceFromFiles({unrelated}));
-        return true;
+        return playback_controller::PresentationOutcome::Activated;
       };
-  ok &= expect(controller.start(routeFor({songB, 0}),
-                                playback_controller::sourceFromFiles(
-                                    {songA, skipped, songB, songC}),
-                                invalidHandoff),
+  ok &= expect(activated(controller.start(routeFor({songB, 0}),
+                                          playback_controller::sourceFromFiles(
+                                              {songA, skipped, songB, songC}),
+                                          invalidHandoff)),
                "rejecting a handoff must not fail the active presentation");
   ok &= expect(!invalidHandoffAccepted,
                "an invalid handoff must be rejected before session exit");
   presented.clear();
   ok &= expect(
-      controller.transport(playback_controller::Direction::Next, accept) &&
+      activated(
+          controller.transport(playback_controller::Direction::Next, accept)) &&
           presented.size() == 1 && isTarget(presented.back(), songC, 0),
       "an invalid handoff must leave the active source and position intact");
 
@@ -166,14 +200,16 @@ int main() {
           playback_controller::Handoff& handoff) {
         failedHandoffTargets.push_back(route.target);
         if (isTarget(route.target, songB, 0)) {
-          return handoff.transport(playback_controller::Direction::Next);
+          return handoff.transport(playback_controller::Direction::Next)
+                     ? playback_controller::PresentationOutcome::Activated
+                     : playback_controller::PresentationOutcome::Rejected;
         }
-        return false;
+        return playback_controller::PresentationOutcome::Rejected;
       };
-  ok &= expect(!controller.start(routeFor({songB, 0}),
-                                 playback_controller::sourceFromFiles(
-                                     {songA, skipped, songB, songC}),
-                                 rejectHandoffTarget),
+  ok &= expect(rejected(controller.start(routeFor({songB, 0}),
+                                         playback_controller::sourceFromFiles(
+                                             {songA, skipped, songB, songC}),
+                                         rejectHandoffTarget)),
                "a rejected handoff target must fail the chained activation");
   ok &= expect(failedHandoffTargets.size() == 2 &&
                    isTarget(failedHandoffTargets[0], songB, 0) &&
@@ -181,12 +217,14 @@ int main() {
                "a chained handoff must present its prepared target");
   presented.clear();
   ok &= expect(
-      controller.transport(playback_controller::Direction::Previous, accept) &&
+      activated(controller.transport(playback_controller::Direction::Previous,
+                                     accept)) &&
           presented.size() == 1 && isTarget(presented.back(), songA, 0),
       "a failed chained target must preserve the last successful activation");
 
   const playback_controller::Controller::Presenter throwPresentation =
-      [](const playback_route::Route&, playback_controller::Handoff&) -> bool {
+      [](const playback_route::Route&, playback_controller::Handoff&)
+      -> playback_controller::PresentationOutcome {
     throw std::runtime_error("presentation failed");
   };
   bool presentationExceptionObserved = false;
@@ -200,10 +238,11 @@ int main() {
   ok &= expect(presentationExceptionObserved,
                "a presenter exception must propagate to its owner");
   presented.clear();
-  ok &= expect(
-      controller.transport(playback_controller::Direction::Next, accept) &&
-          presented.size() == 1 && isTarget(presented.back(), songB, 0),
-      "a presenter exception must leave the active state unmodified");
+  ok &=
+      expect(activated(controller.transport(
+                 playback_controller::Direction::Next, accept)) &&
+                 presented.size() == 1 && isTarget(presented.back(), songB, 0),
+             "a presenter exception must leave the active state unmodified");
 
   std::vector<BrowserEntry> trackEntries;
   trackEntries.emplace_back("Info", songA, browser_entry::Information{});
@@ -214,46 +253,48 @@ int main() {
   trackEntries.emplace_back("Folder", "C:/Media/Sub",
                             browser_entry::OpenDirectory{});
   const int resolvesBeforeExactTransport = resolveCalls;
-  ok &= expect(
-      controller.start(routeFor({songA, 3}),
-                       browser_playback_source::capture(trackEntries), accept),
-      "an exact track-browser source must start");
+  ok &= expect(activated(controller.start(
+                   routeFor({songA, 3}),
+                   browser_playback_source::capture(trackEntries), accept)),
+               "an exact track-browser source must start");
   presented.clear();
-  ok &= expect(
-      controller.transport(playback_controller::Direction::Previous, accept) &&
-          isTarget(presented.back(), songA, 0),
-      "track-browser previous must preserve exact track order");
-  ok &= expect(
-      controller.start(routeFor({songA, 3}),
-                       browser_playback_source::capture(trackEntries),
-                       accept) &&
-          controller.transport(playback_controller::Direction::Next, accept) &&
-          isTarget(presented.back(), songA, 8),
-      "track-browser next must preserve exact track order");
+  ok &= expect(activated(controller.transport(
+                   playback_controller::Direction::Previous, accept)) &&
+                   isTarget(presented.back(), songA, 0),
+               "track-browser previous must preserve exact track order");
+  ok &= expect(activated(controller.start(
+                   routeFor({songA, 3}),
+                   browser_playback_source::capture(trackEntries), accept)) &&
+                   activated(controller.transport(
+                       playback_controller::Direction::Next, accept)) &&
+                   isTarget(presented.back(), songA, 8),
+               "track-browser next must preserve exact track order");
   ok &= expect(resolveCalls == resolvesBeforeExactTransport,
                "exact track targets must not invoke the path resolver");
 
-  ok &= expect(
-      controller.start(routeFor({songC, 2}),
-                       playback_controller::singleSource({songC, 2}), accept),
-      "a direct action must request an explicit singleton source");
-  ok &= expect(
-      !controller.transport(playback_controller::Direction::Previous, accept) &&
-          !controller.transport(playback_controller::Direction::Next, accept),
-      "an explicit singleton source must have no neighbours");
+  ok &= expect(activated(controller.start(
+                   routeFor({songC, 2}),
+                   playback_controller::singleSource({songC, 2}), accept)),
+               "a direct action must request an explicit singleton source");
+  ok &= expect(rejected(controller.transport(
+                   playback_controller::Direction::Previous, accept)) &&
+                   rejected(controller.transport(
+                       playback_controller::Direction::Next, accept)),
+               "an explicit singleton source must have no neighbours");
 
 #ifdef _WIN32
-  ok &= expect(controller.start(
+  ok &= expect(activated(controller.start(
                    routeFor({std::filesystem::path("c:\\media\\a.FLAC"), 0}),
                    playback_controller::sourceFromFiles(
                        {std::filesystem::path("C:/Media/A.flac"), songB}),
-                   accept),
+                   accept)),
                "Windows source matching must use ordinal path identity");
   presented.clear();
-  ok &= expect(
-      controller.transport(playback_controller::Direction::Next, accept) &&
-          presented.size() == 1 && isTarget(presented.back(), songB, 0),
-      "Windows transport must preserve path-identity matching");
+  ok &=
+      expect(activated(controller.transport(
+                 playback_controller::Direction::Next, accept)) &&
+                 presented.size() == 1 && isTarget(presented.back(), songB, 0),
+             "Windows transport must preserve path-identity matching");
 #endif
 
   return ok ? 0 : 1;
