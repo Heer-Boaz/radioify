@@ -3,6 +3,21 @@
 #include <utility>
 
 namespace playback_controller {
+namespace {
+
+class DrivingGuard {
+ public:
+  explicit DrivingGuard(bool& driving) : driving_(driving) { driving_ = true; }
+  ~DrivingGuard() { driving_ = false; }
+
+  DrivingGuard(const DrivingGuard&) = delete;
+  DrivingGuard& operator=(const DrivingGuard&) = delete;
+
+ private:
+  bool& driving_;
+};
+
+}  // namespace
 
 Source sourceFromTargets(std::vector<PlaybackTarget> targets) {
   return Source(std::move(targets));
@@ -27,16 +42,17 @@ Source singleSource(const PlaybackTarget& target) {
   return sourceFromTargets(std::move(targets));
 }
 
-Transition start(Source source, const PlaybackTarget& target) {
-  return Start{std::move(source), target};
+bool Handoff::start(playback_route::Route route, Source source) {
+  return startRequest_ && startRequest_(std::move(route), std::move(source));
 }
 
-Transition continueWith(const PlaybackTarget& target) {
-  return Continue{target};
+bool Handoff::transport(Direction direction) {
+  return transportRequest_ && transportRequest_(direction);
 }
 
-Controller::Controller(ResolvePathTarget resolvePathTarget)
-    : resolvePathTarget_(std::move(resolvePathTarget)) {}
+Controller::Controller(Services services)
+    : resolvePathTarget_(std::move(services.resolvePathTarget)),
+      resolveRoute_(std::move(services.resolveRoute)) {}
 
 bool Controller::matchesTarget(const Entry& entry, const PlaybackTarget& target,
                                const PathIdentity& targetIdentity) {
@@ -44,9 +60,9 @@ bool Controller::matchesTarget(const Entry& entry, const PlaybackTarget& target,
     return false;
   }
 
-  // File sources represent a container as one queue item. Once that item
-  // resolves to a concrete internal track, it still identifies the same queue
-  // position. Track-browser sources carry exact track identities.
+  // File sources represent a container as one item. Once that item resolves to
+  // a concrete internal track, it still identifies the same source position.
+  // Track-browser sources carry exact track identities.
   return entry.target.trackIndex < 0 ||
          entry.target.trackIndex == target.trackIndex;
 }
@@ -66,10 +82,11 @@ std::optional<std::size_t> Controller::findTarget(
   return std::nullopt;
 }
 
-bool Controller::applyStart(Start transition) {
+std::optional<Controller::PreparedActivation> Controller::prepareStart(
+    playback_route::Route route, Source source) const {
   std::vector<Entry> candidate;
-  candidate.reserve(transition.source.targets_.size());
-  for (PlaybackTarget& target : transition.source.targets_) {
+  candidate.reserve(source.targets_.size());
+  for (PlaybackTarget& target : source.targets_) {
     if (target.file.empty()) {
       continue;
     }
@@ -80,34 +97,21 @@ bool Controller::applyStart(Start transition) {
   }
 
   const std::optional<std::size_t> currentIndex =
-      findTarget(candidate, transition.target);
+      findTarget(candidate, route.target);
   if (!currentIndex) {
-    return false;
+    return std::nullopt;
   }
 
-  entries_ = std::move(candidate);
-  currentIndex_ = currentIndex;
-  return true;
+  PreparedActivation activation;
+  activation.route = std::move(route);
+  activation.replacementEntries = std::move(candidate);
+  activation.currentIndex = *currentIndex;
+  activation.replacesSource = true;
+  return activation;
 }
 
-bool Controller::applyContinue(const Continue& transition) {
-  const std::optional<std::size_t> index =
-      findTarget(entries_, transition.target);
-  if (!index) {
-    return false;
-  }
-  currentIndex_ = index;
-  return true;
-}
-
-bool Controller::apply(Transition transition) {
-  if (Start* startTransition = std::get_if<Start>(&transition)) {
-    return applyStart(std::move(*startTransition));
-  }
-  return applyContinue(std::get<Continue>(transition));
-}
-
-std::optional<PlaybackTarget> Controller::adjacent(Direction direction) const {
+std::optional<Controller::AdjacentTarget> Controller::adjacent(
+    Direction direction) const {
   if (!currentIndex_) {
     return std::nullopt;
   }
@@ -128,15 +132,102 @@ std::optional<PlaybackTarget> Controller::adjacent(Direction direction) const {
 
     const PlaybackTarget& candidate = entries_[index].target;
     if (candidate.trackIndex >= 0) {
-      return candidate;
+      return AdjacentTarget{candidate, index};
     }
     if (resolvePathTarget_) {
       if (std::optional<PlaybackTarget> resolved =
               resolvePathTarget_(candidate.file)) {
-        return resolved;
+        return AdjacentTarget{std::move(*resolved), index};
       }
     }
   }
+}
+
+std::optional<Controller::PreparedActivation> Controller::prepareTransport(
+    Direction direction) const {
+  const std::optional<AdjacentTarget> target = adjacent(direction);
+  if (!target || !resolveRoute_) {
+    return std::nullopt;
+  }
+
+  PreparedActivation activation;
+  activation.route = resolveRoute_(target->target);
+  // Navigation owns target selection; the route service only contributes
+  // presentation policy.
+  activation.route.target = target->target;
+  activation.currentIndex = target->index;
+  return activation;
+}
+
+bool Controller::drive(PreparedActivation activation,
+                       const Presenter& presenter) {
+  if (driving_ || !presenter) {
+    return false;
+  }
+
+  DrivingGuard drivingGuard(driving_);
+  std::optional<PreparedActivation> current(std::move(activation));
+  while (current) {
+    const bool replacesSource = current->replacesSource;
+    std::vector<Entry> previousEntries;
+    const std::optional<std::size_t> previousIndex = currentIndex_;
+    if (replacesSource) {
+      previousEntries = std::move(entries_);
+      entries_ = std::move(current->replacementEntries);
+    }
+    currentIndex_ = current->currentIndex;
+
+    std::optional<PreparedActivation> pending;
+    Handoff handoff(
+        [&](playback_route::Route route, Source source) {
+          if (pending) {
+            return false;
+          }
+          pending = prepareStart(std::move(route), std::move(source));
+          return pending.has_value();
+        },
+        [&](Direction direction) {
+          if (pending) {
+            return false;
+          }
+          pending = prepareTransport(direction);
+          return pending.has_value();
+        });
+
+    bool presented = false;
+    try {
+      presented = presenter(current->route, handoff);
+    } catch (...) {
+      if (replacesSource) {
+        entries_ = std::move(previousEntries);
+      }
+      currentIndex_ = previousIndex;
+      throw;
+    }
+
+    if (!presented) {
+      if (replacesSource) {
+        entries_ = std::move(previousEntries);
+      }
+      currentIndex_ = previousIndex;
+      return false;
+    }
+
+    current = std::move(pending);
+  }
+  return true;
+}
+
+bool Controller::start(playback_route::Route route, Source source,
+                       const Presenter& presenter) {
+  std::optional<PreparedActivation> activation =
+      prepareStart(std::move(route), std::move(source));
+  return activation && drive(std::move(*activation), presenter);
+}
+
+bool Controller::transport(Direction direction, const Presenter& presenter) {
+  std::optional<PreparedActivation> activation = prepareTransport(direction);
+  return activation && drive(std::move(*activation), presenter);
 }
 
 }  // namespace playback_controller

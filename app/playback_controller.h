@@ -1,12 +1,13 @@
 #pragma once
 
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <optional>
 #include <utility>
-#include <variant>
 #include <vector>
 
+#include "app/playback_route.h"
 #include "core/path_identity.h"
 #include "playback/target.h"
 
@@ -38,29 +39,48 @@ Source sourceFromTargets(std::vector<PlaybackTarget> targets);
 Source sourceFromFiles(const std::vector<std::filesystem::path>& files);
 Source singleSource(const PlaybackTarget& target);
 
-struct Start {
-  Source source;
-  PlaybackTarget target;
+class Handoff {
+ public:
+  Handoff(const Handoff&) = delete;
+  Handoff& operator=(const Handoff&) = delete;
+  Handoff(Handoff&&) = delete;
+  Handoff& operator=(Handoff&&) = delete;
+
+  [[nodiscard]] bool start(playback_route::Route route, Source source);
+  [[nodiscard]] bool transport(Direction direction);
+
+ private:
+  using StartRequest = std::function<bool(playback_route::Route, Source)>;
+  using TransportRequest = std::function<bool(Direction)>;
+
+  Handoff(StartRequest startRequest, TransportRequest transportRequest)
+      : startRequest_(std::move(startRequest)),
+        transportRequest_(std::move(transportRequest)) {}
+
+  StartRequest startRequest_;
+  TransportRequest transportRequest_;
+
+  friend class Controller;
 };
-
-struct Continue {
-  PlaybackTarget target;
-};
-
-using Transition = std::variant<Start, Continue>;
-
-Transition start(Source source, const PlaybackTarget& target);
-Transition continueWith(const PlaybackTarget& target);
 
 class Controller {
  public:
   using ResolvePathTarget = std::function<std::optional<PlaybackTarget>(
       const std::filesystem::path&)>;
+  using ResolveRoute =
+      std::function<playback_route::Route(const PlaybackTarget&)>;
+  using Presenter = std::function<bool(const playback_route::Route&, Handoff&)>;
 
-  explicit Controller(ResolvePathTarget resolvePathTarget);
+  struct Services {
+    ResolvePathTarget resolvePathTarget;
+    ResolveRoute resolveRoute;
+  };
 
-  [[nodiscard]] bool apply(Transition transition);
-  std::optional<PlaybackTarget> adjacent(Direction direction) const;
+  explicit Controller(Services services);
+
+  [[nodiscard]] bool start(playback_route::Route route, Source source,
+                           const Presenter& presenter);
+  [[nodiscard]] bool transport(Direction direction, const Presenter& presenter);
 
  private:
   struct Entry {
@@ -68,17 +88,35 @@ class Controller {
     PathIdentity fileIdentity;
   };
 
+  struct PreparedActivation {
+    playback_route::Route route;
+    std::vector<Entry> replacementEntries;
+    std::size_t currentIndex = 0;
+    bool replacesSource = false;
+  };
+
+  struct AdjacentTarget {
+    PlaybackTarget target;
+    std::size_t index = 0;
+  };
+
   static bool matchesTarget(const Entry& entry, const PlaybackTarget& target,
                             const PathIdentity& targetIdentity);
   static std::optional<std::size_t> findTarget(
       const std::vector<Entry>& entries, const PlaybackTarget& target);
 
-  [[nodiscard]] bool applyStart(Start transition);
-  [[nodiscard]] bool applyContinue(const Continue& transition);
+  std::optional<PreparedActivation> prepareStart(playback_route::Route route,
+                                                 Source source) const;
+  std::optional<PreparedActivation> prepareTransport(Direction direction) const;
+  std::optional<AdjacentTarget> adjacent(Direction direction) const;
+  [[nodiscard]] bool drive(PreparedActivation activation,
+                           const Presenter& presenter);
 
   ResolvePathTarget resolvePathTarget_;
+  ResolveRoute resolveRoute_;
   std::vector<Entry> entries_;
   std::optional<std::size_t> currentIndex_;
+  bool driving_ = false;
 };
 
 }  // namespace playback_controller

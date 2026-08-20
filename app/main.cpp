@@ -3,6 +3,7 @@
 #include "crash_handler.h"
 #include "playback/target_resolver.h"
 #include "playback_controller.h"
+#include "playback_route.h"
 #include "tui/tui.h"
 
 #ifdef _WIN32
@@ -68,8 +69,11 @@ int main(int argc, char** argv) {
   Options o = parseArgs(argc, argv);
 #endif
   playback_controller::Controller playbackController(
-      [](const std::filesystem::path& file) {
-        return playback_target_resolver::resolvePathTarget(file);
-      });
+      {[](const std::filesystem::path& file) {
+         return playback_target_resolver::resolvePlaybackTarget(file);
+       },
+       [](const PlaybackTarget& target) {
+         return playback_route::resolveTarget(target);
+       }});
   return runTui(o, playbackController);
 }

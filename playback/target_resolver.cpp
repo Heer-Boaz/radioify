@@ -21,15 +21,20 @@ std::optional<PlaybackTarget> resolveAudioPathTarget(
   return PlaybackTarget{path, -1};
 }
 
+std::optional<PlaybackTarget> resolveMediaTarget(
+    const std::filesystem::path& path) {
+  if (isSupportedImageExt(path)) {
+    return PlaybackTarget{path, -1};
+  }
+  return resolvePlaybackTarget(path);
+}
+
 }  // namespace
 
-std::optional<PlaybackTarget> resolvePathTarget(
-    const std::filesystem::path& path, PlaybackTargetResolveOptions options) {
+std::optional<PlaybackTarget> resolvePlaybackTarget(
+    const std::filesystem::path& path) {
   if (path.empty()) {
     return std::nullopt;
-  }
-  if (options.includeImages && isSupportedImageExt(path)) {
-    return PlaybackTarget{path, -1};
   }
   if (isSupportedVideoExt(path)) {
     return PlaybackTarget{path, -1};
@@ -39,11 +44,8 @@ std::optional<PlaybackTarget> resolvePathTarget(
 
 std::optional<PlaybackTarget> resolveDroppedTarget(
     const std::vector<std::filesystem::path>& files) {
-  PlaybackTargetResolveOptions options;
-  options.includeImages = true;
   for (const std::filesystem::path& file : files) {
-    if (std::optional<PlaybackTarget> target =
-            resolvePathTarget(file, options)) {
+    if (std::optional<PlaybackTarget> target = resolveMediaTarget(file)) {
       return target;
     }
   }

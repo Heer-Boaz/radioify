@@ -8,13 +8,8 @@
 
 namespace playback_target_resolver {
 
-struct PlaybackTargetResolveOptions {
-  bool includeImages = false;
-};
-
-std::optional<PlaybackTarget> resolvePathTarget(
-    const std::filesystem::path& path,
-    PlaybackTargetResolveOptions options = {});
+std::optional<PlaybackTarget> resolvePlaybackTarget(
+    const std::filesystem::path& path);
 
 std::optional<PlaybackTarget> resolveDroppedTarget(
     const std::vector<std::filesystem::path>& files);

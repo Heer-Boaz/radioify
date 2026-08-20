@@ -1,6 +1,4 @@
-#include "playback_route.h"
-
-#include <utility>
+#include "app/playback_route.h"
 
 #include "playback/target_kind.h"
 #include "playback/target_resolver.h"
@@ -33,17 +31,6 @@ PlaybackSessionContinuationState videoContinuation(
 }
 
 }  // namespace
-
-Request start(Route route, playback_controller::Source source) {
-  PlaybackTarget target = route.target;
-  return {std::move(route),
-          playback_controller::start(std::move(source), target)};
-}
-
-Request continueWith(Route route) {
-  PlaybackTarget target = route.target;
-  return {std::move(route), playback_controller::continueWith(target)};
-}
 
 Route resolveTarget(
     const PlaybackTarget& target, const WindowPlacementState* sourcePlacement,

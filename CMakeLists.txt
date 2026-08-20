@@ -658,12 +658,24 @@ add_executable(playback_controller_tests)
 target_sources(playback_controller_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_playback_controller_tests>
   ${CMAKE_SOURCE_DIR}/app/playback_controller.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/browser_playback_source.cpp
 )
 radioify_link_repo_target(playback_controller_tests)
 add_test(NAME playback_controller_tests
          COMMAND $<TARGET_FILE:playback_controller_tests>)
+
+add_executable(image_viewer_sequence_tests)
+target_sources(image_viewer_sequence_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_image_viewer_sequence_tests>
+  ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
+  ${CMAKE_SOURCE_DIR}/tui/image_viewer_sequence.cpp
+)
+radioify_link_repo_target(image_viewer_sequence_tests)
+add_test(NAME image_viewer_sequence_tests
+         COMMAND $<TARGET_FILE:image_viewer_sequence_tests>)
 
 add_executable(windows_console_window_tests)
 target_sources(windows_console_window_tests PRIVATE

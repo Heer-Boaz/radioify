@@ -2,6 +2,8 @@
 
 #include <utility>
 
+#include "audio/media_formats.h"
+
 namespace browser_playback_source {
 
 playback_controller::Source capture(const std::vector<BrowserEntry>& entries) {
@@ -10,7 +12,9 @@ playback_controller::Source capture(const std::vector<BrowserEntry>& entries) {
   for (const BrowserEntry& entry : entries) {
     if (const auto* track = entry.actionAs<browser_entry::PlayTrack>()) {
       targets.push_back({entry.path, track->trackIndex});
-    } else if (entry.actionAs<browser_entry::OpenFile>()) {
+    } else if (entry.actionAs<browser_entry::OpenFile>() &&
+               (isSupportedAudioExt(entry.path) ||
+                isSupportedVideoExt(entry.path))) {
       targets.push_back({entry.path, -1});
     }
   }

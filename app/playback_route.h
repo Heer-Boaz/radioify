@@ -4,7 +4,6 @@
 #include <optional>
 #include <vector>
 
-#include "app/playback_controller.h"
 #include "playback/session/presentation_policy.h"
 #include "playback/session/state.h"
 #include "playback/target.h"
@@ -23,14 +22,6 @@ struct Route {
       AudioPictureInPicturePlan::Keep;
   std::optional<PlaybackSessionContinuationState> videoContinuation;
 };
-
-struct Request {
-  Route route;
-  playback_controller::Transition transition;
-};
-
-Request start(Route route, playback_controller::Source source);
-Request continueWith(Route route);
 
 Route resolveTarget(const PlaybackTarget& target,
                     const WindowPlacementState* sourcePlacement = nullptr,

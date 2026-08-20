@@ -28,10 +28,12 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "app_common.h"
 #include "app/playback_controller.h"
+#include "app/playback_route.h"
 #include "audio_picture_in_picture_window.h"
 #include "asciiart.h"
 #include "audioplayback.h"
@@ -48,6 +50,7 @@
 #include "core/windows_message_pump.h"
 #include "core/windows_console_window.h"
 #include "core/windows_shell_open.h"
+#include "image_viewer_sequence.h"
 #include "m4adecoder.h"
 #include "miniaudio.h"
 #include "optionsbrowser.h"
@@ -62,7 +65,6 @@
 #include "playback/notification_area/controls.h"
 #include "playback/overlay/overlay.h"
 #include "playback/system_media_transport/controls.h"
-#include "playback_route.h"
 #include "playback_target_match.h"
 #include "playback/target.h"
 #include "tracklist.h"
@@ -574,42 +576,34 @@ static std::string buildTrackSelectionMeta(const BrowserState& browser) {
   return metaLine;
 }
 
-static bool isImageViewerEntry(const BrowserEntry& entry) {
-  return entry.actionAs<browser_entry::OpenFile>() &&
-         isSupportedImageExt(entry.path);
-}
-
-static std::optional<int> findImageViewerEntryIndex(
-    const BrowserState& browser, const std::filesystem::path& currentFile) {
-  for (int i = 0; i < static_cast<int>(browser.entries.size()); ++i) {
-    const auto& entry = browser.entries[static_cast<size_t>(i)];
-    if (isImageViewerEntry(entry) && samePath(entry.path, currentFile)) {
-      return i;
+static std::optional<image_viewer_sequence::Sequence>
+imageSequenceFromFiles(const std::vector<std::filesystem::path>& files,
+                       const std::filesystem::path& current) {
+  std::vector<std::filesystem::path> images;
+  images.reserve(files.size());
+  for (const std::filesystem::path& file : files) {
+    if (isSupportedImageExt(file)) {
+      images.push_back(file);
     }
   }
-  return std::nullopt;
+  return image_viewer_sequence::Sequence::create(std::move(images), current);
 }
 
-static std::optional<int> resolveAdjacentImageViewerEntryIndex(
-    const BrowserState& browser, const std::filesystem::path& currentFile,
-    int direction) {
-  if (direction == 0) return std::nullopt;
-  const std::optional<int> currentIndex =
-      findImageViewerEntryIndex(browser, currentFile);
-  if (!currentIndex) return std::nullopt;
-
-  const int count = static_cast<int>(browser.entries.size());
-  for (int idx = *currentIndex + direction; idx >= 0 && idx < count;
-       idx += direction) {
-    const auto& entry = browser.entries[static_cast<size_t>(idx)];
-    if (isImageViewerEntry(entry)) {
-      return idx;
+static std::optional<image_viewer_sequence::Sequence>
+imageSequenceFromBrowserEntries(const std::vector<BrowserEntry>& entries,
+                                const std::filesystem::path& current) {
+  std::vector<std::filesystem::path> images;
+  images.reserve(entries.size());
+  for (const BrowserEntry& entry : entries) {
+    if (entry.actionAs<browser_entry::OpenFile>() &&
+        isSupportedImageExt(entry.path)) {
+      images.push_back(entry.path);
     }
   }
-  return std::nullopt;
+  return image_viewer_sequence::Sequence::create(std::move(images), current);
 }
 
-static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& file,
+static bool showAsciiArt(image_viewer_sequence::Sequence sequence,
                          ConsoleInput& input, ConsoleScreen& screen,
                          const Style& baseStyle, const Style& accentStyle,
                          const Style& dimStyle,
@@ -619,34 +613,19 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
                              requestOpenFiles) {
   AsciiArt art;
   std::string error;
-  std::filesystem::path currentFile = file;
-  int currentIndex =
-      findImageViewerEntryIndex(browser, currentFile).value_or(-1);
   int hoverControlToken = -1;
   bool ok = false;
   std::vector<playback_overlay::OverlayControlSpec> controls;
   playback_overlay::OverlayCellLayout controlLayout;
   playback_overlay::InteractionMap controlInteractions;
 
-  auto syncBrowserSelection = [&]() {
-    if (currentIndex >= 0 &&
-        currentIndex < static_cast<int>(browser.entries.size())) {
-      browser.selected = currentIndex;
-    }
-  };
-
   auto makeTitle = [&]() {
-    return std::string("Preview: ") + toUtf8String(currentFile.filename());
+    return std::string("Preview: ") +
+           toUtf8String(sequence.current().filename());
   };
 
-  auto navigateImage = [&](int direction) -> bool {
-    const std::optional<int> nextIndex =
-        resolveAdjacentImageViewerEntryIndex(browser, currentFile, direction);
-    if (!nextIndex) return false;
-    currentIndex = *nextIndex;
-    currentFile = browser.entries[static_cast<size_t>(*nextIndex)].path;
-    browser.selected = *nextIndex;
-    return true;
+  auto navigateImage = [&](image_viewer_sequence::Direction direction) {
+    return sequence.move(direction);
   };
 
   auto rebuildOverlay = [&]() {
@@ -655,12 +634,10 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
 
     playback_overlay::PlaybackOverlayInputs overlayInputs;
     overlayInputs.windowTitle = title;
-    overlayInputs.canPlayPrevious =
-        resolveAdjacentImageViewerEntryIndex(browser, currentFile, -1)
-            .has_value();
+    overlayInputs.canPlayPrevious = sequence.canMove(
+        image_viewer_sequence::Direction::Previous);
     overlayInputs.canPlayNext =
-        resolveAdjacentImageViewerEntryIndex(browser, currentFile, 1)
-            .has_value();
+        sequence.canMove(image_viewer_sequence::Direction::Next);
     overlayInputs.osd.controlsVisible = true;
 
     const playback_overlay::PlaybackOverlayState overlayState =
@@ -697,7 +674,7 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
     error.clear();
     ok = true;
     if (maxHeight > 0) {
-      ok = renderAsciiArt(currentFile, width, maxHeight, art, &error);
+      ok = renderAsciiArt(sequence.current(), width, maxHeight, art, &error);
     }
 
     screen.clear(baseStyle);
@@ -741,14 +718,17 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
 
   auto clickOverlayControl = [&](playback_overlay::OverlayControlId control) {
     playback_overlay::OverlayControlActions actions;
-    actions.previous = [&]() { return navigateImage(-1); };
-    actions.next = [&]() { return navigateImage(1); };
+    actions.previous = [&]() {
+      return navigateImage(image_viewer_sequence::Direction::Previous);
+    };
+    actions.next = [&]() {
+      return navigateImage(image_viewer_sequence::Direction::Next);
+    };
     return playback_overlay::dispatchOverlayControl(control, actions);
   };
 
   screen.updateSize();
   input.setCellPixelSize(screen.cellPixelWidth(), screen.cellPixelHeight());
-  syncBrowserSelection();
   renderFrame();
 
   InputEvent ev{};
@@ -829,12 +809,12 @@ static bool showAsciiArt(BrowserState& browser, const std::filesystem::path& fil
             case PlaybackShortcutAction::CloseViewer:
               return ok;
             case PlaybackShortcutAction::Previous:
-              if (navigateImage(-1)) {
+              if (navigateImage(image_viewer_sequence::Direction::Previous)) {
                 renderFrame();
               }
               continue;
             case PlaybackShortcutAction::Next:
-              if (navigateImage(1)) {
+              if (navigateImage(image_viewer_sequence::Direction::Next)) {
                 renderFrame();
               }
               continue;
@@ -1269,143 +1249,207 @@ int runTui(Options o,
     return std::nullopt;
   };
 
+  struct PlaybackActivation {
+    playback_route::Route route;
+    playback_controller::Source source;
+  };
+  struct ImageActivation {
+    playback_route::Route route;
+    image_viewer_sequence::Sequence sequence;
+  };
+  using MediaActivation = std::variant<PlaybackActivation, ImageActivation>;
+
+  auto mediaActivationFromFiles =
+      [&](playback_route::Route route,
+          const std::vector<std::filesystem::path>& files)
+      -> std::optional<MediaActivation> {
+    if (isSupportedImageExt(route.target.file)) {
+      std::optional<image_viewer_sequence::Sequence> sequence =
+          imageSequenceFromFiles(files, route.target.file);
+      if (!sequence) {
+        return std::nullopt;
+      }
+      return MediaActivation(
+          ImageActivation{std::move(route), std::move(*sequence)});
+    }
+    return MediaActivation(PlaybackActivation{
+        std::move(route), playback_controller::sourceFromFiles(files)});
+  };
+
+  std::optional<MediaActivation> pendingMediaActivation;
   PlaybackSessionContinuationState videoContinuationState;
-  auto playPlaybackRequest = [&](playback_route::Request initialRequest) {
-    playback_route::Request request = std::move(initialRequest);
-    while (!request.route.target.file.empty()) {
-      if (!playbackController.apply(std::move(request.transition))) {
-        return false;
-      }
-      playback_route::Route route = std::move(request.route);
-      if (route.videoContinuation) {
-        videoContinuationState = *route.videoContinuation;
-      }
-      applyAudioPictureInPicturePlan(route.audioPictureInPicture);
-      const PlaybackTarget& target = route.target;
-      if (target.trackIndex >= 0) {
-        return tryStartAudioFile(target.file, target.trackIndex);
-      }
-      if (isSupportedImageExt(target.file)) {
-        bool quitAppRequested = false;
-        std::optional<playback_route::Request> pendingPlaybackRequest;
-        std::optional<std::filesystem::path> pendingOpenDirectory;
-        auto requestImageViewerOpenFiles = [&](const OpenFilesRequest& request) {
-          if (auto dir = resolveOpenDirectory(request.files)) {
-            pendingOpenDirectory = *dir;
-            return true;
-          }
-          if (auto resolvedRoute = resolveOpenFilesPlaybackRoute(request)) {
-            pendingPlaybackRequest = playback_route::start(
-                std::move(*resolvedRoute),
-                playback_controller::sourceFromFiles(request.files));
-            return true;
-          }
+  playback_controller::Controller::Presenter presentPlaybackRoute =
+      [&](const playback_route::Route& route,
+          playback_controller::Handoff& handoff) {
+        if (route.videoContinuation) {
+          videoContinuationState = *route.videoContinuation;
+        }
+        applyAudioPictureInPicturePlan(route.audioPictureInPicture);
+        const PlaybackTarget& target = route.target;
+        if (target.trackIndex >= 0) {
+          return tryStartAudioFile(target.file, target.trackIndex);
+        }
+        if (isSupportedImageExt(target.file)) {
           return false;
-        };
-        showAsciiArt(browser, target.file, input, screen, kStyleNormal,
-                     kStyleAccent, kStyleDim, openFileRequests,
-                     &quitAppRequested,
-                     requestImageViewerOpenFiles);
-        if (quitAppRequested) {
-          running = false;
-          return true;
         }
-        if (pendingOpenDirectory) {
-          openBrowserDirectory(*pendingOpenDirectory);
-          return true;
-        }
-        if (pendingPlaybackRequest) {
-          request = std::move(*pendingPlaybackRequest);
-          continue;
-        }
-        markDirty();
-        return true;
-      }
-      if (isVideoExt(target.file)) {
-        bool quitAppRequested = false;
-        std::optional<playback_route::Request> pendingPlaybackRequest;
-        std::optional<std::filesystem::path> pendingOpenDirectory;
-        auto requestTransportCommand = [&](PlaybackTransportCommand command) {
-          const playback_controller::Direction direction =
-              (command == PlaybackTransportCommand::Previous)
-                  ? playback_controller::Direction::Previous
-                  : playback_controller::Direction::Next;
-          std::optional<PlaybackTarget> adjacentTarget =
-              playbackController.adjacent(direction);
-          if (adjacentTarget) {
-            pendingPlaybackRequest = playback_route::continueWith(
-                playback_route::resolveTarget(*adjacentTarget));
+        if (isVideoExt(target.file)) {
+          bool quitAppRequested = false;
+          std::optional<std::filesystem::path> pendingOpenDirectory;
+          auto requestMediaHandoff =
+              [&](playback_route::Route nextRoute,
+                  const std::vector<std::filesystem::path>& files) {
+                if (isSupportedImageExt(nextRoute.target.file)) {
+                  if (pendingMediaActivation) {
+                    return false;
+                  }
+                  pendingMediaActivation = mediaActivationFromFiles(
+                      std::move(nextRoute), files);
+                  return pendingMediaActivation.has_value();
+                }
+                return handoff.start(
+                    std::move(nextRoute),
+                    playback_controller::sourceFromFiles(files));
+              };
+          auto requestTransportCommand =
+              [&](PlaybackTransportCommand command) {
+                const playback_controller::Direction direction =
+                    (command == PlaybackTransportCommand::Previous)
+                        ? playback_controller::Direction::Previous
+                        : playback_controller::Direction::Next;
+                return handoff.transport(direction);
+              };
+          auto requestOpenFiles =
+              [&](const std::vector<std::filesystem::path>& files) {
+                if (auto dir = resolveOpenDirectory(files)) {
+                  pendingOpenDirectory = *dir;
+                  return true;
+                }
+                if (auto resolvedRoute =
+                        playback_route::resolveDroppedTarget(files)) {
+                  return requestMediaHandoff(std::move(*resolvedRoute), files);
+                }
+                return false;
+              };
+          VideoPlaybackConfig sessionVideoConfig = videoConfig;
+          if (videoContinuationState.hasLayout) {
+            sessionVideoConfig.enableAscii =
+                videoContinuationState.asciiRenderingEnabled;
           }
-          return pendingPlaybackRequest.has_value();
-        };
-        auto requestOpenFiles =
-            [&](const std::vector<std::filesystem::path>& files) {
-              if (auto dir = resolveOpenDirectory(files)) {
+          bool handled = showAsciiVideo(
+              target.file, input, screen, kStyleNormal, kStyleAccent, kStyleDim,
+              kStyleProgressEmpty, kStyleProgressFrame, kProgressStart,
+              kProgressEnd, sessionVideoConfig, openFileRequests,
+              &quitAppRequested, &systemControls, &notificationAreaControls,
+              requestTransportCommand, requestOpenFiles,
+              &videoContinuationState, route.sessionIntent);
+          if (quitAppRequested) {
+            running = false;
+            pendingMediaActivation.reset();
+            return true;
+          }
+          OpenFilesRequest activation;
+          if (openFileRequests.poll(activation)) {
+            if (auto dir = resolveOpenDirectory(activation.files)) {
+              openBrowserDirectory(*dir);
+              return true;
+            }
+            if (auto resolvedRoute =
+                    resolveOpenFilesPlaybackRoute(activation)) {
+              return requestMediaHandoff(std::move(*resolvedRoute),
+                                         activation.files);
+            }
+          }
+          if (pendingOpenDirectory) {
+            openBrowserDirectory(*pendingOpenDirectory);
+            return true;
+          }
+          if (handled) {
+            markDirty();
+            return true;
+          }
+          return tryStartAudioFile(target.file);
+        }
+        return tryStartAudioFile(target.file);
+      };
+
+  auto activateMedia = [&](MediaActivation initialActivation) {
+    std::optional<MediaActivation> activation(
+        std::move(initialActivation));
+    bool handled = false;
+    while (activation) {
+      pendingMediaActivation.reset();
+      if (auto* playback = std::get_if<PlaybackActivation>(&*activation)) {
+        handled = playbackController.start(
+            std::move(playback->route), std::move(playback->source),
+            presentPlaybackRoute);
+      } else {
+        ImageActivation image =
+            std::move(std::get<ImageActivation>(*activation));
+        applyAudioPictureInPicturePlan(
+            image.route.audioPictureInPicture);
+        bool quitAppRequested = false;
+        std::optional<std::filesystem::path> pendingOpenDirectory;
+        auto requestImageViewerOpenFiles =
+            [&](const OpenFilesRequest& request) {
+              if (auto dir = resolveOpenDirectory(request.files)) {
                 pendingOpenDirectory = *dir;
                 return true;
               }
-              if (auto resolvedRoute = playback_route::resolveDroppedTarget(
-                      files)) {
-                pendingPlaybackRequest = playback_route::start(
-                    std::move(*resolvedRoute),
-                    playback_controller::sourceFromFiles(files));
-                return true;
+              if (pendingMediaActivation) {
+                return false;
+              }
+              if (auto route = resolveOpenFilesPlaybackRoute(request)) {
+                pendingMediaActivation = mediaActivationFromFiles(
+                    std::move(*route), request.files);
+                return pendingMediaActivation.has_value();
               }
               return false;
             };
-        VideoPlaybackConfig sessionVideoConfig = videoConfig;
-        if (videoContinuationState.hasLayout) {
-          sessionVideoConfig.enableAscii =
-              videoContinuationState.asciiRenderingEnabled;
-        }
-        bool handled = showAsciiVideo(
-            target.file, input, screen, kStyleNormal, kStyleAccent, kStyleDim,
-            kStyleProgressEmpty, kStyleProgressFrame, kProgressStart,
-            kProgressEnd, sessionVideoConfig, openFileRequests,
-            &quitAppRequested,
-            &systemControls,
-            &notificationAreaControls,
-            requestTransportCommand, requestOpenFiles,
-            &videoContinuationState, route.sessionIntent);
+        showAsciiArt(std::move(image.sequence), input, screen, kStyleNormal,
+                     kStyleAccent, kStyleDim, openFileRequests,
+                     &quitAppRequested, requestImageViewerOpenFiles);
+        handled = true;
         if (quitAppRequested) {
           running = false;
-          return true;
-        }
-        OpenFilesRequest activation;
-        if (openFileRequests.poll(activation)) {
-          if (auto dir = resolveOpenDirectory(activation.files)) {
-            openBrowserDirectory(*dir);
-            return true;
-          }
-          if (auto resolvedRoute = resolveOpenFilesPlaybackRoute(activation)) {
-            request = playback_route::start(
-                std::move(*resolvedRoute),
-                playback_controller::sourceFromFiles(activation.files));
-            continue;
-          }
-        }
-        if (pendingOpenDirectory) {
+          pendingMediaActivation.reset();
+        } else if (pendingOpenDirectory) {
+          pendingMediaActivation.reset();
           openBrowserDirectory(*pendingOpenDirectory);
-          return true;
         }
-        if (pendingPlaybackRequest) {
-          request = std::move(*pendingPlaybackRequest);
-          continue;
-        }
-        if (handled) {
-          markDirty();
-          return true;
-        }
-        return tryStartAudioFile(target.file);
+        markDirty();
       }
-      return tryStartAudioFile(target.file);
+      if (!handled) {
+        return false;
+      }
+      activation = std::exchange(pendingMediaActivation, std::nullopt);
     }
-    return false;
+    return handled;
   };
-  auto playBrowserPlaybackTarget = [&](const PlaybackTarget& target) {
-    return playPlaybackRequest(playback_route::start(
-        playback_route::resolveTarget(target),
-        browser_playback_source::capture(browser.entries)));
+
+  auto startPlayback = [&](playback_route::Route route,
+                           playback_controller::Source source) {
+    return activateMedia(MediaActivation(PlaybackActivation{
+        std::move(route), std::move(source)}));
+  };
+  auto transportPlayback = [&](playback_controller::Direction direction) {
+    pendingMediaActivation.reset();
+    if (!playbackController.transport(direction, presentPlaybackRoute)) {
+      return false;
+    }
+    std::optional<MediaActivation> handoff =
+        std::exchange(pendingMediaActivation, std::nullopt);
+    return !handoff || activateMedia(std::move(*handoff));
+  };
+  auto openBrowserMediaTarget = [&](const PlaybackTarget& target) {
+    playback_route::Route route = playback_route::resolveTarget(target);
+    if (isSupportedImageExt(target.file)) {
+      std::optional<image_viewer_sequence::Sequence> sequence =
+          imageSequenceFromBrowserEntries(browser.entries, target.file);
+      return sequence && activateMedia(MediaActivation(ImageActivation{
+                             std::move(route), std::move(*sequence)}));
+    }
+    return startPlayback(std::move(route),
+                         browser_playback_source::capture(browser.entries));
   };
   auto playOpenFilesRequest = [&](const OpenFilesRequest& request) {
     if (auto dir = resolveOpenDirectory(request.files)) {
@@ -1413,24 +1457,22 @@ int runTui(Options o,
       return true;
     }
     if (auto route = resolveOpenFilesPlaybackRoute(request)) {
-      return playPlaybackRequest(playback_route::start(
-          std::move(*route),
-          playback_controller::sourceFromFiles(request.files)));
+      std::optional<MediaActivation> activation =
+          mediaActivationFromFiles(std::move(*route), request.files);
+      return activation && activateMedia(std::move(*activation));
     }
     return false;
   };
 
   if (hasPendingAudio) {
     const PlaybackTarget target{pendingAudio, -1};
-    playPlaybackRequest(playback_route::start(
-        playback_route::resolveTarget(target),
-        playback_controller::singleSource(target)));
+    startPlayback(playback_route::resolveTarget(target),
+                  playback_controller::singleSource(target));
   }
   if (hasPendingImage) {
-    const PlaybackTarget target{pendingImage, -1};
-    playPlaybackRequest(playback_route::start(
-        playback_route::resolveTarget(target),
-        playback_controller::singleSource(target)));
+    OpenFilesRequest initialImageRequest;
+    initialImageRequest.files.push_back(pendingImage);
+    playOpenFilesRequest(initialImageRequest);
   }
   if (hasPendingVideo) {
     OpenFilesRequest initialVideoRequest;
@@ -1740,19 +1782,19 @@ int runTui(Options o,
       return true;
     }
     if (const auto* track = entry.actionAs<browser_entry::PlayTrack>()) {
-      return playBrowserPlaybackTarget({entry.path, track->trackIndex});
+      return openBrowserMediaTarget({entry.path, track->trackIndex});
     }
     if (!entry.actionAs<browser_entry::OpenFile>()) {
       return false;
     }
     if (isSupportedImageExt(entry.path) || isVideoExt(entry.path)) {
-      return playBrowserPlaybackTarget({entry.path, -1});
+      return openBrowserMediaTarget({entry.path, -1});
     }
     if (browserNavigator.navigate(
             browserTrackLocation(normalizeTrackBrowserPath(entry.path)))) {
       return true;
     }
-    return playBrowserPlaybackTarget({entry.path, -1});
+    return openBrowserMediaTarget({entry.path, -1});
   };
   callbacks.onPlayFiles =
       [&](const std::vector<std::filesystem::path>& files) {
@@ -1812,25 +1854,16 @@ int runTui(Options o,
     if (audioGetNowPlaying().empty()) {
       return;
     }
-    if (auto target =
-            playbackController.adjacent(
-                playback_controller::Direction::Previous)) {
-      if (playPlaybackRequest(playback_route::continueWith(
-              playback_route::resolveTarget(*target)))) {
-        markDirty();
-      }
+    if (transportPlayback(playback_controller::Direction::Previous)) {
+      markDirty();
     }
   };
   callbacks.onPlayNext = [&]() {
     if (audioGetNowPlaying().empty()) {
       return;
     }
-    if (auto target =
-            playbackController.adjacent(playback_controller::Direction::Next)) {
-      if (playPlaybackRequest(playback_route::continueWith(
-              playback_route::resolveTarget(*target)))) {
-        markDirty();
-      }
+    if (transportPlayback(playback_controller::Direction::Next)) {
+      markDirty();
     }
   };
   callbacks.onToggleRadio = [&]() {
@@ -1951,8 +1984,9 @@ int runTui(Options o,
     if (!route) {
       return false;
     }
-    return playPlaybackRequest(playback_route::start(
-        std::move(*route), playback_controller::sourceFromFiles(files)));
+    std::optional<MediaActivation> activation =
+        mediaActivationFromFiles(std::move(*route), files);
+    return activation && activateMedia(std::move(*activation));
   };
   audioPictureInPictureCallbacks.onClose =
       [&]() { markDirty(UiDirtyFlags::Async); };
@@ -2331,8 +2365,8 @@ int runTui(Options o,
           playback_route::resolveTarget({entry.path, -1});
       route.sessionIntent = PlaybackSessionIntent::EditVideo;
       const PlaybackTarget target = route.target;
-      playPlaybackRequest(playback_route::start(
-          std::move(route), playback_controller::singleSource(target)));
+      startPlayback(std::move(route),
+                    playback_controller::singleSource(target));
     } else if (action == FileContextAction::Analyze) {
       startMelodyExport(entry);
     } else if (action == FileContextAction::SplitLoop) {
