@@ -104,19 +104,20 @@ std::optional<Controller::PreparedActivation> Controller::prepareStart(
 
   PreparedActivation activation;
   activation.route = std::move(route);
-  activation.replacementEntries = std::move(candidate);
-  activation.currentIndex = *currentIndex;
-  activation.replacesSource = true;
+  activation.state.sequence =
+      std::make_shared<const Sequence>(std::move(candidate));
+  activation.state.currentIndex = *currentIndex;
   return activation;
 }
 
 std::optional<Controller::AdjacentTarget> Controller::adjacent(
-    Direction direction) const {
-  if (!currentIndex_) {
+    const PlaybackState& state, Direction direction) const {
+  if (!state.sequence || state.currentIndex >= state.sequence->entries.size()) {
     return std::nullopt;
   }
 
-  std::size_t index = *currentIndex_;
+  const std::vector<Entry>& entries = state.sequence->entries;
+  std::size_t index = state.currentIndex;
   while (true) {
     if (direction == Direction::Previous) {
       if (index == 0) {
@@ -124,13 +125,13 @@ std::optional<Controller::AdjacentTarget> Controller::adjacent(
       }
       --index;
     } else {
-      if (index + 1 >= entries_.size()) {
+      if (index + 1 >= entries.size()) {
         return std::nullopt;
       }
       ++index;
     }
 
-    const PlaybackTarget& candidate = entries_[index].target;
+    const PlaybackTarget& candidate = entries[index].target;
     if (candidate.trackIndex >= 0) {
       return AdjacentTarget{candidate, index};
     }
@@ -144,8 +145,8 @@ std::optional<Controller::AdjacentTarget> Controller::adjacent(
 }
 
 std::optional<Controller::PreparedActivation> Controller::prepareTransport(
-    Direction direction) const {
-  const std::optional<AdjacentTarget> target = adjacent(direction);
+    const PlaybackState& state, Direction direction) const {
+  const std::optional<AdjacentTarget> target = adjacent(state, direction);
   if (!target || !resolveRoute_) {
     return std::nullopt;
   }
@@ -155,7 +156,8 @@ std::optional<Controller::PreparedActivation> Controller::prepareTransport(
   // Navigation owns target selection; the route service only contributes
   // presentation policy.
   activation.route.target = target->target;
-  activation.currentIndex = target->index;
+  activation.state = state;
+  activation.state.currentIndex = target->index;
   return activation;
 }
 
@@ -168,15 +170,6 @@ bool Controller::drive(PreparedActivation activation,
   DrivingGuard drivingGuard(driving_);
   std::optional<PreparedActivation> current(std::move(activation));
   while (current) {
-    const bool replacesSource = current->replacesSource;
-    std::vector<Entry> previousEntries;
-    const std::optional<std::size_t> previousIndex = currentIndex_;
-    if (replacesSource) {
-      previousEntries = std::move(entries_);
-      entries_ = std::move(current->replacementEntries);
-    }
-    currentIndex_ = current->currentIndex;
-
     std::optional<PreparedActivation> pending;
     Handoff handoff(
         [&](playback_route::Route route, Source source) {
@@ -190,29 +183,15 @@ bool Controller::drive(PreparedActivation activation,
           if (pending) {
             return false;
           }
-          pending = prepareTransport(direction);
+          pending = prepareTransport(current->state, direction);
           return pending.has_value();
         });
 
-    bool presented = false;
-    try {
-      presented = presenter(current->route, handoff);
-    } catch (...) {
-      if (replacesSource) {
-        entries_ = std::move(previousEntries);
-      }
-      currentIndex_ = previousIndex;
-      throw;
-    }
-
-    if (!presented) {
-      if (replacesSource) {
-        entries_ = std::move(previousEntries);
-      }
-      currentIndex_ = previousIndex;
+    if (!presenter(current->route, handoff)) {
       return false;
     }
 
+    activeState_ = current->state;
     current = std::move(pending);
   }
   return true;
@@ -226,7 +205,11 @@ bool Controller::start(playback_route::Route route, Source source,
 }
 
 bool Controller::transport(Direction direction, const Presenter& presenter) {
-  std::optional<PreparedActivation> activation = prepareTransport(direction);
+  if (!activeState_) {
+    return false;
+  }
+  std::optional<PreparedActivation> activation =
+      prepareTransport(*activeState_, direction);
   return activation && drive(std::move(*activation), presenter);
 }
 

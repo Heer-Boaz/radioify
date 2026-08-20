@@ -1,4 +1,5 @@
 #include <iostream>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -112,12 +113,12 @@ int main() {
   ok &= expect(
       !controller.transport(playback_controller::Direction::Next, reject) &&
           isTarget(failedTarget, songC, 0),
-      "a failed replacement must restore the previous source and position");
+      "a failed replacement must preserve the previous source and position");
   presented.clear();
   ok &= expect(
       controller.transport(playback_controller::Direction::Next, accept) &&
           presented.size() == 1 && isTarget(presented.back(), songC, 0),
-      "a failed activation must roll the current position back");
+      "a failed activation must not commit its candidate position");
 
   std::vector<PlaybackTarget> handoffTargets;
   const playback_controller::Controller::Presenter handoffNext =
@@ -158,6 +159,51 @@ int main() {
       controller.transport(playback_controller::Direction::Next, accept) &&
           presented.size() == 1 && isTarget(presented.back(), songC, 0),
       "an invalid handoff must leave the active source and position intact");
+
+  std::vector<PlaybackTarget> failedHandoffTargets;
+  const playback_controller::Controller::Presenter rejectHandoffTarget =
+      [&](const playback_route::Route& route,
+          playback_controller::Handoff& handoff) {
+        failedHandoffTargets.push_back(route.target);
+        if (isTarget(route.target, songB, 0)) {
+          return handoff.transport(playback_controller::Direction::Next);
+        }
+        return false;
+      };
+  ok &= expect(!controller.start(routeFor({songB, 0}),
+                                 playback_controller::sourceFromFiles(
+                                     {songA, skipped, songB, songC}),
+                                 rejectHandoffTarget),
+               "a rejected handoff target must fail the chained activation");
+  ok &= expect(failedHandoffTargets.size() == 2 &&
+                   isTarget(failedHandoffTargets[0], songB, 0) &&
+                   isTarget(failedHandoffTargets[1], songC, 0),
+               "a chained handoff must present its prepared target");
+  presented.clear();
+  ok &= expect(
+      controller.transport(playback_controller::Direction::Previous, accept) &&
+          presented.size() == 1 && isTarget(presented.back(), songA, 0),
+      "a failed chained target must preserve the last successful activation");
+
+  const playback_controller::Controller::Presenter throwPresentation =
+      [](const playback_route::Route&, playback_controller::Handoff&) -> bool {
+    throw std::runtime_error("presentation failed");
+  };
+  bool presentationExceptionObserved = false;
+  try {
+    (void)controller.start(routeFor({unrelated, 0}),
+                           playback_controller::singleSource({unrelated, 0}),
+                           throwPresentation);
+  } catch (const std::runtime_error&) {
+    presentationExceptionObserved = true;
+  }
+  ok &= expect(presentationExceptionObserved,
+               "a presenter exception must propagate to its owner");
+  presented.clear();
+  ok &= expect(
+      controller.transport(playback_controller::Direction::Next, accept) &&
+          presented.size() == 1 && isTarget(presented.back(), songB, 0),
+      "a presenter exception must leave the active state unmodified");
 
   std::vector<BrowserEntry> trackEntries;
   trackEntries.emplace_back("Info", songA, browser_entry::Information{});

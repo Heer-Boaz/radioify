@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -88,11 +89,21 @@ class Controller {
     PathIdentity fileIdentity;
   };
 
+  struct Sequence {
+    explicit Sequence(std::vector<Entry> entries)
+        : entries(std::move(entries)) {}
+
+    const std::vector<Entry> entries;
+  };
+
+  struct PlaybackState {
+    std::shared_ptr<const Sequence> sequence;
+    std::size_t currentIndex = 0;
+  };
+
   struct PreparedActivation {
     playback_route::Route route;
-    std::vector<Entry> replacementEntries;
-    std::size_t currentIndex = 0;
-    bool replacesSource = false;
+    PlaybackState state;
   };
 
   struct AdjacentTarget {
@@ -107,15 +118,16 @@ class Controller {
 
   std::optional<PreparedActivation> prepareStart(playback_route::Route route,
                                                  Source source) const;
-  std::optional<PreparedActivation> prepareTransport(Direction direction) const;
-  std::optional<AdjacentTarget> adjacent(Direction direction) const;
+  std::optional<PreparedActivation> prepareTransport(const PlaybackState& state,
+                                                     Direction direction) const;
+  std::optional<AdjacentTarget> adjacent(const PlaybackState& state,
+                                         Direction direction) const;
   [[nodiscard]] bool drive(PreparedActivation activation,
                            const Presenter& presenter);
 
   ResolvePathTarget resolvePathTarget_;
   ResolveRoute resolveRoute_;
-  std::vector<Entry> entries_;
-  std::optional<std::size_t> currentIndex_;
+  std::optional<PlaybackState> activeState_;
   bool driving_ = false;
 };
 
