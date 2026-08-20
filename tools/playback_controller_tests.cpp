@@ -1,4 +1,7 @@
+#include <functional>
 #include <iostream>
+#include <memory>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -27,6 +30,55 @@ bool isTarget(const PlaybackTarget& actual, const std::filesystem::path& file,
   return samePath(actual.file, file) && actual.trackIndex == trackIndex;
 }
 
+bool activated(playback_controller::ActivationOutcome outcome) {
+  return outcome == playback_controller::ActivationOutcome::Activated;
+}
+
+bool handled(playback_controller::ActivationOutcome outcome) {
+  return outcome == playback_controller::ActivationOutcome::Handled;
+}
+
+bool rejected(playback_controller::ActivationOutcome outcome) {
+  return outcome == playback_controller::ActivationOutcome::Rejected;
+}
+
+class CallbackSession final : public playback_controller::ActivePresentation {
+ public:
+  explicit CallbackSession(std::function<void()> run) : run_(std::move(run)) {}
+
+  void run() override { run_(); }
+
+ private:
+  std::function<void()> run_;
+};
+
+playback_controller::PresentationOpenResult activate(
+    std::function<void()> run = {}) {
+  std::unique_ptr<playback_controller::ActivePresentation> session;
+  if (run) {
+    session = std::make_unique<CallbackSession>(std::move(run));
+    return playback_controller::PresentationSession{std::move(session)};
+  }
+  return playback_controller::PresentationStarted{};
+}
+
+class LambdaPresenter final : public playback_controller::Presenter {
+ public:
+  using Open = std::function<playback_controller::PresentationOpenResult(
+      const playback_route::Route&, playback_controller::SessionCommands&)>;
+
+  explicit LambdaPresenter(Open open) : open_(std::move(open)) {}
+
+  playback_controller::PresentationOpenResult open(
+      const playback_route::Route& route,
+      playback_controller::SessionCommands& commands) override {
+    return open_(route, commands);
+  }
+
+ private:
+  Open open_;
+};
+
 }  // namespace
 
 int main() {
@@ -49,68 +101,218 @@ int main() {
        },
        [](const PlaybackTarget& target) { return routeFor(target); }});
 
+  std::vector<PlaybackTarget> presented;
+  LambdaPresenter accept([&](const playback_route::Route& route,
+                             playback_controller::SessionCommands&) {
+    presented.push_back(route.target);
+    return activate();
+  });
+
   std::vector<std::filesystem::path> requestedFiles{songA, skipped, songB,
                                                     songC};
   playback_controller::Source files =
       playback_controller::sourceFromFiles(requestedFiles);
   requestedFiles.clear();
-  std::optional<playback_controller::Controller::PreparedActivation> initial =
-      controller.prepareStart(routeFor({songB, 0}), std::move(files));
-  ok &= expect(initial && isTarget(initial->route().target, songB, 0),
-               "a source containing its target must prepare");
+  ok &= expect(activated(controller.start(routeFor({songB, 0}),
+                                          std::move(files), accept)),
+               "a source containing its target must start");
   ok &= expect(resolveCalls == 0,
-               "preparing a source must not eagerly resolve its items");
-  ok &= expect(
-      !controller.prepareTransport(playback_controller::Direction::Previous),
-      "transport must remain unavailable before activation commits");
-  controller.commit(std::move(*initial));
+               "starting playback must not eagerly resolve source items");
+  ok &= expect(presented.size() == 1 && isTarget(presented.back(), songB, 0),
+               "the controller must present the requested source item");
 
-  std::optional<playback_controller::Controller::PreparedActivation> previous =
-      controller.prepareTransport(playback_controller::Direction::Previous);
-  ok &= expect(previous && isTarget(previous->route().target, songA, 0),
-               "previous must lazily skip an unresolvable source item");
+  presented.clear();
+  ok &=
+      expect(activated(controller.transport(
+                 playback_controller::Direction::Previous, accept)) &&
+                 presented.size() == 1 && isTarget(presented.back(), songA, 0),
+             "previous must lazily skip an unresolvable source item");
   ok &= expect(resolveCalls > 0,
                "transport must resolve path-only items at the playback owner");
 
-  std::optional<playback_controller::Controller::PreparedActivation>
-      nextBeforeCommit =
-          controller.prepareTransport(playback_controller::Direction::Next);
-  ok &= expect(
-      nextBeforeCommit && isTarget(nextBeforeCommit->route().target, songC, 0),
-      "preparation must not mutate the committed position");
+  ok &= expect(activated(controller.transport(
+                   playback_controller::Direction::Next, accept)) &&
+                   isTarget(presented.back(), songB, 0),
+               "transport must advance from the committed source position");
 
-  controller.commit(std::move(*previous));
-  std::optional<playback_controller::Controller::PreparedActivation> next =
-      controller.prepareTransport(playback_controller::Direction::Next);
-  ok &= expect(next && isTarget(next->route().target, songB, 0),
-               "transport must advance from the committed position");
-  controller.commit(std::move(*next));
-
-  ok &= expect(!controller.prepareStart(
+  const std::size_t presentationsBeforeInvalidStart = presented.size();
+  ok &= expect(rejected(controller.start(
                    routeFor({songB, 0}),
-                   playback_controller::sourceFromFiles({unrelated})),
+                   playback_controller::sourceFromFiles({unrelated}), accept)),
                "a source missing its requested target must be rejected");
-  std::optional<playback_controller::Controller::PreparedActivation>
-      nextAfterRejectedSource =
-          controller.prepareTransport(playback_controller::Direction::Next);
-  ok &= expect(nextAfterRejectedSource &&
-                   isTarget(nextAfterRejectedSource->route().target, songC, 0),
-               "a rejected source must leave the active source intact");
+  ok &= expect(presented.size() == presentationsBeforeInvalidStart,
+               "an invalid source must never reach the presenter");
+  ok &= expect(activated(controller.transport(
+                   playback_controller::Direction::Next, accept)) &&
+                   isTarget(presented.back(), songC, 0),
+               "an invalid source must leave the active source intact");
 
-  std::optional<playback_controller::Controller::PreparedActivation>
-      discardedReplacement = controller.prepareStart(
-          routeFor({unrelated, 0}),
-          playback_controller::singleSource({unrelated, 0}));
-  ok &= expect(discardedReplacement &&
-                   isTarget(discardedReplacement->route().target, unrelated, 0),
-               "a valid replacement source must prepare independently");
-  discardedReplacement.reset();
-  std::optional<playback_controller::Controller::PreparedActivation>
-      nextAfterDiscard =
-          controller.prepareTransport(playback_controller::Direction::Next);
-  ok &= expect(
-      nextAfterDiscard && isTarget(nextAfterDiscard->route().target, songC, 0),
-      "discarding a prepared source must preserve active playback");
+  ok &= expect(activated(controller.start(routeFor({songB, 0}),
+                                          playback_controller::sourceFromFiles(
+                                              {songA, skipped, songB, songC}),
+                                          accept)),
+               "the original source must be restorable");
+  PlaybackTarget handledTarget;
+  LambdaPresenter handleWithoutPlayback(
+      [&](const playback_route::Route& route,
+          playback_controller::SessionCommands&) {
+        handledTarget = route.target;
+        return playback_controller::PresentationOpenResult(
+            playback_controller::PresentationHandled{});
+      });
+  ok &= expect(handled(controller.start(
+                   routeFor({unrelated, 0}),
+                   playback_controller::singleSource({unrelated, 0}),
+                   handleWithoutPlayback)) &&
+                   isTarget(handledTarget, unrelated, 0),
+               "a handled presentation must not activate playback");
+  PlaybackTarget failedTarget;
+  LambdaPresenter reject([&](const playback_route::Route& route,
+                             playback_controller::SessionCommands&) {
+    failedTarget = route.target;
+    return playback_controller::PresentationOpenResult(
+        playback_controller::PresentationRejected{});
+  });
+  ok &=
+      expect(rejected(controller.start(
+                 routeFor({unrelated, 0}),
+                 playback_controller::singleSource({unrelated, 0}), reject)) &&
+                 isTarget(failedTarget, unrelated, 0),
+             "a backend open failure must reject a replacement source");
+  ok &= expect(rejected(controller.transport(
+                   playback_controller::Direction::Next, reject)) &&
+                   isTarget(failedTarget, songC, 0),
+               "a failed replacement must preserve the committed position");
+  presented.clear();
+  ok &=
+      expect(activated(controller.transport(
+                 playback_controller::Direction::Next, accept)) &&
+                 presented.size() == 1 && isTarget(presented.back(), songC, 0),
+             "a failed open must not commit its candidate position");
+
+  bool openPhaseRequestAccepted = true;
+  LambdaPresenter requestDuringOpen(
+      [&](const playback_route::Route&,
+          playback_controller::SessionCommands& commands) {
+        openPhaseRequestAccepted =
+            commands.transport(playback_controller::Direction::Next);
+        return activate();
+      });
+  ok &= expect(activated(controller.start(routeFor({songB, 0}),
+                                          playback_controller::sourceFromFiles(
+                                              {songA, skipped, songB, songC}),
+                                          requestDuringOpen)),
+               "a valid backend open must activate");
+  ok &= expect(!openPhaseRequestAccepted,
+               "successor commands must stay closed during backend open");
+  presented.clear();
+  ok &=
+      expect(activated(controller.transport(
+                 playback_controller::Direction::Next, accept)) &&
+                 presented.size() == 1 && isTarget(presented.back(), songC, 0),
+             "an open-phase command must not alter playback state");
+
+  std::vector<PlaybackTarget> successorTargets;
+  bool firstRunRequestAccepted = false;
+  bool duplicateRunRequestAccepted = true;
+  LambdaPresenter transportNextDuringRun(
+      [&](const playback_route::Route& route,
+          playback_controller::SessionCommands& commands) {
+        successorTargets.push_back(route.target);
+        if (isTarget(route.target, songB, 0)) {
+          return activate([&]() {
+            firstRunRequestAccepted =
+                commands.transport(playback_controller::Direction::Next);
+            duplicateRunRequestAccepted =
+                commands.transport(playback_controller::Direction::Next);
+          });
+        }
+        return activate();
+      });
+  ok &= expect(activated(controller.start(routeFor({songB, 0}),
+                                          playback_controller::sourceFromFiles(
+                                              {songA, skipped, songB, songC}),
+                                          transportNextDuringRun)),
+               "an active session may hand off to one successor");
+  ok &= expect(firstRunRequestAccepted && !duplicateRunRequestAccepted,
+               "an active presentation must accept exactly one successor");
+  ok &= expect(successorTargets.size() == 2 &&
+                   isTarget(successorTargets[0], songB, 0) &&
+                   isTarget(successorTargets[1], songC, 0),
+               "the controller must drive the complete successor lifecycle");
+
+  std::vector<PlaybackTarget> failedSuccessorTargets;
+  LambdaPresenter rejectSuccessor(
+      [&](const playback_route::Route& route,
+          playback_controller::SessionCommands& commands) {
+        failedSuccessorTargets.push_back(route.target);
+        if (isTarget(route.target, songB, 0)) {
+          return activate([&]() {
+            (void)commands.transport(playback_controller::Direction::Next);
+          });
+        }
+        return playback_controller::PresentationOpenResult(
+            playback_controller::PresentationRejected{});
+      });
+  ok &= expect(rejected(controller.start(routeFor({songB, 0}),
+                                         playback_controller::sourceFromFiles(
+                                             {songA, skipped, songB, songC}),
+                                         rejectSuccessor)),
+               "a rejected successor must fail the chained activation");
+  ok &= expect(failedSuccessorTargets.size() == 2 &&
+                   isTarget(failedSuccessorTargets[0], songB, 0) &&
+                   isTarget(failedSuccessorTargets[1], songC, 0),
+               "a chained successor must reach backend open");
+  presented.clear();
+  ok &=
+      expect(activated(controller.transport(
+                 playback_controller::Direction::Previous, accept)) &&
+                 presented.size() == 1 && isTarget(presented.back(), songA, 0),
+             "a failed successor must preserve the last opened activation");
+
+  LambdaPresenter throwDuringOpen(
+      [](const playback_route::Route&, playback_controller::SessionCommands&)
+          -> playback_controller::PresentationOpenResult {
+        throw std::runtime_error("open failed");
+      });
+  bool openExceptionObserved = false;
+  try {
+    (void)controller.start(routeFor({unrelated, 0}),
+                           playback_controller::singleSource({unrelated, 0}),
+                           throwDuringOpen);
+  } catch (const std::runtime_error&) {
+    openExceptionObserved = true;
+  }
+  ok &= expect(openExceptionObserved,
+               "a backend open exception must propagate to its owner");
+  presented.clear();
+  ok &=
+      expect(activated(controller.transport(
+                 playback_controller::Direction::Next, accept)) &&
+                 presented.size() == 1 && isTarget(presented.back(), songB, 0),
+             "an open exception must leave committed state unchanged");
+
+  LambdaPresenter throwDuringRun(
+      [](const playback_route::Route&, playback_controller::SessionCommands&) {
+        return activate([]() { throw std::runtime_error("run failed"); });
+      });
+  bool runExceptionObserved = false;
+  try {
+    (void)controller.start(
+        routeFor({songB, 0}),
+        playback_controller::sourceFromFiles({songA, skipped, songB, songC}),
+        throwDuringRun);
+  } catch (const std::runtime_error&) {
+    runExceptionObserved = true;
+  }
+  ok &= expect(runExceptionObserved,
+               "an active-session exception must propagate to its owner");
+  presented.clear();
+  ok &=
+      expect(activated(controller.transport(
+                 playback_controller::Direction::Next, accept)) &&
+                 presented.size() == 1 && isTarget(presented.back(), songC, 0),
+             "an opened presentation must commit before its modal run");
 
   std::vector<BrowserEntry> trackEntries;
   trackEntries.emplace_back("Info", songA, browser_entry::Information{});
@@ -121,54 +323,48 @@ int main() {
   trackEntries.emplace_back("Folder", "C:/Media/Sub",
                             browser_entry::OpenDirectory{});
   const int resolvesBeforeExactTransport = resolveCalls;
-  std::optional<playback_controller::Controller::PreparedActivation>
-      exactTrack = controller.prepareStart(
-          routeFor({songA, 3}), browser_playback_source::capture(trackEntries));
-  ok &= expect(exactTrack.has_value(),
-               "an exact track-browser source must prepare");
-  controller.commit(std::move(*exactTrack));
-  std::optional<playback_controller::Controller::PreparedActivation>
-      previousTrack =
-          controller.prepareTransport(playback_controller::Direction::Previous);
-  ok &=
-      expect(previousTrack && isTarget(previousTrack->route().target, songA, 0),
-             "track-browser previous must preserve exact track order");
-
-  exactTrack = controller.prepareStart(
-      routeFor({songA, 3}), browser_playback_source::capture(trackEntries));
-  controller.commit(std::move(*exactTrack));
-  std::optional<playback_controller::Controller::PreparedActivation> nextTrack =
-      controller.prepareTransport(playback_controller::Direction::Next);
-  ok &= expect(nextTrack && isTarget(nextTrack->route().target, songA, 8),
+  ok &= expect(activated(controller.start(
+                   routeFor({songA, 3}),
+                   browser_playback_source::capture(trackEntries), accept)),
+               "an exact track-browser source must start");
+  presented.clear();
+  ok &= expect(activated(controller.transport(
+                   playback_controller::Direction::Previous, accept)) &&
+                   isTarget(presented.back(), songA, 0),
+               "track-browser previous must preserve exact track order");
+  ok &= expect(activated(controller.start(
+                   routeFor({songA, 3}),
+                   browser_playback_source::capture(trackEntries), accept)) &&
+                   activated(controller.transport(
+                       playback_controller::Direction::Next, accept)) &&
+                   isTarget(presented.back(), songA, 8),
                "track-browser next must preserve exact track order");
   ok &= expect(resolveCalls == resolvesBeforeExactTransport,
                "exact track targets must not invoke the path resolver");
 
-  std::optional<playback_controller::Controller::PreparedActivation> singleton =
-      controller.prepareStart(routeFor({songC, 2}),
-                              playback_controller::singleSource({songC, 2}));
-  ok &= expect(singleton.has_value(),
-               "a direct action must prepare an explicit singleton source");
-  controller.commit(std::move(*singleton));
-  ok &= expect(
-      !controller.prepareTransport(playback_controller::Direction::Previous) &&
-          !controller.prepareTransport(playback_controller::Direction::Next),
-      "an explicit singleton source must have no neighbours");
+  ok &= expect(activated(controller.start(
+                   routeFor({songC, 2}),
+                   playback_controller::singleSource({songC, 2}), accept)),
+               "a direct action must request an explicit singleton source");
+  ok &= expect(rejected(controller.transport(
+                   playback_controller::Direction::Previous, accept)) &&
+                   rejected(controller.transport(
+                       playback_controller::Direction::Next, accept)),
+               "an explicit singleton source must have no neighbours");
 
 #ifdef _WIN32
-  std::optional<playback_controller::Controller::PreparedActivation>
-      windowsPath = controller.prepareStart(
-          routeFor({std::filesystem::path("c:\\media\\a.FLAC"), 0}),
-          playback_controller::sourceFromFiles(
-              {std::filesystem::path("C:/Media/A.flac"), songB}));
-  ok &= expect(windowsPath.has_value(),
+  ok &= expect(activated(controller.start(
+                   routeFor({std::filesystem::path("c:\\media\\a.FLAC"), 0}),
+                   playback_controller::sourceFromFiles(
+                       {std::filesystem::path("C:/Media/A.flac"), songB}),
+                   accept)),
                "Windows source matching must use ordinal path identity");
-  controller.commit(std::move(*windowsPath));
-  std::optional<playback_controller::Controller::PreparedActivation>
-      windowsNext =
-          controller.prepareTransport(playback_controller::Direction::Next);
-  ok &= expect(windowsNext && isTarget(windowsNext->route().target, songB, 0),
-               "Windows transport must preserve path-identity matching");
+  presented.clear();
+  ok &=
+      expect(activated(controller.transport(
+                 playback_controller::Direction::Next, accept)) &&
+                 presented.size() == 1 && isTarget(presented.back(), songB, 0),
+             "Windows transport must preserve path-identity matching");
 #endif
 
   return ok ? 0 : 1;

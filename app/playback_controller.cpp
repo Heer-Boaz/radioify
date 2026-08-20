@@ -3,6 +3,21 @@
 #include <utility>
 
 namespace playback_controller {
+namespace {
+
+class DrivingScope {
+ public:
+  explicit DrivingScope(bool& driving) : driving_(driving) { driving_ = true; }
+  ~DrivingScope() { driving_ = false; }
+
+  DrivingScope(const DrivingScope&) = delete;
+  DrivingScope& operator=(const DrivingScope&) = delete;
+
+ private:
+  bool& driving_;
+};
+
+}  // namespace
 
 Source sourceFromTargets(std::vector<PlaybackTarget> targets) {
   return Source(std::move(targets));
@@ -25,6 +40,10 @@ Source singleSource(const PlaybackTarget& target) {
     targets.push_back(target);
   }
   return sourceFromTargets(std::move(targets));
+}
+
+bool SessionCommands::transport(Direction direction) {
+  return accepting_ && transportRequest_(direction);
 }
 
 Controller::Controller(Services services)
@@ -79,10 +98,12 @@ std::optional<Controller::PreparedActivation> Controller::prepareStart(
     return std::nullopt;
   }
 
-  PlaybackState state;
-  state.sequence = std::make_shared<const Sequence>(std::move(candidate));
-  state.currentIndex = *currentIndex;
-  return PreparedActivation(std::move(route), std::move(state));
+  PreparedActivation activation;
+  activation.route = std::move(route);
+  activation.state.sequence =
+      std::make_shared<const Sequence>(std::move(candidate));
+  activation.state.currentIndex = *currentIndex;
+  return activation;
 }
 
 std::optional<Controller::AdjacentTarget> Controller::adjacent(
@@ -110,11 +131,9 @@ std::optional<Controller::AdjacentTarget> Controller::adjacent(
     if (candidate.trackIndex >= 0) {
       return AdjacentTarget{candidate, index};
     }
-    if (resolvePathTarget_) {
-      if (std::optional<PlaybackTarget> resolved =
-              resolvePathTarget_(candidate.file)) {
-        return AdjacentTarget{std::move(*resolved), index};
-      }
+    if (std::optional<PlaybackTarget> resolved =
+            resolvePathTarget_(candidate.file)) {
+      return AdjacentTarget{std::move(*resolved), index};
     }
   }
 }
@@ -122,29 +141,80 @@ std::optional<Controller::AdjacentTarget> Controller::adjacent(
 std::optional<Controller::PreparedActivation> Controller::prepareTransport(
     const PlaybackState& state, Direction direction) const {
   const std::optional<AdjacentTarget> target = adjacent(state, direction);
-  if (!target || !resolveRoute_) {
+  if (!target) {
     return std::nullopt;
   }
 
-  playback_route::Route route = resolveRoute_(target->target);
+  PreparedActivation activation;
+  activation.route = resolveRoute_(target->target);
   // Navigation owns target selection; the route service only contributes
   // presentation policy.
-  route.target = target->target;
-  PlaybackState candidateState = state;
-  candidateState.currentIndex = target->index;
-  return PreparedActivation(std::move(route), std::move(candidateState));
+  activation.route.target = target->target;
+  activation.state = state;
+  activation.state.currentIndex = target->index;
+  return activation;
 }
 
-std::optional<Controller::PreparedActivation> Controller::prepareTransport(
-    Direction direction) const {
-  if (!activeState_) {
-    return std::nullopt;
+ActivationOutcome Controller::drive(PreparedActivation activation,
+                                    Presenter& presenter) {
+  if (driving_) {
+    return ActivationOutcome::Rejected;
   }
-  return prepareTransport(*activeState_, direction);
+
+  DrivingScope drivingScope(driving_);
+  PreparedActivation current(std::move(activation));
+  while (true) {
+    std::optional<PreparedActivation> pending;
+    SessionCommands commands([&](Direction direction) {
+      if (pending) {
+        return false;
+      }
+      pending = prepareTransport(current.state, direction);
+      return pending.has_value();
+    });
+
+    PresentationOpenResult opened = presenter.open(current.route, commands);
+    if (std::holds_alternative<PresentationRejected>(opened)) {
+      return ActivationOutcome::Rejected;
+    }
+    if (std::holds_alternative<PresentationHandled>(opened)) {
+      return ActivationOutcome::Handled;
+    }
+
+    // This is the transaction boundary: the backend is open, but its modal
+    // run loop has not started. From this point all transport is resolved from
+    // the presentation users can actually see and hear.
+    activeState_ = current.state;
+    if (auto* active = std::get_if<PresentationSession>(&opened)) {
+      commands.accepting_ = true;
+      active->session->run();
+      commands.accepting_ = false;
+    }
+
+    if (!pending) {
+      return ActivationOutcome::Activated;
+    }
+    current = std::move(*pending);
+  }
 }
 
-void Controller::commit(PreparedActivation activation) noexcept {
-  activeState_ = std::move(activation.state_);
+ActivationOutcome Controller::start(playback_route::Route route, Source source,
+                                    Presenter& presenter) {
+  std::optional<PreparedActivation> activation =
+      prepareStart(std::move(route), std::move(source));
+  return activation ? drive(std::move(*activation), presenter)
+                    : ActivationOutcome::Rejected;
+}
+
+ActivationOutcome Controller::transport(Direction direction,
+                                        Presenter& presenter) {
+  if (!activeState_) {
+    return ActivationOutcome::Rejected;
+  }
+  std::optional<PreparedActivation> activation =
+      prepareTransport(*activeState_, direction);
+  return activation ? drive(std::move(*activation), presenter)
+                    : ActivationOutcome::Rejected;
 }
 
 }  // namespace playback_controller
