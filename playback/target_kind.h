@@ -1,6 +1,6 @@
 #pragma once
 
-#include "playback_target.h"
+#include "playback/target.h"
 
 enum class PlaybackTargetKind {
   Audio,

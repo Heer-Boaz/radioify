@@ -1,7 +1,9 @@
 #include "playback_route.h"
 
-#include "playback_target_kind.h"
-#include "playback_target_resolver.h"
+#include <utility>
+
+#include "playback/target_kind.h"
+#include "playback/target_resolver.h"
 
 namespace playback_route {
 namespace {
@@ -32,10 +34,20 @@ PlaybackSessionContinuationState videoContinuation(
 
 }  // namespace
 
-Route resolveTarget(const PlaybackTarget& target,
-                    const WindowPlacementState* sourcePlacement,
-                    std::optional<PlaybackWindowPresentationRequest>
-                        videoPresentation) {
+Request start(Route route, playback_controller::Source source) {
+  PlaybackTarget target = route.target;
+  return {std::move(route),
+          playback_controller::start(std::move(source), target)};
+}
+
+Request continueWith(Route route) {
+  PlaybackTarget target = route.target;
+  return {std::move(route), playback_controller::continueWith(target)};
+}
+
+Route resolveTarget(
+    const PlaybackTarget& target, const WindowPlacementState* sourcePlacement,
+    std::optional<PlaybackWindowPresentationRequest> videoPresentation) {
   Route route;
   route.target = target;
   const PlaybackTargetKind targetKind = classifyPlaybackTarget(route.target);

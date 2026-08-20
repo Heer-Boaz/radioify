@@ -1,14 +1,14 @@
-#include "playback_queue.h"
+#include "app/playback_controller.h"
 
 #include <utility>
 
-namespace playback_queue {
+namespace playback_controller {
 
-Source fromTargets(std::vector<PlaybackTarget> targets) {
+Source sourceFromTargets(std::vector<PlaybackTarget> targets) {
   return Source(std::move(targets));
 }
 
-Source fromFiles(const std::vector<std::filesystem::path>& files) {
+Source sourceFromFiles(const std::vector<std::filesystem::path>& files) {
   std::vector<PlaybackTarget> targets;
   targets.reserve(files.size());
   for (const std::filesystem::path& file : files) {
@@ -16,35 +16,43 @@ Source fromFiles(const std::vector<std::filesystem::path>& files) {
       targets.push_back({file, -1});
     }
   }
-  return fromTargets(std::move(targets));
+  return sourceFromTargets(std::move(targets));
 }
 
-Source single(const PlaybackTarget& target) {
+Source singleSource(const PlaybackTarget& target) {
   std::vector<PlaybackTarget> targets;
   if (!target.file.empty()) {
     targets.push_back(target);
   }
-  return fromTargets(std::move(targets));
+  return sourceFromTargets(std::move(targets));
 }
 
-Queue::Queue(ResolvePathTarget resolvePathTarget)
+Transition start(Source source, const PlaybackTarget& target) {
+  return Start{std::move(source), target};
+}
+
+Transition continueWith(const PlaybackTarget& target) {
+  return Continue{target};
+}
+
+Controller::Controller(ResolvePathTarget resolvePathTarget)
     : resolvePathTarget_(std::move(resolvePathTarget)) {}
 
-bool Queue::matchesTarget(const Entry& entry, const PlaybackTarget& target,
-                          const PathIdentity& targetIdentity) {
+bool Controller::matchesTarget(const Entry& entry, const PlaybackTarget& target,
+                               const PathIdentity& targetIdentity) {
   if (target.file.empty() || entry.fileIdentity != targetIdentity) {
     return false;
   }
 
-  // Directory/file sources represent a container as one queue item. Once that
-  // item resolves to a concrete internal track it still identifies the same
-  // queue position. Track-browser sources carry exact track identities.
+  // File sources represent a container as one queue item. Once that item
+  // resolves to a concrete internal track, it still identifies the same queue
+  // position. Track-browser sources carry exact track identities.
   return entry.target.trackIndex < 0 ||
          entry.target.trackIndex == target.trackIndex;
 }
 
-std::optional<std::size_t> Queue::findTarget(const std::vector<Entry>& entries,
-                                             const PlaybackTarget& target) {
+std::optional<std::size_t> Controller::findTarget(
+    const std::vector<Entry>& entries, const PlaybackTarget& target) {
   if (target.file.empty()) {
     return std::nullopt;
   }
@@ -58,10 +66,10 @@ std::optional<std::size_t> Queue::findTarget(const std::vector<Entry>& entries,
   return std::nullopt;
 }
 
-bool Queue::activate(Source source, const PlaybackTarget& current) {
+bool Controller::applyStart(Start transition) {
   std::vector<Entry> candidate;
-  candidate.reserve(source.targets_.size());
-  for (PlaybackTarget& target : source.targets_) {
+  candidate.reserve(transition.source.targets_.size());
+  for (PlaybackTarget& target : transition.source.targets_) {
     if (target.file.empty()) {
       continue;
     }
@@ -72,7 +80,7 @@ bool Queue::activate(Source source, const PlaybackTarget& current) {
   }
 
   const std::optional<std::size_t> currentIndex =
-      findTarget(candidate, current);
+      findTarget(candidate, transition.target);
   if (!currentIndex) {
     return false;
   }
@@ -82,8 +90,9 @@ bool Queue::activate(Source source, const PlaybackTarget& current) {
   return true;
 }
 
-bool Queue::select(const PlaybackTarget& target) {
-  const std::optional<std::size_t> index = findTarget(entries_, target);
+bool Controller::applyContinue(const Continue& transition) {
+  const std::optional<std::size_t> index =
+      findTarget(entries_, transition.target);
   if (!index) {
     return false;
   }
@@ -91,7 +100,14 @@ bool Queue::select(const PlaybackTarget& target) {
   return true;
 }
 
-std::optional<PlaybackTarget> Queue::adjacent(Direction direction) const {
+bool Controller::apply(Transition transition) {
+  if (Start* startTransition = std::get_if<Start>(&transition)) {
+    return applyStart(std::move(*startTransition));
+  }
+  return applyContinue(std::get<Continue>(transition));
+}
+
+std::optional<PlaybackTarget> Controller::adjacent(Direction direction) const {
   if (!currentIndex_) {
     return std::nullopt;
   }
@@ -123,4 +139,4 @@ std::optional<PlaybackTarget> Queue::adjacent(Direction direction) const {
   }
 }
 
-}  // namespace playback_queue
+}  // namespace playback_controller

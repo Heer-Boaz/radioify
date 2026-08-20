@@ -3,6 +3,10 @@
 
 #include "app_common.h"
 
-int runTui(Options o);
+namespace playback_controller {
+class Controller;
+}
+
+int runTui(Options o, playback_controller::Controller& playbackController);
 
 #endif  // TUI_H

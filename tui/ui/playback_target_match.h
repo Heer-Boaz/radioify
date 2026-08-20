@@ -3,7 +3,7 @@
 #include <vector>
 
 #include "browser_model.h"
-#include "playback_target.h"
+#include "playback/target.h"
 
 bool browserEntryMatchesPlaybackTarget(const BrowserEntry& entry,
                                        const PlaybackTarget& target);

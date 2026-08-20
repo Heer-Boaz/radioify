@@ -3,7 +3,7 @@
 #include <functional>
 
 #include "browser_model.h"
-#include "playback_target.h"
+#include "playback/target.h"
 
 class BrowserNavigator;
 

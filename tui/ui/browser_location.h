@@ -5,7 +5,7 @@
 #include <optional>
 #include <utility>
 
-#include "path_identity.h"
+#include "core/path_identity.h"
 
 enum class BrowserLocationKind {
   Directory,

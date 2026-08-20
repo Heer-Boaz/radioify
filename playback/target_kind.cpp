@@ -1,6 +1,6 @@
-#include "playback_target_kind.h"
+#include "playback/target_kind.h"
 
-#include "media_formats.h"
+#include "audio/media_formats.h"
 
 PlaybackTargetKind classifyPlaybackTarget(const PlaybackTarget& target) {
   if (target.trackIndex >= 0) {

@@ -4,9 +4,10 @@
 #include <optional>
 #include <vector>
 
+#include "app/playback_controller.h"
 #include "playback/session/presentation_policy.h"
 #include "playback/session/state.h"
-#include "playback_target.h"
+#include "playback/target.h"
 
 namespace playback_route {
 
@@ -23,11 +24,18 @@ struct Route {
   std::optional<PlaybackSessionContinuationState> videoContinuation;
 };
 
-Route resolveTarget(
-    const PlaybackTarget& target,
-    const WindowPlacementState* sourcePlacement = nullptr,
-    std::optional<PlaybackWindowPresentationRequest> videoPresentation =
-        std::nullopt);
+struct Request {
+  Route route;
+  playback_controller::Transition transition;
+};
+
+Request start(Route route, playback_controller::Source source);
+Request continueWith(Route route);
+
+Route resolveTarget(const PlaybackTarget& target,
+                    const WindowPlacementState* sourcePlacement = nullptr,
+                    std::optional<PlaybackWindowPresentationRequest>
+                        videoPresentation = std::nullopt);
 
 std::optional<Route> resolveDroppedTarget(
     const std::vector<std::filesystem::path>& files,

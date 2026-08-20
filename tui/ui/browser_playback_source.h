@@ -2,11 +2,11 @@
 
 #include <vector>
 
+#include "app/playback_controller.h"
 #include "browser_model.h"
-#include "playback_queue.h"
 
 namespace browser_playback_source {
 
-playback_queue::Source capture(const std::vector<BrowserEntry>& entries);
+playback_controller::Source capture(const std::vector<BrowserEntry>& entries);
 
 }  // namespace browser_playback_source

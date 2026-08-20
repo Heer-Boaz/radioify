@@ -1,6 +1,8 @@
 #include "app_common.h"
-#include "crash_handler.h"
 #include "core/windows_app_identity.h"
+#include "crash_handler.h"
+#include "playback/target_resolver.h"
+#include "playback_controller.h"
 #include "tui/tui.h"
 
 #ifdef _WIN32
@@ -65,5 +67,9 @@ int main(int argc, char** argv) {
 #else
   Options o = parseArgs(argc, argv);
 #endif
-  return runTui(o);
+  playback_controller::Controller playbackController(
+      [](const std::filesystem::path& file) {
+        return playback_target_resolver::resolvePathTarget(file);
+      });
+  return runTui(o, playbackController);
 }
