@@ -2,10 +2,9 @@
 
 #include <filesystem>
 #include <functional>
-#include <vector>
+#include <memory>
 
-#include "app/playback_controller.h"
-#include "playback/session/state.h"
+#include "app/playback_queue.h"
 
 class ConsoleInput;
 class ConsoleScreen;
@@ -17,9 +16,10 @@ struct Color;
 struct Style;
 struct VideoPlaybackConfig;
 
-class TuiPlaybackPresenter final : public playback_controller::Presenter {
+class TuiPlaybackCoordinator {
  public:
   struct Services {
+    playback_queue::Queue& queue;
     ConsoleInput& input;
     ConsoleScreen& screen;
     const Style& baseStyle;
@@ -41,13 +41,17 @@ class TuiPlaybackPresenter final : public playback_controller::Presenter {
     std::function<void()> presentationFinished;
   };
 
-  explicit TuiPlaybackPresenter(Services services);
+  explicit TuiPlaybackCoordinator(Services services);
+  ~TuiPlaybackCoordinator();
 
-  [[nodiscard]] playback_controller::PresentationOpenResult open(
-      const playback_route::Route& route,
-      playback_controller::SessionCommands& commands) override;
+  TuiPlaybackCoordinator(const TuiPlaybackCoordinator&) = delete;
+  TuiPlaybackCoordinator& operator=(const TuiPlaybackCoordinator&) = delete;
+
+  [[nodiscard]] bool start(playback_route::Route route,
+                           playback_queue::Source source);
+  [[nodiscard]] bool transport(playback_queue::Direction direction);
 
  private:
-  Services services_;
-  PlaybackSessionContinuationState continuationState_;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };

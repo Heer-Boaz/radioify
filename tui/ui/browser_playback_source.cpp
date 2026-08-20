@@ -6,7 +6,7 @@
 
 namespace browser_playback_source {
 
-playback_controller::Source capture(const std::vector<BrowserEntry>& entries) {
+playback_queue::Source capture(const std::vector<BrowserEntry>& entries) {
   std::vector<PlaybackTarget> targets;
   targets.reserve(entries.size());
   for (const BrowserEntry& entry : entries) {
@@ -18,7 +18,7 @@ playback_controller::Source capture(const std::vector<BrowserEntry>& entries) {
       targets.push_back({entry.path, -1});
     }
   }
-  return playback_controller::sourceFromTargets(std::move(targets));
+  return playback_queue::sourceFromTargets(std::move(targets));
 }
 
 }  // namespace browser_playback_source

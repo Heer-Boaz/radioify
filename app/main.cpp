@@ -2,7 +2,7 @@
 #include "core/windows_app_identity.h"
 #include "crash_handler.h"
 #include "playback/target_resolver.h"
-#include "playback_controller.h"
+#include "playback_queue.h"
 #include "playback_route.h"
 #include "tui/tui.h"
 
@@ -68,12 +68,12 @@ int main(int argc, char** argv) {
 #else
   Options o = parseArgs(argc, argv);
 #endif
-  playback_controller::Controller playbackController(
+  playback_queue::Queue playbackQueue(
       {[](const std::filesystem::path& file) {
          return playback_target_resolver::resolvePlaybackTarget(file);
        },
        [](const PlaybackTarget& target) {
          return playback_route::resolveTarget(target);
        }});
-  return runTui(o, playbackController);
+  return runTui(o, playbackQueue);
 }
