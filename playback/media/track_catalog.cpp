@@ -14,6 +14,11 @@ std::filesystem::path normalizePlaybackTrackPath(std::filesystem::path path) {
   return path;
 }
 
+bool supportsPlaybackTrackCatalog(const std::filesystem::path& path) {
+  return isKssExt(path) || isGmeExt(path) || isGsfExt(path) ||
+         isVgmExt(path) || isPsfExt(path);
+}
+
 bool listPlaybackTracks(const std::filesystem::path& path,
                         std::vector<TrackEntry>* tracks,
                         std::string* error) {

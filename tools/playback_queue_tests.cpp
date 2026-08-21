@@ -117,6 +117,14 @@ int main() {
   trackEntries.emplace_back("Track 9", songA, browser_entry::PlayTrack{8});
   trackEntries.emplace_back("Folder", "C:/Media/Sub",
                             browser_entry::OpenDirectory{});
+  const BrowserEntry audioFileEntry("Song", songB,
+                                    browser_entry::OpenFile{});
+  const std::optional<PlaybackTarget> audioFileTarget =
+      browser_playback_source::targetFor(audioFileEntry);
+  ok &= expect(audioFileTarget &&
+                   isTarget(*audioFileTarget, songB, -1),
+               "activating a regular audio file must produce a direct "
+               "playback target rather than a browser-navigation request");
   const int resolvesBeforeExactTransport = resolveCalls;
   std::optional<playback_queue::Queue::PreparedActivation> exactTrack =
       queue.prepareStart(routeFor({songA, 3}),

@@ -7,6 +7,7 @@
 #include "tracklist.h"
 
 std::filesystem::path normalizePlaybackTrackPath(std::filesystem::path path);
+bool supportsPlaybackTrackCatalog(const std::filesystem::path& path);
 bool listPlaybackTracks(const std::filesystem::path& path,
                         std::vector<TrackEntry>* tracks,
                         std::string* error);

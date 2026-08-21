@@ -64,6 +64,7 @@
 #include "playback/control/command.h"
 #include "playback/control/transport.h"
 #include "playback/input/shortcuts.h"
+#include "playback/media/track_catalog.h"
 #include "playback/notification_area/controls.h"
 #include "playback/overlay/overlay.h"
 #include "playback/session/session.h"
@@ -1503,12 +1504,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   videoConfig.enableAudio = o.enableAudio;
   videoConfig.debugOverlay = o.asciiDebugOverlay;
 
-  std::filesystem::path pendingImage;
-  bool hasPendingImage = false;
-  std::filesystem::path pendingVideo;
-  bool hasPendingVideo = false;
-  std::filesystem::path pendingAudio;
-  bool hasPendingAudio = false;
+  std::optional<OpenFilesRequest> initialOpenRequest;
 
   auto renderFile = [&](const std::filesystem::path& file) -> void {
     Options renderOpt = o;
@@ -1605,19 +1601,11 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     std::filesystem::path inputPath = pathFromUtf8String(o.input);
     if (std::filesystem::exists(inputPath)) {
       if (!std::filesystem::is_directory(inputPath)) {
-        if (isSupportedImageExt(inputPath)) {
-          pendingImage = inputPath;
-          hasPendingImage = true;
-        } else if (isVideoExt(inputPath)) {
-          pendingVideo = inputPath;
-          hasPendingVideo = true;
-        } else {
-          if (!browserNavigator.navigate(
-                  browserTrackLocation(normalizeTrackBrowserPath(inputPath)))) {
-            pendingAudio = std::move(inputPath);
-            hasPendingAudio = true;
-          }
-        }
+        OpenFilesRequest request;
+        request.files.push_back(std::move(inputPath));
+        request.videoMode =
+            o.enableAscii ? OpenVideoMode::Ascii : OpenVideoMode::Framebuffer;
+        initialOpenRequest.emplace(std::move(request));
       }
     }
   }
@@ -1790,22 +1778,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     return mediaCoordinator.openFiles(request);
   };
 
-  if (hasPendingAudio) {
-    const PlaybackTarget target{pendingAudio, -1};
-    startPlayback(playback_route::resolveTarget(target),
-                  playback_queue::singleSource(target));
-  }
-  if (hasPendingImage) {
-    OpenFilesRequest initialImageRequest;
-    initialImageRequest.files.push_back(pendingImage);
-    playOpenFilesRequest(initialImageRequest);
-  }
-  if (hasPendingVideo) {
-    OpenFilesRequest initialVideoRequest;
-    initialVideoRequest.files.push_back(pendingVideo);
-    initialVideoRequest.videoMode =
-        o.enableAscii ? OpenVideoMode::Ascii : OpenVideoMode::Framebuffer;
-    playOpenFilesRequest(initialVideoRequest);
+  if (initialOpenRequest) {
+    playOpenFilesRequest(*initialOpenRequest);
   }
 
   struct CommandEntry {
@@ -1817,6 +1791,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
 
   enum class FileContextAction : uint8_t {
     Play,
+    BrowseTracks,
     EditVideo,
     Analyze,
     SplitLoop,
@@ -2119,20 +2094,12 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     if (optionsResult == OptionsBrowserResult::Handled) {
       return true;
     }
-    if (const auto* track = entry.actionAs<browser_entry::PlayTrack>()) {
-      return openBrowserMediaTarget({entry.path, track->trackIndex});
-    }
-    if (!entry.actionAs<browser_entry::OpenFile>()) {
+    std::optional<PlaybackTarget> target =
+        browser_playback_source::targetFor(entry);
+    if (!target) {
       return false;
     }
-    if (isSupportedImageExt(entry.path) || isVideoExt(entry.path)) {
-      return openBrowserMediaTarget({entry.path, -1});
-    }
-    if (browserNavigator.navigate(
-            browserTrackLocation(normalizeTrackBrowserPath(entry.path)))) {
-      return true;
-    }
-    return openBrowserMediaTarget({entry.path, -1});
+    return openBrowserMediaTarget(*target);
   };
   callbacks.onPlayFiles =
       [&](const std::vector<std::filesystem::path>& files) {
@@ -2149,6 +2116,9 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       items.push_back({FileContextAction::EditVideo, "Edit video"});
     } else if (isSupportedAudioExt(entry.path)) {
       items.push_back({FileContextAction::Play, "Play"});
+      if (supportsPlaybackTrackCatalog(entry.path)) {
+        items.push_back({FileContextAction::BrowseTracks, "Browse tracks"});
+      }
       if (!isBackgroundTaskRunning()) {
         if (audioCanAnalyzeFileToMelodyFile(entry.path)) {
           items.push_back({FileContextAction::Analyze, "Analyze"});
@@ -2755,6 +2725,9 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       const bool played =
           callbacks.onActivateEntry && callbacks.onActivateEntry(entry);
       (void)played;
+    } else if (action == FileContextAction::BrowseTracks) {
+      browserNavigator.navigate(
+          browserTrackLocation(normalizeTrackBrowserPath(entry.path)));
     } else if (action == FileContextAction::EditVideo) {
       playback_route::Route route =
           playback_route::resolveTarget({entry.path, -1});

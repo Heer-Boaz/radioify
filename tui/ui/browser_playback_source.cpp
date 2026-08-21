@@ -6,16 +6,24 @@
 
 namespace browser_playback_source {
 
+std::optional<PlaybackTarget> targetFor(const BrowserEntry& entry) {
+  if (const auto* track = entry.actionAs<browser_entry::PlayTrack>()) {
+    return PlaybackTarget{entry.path, track->trackIndex};
+  }
+  if (entry.actionAs<browser_entry::OpenFile>() &&
+      isSupportedMediaExt(entry.path)) {
+    return PlaybackTarget{entry.path, -1};
+  }
+  return std::nullopt;
+}
+
 playback_queue::Source capture(const std::vector<BrowserEntry>& entries) {
   std::vector<PlaybackTarget> targets;
   targets.reserve(entries.size());
   for (const BrowserEntry& entry : entries) {
-    if (const auto* track = entry.actionAs<browser_entry::PlayTrack>()) {
-      targets.push_back({entry.path, track->trackIndex});
-    } else if (entry.actionAs<browser_entry::OpenFile>() &&
-               (isSupportedAudioExt(entry.path) ||
-                isSupportedVideoExt(entry.path))) {
-      targets.push_back({entry.path, -1});
+    std::optional<PlaybackTarget> target = targetFor(entry);
+    if (target && !isSupportedImageExt(target->file)) {
+      targets.push_back(std::move(*target));
     }
   }
   return playback_queue::sourceFromTargets(std::move(targets));
