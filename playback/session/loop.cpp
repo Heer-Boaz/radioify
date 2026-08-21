@@ -1040,6 +1040,9 @@ struct PlaybackLoopRunner::Impl {
   void processInputEvent(PlaybackLoopState& loopState,
                          const InputEvent& event) {
     if (loopState == PlaybackLoopState::Stopped) return;
+    if (event.type != InputEvent::Type::Mouse) {
+      mouseDoubleClickTracker.reset();
+    }
     if (event.type == InputEvent::Type::Resize) {
       core.markPendingResize();
       redraw = true;
@@ -1053,15 +1056,8 @@ struct PlaybackLoopRunner::Impl {
           inputView, inputSignals, seekState, event);
     } else if (event.type == InputEvent::Type::Mouse) {
       MouseEvent mouse = event.mouse;
-      const int maximumDeltaX = static_cast<int>(
-          std::max(0, GetSystemMetrics(SM_CXDOUBLECLK) / 2) /
-          std::max(1.0, screen.cellPixelWidth()));
-      const int maximumDeltaY = static_cast<int>(
-          std::max(0, GetSystemMetrics(SM_CYDOUBLECLK) / 2) /
-          std::max(1.0, screen.cellPixelHeight()));
-      mouseDoubleClickTracker.classify(
-          mouse, GetTickCount64(), GetDoubleClickTime(), maximumDeltaX,
-          maximumDeltaY);
+      mouseDoubleClickTracker.classifyUsingSystemSettings(
+          mouse, screen.cellPixelWidth(), screen.cellPixelHeight());
       playback_session_input::handlePlaybackMouseEvent(
           inputView, inputSignals, seekState, mouse);
     } else if (event.type == InputEvent::Type::PointerLeave) {

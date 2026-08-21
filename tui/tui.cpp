@@ -1648,6 +1648,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   AudioPictureInPictureWindow audioPictureInPicture;
   ConsoleInputPump consoleInputPump;
   pointer_input::MouseDoubleClickTracker browserDoubleClickTracker;
+  browser_input::EntryClickTracker browserEntryClickTracker;
   BrowserViewport viewport;
   BrowserFooterLayout footerLayout;
   auto midiToNoteName = [](int midi) {
@@ -2962,15 +2963,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
 
     auto processInputEvent = [&](InputEvent ev) {
       if (ev.type == InputEvent::Type::Mouse) {
-        const int maximumDeltaX = static_cast<int>(
-            std::max(0, GetSystemMetrics(SM_CXDOUBLECLK) / 2) /
-            std::max(1.0, screen.cellPixelWidth()));
-        const int maximumDeltaY = static_cast<int>(
-            std::max(0, GetSystemMetrics(SM_CYDOUBLECLK) / 2) /
-            std::max(1.0, screen.cellPixelHeight()));
-        browserDoubleClickTracker.classify(
-            ev.mouse, GetTickCount64(), GetDoubleClickTime(), maximumDeltaX,
-            maximumDeltaY);
+        browserDoubleClickTracker.classifyUsingSystemSettings(
+            ev.mouse, screen.cellPixelWidth(), screen.cellPixelHeight());
       } else {
         browserDoubleClickTracker.reset();
       }
@@ -3281,13 +3275,12 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           return;
         }
       }
-      handleInputEvent(ev, browserNavigator, layout, breadcrumbLine, breadcrumbY,
-                       searchBarY, searchBarWidth, listTop, listHeight,
-                       progressBarX, progressBarY,
-                       progressBarWidth, actionStrip, browserInteractionEnabled,
-                       o.play, audioIsReady(), breadcrumbHover, actionHover,
-                       searchBarHover,
-                       dirty, running, callbacks);
+      handleInputEvent(
+          ev, browserNavigator, browserEntryClickTracker, layout,
+          breadcrumbLine, breadcrumbY, searchBarY, searchBarWidth, listTop,
+          listHeight, progressBarX, progressBarY, progressBarWidth, actionStrip,
+          browserInteractionEnabled, o.play, audioIsReady(), breadcrumbHover,
+          actionHover, searchBarHover, dirty, running, callbacks);
     };
 
     auto finalizeRenderedExit = [&]() {

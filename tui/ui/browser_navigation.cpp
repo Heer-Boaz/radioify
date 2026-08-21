@@ -53,19 +53,6 @@ bool actionUsesNameForIdentity(const browser_entry::Action& action) {
          std::holds_alternative<browser_entry::SectionHeader>(action);
 }
 
-bool matchesIdentity(const BrowserEntry& entry,
-                     const BrowserState::EntryIdentity& identity) {
-  PathIdentity fallback;
-  if (!entry.isSelectable() ||
-      entry.path.empty() != identity.path.empty() ||
-      cachedPathIdentity(entry, fallback) != identity.pathIdentity ||
-      !actionsMatch(entry.action, identity.action)) {
-    return false;
-  }
-  return !entry.path.empty() || !actionUsesNameForIdentity(entry.action) ||
-         entry.name == identity.name;
-}
-
 int rowFromIndex(int idx, const GridLayout& layout) {
   return idx / std::max(1, layout.cols);
 }
@@ -96,6 +83,20 @@ BrowserState::EntryIdentity browserEntryIdentity(const BrowserEntry& entry) {
   return identity;
 }
 
+bool browserEntryMatchesIdentity(
+    const BrowserEntry& entry,
+    const BrowserState::EntryIdentity& identity) {
+  PathIdentity fallback;
+  if (!entry.isSelectable() ||
+      entry.path.empty() != identity.path.empty() ||
+      cachedPathIdentity(entry, fallback) != identity.pathIdentity ||
+      !actionsMatch(entry.action, identity.action)) {
+    return false;
+  }
+  return !entry.path.empty() || !actionUsesNameForIdentity(entry.action) ||
+         entry.name == identity.name;
+}
+
 BrowserState::Location captureBrowserLocation(const BrowserState& browser) {
   BrowserState::Location location;
   location.route = browser.location;
@@ -112,7 +113,7 @@ BrowserState::Location captureBrowserLocation(const BrowserState& browser) {
 bool selectBrowserEntry(BrowserState& browser,
                         const BrowserState::EntryIdentity& identity) {
   for (size_t i = 0; i < browser.entries.size(); ++i) {
-    if (matchesIdentity(browser.entries[i], identity)) {
+    if (browserEntryMatchesIdentity(browser.entries[i], identity)) {
       browser.selected = static_cast<int>(i);
       return true;
     }

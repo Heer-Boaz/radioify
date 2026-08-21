@@ -10,6 +10,9 @@
 #include "browser_model.h"
 
 BrowserState::EntryIdentity browserEntryIdentity(const BrowserEntry& entry);
+bool browserEntryMatchesIdentity(
+    const BrowserEntry& entry,
+    const BrowserState::EntryIdentity& identity);
 BrowserState::Location captureBrowserLocation(const BrowserState& browser);
 
 bool selectBrowserEntry(BrowserState& browser,

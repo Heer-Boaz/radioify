@@ -13,6 +13,20 @@ namespace pointer_input {
 // combined across the browser and playback surfaces.
 class MouseDoubleClickTracker {
  public:
+  // Use the platform gesture policy while keeping the timestamp/threshold
+  // overload below available for deterministic tests.
+  void classifyUsingSystemSettings(MouseEvent& mouse, double unitPixelWidth,
+                                   double unitPixelHeight) {
+    const int maximumDeltaX = static_cast<int>(
+        std::max(0, GetSystemMetrics(SM_CXDOUBLECLK) / 2) /
+        std::max(1.0, unitPixelWidth));
+    const int maximumDeltaY = static_cast<int>(
+        std::max(0, GetSystemMetrics(SM_CYDOUBLECLK) / 2) /
+        std::max(1.0, unitPixelHeight));
+    classify(mouse, GetTickCount64(), GetDoubleClickTime(), maximumDeltaX,
+             maximumDeltaY);
+  }
+
   void classify(MouseEvent& mouse, uint64_t timestampMs,
                 uint32_t maximumIntervalMs, int maximumDeltaX,
                 int maximumDeltaY) {

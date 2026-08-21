@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <vector>
 
 #include "browser_model.h"
@@ -14,6 +15,19 @@ namespace browser_input {
 inline constexpr bool pointerActivatesEntry(MouseEventKind kind) {
   return kind == MouseEventKind::DoubleClick;
 }
+
+// The platform identifies a double-click by time and pointer position. The
+// browser additionally owns which entry received the first press so a reload
+// or layout change cannot activate a different item on the second press.
+class EntryClickTracker {
+ public:
+  void recordPress(const BrowserEntry& entry);
+  std::optional<BrowserState::EntryIdentity> consumeDoubleClickAnchor();
+  void reset();
+
+ private:
+  std::optional<BrowserState::EntryIdentity> anchor_;
+};
 
 }  // namespace browser_input
 
@@ -94,6 +108,7 @@ PlaybackInputResult handlePlaybackInput(
                                 kPlaybackShortcutContextShared);
 
 void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
+                      browser_input::EntryClickTracker& entryClickTracker,
                       const GridLayout& layout,
                       const BreadcrumbLine& breadcrumbLine, int breadcrumbY,
                       int searchBarY, int searchBarWidth, int listTop,

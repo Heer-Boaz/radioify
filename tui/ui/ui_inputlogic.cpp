@@ -212,6 +212,20 @@ int actionStripIndexAt(const ActionStripLayout& layout, int x, int y) {
 }
 }  // namespace
 
+void browser_input::EntryClickTracker::recordPress(
+    const BrowserEntry& entry) {
+  anchor_ = browserEntryIdentity(entry);
+}
+
+std::optional<BrowserState::EntryIdentity>
+browser_input::EntryClickTracker::consumeDoubleClickAnchor() {
+  std::optional<BrowserState::EntryIdentity> anchor = std::move(anchor_);
+  anchor_.reset();
+  return anchor;
+}
+
+void browser_input::EntryClickTracker::reset() { anchor_.reset(); }
+
 void setBrowserSearchFocus(BrowserState& browser, BrowserSearchFocus focus,
                           bool& dirty) {
   if (focus == BrowserSearchFocus::None) {
@@ -247,6 +261,7 @@ void setBrowserSearchFocus(BrowserState& browser, BrowserSearchFocus focus,
 }
 
 void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
+                      browser_input::EntryClickTracker& entryClickTracker,
                       const GridLayout& layout,
                       const BreadcrumbLine& breadcrumbLine, int breadcrumbY,
                       int searchBarY, int searchBarWidth, int listTop,
@@ -258,6 +273,20 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
                       bool& searchBarHover, bool& dirty, bool& running,
                       const InputCallbacks& callbacks) {
   BrowserState& browser = navigator.state();
+  std::optional<BrowserState::EntryIdentity> doubleClickAnchor;
+  if (ev.type == InputEvent::Type::Mouse) {
+    const MouseEvent& mouse = ev.mouse;
+    if (mouse.kind == MouseEventKind::DoubleClick &&
+        isMouseButtonDown(mouse, MouseButton::Left)) {
+      doubleClickAnchor = entryClickTracker.consumeDoubleClickAnchor();
+    } else if (mouse.kind == MouseEventKind::Press ||
+               mouse.kind == MouseEventKind::VerticalWheel ||
+               mouse.kind == MouseEventKind::HorizontalWheel) {
+      entryClickTracker.reset();
+    }
+  } else {
+    entryClickTracker.reset();
+  }
   auto navigateDirectoryWithHistory = [&](const std::filesystem::path& dir) {
     const bool navigated = navigator.navigate(browserDirectoryLocation(dir));
     if (navigated) breadcrumbHover = -1;
@@ -824,16 +853,19 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
     if ((mouse.kind == MouseEventKind::Press ||
          mouse.kind == MouseEventKind::DoubleClick) &&
         leftPressed) {
-      if (!browser.entries[static_cast<size_t>(idx)].isSelectable()) {
+      const auto& pick = browser.entries[static_cast<size_t>(idx)];
+      if (!pick.isSelectable()) {
         return;
       }
       if (browser.selected != idx) {
         browser.selected = idx;
         dirty = true;
       }
-      if (browser_input::pointerActivatesEntry(mouse.kind)) {
-        const auto& pick =
-            browser.entries[static_cast<size_t>(browser.selected)];
+      if (mouse.kind == MouseEventKind::Press) {
+        entryClickTracker.recordPress(pick);
+      } else if (browser_input::pointerActivatesEntry(mouse.kind) &&
+                 doubleClickAnchor &&
+                 browserEntryMatchesIdentity(pick, *doubleClickAnchor)) {
         activateEntry(pick);
       }
     }

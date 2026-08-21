@@ -12,6 +12,7 @@
 #include "kssoptions.h"
 #include "playback_target_match.h"
 #include "track_browser_state.h"
+#include "ui_inputlogic.h"
 
 namespace {
 
@@ -72,6 +73,22 @@ int main() {
 
   std::vector<BrowserEntry> files{fileEntry("A.flac", songA),
                                   fileEntry("B.flac", songB)};
+  browser_input::EntryClickTracker entryClickTracker;
+  entryClickTracker.recordPress(files[0]);
+  const auto sameEntryAnchor =
+      entryClickTracker.consumeDoubleClickAnchor();
+  ok &= expect(sameEntryAnchor &&
+                   browserEntryMatchesIdentity(files[0], *sameEntryAnchor),
+               "a double-click must retain the identity of its first entry");
+  ok &= expect(!entryClickTracker.consumeDoubleClickAnchor(),
+               "a completed double-click must consume its entry anchor");
+  entryClickTracker.recordPress(files[0]);
+  const auto differentEntryAnchor =
+      entryClickTracker.consumeDoubleClickAnchor();
+  ok &= expect(differentEntryAnchor &&
+                   !browserEntryMatchesIdentity(files[1],
+                                                *differentEntryAnchor),
+               "a second press on another entry must not activate it");
   const PlaybackTarget playingA{songA, -1};
   ok &= expect(findBrowserPlaybackTargetEntry(files, playingA) == 0,
                "the playing item must be found independently of selection");
