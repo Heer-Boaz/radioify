@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 
-#include "consoleinput.h"
+#include "input_event.h"
 
 namespace {
 
@@ -65,13 +65,15 @@ void assignTerminalMouseEvent(InputEvent& out, int buttonCode, int x, int y,
   }
   if (wheel) {
     const SHORT delta = ((buttonCode & 0x01) == 0) ? WHEEL_DELTA : -WHEEL_DELTA;
-    out.mouse.buttonState =
-        static_cast<DWORD>(static_cast<WORD>(delta)) << 16;
-    out.mouse.eventFlags = MOUSE_WHEELED;
+    out.mouse.buttonState = 0;
+    out.mouse.kind = MouseEventKind::VerticalWheel;
+    out.mouse.wheelDelta = delta;
     return;
   }
   out.mouse.buttonState = terminalMouseButtons(buttonCode, release);
-  out.mouse.eventFlags = motion ? MOUSE_MOVED : 0;
+  out.mouse.kind = motion ? MouseEventKind::Move
+                          : (release ? MouseEventKind::Release
+                                     : MouseEventKind::Press);
 }
 
 WORD csiFinalToVirtualKey(wchar_t final) {

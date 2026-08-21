@@ -1,6 +1,6 @@
 #pragma once
 
-#include "consoleinput.h"
+#include "input_event.h"
 
 inline constexpr DWORD kShortcutCtrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
 inline constexpr DWORD kShortcutAltMask = LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED;

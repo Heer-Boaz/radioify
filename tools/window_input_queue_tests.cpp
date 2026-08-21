@@ -33,7 +33,7 @@ InputEvent mouseMoveEvent(SHORT x, DWORD buttonState) {
   event.type = InputEvent::Type::Mouse;
   event.mouse.pos.X = x;
   event.mouse.buttonState = buttonState;
-  event.mouse.eventFlags = MOUSE_MOVED;
+  event.mouse.kind = MouseEventKind::Move;
   return event;
 }
 

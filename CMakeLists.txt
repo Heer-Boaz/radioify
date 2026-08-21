@@ -467,6 +467,15 @@ endif()
 add_test(NAME shortcut_match_tests
          COMMAND $<TARGET_FILE:shortcut_match_tests>)
 
+add_executable(terminal_input_sequence_tests)
+target_sources(terminal_input_sequence_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_terminal_input_sequence_tests>
+  ${CMAKE_SOURCE_DIR}/tui/terminal_input_sequence.cpp
+)
+radioify_link_repo_target(terminal_input_sequence_tests)
+add_test(NAME terminal_input_sequence_tests
+         COMMAND $<TARGET_FILE:terminal_input_sequence_tests>)
+
 add_executable(frame_clipboard_tests)
 target_sources(frame_clipboard_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_frame_clipboard_tests>

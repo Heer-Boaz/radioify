@@ -610,7 +610,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     }
     return;
   }
-  if (mouse.eventFlags == MOUSE_MOVED) {
+  if (mouse.kind == MouseEventKind::Move) {
     triggerOverlay(view, signals);
     *signals.redraw = true;
   }
@@ -638,7 +638,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   const auto& boundaryHit = interactionHit.editBoundary;
   const auto& controlHit = interactionHit.control;
   const auto& contextMenuItemHit = interactionHit.contextMenuItem;
-  if (rightPressed && mouse.eventFlags == 0 &&
+  if (rightPressed && mouse.kind == MouseEventKind::Press &&
       editPrompt == playback_video_edit::Prompt::None) {
     playback_session::ContextMenuInput request;
     request.kind = playback_session::ContextMenuInputKind::Open;
@@ -663,8 +663,8 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     request.surface =
         windowEvent ? playback_session::ContextMenuSurface::VideoWindow
                     : playback_session::ContextMenuSurface::Terminal;
-    if (mouse.eventFlags == MOUSE_WHEELED) {
-      const int delta = static_cast<SHORT>(HIWORD(mouse.buttonState));
+    if (mouse.kind == MouseEventKind::VerticalWheel) {
+      const int delta = mouse.wheelDelta;
       if (delta != 0) {
         request.kind = playback_session::ContextMenuInputKind::MoveSelection;
         request.selectionDelta = delta > 0 ? -1 : 1;
@@ -672,7 +672,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
       }
       return;
     }
-    if (mouse.eventFlags == MOUSE_MOVED) {
+    if (mouse.kind == MouseEventKind::Move) {
       if (contextMenuItemHit) {
         request.kind = playback_session::ContextMenuInputKind::SelectItem;
         request.item = *contextMenuItemHit;
@@ -680,7 +680,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
       }
       return;
     }
-    if (leftPressed && mouse.eventFlags == 0) {
+    if (leftPressed && mouse.kind == MouseEventKind::Press) {
       if (contextMenuItemHit) {
         request.kind = playback_session::ContextMenuInputKind::ActivateItem;
         request.item = *contextMenuItemHit;
@@ -710,7 +710,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   const int progressUnits = progressHit ? progressHit->units : 0;
 
   if (progressHit && leftPressed && !dragFromThisSurface &&
-      mouse.eventFlags == 0 && boundaryHit &&
+      mouse.kind == MouseEventKind::Press && boundaryHit &&
       signals.videoEditorActive && signals.videoEditorActive() &&
       signals.moveVideoEditBoundary) {
     setPlaybackPaused(view, signals, seekState, true);
@@ -719,7 +719,8 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
         PlaybackSeekGestureState::VideoEditBoundaryDrag{
             *boundaryHit, previewSurface, -1,
             view.player->timelineSnapshot().latestSeekRequestGeneration};
-  } else if (progressHit && leftPressed && mouse.eventFlags == 0) {
+  } else if (progressHit && leftPressed &&
+             mouse.kind == MouseEventKind::Press) {
     seekState.progressDragSurface = previewSurface;
   }
   const bool boundaryDrag =
@@ -751,8 +752,8 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   }
   const bool seekGesture =
       leftPressed && progressHit &&
-      (windowEvent || mouse.eventFlags == 0 ||
-       mouse.eventFlags == MOUSE_MOVED);
+      (windowEvent || mouse.kind == MouseEventKind::Press ||
+       mouse.kind == MouseEventKind::Move);
   if (progressHit) {
     updateOverlayControlHover(signals, -1);
     if (signals.requestTimelinePreview) {
@@ -774,7 +775,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     triggerOverlay(view, signals);
   }
 
-  if (leftPressed && mouse.eventFlags == 0 && controlHit) {
+  if (leftPressed && mouse.kind == MouseEventKind::Press && controlHit) {
     if (executeOverlayControl(view, signals, seekState, *controlHit)) {
       updateOverlayControlHover(signals, -1);
       if (*signals.loopStopRequested) {

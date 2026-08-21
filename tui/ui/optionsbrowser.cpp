@@ -10,7 +10,6 @@
 
 #include "audioplayback.h"
 #include "media_formats.h"
-#include "consoleinput.h"
 #include "kssoptions.h"
 #include "nsfoptions.h"
 #include "runtime_helpers.h"

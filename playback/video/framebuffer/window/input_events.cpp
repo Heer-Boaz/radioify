@@ -119,17 +119,15 @@ DWORD mouseButtonsFromWParam(WPARAM wParam) {
   return buttonState;
 }
 
-DWORD wheelButtonState(SHORT delta) {
-  return static_cast<DWORD>(static_cast<uint16_t>(delta)) << 16;
-}
-
-InputEvent mouseEvent(int x, int y, DWORD buttonState, DWORD eventFlags) {
+InputEvent mouseEvent(int x, int y, DWORD buttonState, MouseEventKind kind,
+                      int wheelDelta) {
   InputEvent event{};
   event.type = InputEvent::Type::Mouse;
   event.mouse.pos.X = static_cast<SHORT>(x);
   event.mouse.pos.Y = static_cast<SHORT>(y);
   event.mouse.buttonState = buttonState;
-  event.mouse.eventFlags = eventFlags;
+  event.mouse.kind = kind;
+  event.mouse.wheelDelta = wheelDelta;
   markWindowMouseEvent(event.mouse);
   event.mouse.hasPixelPosition = true;
   event.mouse.pixelX = x;

@@ -12,7 +12,7 @@
 #include <optional>
 
 #include "core/native_wait_handle.h"
-#include "consoleinput.h"
+#include "input_event.h"
 #include "windows_file_drop_apartment.h"
 #include "input_queue.h"
 

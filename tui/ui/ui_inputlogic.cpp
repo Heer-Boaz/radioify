@@ -619,9 +619,11 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
                          isMouseInSearchBar(mouse, searchBarY, searchBarWidth);
     if ((browser.filterActive || browser.pathSearchActive) &&
         browserInteractionEnabled &&
-        (mouse.eventFlags == 0 || mouse.eventFlags == MOUSE_WHEELED) &&
+        (mouse.kind == MouseEventKind::Press ||
+         mouse.kind == MouseEventKind::VerticalWheel) &&
         !hoveredSearch &&
-        (leftPressed || rightPressed || mouse.eventFlags == MOUSE_WHEELED)) {
+        (leftPressed || rightPressed ||
+         mouse.kind == MouseEventKind::VerticalWheel)) {
       setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
     }
     if (searchBarHover != hoveredSearch) {
@@ -644,8 +646,8 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       actionHover = nextActionHover;
       dirty = true;
     }
-    if (mouse.eventFlags == MOUSE_WHEELED) {
-      int delta = static_cast<SHORT>(HIWORD(mouse.buttonState));
+    if (mouse.kind == MouseEventKind::VerticalWheel) {
+      int delta = mouse.wheelDelta;
       if (delta != 0) {
         int actionIndex = actionStripIndexAt(actionStrip, mouse.pos.X, mouse.pos.Y);
         if (actionIndex >= 0) {
@@ -668,7 +670,8 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       return;
     }
 
-    if (browserInteractionEnabled && leftPressed && mouse.eventFlags == 0 &&
+    if (browserInteractionEnabled && leftPressed &&
+        mouse.kind == MouseEventKind::Press &&
         breadcrumbHover >= 0) {
       const auto& crumb =
           breadcrumbLine.crumbs[static_cast<size_t>(breadcrumbHover)];
@@ -680,7 +683,8 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       return;
     }
 
-    if (browserInteractionEnabled && leftPressed && mouse.eventFlags == 0 &&
+    if (browserInteractionEnabled && leftPressed &&
+        mouse.kind == MouseEventKind::Press &&
         hoveredSearch) {
       browser.filterBackup = browser.filter;
       setBrowserSearchFocus(browser, BrowserSearchFocus::Filter, dirty);
@@ -688,7 +692,8 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       return;
     }
 
-    if (browserInteractionEnabled && rightPressed && mouse.eventFlags == 0) {
+    if (browserInteractionEnabled && rightPressed &&
+        mouse.kind == MouseEventKind::Press) {
       int actionIndex = actionStripIndexAt(actionStrip, mouse.pos.X, mouse.pos.Y);
       if (actionIndex >= 0) {
         const auto& btn = actionStrip.buttons[static_cast<size_t>(actionIndex)];
@@ -700,7 +705,8 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       }
     }
 
-    if (leftPressed && (mouse.eventFlags == 0 || mouse.eventFlags == MOUSE_MOVED)) {
+    if (leftPressed && (mouse.kind == MouseEventKind::Press ||
+                        mouse.kind == MouseEventKind::Move)) {
       int actionIndex = actionStripIndexAt(actionStrip, mouse.pos.X, mouse.pos.Y);
       if (actionIndex >= 0) {
         const auto& btn = actionStrip.buttons[static_cast<size_t>(actionIndex)];
@@ -788,7 +794,7 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
         browserGridEntryIndex(layout, browser.viewMode, row, col, count);
     if (idx < 0 || idx >= count) return;
 
-    if (mouse.eventFlags == MOUSE_MOVED && !leftPressed) {
+    if (mouse.kind == MouseEventKind::Move && !leftPressed) {
       if (!browser.entries[static_cast<size_t>(idx)].isSelectable()) {
         return;
       }
@@ -799,7 +805,7 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       return;
     }
 
-    if (mouse.eventFlags == 0 && rightPressed) {
+    if (mouse.kind == MouseEventKind::Press && rightPressed) {
       if (!browser.entries[static_cast<size_t>(idx)].isSelectable()) {
         return;
       }
@@ -815,7 +821,7 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       return;
     }
 
-    if (mouse.eventFlags == 0 && leftPressed) {
+    if (mouse.kind == MouseEventKind::Press && leftPressed) {
       if (!browser.entries[static_cast<size_t>(idx)].isSelectable()) {
         return;
       }

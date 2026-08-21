@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "asciiart.h"
-#include "consoleinput.h"
+#include "input_event.h"
 #include "consolescreen.h"
 #include "gpu_text_grid.h"
 #include "playback/framebuffer/window_presentation.h"

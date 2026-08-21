@@ -14,7 +14,7 @@
 #include "core/waitable_signal.h"
 #include "core/windows_handle.h"
 #include "playback/video/color.h"
-#include "consoleinput.h"
+#include "input_event.h"
 #include "consolescreen.h"
 #include "playback/video/framebuffer/gpu_text_grid.h"
 #include "playback/video/framebuffer/window/gpu_text_grid_composition.h"

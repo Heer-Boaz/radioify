@@ -5,7 +5,7 @@
 
 #include "core/native_wait_handle.h"
 #include "core/waitable_signal.h"
-#include "consoleinput.h"
+#include "input_event.h"
 
 class WindowInputQueue {
  public:

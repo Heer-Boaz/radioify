@@ -53,7 +53,7 @@ bool leftPressed(const MouseEvent& mouse) {
 }
 
 int wheelDelta(const MouseEvent& mouse) {
-  return static_cast<SHORT>(HIWORD(mouse.buttonState));
+  return mouse.wheelDelta;
 }
 
 }  // namespace
@@ -420,12 +420,12 @@ void AudioPictureInPictureWindow::handleInput(const InputEvent& ev,
   const auto& hitControl = interactionHit.control;
   const int hitControlToken =
       hitControl ? playback_overlay::overlayControlToken(*hitControl) : -1;
-  if (mouse.eventFlags == MOUSE_MOVED &&
+  if (mouse.kind == MouseEventKind::Move &&
       hitControlToken != hoverControlToken_) {
     hoverControlToken_ = hitControlToken;
   }
 
-  if (mouse.eventFlags == MOUSE_WHEELED) {
+  if (mouse.kind == MouseEventKind::VerticalWheel) {
     const int delta = wheelDelta(mouse);
     if (delta != 0 && callbacks.onAdjustVolume) {
       callbacks.onAdjustVolume(delta > 0 ? 0.05f : -0.05f);
@@ -434,11 +434,12 @@ void AudioPictureInPictureWindow::handleInput(const InputEvent& ev,
   }
 
   if (!leftPressed(mouse) ||
-      (mouse.eventFlags != 0 && mouse.eventFlags != MOUSE_MOVED)) {
+      (mouse.kind != MouseEventKind::Press &&
+       mouse.kind != MouseEventKind::Move)) {
     return;
   }
 
-  if (mouse.eventFlags == 0) {
+  if (mouse.kind == MouseEventKind::Press) {
     if (hitControl) {
       clickControl(*hitControl, callbacks);
       return;

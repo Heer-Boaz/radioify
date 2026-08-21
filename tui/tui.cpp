@@ -816,7 +816,7 @@ static ImageViewerExit showAsciiArt(
             hitControl
                 ? playback_overlay::overlayControlToken(*hitControl)
                 : -1;
-        if (mouse.eventFlags == MOUSE_MOVED) {
+        if (mouse.kind == MouseEventKind::Move) {
           if (hoverControlToken != hitControlToken) {
             hoverControlToken = hitControlToken;
             renderFrame();
@@ -825,7 +825,7 @@ static ImageViewerExit showAsciiArt(
         }
 
         if ((mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0 &&
-            mouse.eventFlags == 0) {
+            mouse.kind == MouseEventKind::Press) {
           if (hitControl && clickOverlayControl(*hitControl)) {
             renderFrame();
             continue;
@@ -3131,8 +3131,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           const MouseEvent& mouse = ev.mouse;
           bool leftPressed =
               (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
-          if (mouse.eventFlags == MOUSE_WHEELED) {
-            int delta = static_cast<SHORT>(HIWORD(mouse.buttonState));
+          if (mouse.kind == MouseEventKind::VerticalWheel) {
+            int delta = mouse.wheelDelta;
             if (delta != 0) {
               if (delta > 0) {
                 fileContextMenu.selected =
@@ -3146,7 +3146,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
             }
             return;
           }
-          if (mouse.eventFlags == MOUSE_MOVED) {
+          if (mouse.kind == MouseEventKind::Move) {
             if (fileContextLayout.valid &&
                 mouse.pos.X >= fileContextLayout.x &&
                 mouse.pos.X < fileContextLayout.x + fileContextLayout.width &&
@@ -3161,7 +3161,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
             }
             return;
           }
-          if (mouse.eventFlags == 0 && leftPressed) {
+          if (mouse.kind == MouseEventKind::Press && leftPressed) {
             bool inside =
                 fileContextLayout.valid &&
                 mouse.pos.X >= fileContextLayout.x &&
@@ -3252,8 +3252,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           const MouseEvent& mouse = ev.mouse;
           bool leftPressed =
               (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
-          if (mouse.eventFlags == MOUSE_WHEELED) {
-            int delta = static_cast<SHORT>(HIWORD(mouse.buttonState));
+          if (mouse.kind == MouseEventKind::VerticalWheel) {
+            int delta = mouse.wheelDelta;
             if (delta != 0) {
               paletteSelected -= delta / WHEEL_DELTA;
               ensurePaletteScroll(static_cast<int>(paletteFiltered.size()),
@@ -3262,7 +3262,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
             }
             return;
           }
-          if (leftPressed && mouse.eventFlags == 0) {
+          if (leftPressed && mouse.kind == MouseEventKind::Press) {
             paletteLayout =
                 computePaletteLayout(width, height, listTop, visibleRows);
             if (paletteLayout.valid) {

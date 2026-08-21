@@ -38,6 +38,10 @@ radioify_add_module_object_library(radioify_tool_shortcut_match_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/shortcut_match_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_terminal_input_sequence_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/terminal_input_sequence_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_osd_timeline_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/osd_timeline_tests.cpp
 )

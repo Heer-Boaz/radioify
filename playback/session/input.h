@@ -12,7 +12,7 @@
 #include "playback/control/command.h"
 #include "playback/control/transport.h"
 #include "playback/input/shortcut_types.h"
-#include "consoleinput.h"
+#include "input_event.h"
 #include "playback/ascii/frame_output.h"
 #include "playback/session/context_menu_controller.h"
 #include "playback/video/edit/view.h"
@@ -37,7 +37,7 @@ inline bool isBackMousePressed(const MouseEvent& mouse) {
 
 inline bool isPlaybackFullscreenGesture(const MouseEvent& mouse) {
   return (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0 &&
-         mouse.eventFlags == DOUBLE_CLICK;
+         mouse.kind == MouseEventKind::DoubleClick;
 }
 
 struct PlaybackInputView {

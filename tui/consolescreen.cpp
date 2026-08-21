@@ -17,7 +17,6 @@
 
 #include "asciiart.h"
 #include "browser_grid_index.h"
-#include "consoleinput.h"
 #include "core/windows_handle.h"
 #include "playback/media/artwork_catalog.h"
 #include "runtime_helpers.h"

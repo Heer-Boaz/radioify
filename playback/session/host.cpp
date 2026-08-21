@@ -4,7 +4,6 @@
 #include <mutex>
 #include <string>
 
-#include "consoleinput.h"
 #include "consolescreen.h"
 #include "playback/video/gpu/gpu_shared.h"
 #include "playback_dialog.h"

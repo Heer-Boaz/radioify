@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <optional>
 
-#include "consoleinput.h"
+#include "input_event.h"
 #include "playback/input/media_keys.h"
 #include "playback/input/shortcut_types.h"
 #include "playback/video/edit/command.h"

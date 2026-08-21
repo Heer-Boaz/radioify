@@ -12,70 +12,11 @@
 #include <string>
 
 #include "core/native_wait_handle.h"
-#include "playback/input/input_action.h"
-#include "file_drop_event.h"
+#include "input_event.h"
 #include "mouse_double_click_tracker.h"
 #include "terminal_input_sequence.h"
 
 struct BreadcrumbLine;
-
-struct KeyEvent {
-  WORD vk = 0;
-  char ch = 0;
-  DWORD control = 0;
-};
-
-struct MouseEvent {
-  COORD pos{};
-  DWORD buttonState = 0;
-  DWORD eventFlags = 0;
-  DWORD control = 0;
-  bool hasPixelPosition = false;
-  int pixelX = 0;
-  int pixelY = 0;
-  double unitWidth = 1.0;
-  double unitHeight = 1.0;
-};
-
-inline constexpr DWORD kInputEventWindowMouseFlag = 0x80000000u;
-
-inline bool isWindowMouseEvent(const MouseEvent& mouse) {
-  return (mouse.control & kInputEventWindowMouseFlag) != 0;
-}
-
-inline void markWindowMouseEvent(MouseEvent& mouse) {
-  mouse.control |= kInputEventWindowMouseFlag;
-}
-
-inline void clearWindowMouseEvent(MouseEvent& mouse) {
-  mouse.control &= ~kInputEventWindowMouseFlag;
-}
-
-struct InputEvent {
-  enum class Type {
-    None,
-    Key,
-    Action,
-    Mouse,
-    PointerLeave,
-    Resize,
-    FileDrop,
-  };
-
-  Type type = Type::None;
-  KeyEvent key{};
-  InputAction action = InputAction::Back;
-  MouseEvent mouse{};
-  COORD size{};
-  FileDropEvent fileDrop;
-};
-
-inline InputEvent inputActionEvent(InputAction action) {
-  InputEvent ev{};
-  ev.type = InputEvent::Type::Action;
-  ev.action = action;
-  return ev;
-}
 
 class ConsoleInput {
  public:
@@ -97,6 +38,7 @@ class ConsoleInput {
   void updateTerminalGridSize();
   void mapPixelMousePosition(MouseEvent& mouse) const;
   void normalizeTerminalMouseGesture(MouseEvent& mouse);
+  void normalizeTerminalEvent(InputEvent& event);
   bool ownsForegroundConsoleWindow() const;
   bool pollTerminalInputStream(InputEvent& out);
   bool handleTerminalInputCharacter(wchar_t ch, InputEvent& out);
@@ -112,6 +54,7 @@ class ConsoleInput {
   bool focusActive_ = true;
   bool xButton1Down_ = false;
   bool xButton2Down_ = false;
+  DWORD consoleMouseButtonState_ = 0;
   bool terminalMouseInput_ = false;
   std::wstring originalConsoleTitle_;
   std::wstring activeConsoleTitle_;

@@ -10,7 +10,7 @@
 
 #include <optional>
 
-#include "consoleinput.h"
+#include "input_event.h"
 
 namespace window_input_events {
 
@@ -23,8 +23,8 @@ std::optional<InputEvent> inputEventFromXButton(WPARAM wParam);
 std::optional<InputEvent> inputEventFromAppCommand(LPARAM lParam);
 
 DWORD mouseButtonsFromWParam(WPARAM wParam);
-DWORD wheelButtonState(SHORT delta);
-InputEvent mouseEvent(int x, int y, DWORD buttonState, DWORD eventFlags);
+InputEvent mouseEvent(int x, int y, DWORD buttonState, MouseEventKind kind,
+                      int wheelDelta = 0);
 InputEvent pointerLeaveEvent();
 
 }  // namespace window_input_events

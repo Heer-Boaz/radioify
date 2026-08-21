@@ -8,8 +8,8 @@ bool shouldCoalesceMouseMove(const InputEvent& queuedTail,
                              const InputEvent& incoming) {
   return queuedTail.type == InputEvent::Type::Mouse &&
          incoming.type == InputEvent::Type::Mouse &&
-         queuedTail.mouse.eventFlags == MOUSE_MOVED &&
-         incoming.mouse.eventFlags == MOUSE_MOVED &&
+         queuedTail.mouse.kind == MouseEventKind::Move &&
+         incoming.mouse.kind == MouseEventKind::Move &&
          queuedTail.mouse.buttonState == incoming.mouse.buttonState;
 }
 

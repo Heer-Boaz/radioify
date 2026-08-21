@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "browser_model.h"
-#include "consoleinput.h"
+#include "input_event.h"
 #include "playback/input/shortcut_types.h"
 
 struct InputCallbacks {
