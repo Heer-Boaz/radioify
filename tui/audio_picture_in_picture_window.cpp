@@ -381,6 +381,8 @@ void AudioPictureInPictureWindow::handleInput(const InputEvent& ev,
       close();
       if (callbacks.onClose) callbacks.onClose();
     };
+    playbackCallbacks.onTogglePictureInPicture =
+        playbackCallbacks.onToggleWindow;
     playbackCallbacks.onToggleRadio = callbacks.onToggleRadio;
     playbackCallbacks.onToggle50Hz = callbacks.onToggle50Hz;
     playbackCallbacks.onSeekBy = [&](int direction) {
@@ -392,7 +394,6 @@ void AudioPictureInPictureWindow::handleInput(const InputEvent& ev,
     playbackCallbacks.onPlaybackContextShortcut =
         [&](PlaybackShortcutAction action) {
           switch (action) {
-            case PlaybackShortcutAction::TogglePictureInPicture:
             case PlaybackShortcutAction::DismissPictureInPicture:
               close();
               if (callbacks.onClose) callbacks.onClose();

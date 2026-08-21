@@ -1,11 +1,8 @@
 #include "output.h"
 
-#include <algorithm>
 #include <memory>
 #include <utility>
 
-#include "consoleinput.h"
-#include "core/windows_message_pump.h"
 #include "playback/video/player.h"
 #include "playback/video/framebuffer/frame_clipboard.h"
 #include "playback/video/gpu/videoprocessor.h"
@@ -51,6 +48,15 @@ bool PlaybackOutputController::consumeWindowCloseRequested() {
   return impl_->presentation.consumeWindowCloseRequested();
 }
 
+NativeWaitHandle PlaybackOutputController::windowInputWaitHandle() const {
+  return impl_->presentation.windowInputWaitHandle();
+}
+
+NativeWaitHandle
+PlaybackOutputController::windowCloseRequestedWaitHandle() const {
+  return impl_->presentation.windowCloseRequestedWaitHandle();
+}
+
 PlaybackRenderMode PlaybackOutputController::renderMode(bool enableAscii) const {
   return impl_->presentation.renderMode(enableAscii);
 }
@@ -74,50 +80,8 @@ PlaybackPresenterSyncResult PlaybackOutputController::sync(
                                   forceRefreshArt);
 }
 
-bool PlaybackOutputController::pollInput(ConsoleInput& input, InputEvent& ev) {
-  if (input.poll(ev)) {
-    return true;
-  }
-  return impl_->presentation.window().PollInput(ev);
-}
-
-bool PlaybackOutputController::waitForActivity(
-    ConsoleInput& input, int timeoutMs, NativeWaitHandle extraHandle,
-    NativeWaitHandle secondExtraHandle, NativeWaitHandle thirdExtraHandle,
-    NativeWaitHandle fourthExtraHandle) {
-  NativeWaitHandle handles[7];
-  DWORD handleCount = 0;
-  if (NativeWaitHandle inputHandle = input.waitHandle()) {
-    handles[handleCount++] = inputHandle;
-  }
-  if (extraHandle) {
-    handles[handleCount++] = extraHandle;
-  }
-  if (secondExtraHandle) {
-    handles[handleCount++] = secondExtraHandle;
-  }
-  if (thirdExtraHandle) {
-    handles[handleCount++] = thirdExtraHandle;
-  }
-  if (fourthExtraHandle) {
-    handles[handleCount++] = fourthExtraHandle;
-  }
-  if (NativeWaitHandle windowInputHandle =
-          impl_->presentation.window().InputWaitHandle()) {
-    handles[handleCount++] = windowInputHandle;
-  }
-  if (impl_->presentation.windowActive()) {
-    if (NativeWaitHandle closeHandle =
-            impl_->presentation.windowCloseRequestedWaitHandle()) {
-      handles[handleCount++] = closeHandle;
-    }
-  }
-
-  DWORD waitMs =
-      timeoutMs < 0 ? INFINITE : static_cast<DWORD>(std::max(0, timeoutMs));
-  DWORD result = waitForHandlesAndPumpThreadWindowMessages(
-      handleCount, handleCount > 0 ? handles : nullptr, waitMs);
-  return result != WAIT_TIMEOUT && result != WAIT_FAILED;
+bool PlaybackOutputController::pollWindowInput(InputEvent& event) {
+  return impl_->presentation.window().PollInput(event);
 }
 
 void PlaybackOutputController::updateWindowCursor(

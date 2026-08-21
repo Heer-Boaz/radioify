@@ -441,6 +441,9 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
         view, signals, PlaybackTransportCommand::Next);
   };
   cb.onToggleWindow = [&]() { toggleRequestedLayout(view, signals); };
+  cb.onTogglePictureInPicture = [&]() {
+    togglePictureInPicture(view, signals);
+  };
   cb.onToggleFullscreen = [&]() { signals.toggleFullscreen(); };
   cb.onToggleRadio = [&]() { cycleRadioFilter(view); };
   cb.onToggle50Hz = [&]() { toggle50Hz(view); };
@@ -454,7 +457,6 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
       return;
     }
     switch (action) {
-      case PlaybackShortcutAction::TogglePictureInPicture:
       case PlaybackShortcutAction::DismissPictureInPicture:
         togglePictureInPicture(view, signals);
         break;

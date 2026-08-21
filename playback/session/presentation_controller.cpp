@@ -115,17 +115,6 @@ void PlaybackPresentationController::reconcile(
   markPresentationChanged(redraw, forceRefreshArt);
 }
 
-void PlaybackPresentationController::closePresentation(
-    PlaybackOutputController& output, bool& redraw, bool& forceRefreshArt) {
-  transitionTo(PlaybackPresentationState::terminalAscii(), output, redraw,
-               forceRefreshArt);
-}
-
-void PlaybackPresentationController::handleWindowClosed(
-    PlaybackOutputController& output, bool& redraw, bool& forceRefreshArt) {
-  closePresentation(output, redraw, forceRefreshArt);
-}
-
 void PlaybackPresentationController::captureWindowPlacement(
     PlaybackOutputController& output,
     PlaybackSessionContinuationState& state) {

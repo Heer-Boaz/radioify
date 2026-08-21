@@ -9,7 +9,6 @@
 #include "playback_mode.h"
 #include "state.h"
 
-class ConsoleInput;
 class Player;
 class VideoWindow;
 class GpuVideoFrameCache;
@@ -39,6 +38,8 @@ class PlaybackOutputController {
   bool windowOpen() const;
   bool windowVisible() const;
   bool consumeWindowCloseRequested();
+  NativeWaitHandle windowInputWaitHandle() const;
+  NativeWaitHandle windowCloseRequestedWaitHandle() const;
   PlaybackRenderMode renderMode(bool enableAscii) const;
   void requestLayout(PlaybackLayout layout);
   PlaybackLayout desiredLayout() const;
@@ -50,12 +51,7 @@ class PlaybackOutputController {
           buildTextGridPresentation,
       bool& redraw, bool& forceRefreshArt);
 
-  bool pollInput(ConsoleInput& input, InputEvent& ev);
-  bool waitForActivity(ConsoleInput& input, int timeoutMs,
-                       NativeWaitHandle extraHandle = NativeWaitHandle(),
-                       NativeWaitHandle secondExtraHandle = NativeWaitHandle(),
-                       NativeWaitHandle thirdExtraHandle = NativeWaitHandle(),
-                       NativeWaitHandle fourthExtraHandle = NativeWaitHandle());
+  bool pollWindowInput(InputEvent& event);
   void updateWindowCursor(Player& player, PlaybackSessionState playbackState,
                           bool overlayVisible);
   void renderTerminal(

@@ -316,3 +316,69 @@ inline std::optional<PlaybackShortcutAction> resolvePlaybackShortcutAction(
   }
   return resolvePlaybackShortcutAction(ev.key, shortcutContexts);
 }
+
+// Playback keeps a deliberately small application-level shortcut layer while
+// the media browser owns the terminal. Text-entry modes can suppress this
+// layer; browser back/up remains browser navigation, while Escape still closes
+// the active video session.
+inline std::optional<PlaybackShortcutAction>
+resolveLiveBrowserVideoShortcut(const InputEvent& event) {
+  constexpr uint32_t kContexts =
+      kPlaybackShortcutContextGlobal | kPlaybackShortcutContextShared |
+      kPlaybackShortcutContextPlaybackSession |
+      kPlaybackShortcutContextVideoPlayback;
+  const std::optional<PlaybackShortcutAction> action =
+      resolvePlaybackShortcutAction(event, kContexts);
+  if (!action) return std::nullopt;
+
+  switch (*action) {
+    case PlaybackShortcutAction::Quit:
+    case PlaybackShortcutAction::Play:
+    case PlaybackShortcutAction::Pause:
+    case PlaybackShortcutAction::TogglePause:
+    case PlaybackShortcutAction::Stop:
+    case PlaybackShortcutAction::Previous:
+    case PlaybackShortcutAction::Next:
+    case PlaybackShortcutAction::ToggleWindow:
+    case PlaybackShortcutAction::ToggleFullscreen:
+    case PlaybackShortcutAction::ToggleRadio:
+    case PlaybackShortcutAction::Toggle50Hz:
+    case PlaybackShortcutAction::ToggleSubtitles:
+    case PlaybackShortcutAction::ToggleAudioTrack:
+    case PlaybackShortcutAction::SeekBackward:
+    case PlaybackShortcutAction::SeekForward:
+    case PlaybackShortcutAction::PreviousFrame:
+    case PlaybackShortcutAction::NextFrame:
+    case PlaybackShortcutAction::CopyVideoFrame:
+    case PlaybackShortcutAction::OpenVideoEditor:
+    case PlaybackShortcutAction::VolumeUp:
+    case PlaybackShortcutAction::VolumeDown:
+    case PlaybackShortcutAction::TogglePictureInPicture:
+      return action;
+    case PlaybackShortcutAction::ExitPlaybackSession:
+      return event.type == InputEvent::Type::Key && event.key.vk == VK_ESCAPE
+                 ? action
+                 : std::nullopt;
+    case PlaybackShortcutAction::ToggleOptions:
+    case PlaybackShortcutAction::RequestCloseVideoEditor:
+    case PlaybackShortcutAction::NavigateBackInVideoEditor:
+    case PlaybackShortcutAction::ConfirmVideoEditPrompt:
+    case PlaybackShortcutAction::SetVideoEditIn:
+    case PlaybackShortcutAction::SetVideoEditOut:
+    case PlaybackShortcutAction::ClearVideoEditIn:
+    case PlaybackShortcutAction::ClearVideoEditOut:
+    case PlaybackShortcutAction::ClearVideoEditInAndOut:
+    case PlaybackShortcutAction::RippleDeleteVideoEditSelection:
+    case PlaybackShortcutAction::TrimVideoEditSelection:
+    case PlaybackShortcutAction::UndoVideoEdit:
+    case PlaybackShortcutAction::RedoVideoEdit:
+    case PlaybackShortcutAction::ResetVideoEdits:
+    case PlaybackShortcutAction::ExportVideoEdits:
+    case PlaybackShortcutAction::DiscardVideoEditsAndExit:
+    case PlaybackShortcutAction::CancelVideoEditPrompt:
+    case PlaybackShortcutAction::DismissPictureInPicture:
+    case PlaybackShortcutAction::CloseViewer:
+      return std::nullopt;
+  }
+  return std::nullopt;
+}

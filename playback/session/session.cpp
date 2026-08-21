@@ -18,6 +18,7 @@ struct PlaybackSession::Impl {
   enum class Lifecycle {
     Created,
     Ready,
+    Running,
     Finished,
   };
 
@@ -33,9 +34,6 @@ struct PlaybackSession::Impl {
         progressStart(args.progressStart),
         progressEnd(args.progressEnd),
         config(args.config),
-        openFileRequests(args.openFileRequests),
-        systemControls(args.systemControls),
-        notificationAreaControls(args.notificationAreaControls),
         requestTransportCommand(std::move(args.requestTransportCommand)),
         requestOpenFiles(std::move(args.requestOpenFiles)),
         continuityState(args.continuityState),
@@ -68,7 +66,6 @@ struct PlaybackSession::Impl {
 
   void createLoop() {
     loop = std::make_unique<PlaybackLoopRunner>(PlaybackLoopRunner::Args{
-        input,
         screen,
         config,
         player,
@@ -89,10 +86,7 @@ struct PlaybackSession::Impl {
         enableAscii,
         enableAudio,
         hasSubtitles,
-        openFileRequests,
         host.quitApplicationRequestedPtr(),
-        systemControls,
-        notificationAreaControls,
         requestTransportCommand,
         requestOpenFiles,
         continuityState,
@@ -106,7 +100,7 @@ struct PlaybackSession::Impl {
     }
   }
 
-  void finalizeRun() {
+  void finalizePlayback() {
     if (!loop) {
       return;
     }
@@ -119,6 +113,14 @@ struct PlaybackSession::Impl {
     host.reportVideoError(loop->renderFailureMessage(),
                           loop->renderFailureDetail());
     loop->renderFailureScreen();
+  }
+
+  void completePlayback() {
+    if (continuityState) {
+      *continuityState = loop->continuationState();
+    }
+    finalizePlayback();
+    lifecycle = Lifecycle::Finished;
   }
 
   PlaybackSessionOpenOutcome open() {
@@ -144,14 +146,20 @@ struct PlaybackSession::Impl {
     return PlaybackSessionOpenOutcome::Ready;
   }
 
-  void run() {
-    assert(lifecycle == Lifecycle::Ready);
-    loop->run();
-    if (continuityState) {
-      *continuityState = loop->continuationState();
+  bool pump() {
+    assert(lifecycle == Lifecycle::Ready ||
+           lifecycle == Lifecycle::Running);
+    lifecycle = Lifecycle::Running;
+    if (loop->pump()) {
+      return true;
     }
-    finalizeRun();
-    lifecycle = Lifecycle::Finished;
+    completePlayback();
+    return false;
+  }
+
+  bool canControl() const {
+    return loop && (lifecycle == Lifecycle::Ready ||
+                    lifecycle == Lifecycle::Running);
   }
 
   const std::filesystem::path& file;
@@ -165,9 +173,6 @@ struct PlaybackSession::Impl {
   const Color& progressStart;
   const Color& progressEnd;
   const VideoPlaybackConfig& config;
-  OpenFileRequests& openFileRequests;
-  PlaybackSystemControls* systemControls = nullptr;
-  PlaybackNotificationAreaControls* notificationAreaControls = nullptr;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
   PlaybackSessionContinuationState* continuityState = nullptr;
@@ -196,4 +201,77 @@ PlaybackSession& PlaybackSession::operator=(PlaybackSession&&) noexcept =
 
 PlaybackSessionOpenOutcome PlaybackSession::open() { return impl_->open(); }
 
-void PlaybackSession::run() { impl_->run(); }
+bool PlaybackSession::pump() {
+  return impl_->pump();
+}
+
+PlaybackShellTerminalRole PlaybackSession::terminalRole() const {
+  assert(impl_->canControl());
+  return impl_->loop->terminalRole();
+}
+
+std::vector<NativeWaitHandle> PlaybackSession::activityWaitHandles() const {
+  assert(impl_->canControl());
+  return impl_->loop->activityWaitHandles();
+}
+
+int PlaybackSession::nextWakeTimeoutMs() const {
+  assert(impl_->canControl());
+  return impl_->loop->nextWakeTimeoutMs();
+}
+
+PlaybackControlState PlaybackSession::controlState() const {
+  assert(impl_->canControl());
+  return impl_->loop->controlState();
+}
+
+PlaybackPresentationState PlaybackSession::presentationState() const {
+  assert(impl_->canControl());
+  return impl_->loop->presentationState();
+}
+
+bool PlaybackSession::capturesBrowserInput() const {
+  return impl_->canControl() && impl_->loop->capturesBrowserInput();
+}
+
+bool PlaybackSession::handleInputEvent(const InputEvent& event) {
+  return impl_->canControl() && impl_->loop->handleInputEvent(event);
+}
+
+bool PlaybackSession::handleControlCommand(PlaybackControlCommand command) {
+  return impl_->canControl() && impl_->loop->handleControlCommand(command);
+}
+
+bool PlaybackSession::seekToRatio(double ratio) {
+  return impl_->canControl() && impl_->loop->seekToRatio(ratio);
+}
+
+bool PlaybackSession::toggleWindowPresentation() {
+  return impl_->canControl() && impl_->loop->toggleWindowPresentation();
+}
+
+bool PlaybackSession::togglePictureInPicture() {
+  return impl_->canControl() && impl_->loop->togglePictureInPicture();
+}
+
+bool PlaybackSession::toggleFullscreen() {
+  return impl_->canControl() && impl_->loop->toggleFullscreen();
+}
+
+bool PlaybackSession::activatePresentation() {
+  return impl_->canControl() && impl_->loop->activatePresentation();
+}
+
+bool PlaybackSession::requestHandoff(
+    std::function<void(bool)> completion) {
+  return impl_->canControl() &&
+         impl_->loop->requestHandoff(std::move(completion));
+}
+
+void PlaybackSession::requestStop() {
+  if (impl_->canControl()) impl_->loop->requestStop();
+}
+
+void PlaybackSession::requestQuit() {
+  if (impl_->canControl()) impl_->loop->requestQuit();
+}

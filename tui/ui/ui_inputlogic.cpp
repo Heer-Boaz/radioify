@@ -734,7 +734,9 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
             dirty = true;
             return;
           case ActionStripItem::PictureInPicture:
-            if (callbacks.onToggleWindow) callbacks.onToggleWindow();
+            if (callbacks.onTogglePictureInPicture) {
+              callbacks.onTogglePictureInPicture();
+            }
             dirty = true;
             return;
         }
@@ -856,6 +858,11 @@ PlaybackInputResult handlePlaybackInput(const InputEvent& ev,
       case PlaybackShortcutAction::ToggleWindow:
         if (callbacks.onToggleWindow) callbacks.onToggleWindow();
         return PlaybackInputResult::Handled;
+      case PlaybackShortcutAction::TogglePictureInPicture:
+        if (callbacks.onTogglePictureInPicture) {
+          callbacks.onTogglePictureInPicture();
+        }
+        return PlaybackInputResult::Handled;
       case PlaybackShortcutAction::ToggleFullscreen:
         if (callbacks.onToggleFullscreen) callbacks.onToggleFullscreen();
         return PlaybackInputResult::Handled;
@@ -895,7 +902,6 @@ PlaybackInputResult handlePlaybackInput(const InputEvent& ev,
       case PlaybackShortcutAction::VolumeDown:
         if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(-0.10f);
         return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::TogglePictureInPicture:
       case PlaybackShortcutAction::OpenVideoEditor:
       case PlaybackShortcutAction::RequestCloseVideoEditor:
       case PlaybackShortcutAction::NavigateBackInVideoEditor:

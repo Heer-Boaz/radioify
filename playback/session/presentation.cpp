@@ -56,6 +56,10 @@ NativeWaitHandle PlaybackPresentation::windowCloseRequestedWaitHandle() const {
   return impl_->windowPresenter.closeRequestedWaitHandle();
 }
 
+NativeWaitHandle PlaybackPresentation::windowInputWaitHandle() const {
+  return impl_->windowPresenter.window().InputWaitHandle();
+}
+
 PlaybackRenderMode PlaybackPresentation::renderMode(bool enableAscii) const {
   return resolvePlaybackMode(enableAscii, impl_->activeLayout);
 }

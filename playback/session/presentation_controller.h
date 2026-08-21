@@ -19,12 +19,8 @@ class PlaybackPresentationController {
   bool toggleFullscreen(PlaybackOutputController& output, bool& redraw,
                         bool& forceRefreshArt);
 
-  void closePresentation(PlaybackOutputController& output, bool& redraw,
-                         bool& forceRefreshArt);
   void reconcile(PlaybackOutputController& output, bool windowStartFailed,
                  bool& redraw, bool& forceRefreshArt);
-  void handleWindowClosed(PlaybackOutputController& output, bool& redraw,
-                          bool& forceRefreshArt);
   void captureWindowPlacement(PlaybackOutputController& output,
                               PlaybackSessionContinuationState& state);
 

@@ -41,6 +41,7 @@ class PlaybackPresentation {
   HWND nativeWindowHandle() const;
   bool consumeWindowCloseRequested();
   NativeWaitHandle windowCloseRequestedWaitHandle() const;
+  NativeWaitHandle windowInputWaitHandle() const;
   PlaybackRenderMode renderMode(bool enableAscii) const;
   void requestLayout(PlaybackLayout layout);
   PlaybackLayout desiredLayout() const;

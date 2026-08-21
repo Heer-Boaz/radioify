@@ -34,6 +34,20 @@ KeyEvent makeKey(WORD vk, char ch = 0, DWORD control = 0) {
   return key;
 }
 
+InputEvent makeKeyEvent(WORD vk, char ch = 0, DWORD control = 0) {
+  InputEvent event{};
+  event.type = InputEvent::Type::Key;
+  event.key = makeKey(vk, ch, control);
+  return event;
+}
+
+InputEvent makeActionEvent(InputAction action) {
+  InputEvent event{};
+  event.type = InputEvent::Type::Action;
+  event.action = action;
+  return event;
+}
+
 MouseEvent makeMouse(DWORD buttonState) {
   MouseEvent mouse{};
   mouse.buttonState = buttonState;
@@ -111,6 +125,27 @@ int main() {
                    makeKey(VK_ESCAPE), kPlaybackShortcutContextImageViewer)
                    .value() == PlaybackShortcutAction::CloseViewer,
                "VK_ESCAPE must still close the image viewer");
+  ok &= expect(resolveLiveBrowserVideoShortcut(makeKeyEvent(VK_SPACE, ' ')) ==
+                   PlaybackShortcutAction::TogglePause,
+               "Space must remain a playback shortcut in the live browser");
+  ok &= expect(resolveLiveBrowserVideoShortcut(
+                   makeKeyEvent(VK_RETURN, 0, kPlaybackShortcutAltMask)) ==
+                   PlaybackShortcutAction::ToggleFullscreen,
+               "Alt+Enter must reach native video from the live browser");
+  ok &= expect(resolveLiveBrowserVideoShortcut(
+                   makeKeyEvent('P', 0, kPlaybackShortcutCtrlMask)) ==
+                   PlaybackShortcutAction::TogglePictureInPicture,
+               "Ctrl+P must reach native video from the live browser");
+  ok &= expect(resolveLiveBrowserVideoShortcut(makeKeyEvent(VK_ESCAPE)) ==
+                   PlaybackShortcutAction::ExitPlaybackSession,
+               "Escape must close video while the live browser has focus");
+  ok &= expect(!resolveLiveBrowserVideoShortcut(makeKeyEvent(VK_BACK)),
+               "Backspace must remain browser-up while native video plays");
+  ok &= expect(!resolveLiveBrowserVideoShortcut(
+                   makeActionEvent(InputAction::Back)),
+               "browser Back must remain navigation while native video plays");
+  ok &= expect(!resolveLiveBrowserVideoShortcut(makeKeyEvent('O', 'o')),
+               "Options must remain owned by the live browser");
   ok &= expect(resolvePlaybackShortcutAction(
                    makeKey('P', 0, kPlaybackShortcutCtrlMask),
                    kPlaybackShortcutContextShared)

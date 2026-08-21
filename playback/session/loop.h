@@ -7,26 +7,25 @@
 #include <string>
 #include <vector>
 
-#include "playback/system_media_transport/controls.h"
+#include "core/native_wait_handle.h"
+#include "playback/control/command.h"
+#include "playback/control/system_control_state.h"
 #include "playback/control/transport.h"
 #include "playback/ascii/frame_output.h"
 #include "playback/session/state.h"
 #include "log.h"
 #include "playback/video/playback.h"
 
-class ConsoleInput;
 class ConsoleScreen;
-class OpenFileRequests;
 class Player;
-class PlaybackNotificationAreaControls;
 class SubtitleManager;
 struct Color;
+struct InputEvent;
 struct Style;
 
 class PlaybackLoopRunner {
  public:
   struct Args {
-    ConsoleInput& input;
     ConsoleScreen& screen;
     const VideoPlaybackConfig& config;
     Player& player;
@@ -47,10 +46,7 @@ class PlaybackLoopRunner {
     bool enableAscii;
     bool enableAudio;
     bool hasSubtitles = false;
-    OpenFileRequests& openFileRequests;
     bool* quitApplicationRequested = nullptr;
-    PlaybackSystemControls* systemControls = nullptr;
-    PlaybackNotificationAreaControls* notificationAreaControls = nullptr;
     std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
     std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
     PlaybackSessionContinuationState* continuityState = nullptr;
@@ -66,7 +62,23 @@ class PlaybackLoopRunner {
   PlaybackLoopRunner(const PlaybackLoopRunner&) = delete;
   PlaybackLoopRunner& operator=(const PlaybackLoopRunner&) = delete;
 
-  void run();
+  bool pump();
+  PlaybackShellTerminalRole terminalRole() const;
+  std::vector<NativeWaitHandle> activityWaitHandles() const;
+  int nextWakeTimeoutMs() const;
+  PlaybackControlState controlState() const;
+  PlaybackPresentationState presentationState() const;
+  bool capturesBrowserInput() const;
+  bool handleInputEvent(const InputEvent& event);
+  bool handleControlCommand(PlaybackControlCommand command);
+  bool seekToRatio(double ratio);
+  bool toggleWindowPresentation();
+  bool togglePictureInPicture();
+  bool toggleFullscreen();
+  bool activatePresentation();
+  bool requestHandoff(std::function<void(bool)> completion);
+  void requestStop();
+  void requestQuit();
   void shutdown();
   void renderFailureScreen();
   PlaybackSessionContinuationState continuationState() const;

@@ -5,15 +5,17 @@
 #include <memory>
 #include <vector>
 
+#include "core/native_wait_handle.h"
+#include "playback/control/command.h"
+#include "playback/control/system_control_state.h"
 #include "playback/control/transport.h"
+#include "playback/session/presentation_policy.h"
 #include "playback/session/state.h"
 
 class ConsoleInput;
 class ConsoleScreen;
-class OpenFileRequests;
-class PlaybackNotificationAreaControls;
-class PlaybackSystemControls;
 struct Color;
+struct InputEvent;
 struct Style;
 struct VideoPlaybackConfig;
 
@@ -37,10 +39,7 @@ class PlaybackSession {
     const Color& progressStart;
     const Color& progressEnd;
     const VideoPlaybackConfig& config;
-    OpenFileRequests& openFileRequests;
     bool* quitAppRequested = nullptr;
-    PlaybackSystemControls* systemControls = nullptr;
-    PlaybackNotificationAreaControls* notificationAreaControls = nullptr;
     std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
     std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
     PlaybackSessionContinuationState* continuityState = nullptr;
@@ -57,7 +56,23 @@ class PlaybackSession {
   PlaybackSession& operator=(const PlaybackSession&) = delete;
 
   PlaybackSessionOpenOutcome open();
-  void run();
+  bool pump();
+  PlaybackShellTerminalRole terminalRole() const;
+  std::vector<NativeWaitHandle> activityWaitHandles() const;
+  int nextWakeTimeoutMs() const;
+  PlaybackControlState controlState() const;
+  PlaybackPresentationState presentationState() const;
+  bool capturesBrowserInput() const;
+  bool handleInputEvent(const InputEvent& event);
+  bool handleControlCommand(PlaybackControlCommand command);
+  bool seekToRatio(double ratio);
+  bool toggleWindowPresentation();
+  bool togglePictureInPicture();
+  bool toggleFullscreen();
+  bool activatePresentation();
+  bool requestHandoff(std::function<void(bool)> completion);
+  void requestStop();
+  void requestQuit();
 
  private:
   struct Impl;
