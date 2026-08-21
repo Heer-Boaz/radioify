@@ -354,9 +354,6 @@ private:
     bool m_windowMouseInputActive = false;
     bool m_trackingMouseLeave = false;
     bool m_trackingNonClientMouseLeave = false;
-    // Cache last window title to avoid repeated SetWindowText calls
-    std::string m_lastWindowTitle;
-    std::string m_baseWindowTitle;
 
     // Fullscreen helpers
     LONG m_prevStyle = 0;

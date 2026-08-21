@@ -47,11 +47,11 @@ PlaybackOutputController::windowCloseRequestedWaitHandle() const {
 }
 
 bool PlaybackOutputController::openWindow(
-    Player& player,
+    Player& player, const std::string& mediaTitle,
     const std::function<WindowUiState()>& buildUiState,
     const playback_framebuffer_presenter::TextGridPresentationProvider&
         buildTextGridPresentation) {
-  return impl_->windowPresenter.start(player, buildUiState,
+  return impl_->windowPresenter.start(player, mediaTitle, buildUiState,
                                       buildTextGridPresentation);
 }
 

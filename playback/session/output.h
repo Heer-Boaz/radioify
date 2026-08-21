@@ -36,7 +36,7 @@ class PlaybackOutputController {
   NativeWaitHandle windowInputWaitHandle() const;
   NativeWaitHandle windowCloseRequestedWaitHandle() const;
   bool openWindow(
-      Player& player,
+      Player& player, const std::string& mediaTitle,
       const std::function<WindowUiState()>& buildUiState,
       const playback_framebuffer_presenter::TextGridPresentationProvider&
           buildTextGridPresentation);

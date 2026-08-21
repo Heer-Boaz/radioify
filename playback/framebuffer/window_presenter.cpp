@@ -76,7 +76,8 @@ struct WindowPresenter::Impl {
     }
   }
 
-  bool start(Player& player, const std::function<WindowUiState()>& buildUiState,
+  bool start(Player& player, const std::string& mediaTitle,
+             const std::function<WindowUiState()>& buildUiState,
              const playback_framebuffer_presenter::TextGridPresentationProvider&
                  buildTextGridPresentation) {
     if (thread.joinable()) {
@@ -97,14 +98,18 @@ struct WindowPresenter::Impl {
     cursorVisible.store(true, std::memory_order_relaxed);
     threadState.store(WindowThreadState::Enabled, std::memory_order_relaxed);
     forcePresent.store(true, std::memory_order_relaxed);
+    const std::string nativeWindowTitle =
+        mediaTitle.empty() ? std::string(RADIOIFY_APP_NAME)
+                           : mediaTitle + " - " RADIOIFY_APP_NAME;
 
     thread = std::thread(
-        [this, &player, buildTextGridPresentation, startGate]() {
+        [this, &player, buildTextGridPresentation, startGate,
+         nativeWindowTitle]() {
           dispatch.openOnCurrentThread();
           const bool opened = window.Open(
               VideoWindow::kDefaultVideoClientWidth,
               VideoWindow::kDefaultVideoClientHeight,
-              RADIOIFY_APP_NAME " Output");
+              nativeWindowTitle);
           if (opened) {
             windowHandle.store(window.NativeWindowHandle(),
                                std::memory_order_release);
@@ -295,10 +300,12 @@ WindowPresenter::WindowPresenter()
 WindowPresenter::~WindowPresenter() = default;
 
 bool WindowPresenter::start(
-    Player& player, const std::function<WindowUiState()>& buildUiState,
+    Player& player, const std::string& mediaTitle,
+    const std::function<WindowUiState()>& buildUiState,
     const playback_framebuffer_presenter::TextGridPresentationProvider&
         buildTextGridPresentation) {
-  return impl_->start(player, buildUiState, buildTextGridPresentation);
+  return impl_->start(player, mediaTitle, buildUiState,
+                      buildTextGridPresentation);
 }
 
 void WindowPresenter::stop() { impl_->stop(); }

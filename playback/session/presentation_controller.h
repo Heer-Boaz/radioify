@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <optional>
+#include <string>
 
 #include "playback/framebuffer/presenter.h"
 #include "presentation_policy.h"
@@ -43,6 +44,7 @@ class PlaybackPresentationController {
 
   PlaybackPresentationSyncResult synchronize(
       PlaybackOutputController& output, Player& player,
+      const std::string& mediaTitle,
       const std::function<WindowUiState()>& buildUiState,
       const playback_framebuffer_presenter::TextGridPresentationProvider&
           buildTextGridPresentation);

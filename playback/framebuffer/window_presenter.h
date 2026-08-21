@@ -3,6 +3,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <string>
 
 #include "core/native_wait_handle.h"
 #include "playback/framebuffer/window_presentation.h"
@@ -19,7 +20,8 @@ class WindowPresenter {
   WindowPresenter(const WindowPresenter&) = delete;
   WindowPresenter& operator=(const WindowPresenter&) = delete;
 
-  bool start(Player& player, const std::function<WindowUiState()>& buildUiState,
+  bool start(Player& player, const std::string& mediaTitle,
+             const std::function<WindowUiState()>& buildUiState,
              const playback_framebuffer_presenter::TextGridPresentationProvider&
                  buildTextGridPresentation);
   void stop();

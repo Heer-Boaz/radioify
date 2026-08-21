@@ -853,7 +853,8 @@ struct PlaybackLoopRunner::Impl {
               outInteractions);
         };
     return presentationController.synchronize(
-        output, core.player(), buildUiState, buildTextGridPresentation);
+        output, core.player(), windowTitle, buildUiState,
+        buildTextGridPresentation);
   }
 
   void applyPresenterSync(const PlaybackPresentationSyncResult& syncResult) {

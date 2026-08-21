@@ -1607,7 +1607,19 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
         wc.hInstance = hInstance;
         wc.lpszClassName = className;
         wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-        RegisterClassExW(&wc);
+        wc.hIcon = static_cast<HICON>(LoadImageW(
+            hInstance, MAKEINTRESOURCEW(IDI_RADIOIFY_APP_ICON), IMAGE_ICON,
+            GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON),
+            LR_DEFAULTCOLOR | LR_SHARED));
+        wc.hIconSm = static_cast<HICON>(LoadImageW(
+            hInstance, MAKEINTRESOURCEW(IDI_RADIOIFY_APP_ICON), IMAGE_ICON,
+            GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
+            LR_DEFAULTCOLOR | LR_SHARED));
+        if (!RegisterClassExW(&wc) &&
+            GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+            m_input.endWindowThread();
+            return false;
+        }
     }
 
     RECT wr = { 0, 0, width, height };
@@ -1626,10 +1638,6 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
         return false;
     }
     m_windowThreadId = GetCurrentThreadId();
-
-    // Remember base window title so we can temporarily update it while overlay is visible
-    m_lastWindowTitle = title;
-    m_baseWindowTitle = title;
 
     if (!CreateSwapChain(width, height)) {
         Close();

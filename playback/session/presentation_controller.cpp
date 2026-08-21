@@ -38,6 +38,7 @@ bool PlaybackPresentationController::toggleFullscreen() {
 PlaybackPresentationSyncResult
 PlaybackPresentationController::synchronize(
     PlaybackOutputController& output, Player& player,
+    const std::string& mediaTitle,
     const std::function<WindowUiState()>& buildUiState,
     const playback_framebuffer_presenter::TextGridPresentationProvider&
         buildTextGridPresentation) {
@@ -86,7 +87,8 @@ PlaybackPresentationController::synchronize(
       appliedState_;
   const bool openedWindow = !output.windowOpen();
   if (openedWindow &&
-      !output.openWindow(player, buildUiState, buildTextGridPresentation)) {
+      !output.openWindow(player, mediaTitle, buildUiState,
+                         buildTextGridPresentation)) {
     desiredState_ = PlaybackPresentationState::terminalAscii();
     appliedState_ = desiredState_;
     return finish(true, PlaybackShellFocusTarget::TerminalPlayback);
