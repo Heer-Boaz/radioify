@@ -1807,6 +1807,17 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     int width;
   };
 
+  auto selectedOptionsSubject = [&]()
+      -> std::optional<OptionsBrowserSubject> {
+    if (optionsBrowserIsActive(browser) || browser.entries.empty() ||
+        browser.selected < 0 ||
+        browser.selected >= static_cast<int>(browser.entries.size())) {
+      return std::nullopt;
+    }
+    return optionsBrowserSubjectForEntry(
+        browser.entries[static_cast<size_t>(browser.selected)]);
+  };
+
   auto buildActionRenderItems = [&](bool browserInteractionEnabled) {
     std::vector<ActionRenderItem> items;
     auto addActionItem = [&](ActionStripItem id, const std::string& text,
@@ -1916,7 +1927,10 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       }
       addActionItem(ActionStripItem::View, viewState, false);
     }
-    if (browserInteractionEnabled && optionsBrowserCanToggle(browser)) {
+    const bool selectedEntryHasOptions =
+        browserInteractionEnabled && selectedOptionsSubject().has_value();
+    if (browserInteractionEnabled &&
+        (optionsBrowserIsActive(browser) || selectedEntryHasOptions)) {
       addActionItem(ActionStripItem::Options, "Options",
                     optionsBrowserIsActive(browser));
     }
@@ -2149,8 +2163,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       browserNavigator.closeContext();
       return;
     }
-    if (const auto location = optionsBrowserOpenLocation(browser)) {
-      browserNavigator.navigate(*location);
+    if (const auto subject = selectedOptionsSubject()) {
+      browserNavigator.navigate(optionsBrowserOpenLocation(*subject));
     }
   };
   callbacks.onSeekBy = [&](int direction) {
@@ -2454,7 +2468,9 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
                         browser.viewMode = BrowserState::ViewMode::ListPreview;
                         markLayoutDirty();
                       }});
-      if (optionsBrowserCanToggle(browser)) {
+      const bool selectedEntryHasOptions =
+          selectedOptionsSubject().has_value();
+      if (optionsBrowserIsActive(browser) || selectedEntryHasOptions) {
         cmds.push_back({"Options", "O", true, [&]() {
                           if (callbacks.onToggleOptions) {
                             callbacks.onToggleOptions();

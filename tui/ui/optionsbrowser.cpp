@@ -238,30 +238,6 @@ BrowserEntry optionsParentEntry() {
   return {"..", {}, browser_entry::NavigateUp{}};
 }
 
-std::filesystem::path resolveOptionsFile(const BrowserState& browser,
-                                         OptionsTarget* targetOut) {
-  if (targetOut) *targetOut = OptionsTarget::None;
-  if (!browser.entries.empty()) {
-    int idx = std::clamp(browser.selected, 0,
-                         static_cast<int>(browser.entries.size()) - 1);
-    const auto& entry = browser.entries[static_cast<size_t>(idx)];
-    if (entry.isMedia()) {
-      OptionsTarget target = targetForPath(entry.path);
-      if (target != OptionsTarget::None) {
-        if (targetOut) *targetOut = target;
-        return entry.path;
-      }
-    }
-  }
-  std::filesystem::path nowPlaying = audioGetNowPlaying();
-  OptionsTarget target = targetForPath(nowPlaying);
-  if (target != OptionsTarget::None) {
-    if (targetOut) *targetOut = target;
-    return nowPlaying;
-  }
-  return {};
-}
-
 void buildOptionsEntries(std::vector<BrowserEntry>& entries,
                          const BrowserLocation& location) {
   entries.clear();
@@ -372,16 +348,7 @@ void buildInstrumentEntries(std::vector<BrowserEntry>& entries,
 
   if (targetForPath(location.path) != OptionsTarget::Kss) return;
 
-  int trackIndex = std::max(0, location.trackIndex);
-  if (!auditionActive) {
-    std::filesystem::path nowPlaying = audioGetNowPlaying();
-    if (!nowPlaying.empty() && samePath(nowPlaying, location.path)) {
-      int currentTrack = audioGetTrackIndex();
-      if (currentTrack >= 0) {
-        trackIndex = currentTrack;
-      }
-    }
-  }
+  const int trackIndex = std::max(0, location.trackIndex);
 
   if (!content.instrumentsLoaded ||
       !samePath(content.instrumentFile, location.path) ||
@@ -587,38 +554,23 @@ bool optionsBrowserIsActive(const BrowserState& browser) {
   return browser.location.kind == BrowserLocationKind::OptionsBrowser;
 }
 
-bool optionsBrowserCanToggle(const BrowserState& browser) {
-  if (optionsBrowserIsActive(browser)) return true;
-  OptionsTarget target = OptionsTarget::None;
-  return !resolveOptionsFile(browser, &target).empty();
-}
-
-std::optional<BrowserLocation> optionsBrowserOpenLocation(
-    const BrowserState& browser) {
-  OptionsTarget target = OptionsTarget::None;
-  const std::filesystem::path file = resolveOptionsFile(browser, &target);
-  if (file.empty() || target == OptionsTarget::None) {
+std::optional<OptionsBrowserSubject> optionsBrowserSubjectForEntry(
+    const BrowserEntry& entry) {
+  if (!entry.isMedia() || entry.path.empty() ||
+      targetForPath(entry.path) == OptionsTarget::None) {
     return std::nullopt;
   }
+  OptionsBrowserSubject subject;
+  subject.file = entry.path;
+  if (const auto* track = entry.actionAs<browser_entry::PlayTrack>()) {
+    subject.trackIndex = track->trackIndex;
+  }
+  return subject;
+}
 
-  int trackIndex = -1;
-  if (!browser.entries.empty()) {
-    const int idx = std::clamp(
-        browser.selected, 0, static_cast<int>(browser.entries.size()) - 1);
-    const auto& entry = browser.entries[static_cast<size_t>(idx)];
-    const auto* track = entry.actionAs<browser_entry::PlayTrack>();
-    if (track && samePath(entry.path, file)) {
-      trackIndex = track->trackIndex;
-    }
-  }
-  const std::filesystem::path nowPlaying = audioGetNowPlaying();
-  if (!nowPlaying.empty() && samePath(nowPlaying, file)) {
-    const int currentTrack = audioGetTrackIndex();
-    if (currentTrack >= 0) {
-      trackIndex = currentTrack;
-    }
-  }
-  return browserOptionsLocation(file, trackIndex);
+BrowserLocation optionsBrowserOpenLocation(
+    const OptionsBrowserSubject& subject) {
+  return browserOptionsLocation(subject.file, subject.trackIndex.value_or(-1));
 }
 
 bool optionsBrowserSupportsLocation(const BrowserLocation& location) {

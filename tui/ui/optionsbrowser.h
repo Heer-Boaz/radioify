@@ -11,10 +11,15 @@ enum class OptionsBrowserResult {
   Changed,
 };
 
+struct OptionsBrowserSubject {
+  std::filesystem::path file;
+  std::optional<int> trackIndex;
+};
+
 bool optionsBrowserIsActive(const BrowserState& browser);
-bool optionsBrowserCanToggle(const BrowserState& browser);
-std::optional<BrowserLocation> optionsBrowserOpenLocation(
-    const BrowserState& browser);
+std::optional<OptionsBrowserSubject> optionsBrowserSubjectForEntry(
+    const BrowserEntry& entry);
+BrowserLocation optionsBrowserOpenLocation(const OptionsBrowserSubject& subject);
 bool optionsBrowserSupportsLocation(const BrowserLocation& location);
 bool prepareOptionsBrowserContent(BrowserState& browser);
 OptionsBrowserResult optionsBrowserActivateEntry(const BrowserState& browser,

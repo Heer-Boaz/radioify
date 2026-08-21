@@ -10,6 +10,7 @@
 #include "browser_navigation.h"
 #include "core/latest_request_worker.h"
 #include "kssoptions.h"
+#include "optionsbrowser.h"
 #include "playback_target_match.h"
 #include "track_browser_state.h"
 #include "ui_inputlogic.h"
@@ -63,6 +64,7 @@ int main() {
 
   const std::filesystem::path songA = "C:/Media/A.flac";
   const std::filesystem::path songB = "C:/Media/B.flac";
+  const std::filesystem::path kssFile = "C:/Media/Game.kss";
   const BrowserEntry status{"Scan failed", {}, browser_entry::Status{}};
   const BrowserEntry information{"Title: Example", {},
                                  browser_entry::Information{}};
@@ -197,6 +199,21 @@ int main() {
   ok &= expect(!browserEntryMatchesPlaybackTarget(
                    directoryEntry("Media", "C:/Media"), playingA),
                "directories must never receive a playback marker");
+
+  ok &= expect(!optionsBrowserSubjectForEntry(files.front()),
+               "options must not fall back from an unsupported selection");
+  const BrowserEntry kssContainer = fileEntry("Game.kss", kssFile);
+  const auto kssContainerSubject =
+      optionsBrowserSubjectForEntry(kssContainer);
+  ok &= expect(kssContainerSubject &&
+                   kssContainerSubject->file == kssFile &&
+                   !kssContainerSubject->trackIndex,
+               "a container selection must be an explicit file subject");
+  const BrowserEntry kssTrack = trackEntry("Track 5", kssFile, 4);
+  const auto kssTrackSubject = optionsBrowserSubjectForEntry(kssTrack);
+  ok &= expect(kssTrackSubject && kssTrackSubject->trackIndex == 4 &&
+                   optionsBrowserOpenLocation(*kssTrackSubject).trackIndex == 4,
+               "a selected internal track must remain the options subject");
 
   BrowserState optionIdentityBrowser;
   optionIdentityBrowser.location =
