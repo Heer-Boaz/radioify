@@ -60,8 +60,8 @@ int main() {
                "SGR mouse press must parse as an input event");
   ok &= expect(firstPress.type == InputEvent::Type::Mouse &&
                    firstPress.mouse.kind == MouseEventKind::Press &&
-                   firstPress.mouse.buttonState ==
-                       FROM_LEFT_1ST_BUTTON_PRESSED &&
+                   firstPress.mouse.buttons == MouseButtons::Left &&
+                   firstPress.mouse.button == MouseButton::Left &&
                    !firstPress.mouse.hasPixelPosition &&
                    firstPress.mouse.pos.X == 100 &&
                    firstPress.mouse.pos.Y == 80,
@@ -71,7 +71,8 @@ int main() {
   ok &= expect(parseSequence(parser, L"\x1b[<0;101;81m", firstRelease),
                "SGR mouse release must parse as an input event");
   ok &= expect(firstRelease.mouse.kind == MouseEventKind::Release &&
-                   firstRelease.mouse.buttonState == 0,
+                   firstRelease.mouse.buttons == MouseButtons::None &&
+                   firstRelease.mouse.button == MouseButton::Left,
                "SGR mouse release must not masquerade as a zero-button "
                "press");
 
@@ -90,17 +91,26 @@ int main() {
   InputEvent drag{};
   ok &= expect(parseSequence(parser, L"\x1b[<32;120;90M", drag) &&
                    drag.mouse.kind == MouseEventKind::Move &&
-                   drag.mouse.buttonState ==
-                       FROM_LEFT_1ST_BUTTON_PRESSED,
+                   drag.mouse.buttons == MouseButtons::Left &&
+                   drag.mouse.button == MouseButton::None,
                "SGR drag reports must remain mouse moves with the left button "
                "held");
 
   InputEvent wheel{};
   ok &= expect(parseSequence(parser, L"\x1b[<64;120;90M", wheel) &&
                    wheel.mouse.kind == MouseEventKind::VerticalWheel &&
-                   wheel.mouse.buttonState == 0 &&
+                   wheel.mouse.buttons == MouseButtons::None &&
+                   wheel.mouse.button == MouseButton::None &&
                    wheel.mouse.wheelDelta == WHEEL_DELTA,
                "SGR wheel reports must use an explicit wheel delta");
+
+  InputEvent middlePress{};
+  ok &= expect(parseSequence(parser, L"\x1b[<1;120;90M", middlePress) &&
+                   middlePress.mouse.kind == MouseEventKind::Press &&
+                   middlePress.mouse.buttons == MouseButtons::Middle &&
+                   middlePress.mouse.button == MouseButton::Middle,
+               "SGR middle-button input must remain a pointer button rather "
+               "than a browser-back command");
 
   doubleClickTracker.reset();
   observe(doubleClickTracker, firstPress.mouse, 2000, 500, 0, 0);

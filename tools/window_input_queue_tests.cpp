@@ -28,11 +28,11 @@ InputEvent keyEvent(WORD key) {
   return event;
 }
 
-InputEvent mouseMoveEvent(SHORT x, DWORD buttonState) {
+InputEvent mouseMoveEvent(SHORT x, MouseButtons buttons) {
   InputEvent event{};
   event.type = InputEvent::Type::Mouse;
   event.mouse.pos.X = x;
-  event.mouse.buttonState = buttonState;
+  event.mouse.buttons = buttons;
   event.mouse.kind = MouseEventKind::Move;
   return event;
 }
@@ -74,22 +74,23 @@ int main() {
                "clearing the queue must reset the wake signal");
   ok &= expect(!queue.poll(event), "cleared queue must be empty");
 
-  queue.push(mouseMoveEvent(10, FROM_LEFT_1ST_BUTTON_PRESSED));
-  queue.push(mouseMoveEvent(20, FROM_LEFT_1ST_BUTTON_PRESSED));
+  queue.push(mouseMoveEvent(10, MouseButtons::Left));
+  queue.push(mouseMoveEvent(20, MouseButtons::Left));
   ok &= expect(queue.poll(event) && event.mouse.pos.X == 20,
                "adjacent drag moves must coalesce to the newest position");
   ok &= expect(!queue.poll(event),
                "coalesced drag moves must occupy one queue entry");
 
-  queue.push(mouseMoveEvent(30, FROM_LEFT_1ST_BUTTON_PRESSED));
-  queue.push(mouseMoveEvent(40, 0));
+  queue.push(mouseMoveEvent(30, MouseButtons::Left));
+  queue.push(mouseMoveEvent(40, MouseButtons::None));
   ok &= expect(queue.poll(event) &&
-                   event.mouse.buttonState == FROM_LEFT_1ST_BUTTON_PRESSED,
+                   event.mouse.buttons == MouseButtons::Left,
                "mouse button transitions must preserve the final drag move");
-  ok &= expect(queue.poll(event) && event.mouse.buttonState == 0,
+  ok &= expect(queue.poll(event) &&
+                   event.mouse.buttons == MouseButtons::None,
                "mouse button transitions must remain distinct events");
 
-  queue.push(mouseMoveEvent(50, 0));
+  queue.push(mouseMoveEvent(50, MouseButtons::None));
   queue.push(pointerLeaveEvent());
   ok &= expect(queue.poll(event) && event.type == InputEvent::Type::Mouse,
                "the final pointer position must precede pointer leave");

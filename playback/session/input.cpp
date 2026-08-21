@@ -577,10 +577,8 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
       windowEvent
           ? playback_video_timeline_preview::PresentationSurface::VideoWindow
           : playback_video_timeline_preview::PresentationSurface::Terminal;
-  const bool leftPressed =
-      (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
-  const bool rightPressed =
-      (mouse.buttonState & RIGHTMOST_BUTTON_PRESSED) != 0;
+  const bool leftPressed = isMouseButtonDown(mouse, MouseButton::Left);
+  const bool rightPressed = isMouseButtonDown(mouse, MouseButton::Right);
   const bool dragFromThisSurface =
       seekState.videoEditBoundaryDrag &&
       seekState.videoEditBoundaryDrag->surface == previewSurface;
@@ -600,16 +598,6 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
       windowEvent && mouse.hasPixelPosition ? mouse.pixelX : mouse.pos.X;
   const double pointerY =
       windowEvent && mouse.hasPixelPosition ? mouse.pixelY : mouse.pos.Y;
-  if (isBackMousePressed(mouse)) {
-    if (signals.contextMenuVisible && signals.contextMenuVisible()) {
-      playback_session::ContextMenuInput request;
-      request.kind = playback_session::ContextMenuInputKind::Dismiss;
-      dispatchContextMenuInput(signals, request);
-    } else if (signals.navigateBack) {
-      signals.navigateBack();
-    }
-    return;
-  }
   if (mouse.kind == MouseEventKind::Move) {
     triggerOverlay(view, signals);
     *signals.redraw = true;

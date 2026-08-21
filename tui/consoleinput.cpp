@@ -23,6 +23,11 @@ constexpr DWORD kMouseButtonMask =
     FROM_LEFT_1ST_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED |
     FROM_LEFT_2ND_BUTTON_PRESSED | FROM_LEFT_3RD_BUTTON_PRESSED |
     FROM_LEFT_4TH_BUTTON_PRESSED;
+constexpr DWORD kPointerButtonMask =
+    FROM_LEFT_1ST_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED |
+    FROM_LEFT_2ND_BUTTON_PRESSED;
+constexpr DWORD kSideButtonMask =
+    FROM_LEFT_3RD_BUTTON_PRESSED | FROM_LEFT_4TH_BUTTON_PRESSED;
 
 bool writeTerminalSequence(HANDLE output, const wchar_t* sequence) {
   if (output == INVALID_HANDLE_VALUE || !sequence) return false;
@@ -121,6 +126,37 @@ std::optional<InputAction> inputActionFromVirtualKey(WORD vk) {
   return std::nullopt;
 }
 
+constexpr MouseButtons mouseButtonsFromConsoleState(DWORD state) {
+  MouseButtons buttons = MouseButtons::None;
+  if ((state & FROM_LEFT_1ST_BUTTON_PRESSED) != 0) {
+    buttons = buttons | MouseButtons::Left;
+  }
+  if ((state & FROM_LEFT_2ND_BUTTON_PRESSED) != 0) {
+    buttons = buttons | MouseButtons::Middle;
+  }
+  if ((state & RIGHTMOST_BUTTON_PRESSED) != 0) {
+    buttons = buttons | MouseButtons::Right;
+  }
+  return buttons;
+}
+
+constexpr MouseButton mouseButtonFromConsoleState(DWORD state) {
+  if ((state & FROM_LEFT_1ST_BUTTON_PRESSED) != 0) {
+    return MouseButton::Left;
+  }
+  if ((state & FROM_LEFT_2ND_BUTTON_PRESSED) != 0) {
+    return MouseButton::Middle;
+  }
+  if ((state & RIGHTMOST_BUTTON_PRESSED) != 0) {
+    return MouseButton::Right;
+  }
+  return MouseButton::None;
+}
+
+static_assert(mouseButtonFromConsoleState(
+                  FROM_LEFT_2ND_BUTTON_PRESSED) == MouseButton::Middle);
+static_assert((kSideButtonMask & FROM_LEFT_2ND_BUTTON_PRESSED) == 0);
+
 MouseEventKind mouseEventKind(const MOUSE_EVENT_RECORD& event) {
   switch (event.dwEventFlags) {
     case 0:
@@ -210,15 +246,16 @@ void ConsoleInput::normalizeTerminalMouseGesture(MouseEvent& mouse) {
     return;
   }
 
-  const bool leftPressed =
-      (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+  const bool leftPressed = isMouseButtonDown(mouse, MouseButton::Left);
   terminal_input::MouseClickTransition transition;
   if (mouse.kind == MouseEventKind::Move) {
     if (!leftPressed) return;
     transition = terminal_input::MouseClickTransition::Move;
-  } else if (mouse.kind == MouseEventKind::Press && leftPressed) {
+  } else if (mouse.kind == MouseEventKind::Press &&
+             mouse.button == MouseButton::Left) {
     transition = terminal_input::MouseClickTransition::Press;
-  } else if (mouse.kind == MouseEventKind::Release) {
+  } else if (mouse.kind == MouseEventKind::Release &&
+             mouse.button == MouseButton::Left) {
     transition = terminal_input::MouseClickTransition::Release;
   } else {
     if (mouse.kind == MouseEventKind::Press) {
@@ -377,36 +414,59 @@ bool ConsoleInput::poll(InputEvent& out) {
     if (rec.EventType == MOUSE_EVENT) {
       const auto& mev = rec.Event.MouseEvent;
       const DWORD buttonState = mev.dwButtonState & kMouseButtonMask;
+      DWORD pressed = 0;
+      DWORD released = 0;
       MouseEventKind kind = mouseEventKind(mev);
       if (mev.dwEventFlags == 0) {
-        const DWORD pressed = buttonState & ~consoleMouseButtonState_;
-        const DWORD released = consoleMouseButtonState_ & ~buttonState;
+        pressed = buttonState & ~consoleMouseButtonState_;
+        released = consoleMouseButtonState_ & ~buttonState;
         kind = pressed != 0 ? MouseEventKind::Press
                             : (released != 0 ? MouseEventKind::Release
                                              : MouseEventKind::Unknown);
       }
       consoleMouseButtonState_ = buttonState;
+      xButton1Down_ =
+          (buttonState & FROM_LEFT_3RD_BUTTON_PRESSED) != 0;
+      xButton2Down_ =
+          (buttonState & FROM_LEFT_4TH_BUTTON_PRESSED) != 0;
       if (kind == MouseEventKind::Unknown) {
         count--;
         continue;
       }
 
-      constexpr DWORD kSideButtonMask =
-          FROM_LEFT_2ND_BUTTON_PRESSED | FROM_LEFT_3RD_BUTTON_PRESSED |
-          FROM_LEFT_4TH_BUTTON_PRESSED;
-      if (kind == MouseEventKind::Press &&
-          (buttonState & kSideButtonMask) != 0) {
+      const DWORD sideButtonsPressed = pressed & kSideButtonMask;
+      if (kind == MouseEventKind::Press && sideButtonsPressed != 0) {
         out.type = InputEvent::Type::Action;
-        if ((buttonState & FROM_LEFT_2ND_BUTTON_PRESSED) != 0) {
+        if ((sideButtonsPressed & FROM_LEFT_3RD_BUTTON_PRESSED) != 0) {
           out.action = InputAction::Back;
         } else {
           out.action = InputAction::Forward;
         }
         return true;
       }
+
+      DWORD changedButtonState = 0;
+      if (kind == MouseEventKind::Press) {
+        changedButtonState = pressed & kPointerButtonMask;
+      } else if (kind == MouseEventKind::Release) {
+        changedButtonState = released & kPointerButtonMask;
+      } else if (kind == MouseEventKind::DoubleClick) {
+        changedButtonState = buttonState & kPointerButtonMask;
+      }
+      const MouseButton changedButton =
+          mouseButtonFromConsoleState(changedButtonState);
+      if ((kind == MouseEventKind::Press ||
+           kind == MouseEventKind::Release ||
+           kind == MouseEventKind::DoubleClick) &&
+          changedButton == MouseButton::None) {
+        count--;
+        continue;
+      }
+
       out.type = InputEvent::Type::Mouse;
       out.mouse.pos = mev.dwMousePosition;
-      out.mouse.buttonState = buttonState;
+      out.mouse.buttons = mouseButtonsFromConsoleState(buttonState);
+      out.mouse.button = changedButton;
       out.mouse.kind = kind;
       out.mouse.wheelDelta = mouseWheelDelta(mev);
       out.mouse.control = mev.dwControlKeyState;

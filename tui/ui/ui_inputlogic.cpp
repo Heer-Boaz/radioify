@@ -613,8 +613,8 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
 
   if (ev.type == InputEvent::Type::Mouse) {
     const MouseEvent& mouse = ev.mouse;
-    bool leftPressed = (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
-    bool rightPressed = (mouse.buttonState & RIGHTMOST_BUTTON_PRESSED) != 0;
+    bool leftPressed = isMouseButtonDown(mouse, MouseButton::Left);
+    bool rightPressed = isMouseButtonDown(mouse, MouseButton::Right);
     bool hoveredSearch = browserInteractionEnabled &&
                          isMouseInSearchBar(mouse, searchBarY, searchBarWidth);
     if ((browser.filterActive || browser.pathSearchActive) &&

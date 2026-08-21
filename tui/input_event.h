@@ -34,9 +34,51 @@ enum class MouseEventSource : uint8_t {
   NativeWindow,
 };
 
+enum class MouseButton : uint8_t {
+  None,
+  Left,
+  Middle,
+  Right,
+};
+
+enum class MouseButtons : uint8_t {
+  None = 0,
+  Left = 1 << 0,
+  Middle = 1 << 1,
+  Right = 1 << 2,
+};
+
+inline constexpr MouseButtons operator|(MouseButtons lhs, MouseButtons rhs) {
+  return static_cast<MouseButtons>(static_cast<uint8_t>(lhs) |
+                                   static_cast<uint8_t>(rhs));
+}
+
+inline constexpr MouseButtons mouseButtonSet(MouseButton button) {
+  switch (button) {
+    case MouseButton::Left:
+      return MouseButtons::Left;
+    case MouseButton::Middle:
+      return MouseButtons::Middle;
+    case MouseButton::Right:
+      return MouseButtons::Right;
+    case MouseButton::None:
+      return MouseButtons::None;
+  }
+  return MouseButtons::None;
+}
+
+inline constexpr bool containsMouseButton(MouseButtons buttons,
+                                          MouseButton button) {
+  const uint8_t mask = static_cast<uint8_t>(mouseButtonSet(button));
+  return mask != 0 && (static_cast<uint8_t>(buttons) & mask) != 0;
+}
+
 struct MouseEvent {
   COORD pos{};
-  DWORD buttonState = 0;
+  // Buttons held after this event, matching the PointerEvent `buttons` model.
+  MouseButtons buttons = MouseButtons::None;
+  // Button whose state changed; None for motion and wheel events.
+  MouseButton button = MouseButton::None;
   MouseEventKind kind = MouseEventKind::Unknown;
   MouseEventSource source = MouseEventSource::Terminal;
   int wheelDelta = 0;
@@ -47,6 +89,11 @@ struct MouseEvent {
   double unitWidth = 1.0;
   double unitHeight = 1.0;
 };
+
+inline constexpr bool isMouseButtonDown(const MouseEvent& mouse,
+                                        MouseButton button) {
+  return containsMouseButton(mouse.buttons, button);
+}
 
 inline bool isWindowMouseEvent(const MouseEvent& mouse) {
   return mouse.source == MouseEventSource::NativeWindow;

@@ -49,7 +49,7 @@ void writeFitted(ConsoleScreen& screen, int x, int y, int width,
 }
 
 bool leftPressed(const MouseEvent& mouse) {
-  return (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+  return isMouseButtonDown(mouse, MouseButton::Left);
 }
 
 int wheelDelta(const MouseEvent& mouse) {

@@ -28,15 +28,8 @@ class PlaybackOsdTimeline;
 
 namespace playback_session_input {
 
-inline bool isBackMousePressed(const MouseEvent& mouse) {
-  constexpr DWORD kBackButtons = FROM_LEFT_2ND_BUTTON_PRESSED |
-                                 FROM_LEFT_3RD_BUTTON_PRESSED |
-                                 FROM_LEFT_4TH_BUTTON_PRESSED;
-  return (mouse.buttonState & kBackButtons) != 0;
-}
-
 inline bool isPlaybackFullscreenGesture(const MouseEvent& mouse) {
-  return (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0 &&
+  return mouse.button == MouseButton::Left &&
          mouse.kind == MouseEventKind::DoubleClick;
 }
 

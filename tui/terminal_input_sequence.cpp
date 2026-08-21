@@ -23,20 +23,16 @@ bool parseNumber(const wchar_t* text, size_t length, size_t& offset,
   return true;
 }
 
-DWORD terminalMouseButtons(int buttonCode, bool release) {
-  if (release) {
-    return 0;
-  }
-
+MouseButton terminalMouseButton(int buttonCode) {
   switch (buttonCode & 0x03) {
     case 0:
-      return FROM_LEFT_1ST_BUTTON_PRESSED;
+      return MouseButton::Left;
     case 1:
-      return FROM_LEFT_2ND_BUTTON_PRESSED;
+      return MouseButton::Middle;
     case 2:
-      return RIGHTMOST_BUTTON_PRESSED;
+      return MouseButton::Right;
     default:
-      return 0;
+      return MouseButton::None;
   }
 }
 
@@ -61,12 +57,16 @@ void assignTerminalMouseEvent(InputEvent& out, int buttonCode, int x, int y,
   out.mouse.hasPixelPosition = false;
   if (wheel) {
     const SHORT delta = ((buttonCode & 0x01) == 0) ? WHEEL_DELTA : -WHEEL_DELTA;
-    out.mouse.buttonState = 0;
+    out.mouse.buttons = MouseButtons::None;
+    out.mouse.button = MouseButton::None;
     out.mouse.kind = MouseEventKind::VerticalWheel;
     out.mouse.wheelDelta = delta;
     return;
   }
-  out.mouse.buttonState = terminalMouseButtons(buttonCode, release);
+  const MouseButton reportedButton = terminalMouseButton(buttonCode);
+  out.mouse.button = motion ? MouseButton::None : reportedButton;
+  out.mouse.buttons = release ? MouseButtons::None
+                              : mouseButtonSet(reportedButton);
   out.mouse.kind = motion ? MouseEventKind::Move
                           : (release ? MouseEventKind::Release
                                      : MouseEventKind::Press);

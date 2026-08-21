@@ -108,24 +108,28 @@ std::optional<InputEvent> inputEventFromAppCommand(LPARAM lParam) {
   }
 }
 
-DWORD mouseButtonsFromWParam(WPARAM wParam) {
-  DWORD buttonState = 0;
+MouseButtons mouseButtonsFromWParam(WPARAM wParam) {
+  MouseButtons buttons = MouseButtons::None;
   if ((wParam & MK_LBUTTON) != 0) {
-    buttonState |= FROM_LEFT_1ST_BUTTON_PRESSED;
+    buttons = buttons | MouseButtons::Left;
+  }
+  if ((wParam & MK_MBUTTON) != 0) {
+    buttons = buttons | MouseButtons::Middle;
   }
   if ((wParam & MK_RBUTTON) != 0) {
-    buttonState |= RIGHTMOST_BUTTON_PRESSED;
+    buttons = buttons | MouseButtons::Right;
   }
-  return buttonState;
+  return buttons;
 }
 
-InputEvent mouseEvent(int x, int y, DWORD buttonState, MouseEventKind kind,
-                      int wheelDelta) {
+InputEvent mouseEvent(int x, int y, MouseEventKind kind, MouseButtons buttons,
+                      MouseButton button, int wheelDelta) {
   InputEvent event{};
   event.type = InputEvent::Type::Mouse;
   event.mouse.pos.X = static_cast<SHORT>(x);
   event.mouse.pos.Y = static_cast<SHORT>(y);
-  event.mouse.buttonState = buttonState;
+  event.mouse.buttons = buttons;
+  event.mouse.button = button;
   event.mouse.kind = kind;
   event.mouse.wheelDelta = wheelDelta;
   markWindowMouseEvent(event.mouse);

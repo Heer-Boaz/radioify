@@ -48,11 +48,11 @@ InputEvent makeActionEvent(InputAction action) {
   return event;
 }
 
-MouseEvent makeMouse(DWORD buttonState) {
+MouseEvent makeMouse(MouseButton button) {
   MouseEvent mouse{};
-  mouse.buttonState = buttonState;
-  mouse.kind = buttonState == 0 ? MouseEventKind::Release
-                                : MouseEventKind::Press;
+  mouse.buttons = mouseButtonSet(button);
+  mouse.button = button;
+  mouse.kind = MouseEventKind::Press;
   return mouse;
 }
 
@@ -1956,14 +1956,7 @@ int main() {
   ok &= expect(playback_overlay::overlayCellCountForPixels(960, 9) == 107,
                "overlayCellCountForPixels must round columns up");
 
-  ok &= expect(!playback_session_input::isBackMousePressed(
-                   makeMouse(RIGHTMOST_BUTTON_PRESSED)),
-               "Right mouse button must not act as playback back/exit");
-  ok &= expect(playback_session_input::isBackMousePressed(
-                   makeMouse(FROM_LEFT_2ND_BUTTON_PRESSED)),
-               "Side/back mouse button must still act as playback back/exit");
-  MouseEvent windowDoubleClick =
-      makeMouse(FROM_LEFT_1ST_BUTTON_PRESSED);
+  MouseEvent windowDoubleClick = makeMouse(MouseButton::Left);
   windowDoubleClick.kind = MouseEventKind::DoubleClick;
   markWindowMouseEvent(windowDoubleClick);
   ok &= expect(playback_session_input::isPlaybackFullscreenGesture(
@@ -1979,6 +1972,11 @@ int main() {
   ok &= expect(!playback_session_input::isPlaybackFullscreenGesture(
                    windowSingleClick),
                "A playback single click must not toggle fullscreen");
+  MouseEvent middleDoubleClick = makeMouse(MouseButton::Middle);
+  middleDoubleClick.kind = MouseEventKind::DoubleClick;
+  ok &= expect(!playback_session_input::isPlaybackFullscreenGesture(
+                   middleDoubleClick),
+               "A middle-button double-click must not toggle fullscreen");
 
   ok &= expect(playback_frame_output::centerContentTop(0, 30, 20) == 5,
                "centerContentTop must center smaller content vertically");

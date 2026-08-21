@@ -134,8 +134,8 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         }
     }
 
-    auto queueWindowMouseEvent = [&](int x, int y, DWORD buttonState,
-                                     MouseEventKind kind,
+    auto queueWindowMouseEvent = [&](int x, int y, MouseEventKind kind,
+                                     MouseButtons buttons, MouseButton button,
                                      int wheelDelta = 0) {
         const bool mouseCaptured = GetCapture() == hWnd;
         const bool pointerMove = kind == MouseEventKind::Move;
@@ -147,7 +147,7 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
             pThis->m_windowMouseInputActive = true;
         }
         pThis->m_input.push(window_input_events::mouseEvent(
-            x, y, buttonState, kind, wheelDelta));
+            x, y, kind, buttons, button, wheelDelta));
     };
 
     if (uMsg == WM_NCMOUSEMOVE &&
@@ -162,7 +162,8 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
             pThis->m_trackingNonClientMouseLeave =
                 TrackMouseEvent(&tracking) != FALSE;
         }
-        queueWindowMouseEvent(point.x, point.y, 0, MouseEventKind::Move);
+        queueWindowMouseEvent(point.x, point.y, MouseEventKind::Move,
+                              MouseButtons::None, MouseButton::None);
         return 0;
     }
 
@@ -178,7 +179,8 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     if (uMsg == WM_LBUTTONDBLCLK) {
         pThis->m_input.push(window_input_events::mouseEvent(
             GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam),
-            FROM_LEFT_1ST_BUTTON_PRESSED, MouseEventKind::DoubleClick));
+            MouseEventKind::DoubleClick, MouseButtons::Left,
+            MouseButton::Left));
         return 0;
     }
 
@@ -193,15 +195,15 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
             pThis->m_editBoundaryCaptureActive =
                 pThis->m_leftMouseCaptureActive && editBoundary;
         }
-        queueWindowMouseEvent(x, y,
-                              FROM_LEFT_1ST_BUTTON_PRESSED,
-                              MouseEventKind::Press);
+        queueWindowMouseEvent(x, y, MouseEventKind::Press,
+                              MouseButtons::Left, MouseButton::Left);
         return 0;
     }
 
     if (uMsg == WM_LBUTTONUP) {
-        queueWindowMouseEvent(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), 0,
-                              MouseEventKind::Release);
+        queueWindowMouseEvent(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam),
+                              MouseEventKind::Release, MouseButtons::None,
+                              MouseButton::Left);
         if (GetCapture() == hWnd) {
             pThis->m_leftMouseCaptureActive = false;
             pThis->m_editBoundaryCaptureActive = false;
@@ -233,8 +235,8 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
             ScreenToClient(hWnd, &point);
         }
         pThis->m_input.push(window_input_events::mouseEvent(
-            point.x, point.y, RIGHTMOST_BUTTON_PRESSED,
-            MouseEventKind::Press));
+            point.x, point.y, MouseEventKind::Press, MouseButtons::Right,
+            MouseButton::Right));
         return 0;
     }
 
@@ -248,8 +250,9 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         }
         queueWindowMouseEvent(
             GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam),
+            MouseEventKind::Move,
             window_input_events::mouseButtonsFromWParam(wParam),
-            MouseEventKind::Move);
+            MouseButton::None);
         return 0;
     }
 
@@ -266,7 +269,8 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         ScreenToClient(pThis->m_hWnd, &point);
         queueWindowMouseEvent(
-            point.x, point.y, 0, MouseEventKind::VerticalWheel,
+            point.x, point.y, MouseEventKind::VerticalWheel,
+            MouseButtons::None, MouseButton::None,
             GET_WHEEL_DELTA_WPARAM(wParam));
         return 0;
     }

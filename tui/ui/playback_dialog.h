@@ -131,7 +131,10 @@ inline void showInfoDialog(ConsoleInput& input, ConsoleScreen& screen,
         }
       }
       if (ev.type == InputEvent::Type::Mouse) {
-        if (ev.mouse.buttonState != 0) return;
+        if (ev.mouse.kind == MouseEventKind::Press &&
+            ev.mouse.button != MouseButton::None) {
+          return;
+        }
       }
       if (ev.type == InputEvent::Type::Resize) {
         screen.updateSize();
@@ -163,7 +166,10 @@ inline DialogResult showConfirmDialog(ConsoleInput& input, ConsoleScreen& screen
         return DialogResult::Cancelled;
       }
       if (ev.type == InputEvent::Type::Mouse) {
-        if (ev.mouse.buttonState != 0) return DialogResult::Confirmed;
+        if (ev.mouse.kind == MouseEventKind::Press &&
+            ev.mouse.button != MouseButton::None) {
+          return DialogResult::Confirmed;
+        }
       }
       if (ev.type == InputEvent::Type::Key) {
         const KeyEvent& key = ev.key;

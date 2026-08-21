@@ -139,11 +139,9 @@ struct PlaybackSessionBootstrap::Impl {
   }
 
   bool handleMouseCancel(const MouseEvent& mouse) const {
-    const DWORD backMask = RIGHTMOST_BUTTON_PRESSED |
-                           FROM_LEFT_2ND_BUTTON_PRESSED |
-                           FROM_LEFT_3RD_BUTTON_PRESSED |
-                           FROM_LEFT_4TH_BUTTON_PRESSED;
-    return (mouse.buttonState & backMask) != 0;
+    return mouse.kind == MouseEventKind::Press &&
+           (mouse.button == MouseButton::Right ||
+            mouse.button == MouseButton::Middle);
   }
 
   bool waitForInitialization() {

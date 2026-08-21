@@ -792,11 +792,9 @@ static ImageViewerExit showAsciiArt(
       }
       if (ev.type == InputEvent::Type::Mouse) {
         const MouseEvent& mouse = ev.mouse;
-        const DWORD backMask = RIGHTMOST_BUTTON_PRESSED |
-                               FROM_LEFT_2ND_BUTTON_PRESSED |
-                               FROM_LEFT_3RD_BUTTON_PRESSED |
-                               FROM_LEFT_4TH_BUTTON_PRESSED;
-        if ((mouse.buttonState & backMask) != 0) {
+        if (mouse.kind == MouseEventKind::Press &&
+            (mouse.button == MouseButton::Right ||
+             mouse.button == MouseButton::Middle)) {
           return ImageViewerExit::Closed;
         }
 
@@ -824,7 +822,7 @@ static ImageViewerExit showAsciiArt(
           continue;
         }
 
-        if ((mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0 &&
+        if (isMouseButtonDown(mouse, MouseButton::Left) &&
             mouse.kind == MouseEventKind::Press) {
           if (hitControl && clickOverlayControl(*hitControl)) {
             renderFrame();
@@ -3037,7 +3035,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       }
       const bool browserInteractionEnabled = !melodyVisualizationEnabled;
       bool isLeftClick = (ev.type == InputEvent::Type::Mouse) &&
-                        (ev.mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+                         isMouseButtonDown(ev.mouse, MouseButton::Left);
       bool clearBtnHover = false;
       if (ev.type == InputEvent::Type::Mouse) {
         clearBtnHover =
@@ -3129,8 +3127,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         }
         if (ev.type == InputEvent::Type::Mouse) {
           const MouseEvent& mouse = ev.mouse;
-          bool leftPressed =
-              (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+          bool leftPressed = isMouseButtonDown(mouse, MouseButton::Left);
           if (mouse.kind == MouseEventKind::VerticalWheel) {
             int delta = mouse.wheelDelta;
             if (delta != 0) {
@@ -3250,8 +3247,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         }
         if (ev.type == InputEvent::Type::Mouse) {
           const MouseEvent& mouse = ev.mouse;
-          bool leftPressed =
-              (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+          bool leftPressed = isMouseButtonDown(mouse, MouseButton::Left);
           if (mouse.kind == MouseEventKind::VerticalWheel) {
             int delta = mouse.wheelDelta;
             if (delta != 0) {
