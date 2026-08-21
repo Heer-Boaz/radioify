@@ -21,12 +21,8 @@ PlaybackSessionHost::PlaybackSessionHost(const Args& args)
       accentStyle_(args.accentStyle),
       dimStyle_(args.dimStyle),
       fullRedrawEnabled_(args.enableAscii),
-      quitAppRequested_(args.quitAppRequested),
       logPath_(radioifyLogPath()),
       windowTitle_(toUtf8String(args.file.filename())) {
-  if (quitAppRequested_) {
-    *quitAppRequested_ = false;
-  }
   sharedGpuRenderer().ResetSessionState();
   if (fullRedrawEnabled_) {
     screen_.setAlwaysFullRedraw(true);
@@ -34,9 +30,6 @@ PlaybackSessionHost::PlaybackSessionHost(const Args& args)
 }
 
 PlaybackSessionHost::~PlaybackSessionHost() {
-  if (quitAppRequested_) {
-    *quitAppRequested_ = quitApplicationRequested_;
-  }
   finalizeVideoPlayback(screen_, fullRedrawEnabled_, &perfLog_);
   sharedGpuRenderer().ResetSessionState();
 }
@@ -137,8 +130,4 @@ playback_frame_output::LogLineWriter PlaybackSessionHost::warningSink() const {
 
 const std::string& PlaybackSessionHost::windowTitle() const {
   return windowTitle_;
-}
-
-bool* PlaybackSessionHost::quitApplicationRequestedPtr() {
-  return &quitApplicationRequested_;
 }

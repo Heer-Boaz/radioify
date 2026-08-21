@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "core/native_wait_handle.h"
@@ -23,12 +24,34 @@ enum class PlaybackSessionOpenOutcome {
   Ready,
   HandledWithoutPlayback,
   AudioFallbackRequested,
+  QuitApplicationRequested,
+};
+
+enum class PlaybackSessionExitIntent {
+  Stop,
+  QuitApplication,
+};
+
+struct PlaybackSessionCompletion {
+  PlaybackSessionExitIntent intent = PlaybackSessionExitIntent::Stop;
+  PlaybackSessionContinuationState continuityState;
 };
 
 class PlaybackSession {
  public:
-  struct Args {
+  // Session-owned activation data; it remains valid across pump() calls.
+  struct Request {
     std::filesystem::path file;
+    VideoPlaybackConfig config;
+    PlaybackSessionContinuationState continuityState;
+    PlaybackSessionIntent sessionIntent = PlaybackSessionIntent::View;
+    std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
+    std::function<bool(const std::vector<std::filesystem::path>&)>
+        requestOpenFiles;
+  };
+
+  // These dependencies are borrowed and must outlive the session.
+  struct Dependencies {
     ConsoleInput& input;
     ConsoleScreen& screen;
     const Style& baseStyle;
@@ -38,15 +61,9 @@ class PlaybackSession {
     const Style& progressFrameStyle;
     const Color& progressStart;
     const Color& progressEnd;
-    VideoPlaybackConfig config;
-    bool* quitAppRequested = nullptr;
-    std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
-    std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
-    PlaybackSessionContinuationState* continuityState = nullptr;
-    PlaybackSessionIntent sessionIntent = PlaybackSessionIntent::View;
   };
 
-  explicit PlaybackSession(Args args);
+  PlaybackSession(Request request, Dependencies dependencies);
   ~PlaybackSession();
 
   PlaybackSession(PlaybackSession&&) noexcept;
@@ -56,7 +73,7 @@ class PlaybackSession {
   PlaybackSession& operator=(const PlaybackSession&) = delete;
 
   PlaybackSessionOpenOutcome open();
-  bool pump();
+  std::optional<PlaybackSessionCompletion> pump();
   PlaybackShellTerminalRole terminalRole() const;
   std::vector<NativeWaitHandle> activityWaitHandles() const;
   int nextWakeTimeoutMs() const;

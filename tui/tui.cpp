@@ -940,8 +940,10 @@ class TuiMediaCoordinator {
 
   void pump() {
     if (!videoSession_) return;
-    if (videoSession_->pump()) return;
-    finishVideoSession();
+    std::optional<PlaybackSessionCompletion> completion =
+        videoSession_->pump();
+    if (!completion) return;
+    finishVideoSession(std::move(*completion));
     drainPendingCommands();
   }
 
@@ -1206,7 +1208,6 @@ class TuiMediaCoordinator {
       return true;
     }
 
-    videoQuitRequested_ = false;
     auto requestTransport = [this](PlaybackTransportCommand command) {
       if (!videoSession_ || pendingCommand_) {
         return false;
@@ -1226,15 +1227,25 @@ class TuiMediaCoordinator {
           return enqueueOpenFiles(request);
         };
 
-    const VideoPlaybackConfig videoConfig =
-        sessionConfig(services_.videoConfig, continuationState_);
-    videoSession_.emplace(PlaybackSession::Args{
-        target.file, services_.input, services_.screen, services_.baseStyle,
-        services_.accentStyle, services_.dimStyle, services_.progressEmptyStyle,
-        services_.progressFrameStyle, services_.progressStart,
-        services_.progressEnd, videoConfig, &videoQuitRequested_,
-        requestTransport,
-        requestDroppedFiles, &continuationState_, route.sessionIntent});
+    PlaybackSession::Request sessionRequest{
+        target.file,
+        sessionConfig(services_.videoConfig, continuationState_),
+        continuationState_,
+        route.sessionIntent,
+        std::move(requestTransport),
+        std::move(requestDroppedFiles)};
+    PlaybackSession::Dependencies sessionDependencies{
+        services_.input,
+        services_.screen,
+        services_.baseStyle,
+        services_.accentStyle,
+        services_.dimStyle,
+        services_.progressEmptyStyle,
+        services_.progressFrameStyle,
+        services_.progressStart,
+        services_.progressEnd};
+    videoSession_.emplace(std::move(sessionRequest),
+                          std::move(sessionDependencies));
 
     const PlaybackSessionOpenOutcome openOutcome = videoSession_->open();
     if (openOutcome == PlaybackSessionOpenOutcome::Ready) {
@@ -1250,17 +1261,25 @@ class TuiMediaCoordinator {
       }
       services_.queue.commit(std::move(activation));
       return true;
+    } else if (openOutcome ==
+               PlaybackSessionOpenOutcome::QuitApplicationRequested) {
+      videoSession_.reset();
+      enqueueQuit();
+      services_.presentationFinished();
+      return true;
     }
     videoSession_.reset();
     services_.presentationFinished();
     return true;
   }
 
-  void finishVideoSession() {
+  void finishVideoSession(PlaybackSessionCompletion completion) {
+    continuationState_ = std::move(completion.continuityState);
     videoSession_.reset();
     videoTarget_.reset();
-    if (videoQuitRequested_) enqueueQuit();
-    videoQuitRequested_ = false;
+    if (completion.intent == PlaybackSessionExitIntent::QuitApplication) {
+      enqueueQuit();
+    }
     services_.presentationFinished();
   }
 
@@ -1305,7 +1324,6 @@ class TuiMediaCoordinator {
   std::optional<PlaybackTarget> videoTarget_;
   std::optional<Command> pendingCommand_;
   std::optional<Command> handoffCommand_;
-  bool videoQuitRequested_ = false;
   bool driving_ = false;
 };
 

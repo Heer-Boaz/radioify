@@ -21,7 +21,6 @@ class PlaybackSessionHost {
     const Style& accentStyle;
     const Style& dimStyle;
     bool enableAscii;
-    bool* quitAppRequested = nullptr;
   };
 
   explicit PlaybackSessionHost(const Args& args);
@@ -38,7 +37,6 @@ class PlaybackSessionHost {
   playback_frame_output::LogLineWriter timingSink() const;
   playback_frame_output::LogLineWriter warningSink() const;
   const std::string& windowTitle() const;
- bool* quitApplicationRequestedPtr();
 
  private:
   ConsoleInput& input_;
@@ -47,8 +45,6 @@ class PlaybackSessionHost {
   const Style& accentStyle_;
   const Style& dimStyle_;
   const bool fullRedrawEnabled_;
-  bool* quitAppRequested_ = nullptr;
-  bool quitApplicationRequested_ = false;
   PerfLog perfLog_;
   std::filesystem::path logPath_;
   std::string windowTitle_;

@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "audioplayback.h"
-#include "playback/video/playback.h"
 #include "playback/video/player.h"
 #include "bootstrap.h"
 #include "host.h"
@@ -22,43 +21,37 @@ struct PlaybackSession::Impl {
     Finished,
   };
 
-  explicit Impl(Args args)
-      : file(std::move(args.file)),
-        input(args.input),
-        screen(args.screen),
-        baseStyle(args.baseStyle),
-        accentStyle(args.accentStyle),
-        dimStyle(args.dimStyle),
-        progressEmptyStyle(args.progressEmptyStyle),
-        progressFrameStyle(args.progressFrameStyle),
-        progressStart(args.progressStart),
-        progressEnd(args.progressEnd),
-        config(std::move(args.config)),
-        requestTransportCommand(std::move(args.requestTransportCommand)),
-        requestOpenFiles(std::move(args.requestOpenFiles)),
-        continuityState(args.continuityState),
-        sessionIntent(args.sessionIntent),
-        enableAscii(config.enableAscii),
-        enableAudio(config.enableAudio && audioIsEnabled()),
-        host({file, input, screen, baseStyle, accentStyle, dimStyle,
-              enableAscii, args.quitAppRequested}) {}
+  Impl(Request startRequest, Dependencies sessionDependencies)
+      : request(std::move(startRequest)),
+        dependencies(std::move(sessionDependencies)),
+        enableAscii(request.config.enableAscii),
+        enableAudio(request.config.enableAudio && audioIsEnabled()),
+        host({request.file, dependencies.input, dependencies.screen,
+              dependencies.baseStyle, dependencies.accentStyle,
+              dependencies.dimStyle, enableAscii}) {}
 
   ~Impl() { shutdownLoop(); }
 
   PlaybackSessionBootstrapOutcome bootstrap() {
     PlaybackSessionBootstrap bootstrapper(
-        {file,       input,
-         screen,     baseStyle,
-         accentStyle, dimStyle,
-         progressEmptyStyle, progressFrameStyle,
-         progressStart,      progressEnd,
-         enableAudio, enableAscii,
-         player,     host.quitApplicationRequestedPtr()});
+        {request.file,
+         dependencies.input,
+         dependencies.screen,
+         dependencies.baseStyle,
+         dependencies.accentStyle,
+         dependencies.dimStyle,
+         dependencies.progressEmptyStyle,
+         dependencies.progressFrameStyle,
+         dependencies.progressStart,
+         dependencies.progressEnd,
+         enableAudio,
+         enableAscii,
+         player});
     return bootstrapper.run();
   }
 
   void prepareSubtitles() {
-    subtitleManager.loadForVideo(file);
+    subtitleManager.loadForVideo(request.file);
     hasSubtitles = subtitleManager.selectableTrackCount() > 0;
     enableSubtitlesShared.store(hasSubtitles);
     host.logSubtitleDetection(subtitleManager);
@@ -66,31 +59,30 @@ struct PlaybackSession::Impl {
 
   void createLoop() {
     loop = std::make_unique<PlaybackLoopRunner>(PlaybackLoopRunner::Args{
-        screen,
-        config,
+        dependencies.screen,
+        std::move(request.config),
         player,
         subtitleManager,
         host.perfLog(),
-        baseStyle,
-        accentStyle,
-        dimStyle,
-        progressEmptyStyle,
-        progressFrameStyle,
-        progressStart,
-        progressEnd,
+        dependencies.baseStyle,
+        dependencies.accentStyle,
+        dependencies.dimStyle,
+        dependencies.progressEmptyStyle,
+        dependencies.progressFrameStyle,
+        dependencies.progressStart,
+        dependencies.progressEnd,
         host.timingSink(),
         host.warningSink(),
         enableSubtitlesShared,
         host.windowTitle(),
-        file,
+        std::move(request.file),
         enableAscii,
         enableAudio,
         hasSubtitles,
-        host.quitApplicationRequestedPtr(),
-        requestTransportCommand,
-        requestOpenFiles,
-        continuityState,
-        sessionIntent});
+        std::move(request.requestTransportCommand),
+        std::move(request.requestOpenFiles),
+        std::move(request.continuityState),
+        request.sessionIntent});
   }
 
   void shutdownLoop() {
@@ -115,12 +107,15 @@ struct PlaybackSession::Impl {
     loop->renderFailureScreen();
   }
 
-  void completePlayback() {
-    if (continuityState) {
-      *continuityState = loop->continuationState();
-    }
+  PlaybackSessionCompletion completePlayback() {
+    PlaybackSessionCompletion completion{
+        loop->quitApplicationRequested()
+            ? PlaybackSessionExitIntent::QuitApplication
+            : PlaybackSessionExitIntent::Stop,
+        loop->continuationState()};
     finalizePlayback();
     lifecycle = Lifecycle::Finished;
+    return completion;
   }
 
   PlaybackSessionOpenOutcome open() {
@@ -131,6 +126,11 @@ struct PlaybackSession::Impl {
     }
 
     const PlaybackSessionBootstrapOutcome bootstrapOutcome = bootstrap();
+    if (bootstrapOutcome ==
+        PlaybackSessionBootstrapOutcome::QuitApplication) {
+      lifecycle = Lifecycle::Finished;
+      return PlaybackSessionOpenOutcome::QuitApplicationRequested;
+    }
     if (bootstrapOutcome == PlaybackSessionBootstrapOutcome::PlayAudioOnly) {
       lifecycle = Lifecycle::Finished;
       return PlaybackSessionOpenOutcome::AudioFallbackRequested;
@@ -146,15 +146,14 @@ struct PlaybackSession::Impl {
     return PlaybackSessionOpenOutcome::Ready;
   }
 
-  bool pump() {
+  std::optional<PlaybackSessionCompletion> pump() {
     assert(lifecycle == Lifecycle::Ready ||
            lifecycle == Lifecycle::Running);
     lifecycle = Lifecycle::Running;
     if (loop->pump()) {
-      return true;
+      return std::nullopt;
     }
-    completePlayback();
-    return false;
+    return completePlayback();
   }
 
   bool canControl() const {
@@ -162,21 +161,8 @@ struct PlaybackSession::Impl {
                     lifecycle == Lifecycle::Running);
   }
 
-  std::filesystem::path file;
-  ConsoleInput& input;
-  ConsoleScreen& screen;
-  const Style& baseStyle;
-  const Style& accentStyle;
-  const Style& dimStyle;
-  const Style& progressEmptyStyle;
-  const Style& progressFrameStyle;
-  const Color& progressStart;
-  const Color& progressEnd;
-  VideoPlaybackConfig config;
-  std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
-  std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
-  PlaybackSessionContinuationState* continuityState = nullptr;
-  PlaybackSessionIntent sessionIntent = PlaybackSessionIntent::View;
+  Request request;
+  Dependencies dependencies;
   const bool enableAscii;
   const bool enableAudio;
   PlaybackSessionHost host;
@@ -189,8 +175,9 @@ struct PlaybackSession::Impl {
   std::unique_ptr<PlaybackLoopRunner> loop;
 };
 
-PlaybackSession::PlaybackSession(Args args)
-    : impl_(std::make_unique<Impl>(std::move(args))) {}
+PlaybackSession::PlaybackSession(Request request, Dependencies dependencies)
+    : impl_(std::make_unique<Impl>(std::move(request),
+                                  std::move(dependencies))) {}
 
 PlaybackSession::~PlaybackSession() = default;
 
@@ -201,7 +188,7 @@ PlaybackSession& PlaybackSession::operator=(PlaybackSession&&) noexcept =
 
 PlaybackSessionOpenOutcome PlaybackSession::open() { return impl_->open(); }
 
-bool PlaybackSession::pump() {
+std::optional<PlaybackSessionCompletion> PlaybackSession::pump() {
   return impl_->pump();
 }
 

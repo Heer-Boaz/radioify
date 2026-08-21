@@ -13,6 +13,7 @@ enum class PlaybackSessionBootstrapOutcome {
   ContinueVideo,
   PlayAudioOnly,
   Handled,
+  QuitApplication,
 };
 
 class PlaybackSessionBootstrap {
@@ -31,7 +32,6 @@ class PlaybackSessionBootstrap {
     bool enableAudio;
     bool enableAscii;
     Player& player;
-    bool* quitAppRequested = nullptr;
   };
 
   explicit PlaybackSessionBootstrap(Args args);

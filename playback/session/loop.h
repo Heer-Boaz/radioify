@@ -27,7 +27,7 @@ class PlaybackLoopRunner {
  public:
   struct Args {
     ConsoleScreen& screen;
-    const VideoPlaybackConfig& config;
+    VideoPlaybackConfig config;
     Player& player;
     SubtitleManager& subtitleManager;
     PerfLog& perfLog;
@@ -41,15 +41,15 @@ class PlaybackLoopRunner {
     playback_frame_output::LogLineWriter timingSink;
     playback_frame_output::LogLineWriter warningSink;
     std::atomic<bool>& enableSubtitlesShared;
-    const std::string& windowTitle;
-    const std::filesystem::path& file;
+    std::string windowTitle;
+    std::filesystem::path file;
     bool enableAscii;
     bool enableAudio;
     bool hasSubtitles = false;
-    bool* quitApplicationRequested = nullptr;
     std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
-    std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
-    PlaybackSessionContinuationState* continuityState = nullptr;
+    std::function<bool(const std::vector<std::filesystem::path>&)>
+        requestOpenFiles;
+    PlaybackSessionContinuationState continuityState;
     PlaybackSessionIntent sessionIntent = PlaybackSessionIntent::View;
   };
 
@@ -81,6 +81,7 @@ class PlaybackLoopRunner {
   void requestQuit();
   void shutdown();
   void renderFailureScreen();
+  bool quitApplicationRequested() const;
   PlaybackSessionContinuationState continuationState() const;
 
   bool hasRenderFailure() const;

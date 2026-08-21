@@ -55,9 +55,9 @@ bool shouldRenderPlaybackFrame(bool redraw, bool presented,
 
 PlaybackPresentationState initialPlaybackPresentation(
     const VideoPlaybackConfig& config,
-    const PlaybackSessionContinuationState* continuityState) {
-  if (continuityState && continuityState->hasPresentation) {
-    return continuityState->presentation;
+    const PlaybackSessionContinuationState& continuityState) {
+  if (continuityState.hasPresentation) {
+    return continuityState.presentation;
   }
   return config.enableAscii ? PlaybackPresentationState::terminalAscii()
                             : PlaybackPresentationState::nativeWindowed();
@@ -94,7 +94,7 @@ struct PlaybackLoopRunner::Impl {
   };
 
   ConsoleScreen& screen;
-  const VideoPlaybackConfig& config;
+  const VideoPlaybackConfig config;
   SubtitleManager& subtitleManager;
   PerfLog& perfLog;
   const Style& baseStyle;
@@ -107,14 +107,13 @@ struct PlaybackLoopRunner::Impl {
   playback_frame_output::LogLineWriter timingSink;
   playback_frame_output::LogLineWriter warningSink;
   std::atomic<bool>& enableSubtitlesShared;
-  const std::string& windowTitle;
-  const std::filesystem::path& file;
-  bool* quitApplicationRequested = nullptr;
+  const std::string windowTitle;
+  const std::filesystem::path file;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
-  PlaybackSessionContinuationState* continuityState = nullptr;
   const PlaybackSessionIntent sessionIntent;
   PlaybackSessionContinuationState capturedContinuationState;
+  bool quitApplicationRequested = false;
   const bool enableAudio;
   const bool hasSubtitles;
 
@@ -162,7 +161,7 @@ struct PlaybackLoopRunner::Impl {
 
   explicit Impl(PlaybackLoopRunner::Args args)
       : screen(args.screen),
-        config(args.config),
+        config(std::move(args.config)),
         subtitleManager(args.subtitleManager),
         perfLog(args.perfLog),
         baseStyle(args.baseStyle),
@@ -175,26 +174,23 @@ struct PlaybackLoopRunner::Impl {
         timingSink(std::move(args.timingSink)),
         warningSink(std::move(args.warningSink)),
         enableSubtitlesShared(args.enableSubtitlesShared),
-        windowTitle(args.windowTitle),
-        file(args.file),
-        quitApplicationRequested(args.quitApplicationRequested),
+        windowTitle(std::move(args.windowTitle)),
+        file(std::move(args.file)),
         requestTransportCommand(std::move(args.requestTransportCommand)),
         requestOpenFiles(std::move(args.requestOpenFiles)),
-        continuityState(args.continuityState),
         sessionIntent(args.sessionIntent),
         enableAudio(args.enableAudio),
         hasSubtitles(args.hasSubtitles),
         output(playbackLayoutFor(initialPlaybackPresentation(
-                   args.config, args.continuityState))),
+                   config, args.continuityState))),
         presentationController(
-            initialPlaybackPresentation(args.config, args.continuityState),
-            args.continuityState ? args.continuityState->windowPlacement
-                                 : WindowPlacementState{}),
+            initialPlaybackPresentation(config, args.continuityState),
+            args.continuityState.windowPlacement),
         core({args.player, args.perfLog, args.enableAudio,
-              initialPlaybackPresentation(args.config, args.continuityState)
+              initialPlaybackPresentation(config, args.continuityState)
                   .usesAsciiGrid()}),
         gpuRenderer(sharedGpuRenderer()),
-        videoEditWorkspace(args.file, core.player(), timelinePreviewModel,
+        videoEditWorkspace(file, core.player(), timelinePreviewModel,
                            timelinePreviewProvider) {
     core.initialize(screen);
     const playback_video_timeline_preview::Source previewSource{
@@ -231,9 +227,7 @@ struct PlaybackLoopRunner::Impl {
     osd.clear();
     redraw = true;
     forceRefreshArt = true;
-    if (quitApplication && quitApplicationRequested) {
-      *quitApplicationRequested = true;
-    }
+    quitApplicationRequested = quitApplicationRequested || quitApplication;
   }
 
   bool exitNeedsConfirmation() const {
@@ -1443,6 +1437,10 @@ void PlaybackLoopRunner::requestQuit() { impl_->requestQuit(); }
 void PlaybackLoopRunner::shutdown() { impl_->shutdown(); }
 
 void PlaybackLoopRunner::renderFailureScreen() { impl_->renderFailureScreen(); }
+
+bool PlaybackLoopRunner::quitApplicationRequested() const {
+  return impl_->quitApplicationRequested;
+}
 
 PlaybackSessionContinuationState PlaybackLoopRunner::continuationState() const {
   return impl_->capturedContinuationState;

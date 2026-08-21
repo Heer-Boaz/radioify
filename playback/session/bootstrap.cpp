@@ -99,20 +99,11 @@ struct PlaybackSessionBootstrap::Impl {
         progressEnd(args.progressEnd),
         enableAudio(args.enableAudio),
         enableAscii(args.enableAscii),
-        player(args.player),
-        quitAppRequested(args.quitAppRequested) {}
+        player(args.player) {}
 
-  void requestQuit() {
-    if (quitAppRequested) {
-      *quitAppRequested = true;
-    }
-  }
+  void requestQuit() { quitApplicationRequested = true; }
 
   bool openPlayer() {
-    if (quitAppRequested) {
-      *quitAppRequested = false;
-    }
-
     auto playerConfig = PlayerConfig{};
     playerConfig.file = file;
     playerConfig.enableAudio = enableAudio;
@@ -216,7 +207,9 @@ struct PlaybackSessionBootstrap::Impl {
     }
     if (!waitForInitialization()) {
       player.close();
-      return PlaybackSessionBootstrapOutcome::Handled;
+      return quitApplicationRequested
+                 ? PlaybackSessionBootstrapOutcome::QuitApplication
+                 : PlaybackSessionBootstrapOutcome::Handled;
     }
     if (!player.initOk()) {
       return handleInitFailure();
@@ -237,7 +230,7 @@ struct PlaybackSessionBootstrap::Impl {
   const bool enableAudio;
   const bool enableAscii;
   Player& player;
-  bool* quitAppRequested = nullptr;
+  bool quitApplicationRequested = false;
 };
 
 PlaybackSessionBootstrap::PlaybackSessionBootstrap(Args args)
