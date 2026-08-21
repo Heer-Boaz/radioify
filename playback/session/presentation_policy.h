@@ -2,6 +2,8 @@
 
 #include <optional>
 
+#include "playback/framebuffer/window_presentation.h"
+
 enum class PlaybackVisualMode {
   AsciiGrid,
   Framebuffer,
@@ -160,27 +162,16 @@ class PlaybackPresentationState {
       PlaybackPictureInPictureReturn::Base;
 };
 
-enum class PlaybackWindowPresentationMode {
-  Windowed,
-  Fullscreen,
-  PictureInPicture,
-};
-
-enum class PlaybackPresentationFocus {
-  KeepCurrentSurface,
-  FocusTargetSurface,
-};
-
 enum class PlaybackShellFocusTarget {
   Browser,
   TerminalPlayback,
 };
 
-inline constexpr PlaybackPresentationFocus presentationFocusFor(
+inline constexpr WindowFocusPolicy presentationFocusFor(
     const PlaybackPresentationState& target) {
   return target.layer() == PlaybackPresentationLayer::PictureInPicture
-             ? PlaybackPresentationFocus::KeepCurrentSurface
-             : PlaybackPresentationFocus::FocusTargetSurface;
+             ? WindowFocusPolicy::PreserveCurrent
+             : WindowFocusPolicy::ActivateWindow;
 }
 
 inline constexpr bool entersPictureInPicture(
@@ -202,32 +193,26 @@ shellFocusAfterTransition(const PlaybackPresentationState& previous,
   return std::nullopt;
 }
 
-struct PlaybackWindowPresentationRequest {
-  PlaybackWindowPresentationMode target =
-      PlaybackWindowPresentationMode::Windowed;
-  PlaybackVisualMode visual = PlaybackVisualMode::Framebuffer;
-  PlaybackPresentationFocus focus =
-      PlaybackPresentationFocus::KeepCurrentSurface;
-};
-
-inline constexpr std::optional<PlaybackWindowPresentationRequest>
+inline constexpr std::optional<WindowPresentationRequest>
 windowPresentationRequest(const PlaybackPresentationState& state,
-                          PlaybackPresentationFocus focus) {
+                          WindowFocusPolicy focus) {
   if (!state.requiresNativeWindow()) {
     return std::nullopt;
   }
 
-  PlaybackWindowPresentationMode target =
-      PlaybackWindowPresentationMode::Windowed;
+  WindowPresentationMode mode = WindowPresentationMode::Windowed;
   switch (state.layer()) {
     case PlaybackPresentationLayer::Base:
       break;
     case PlaybackPresentationLayer::Fullscreen:
-      target = PlaybackWindowPresentationMode::Fullscreen;
+      mode = WindowPresentationMode::Fullscreen;
       break;
     case PlaybackPresentationLayer::PictureInPicture:
-      target = PlaybackWindowPresentationMode::PictureInPicture;
+      mode = WindowPresentationMode::PictureInPicture;
       break;
   }
-  return PlaybackWindowPresentationRequest{target, state.visual(), focus};
+  const WindowContentMode content =
+      state.usesAsciiGrid() ? WindowContentMode::TextGrid
+                            : WindowContentMode::Framebuffer;
+  return WindowPresentationRequest{mode, content, focus};
 }

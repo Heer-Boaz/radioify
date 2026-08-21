@@ -11,6 +11,7 @@
 #include "core/windows_message_pump.h"
 #include "playback/debug/lines.h"
 #include "playback/frame/refresh.h"
+#include "playback/session/state.h"
 #include "playback/video/state/machine.h"
 #include "video_pipeline.h"
 #include "mini_player_tui.h"

@@ -10,7 +10,7 @@ PlaybackPresentationController::PlaybackPresentationController(
       windowPlacement_(initialPlacement) {}
 
 bool PlaybackPresentationController::transitionTo(
-    PlaybackPresentationState next, PlaybackPresentationFocus focus) {
+    PlaybackPresentationState next, WindowFocusPolicy focus) {
   if (next == desiredState_) {
     return false;
   }
@@ -53,7 +53,7 @@ PlaybackPresentationController::synchronize(
         result.windowOpen = output.windowOpen();
         result.transitionFailed = failed;
         result.shellFocusTarget = focusTarget;
-        pendingFocus_ = PlaybackPresentationFocus::KeepCurrentSurface;
+        pendingFocus_ = WindowFocusPolicy::PreserveCurrent;
         return result;
       };
 
@@ -68,7 +68,7 @@ PlaybackPresentationController::synchronize(
   if (!desiredState_.requiresNativeWindow()) {
     if (output.windowOpen()) {
       if (appliedState_ && appliedState_->requiresNativeWindow()) {
-        output.captureWindowPlacement(windowPlacement_, *appliedState_);
+        output.captureWindowPlacement(windowPlacement_);
       }
       output.closeWindow();
     }
@@ -76,7 +76,7 @@ PlaybackPresentationController::synchronize(
     std::optional<PlaybackShellFocusTarget> focusTarget =
         shellFocusAfterTransition(result.previousState, *appliedState_);
     if (!focusTarget && result.previousWindowOpen &&
-        pendingFocus_ == PlaybackPresentationFocus::FocusTargetSurface) {
+        pendingFocus_ == WindowFocusPolicy::ActivateWindow) {
       focusTarget = PlaybackShellFocusTarget::TerminalPlayback;
     }
     return finish(false, focusTarget);
@@ -100,7 +100,7 @@ PlaybackPresentationController::synchronize(
            : output.applyWindowPresentation(*request));
   if (applied) {
     appliedState_ = desiredState_;
-    output.captureWindowPlacement(windowPlacement_, *appliedState_);
+    output.captureWindowPlacement(windowPlacement_);
     return finish(false, shellFocusAfterTransition(result.previousState,
                                                     *appliedState_));
   }
@@ -110,7 +110,7 @@ PlaybackPresentationController::synchronize(
       previousApplied->requiresNativeWindow() && output.windowOpen();
   if (canRestorePreviousWindowState) {
     const auto rollback = windowPresentationRequest(
-        *previousApplied, PlaybackPresentationFocus::KeepCurrentSurface);
+        *previousApplied, WindowFocusPolicy::PreserveCurrent);
     if (rollback && output.applyWindowPresentation(*rollback)) {
       desiredState_ = *previousApplied;
       appliedState_ = *previousApplied;
@@ -129,7 +129,7 @@ void PlaybackPresentationController::captureWindowPlacement(
     PlaybackSessionContinuationState& state) {
   const PlaybackPresentationState& applied = this->state();
   if (applied.requiresNativeWindow() && output.windowOpen()) {
-    output.captureWindowPlacement(windowPlacement_, applied);
+    output.captureWindowPlacement(windowPlacement_);
   }
   state.hasPresentation = true;
   state.presentation = applied;

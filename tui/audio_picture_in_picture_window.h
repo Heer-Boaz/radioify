@@ -9,8 +9,8 @@
 #include "consoleinput.h"
 #include "consolescreen.h"
 #include "gpu_text_grid.h"
+#include "playback/framebuffer/window_presentation.h"
 #include "playback/overlay/overlay.h"
-#include "playback/session/state.h"
 #include "playback/video/framebuffer/window/window.h"
 
 class AudioPictureInPictureWindow {

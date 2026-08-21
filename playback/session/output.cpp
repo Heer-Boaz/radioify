@@ -83,20 +83,19 @@ void PlaybackOutputController::renderTerminal(
 }
 
 bool PlaybackOutputController::applyWindowPresentation(
-    PlaybackWindowPresentationRequest request) {
+    WindowPresentationRequest request) {
   return impl_->windowPresenter.applyPresentation(request);
 }
 
 bool PlaybackOutputController::restoreWindowPresentation(
-    PlaybackWindowPresentationRequest request,
+    WindowPresentationRequest request,
     const WindowPlacementState& placement) {
   return impl_->windowPresenter.restorePresentation(request, placement);
 }
 
 bool PlaybackOutputController::captureWindowPlacement(
-    WindowPlacementState& placement,
-    const PlaybackPresentationState& presentation) {
-  return impl_->windowPresenter.capturePlacement(placement, presentation);
+    WindowPlacementState& placement) {
+  return impl_->windowPresenter.capturePlacement(placement);
 }
 
 bool PlaybackOutputController::activateWindow() {

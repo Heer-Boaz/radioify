@@ -48,13 +48,11 @@ class PlaybackOutputController {
   void renderTerminal(
       playback_screen_renderer::PlaybackScreenRenderInputs& inputs);
 
-  bool applyWindowPresentation(PlaybackWindowPresentationRequest request);
+  bool applyWindowPresentation(WindowPresentationRequest request);
   bool restoreWindowPresentation(
-      PlaybackWindowPresentationRequest request,
+      WindowPresentationRequest request,
       const WindowPlacementState& placement);
-  bool captureWindowPlacement(
-      WindowPlacementState& placement,
-      const PlaybackPresentationState& presentation);
+  bool captureWindowPlacement(WindowPlacementState& placement);
   bool activateWindow();
   VideoWindow& window();
   const VideoWindow& window() const;

@@ -58,11 +58,10 @@ class PlaybackPresentationController {
 
  private:
   bool transitionTo(PlaybackPresentationState next,
-                    PlaybackPresentationFocus focus);
+                    WindowFocusPolicy focus);
 
   PlaybackPresentationState desiredState_;
   std::optional<PlaybackPresentationState> appliedState_;
-  PlaybackPresentationFocus pendingFocus_ =
-      PlaybackPresentationFocus::FocusTargetSurface;
+  WindowFocusPolicy pendingFocus_ = WindowFocusPolicy::ActivateWindow;
   WindowPlacementState windowPlacement_;
 };

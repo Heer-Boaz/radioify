@@ -8,9 +8,9 @@
 #include "audioplayback.h"
 #include "core/windows_app_resources.h"
 #include "playback/framebuffer/mini_player_tui.h"
+#include "playback/framebuffer/window_presentation.h"
 #include "playback/media/artwork_catalog.h"
 #include "playback/input/shortcuts.h"
-#include "playback/session/window_presentation.h"
 #include "runtime_helpers.h"
 #include "tracklist.h"
 #include "ui_helpers.h"
@@ -84,13 +84,11 @@ bool AudioPictureInPictureWindow::open() {
   }
   window_.SetVsync(true);
   window_.SetTextGridMinimumSize(kMinCols, kMinRows);
-  const PlaybackPresentationState presentation =
-      PlaybackPresentationState::nativeWindowed(
-          PlaybackVisualMode::AsciiGrid)
-          .togglePictureInPicture();
-  const auto request = windowPresentationRequest(
-      presentation, PlaybackPresentationFocus::KeepCurrentSurface);
-  if (!request || !playback_session_window::apply(window_, *request)) {
+  const WindowPresentationRequest request{
+      WindowPresentationMode::PictureInPicture,
+      WindowContentMode::TextGrid,
+      WindowFocusPolicy::PreserveCurrent};
+  if (!playback_window_presentation::apply(window_, request)) {
     lastError_ = "The picture-in-picture presentation could not be applied.";
     close();
     return false;
@@ -127,11 +125,7 @@ bool AudioPictureInPictureWindow::ensureOpen() {
 
 WindowPlacementState AudioPictureInPictureWindow::capturePlacement() const {
   WindowPlacementState placement;
-  const PlaybackPresentationState presentation =
-      PlaybackPresentationState::nativeWindowed(
-          PlaybackVisualMode::AsciiGrid)
-          .togglePictureInPicture();
-  playback_session_window::capturePlacement(window_, placement, presentation);
+  playback_window_presentation::capturePlacement(window_, placement);
   return placement;
 }
 

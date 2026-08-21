@@ -32,7 +32,7 @@ int main() {
                "terminal ASCII must be the primary playback surface");
   ok &= expect(!windowPresentationRequest(
                     terminal,
-                    PlaybackPresentationFocus::KeepCurrentSurface),
+                    WindowFocusPolicy::PreserveCurrent),
                "terminal playback must not request a native window");
 
   const PlaybackPresentationState windowed = terminal.toggleWindowMode();
@@ -47,11 +47,10 @@ int main() {
                    PlaybackPrimarySurface::NativePlayback,
                "a normal video window must remain the primary surface");
   const auto windowedRequest = windowPresentationRequest(
-      windowed, PlaybackPresentationFocus::FocusTargetSurface);
+      windowed, WindowFocusPolicy::ActivateWindow);
   ok &= expect(windowedRequest &&
-                   windowedRequest->target ==
-                       PlaybackWindowPresentationMode::Windowed &&
-                   windowedRequest->visual == PlaybackVisualMode::Framebuffer,
+                   windowedRequest->mode == WindowPresentationMode::Windowed &&
+                   windowedRequest->content == WindowContentMode::Framebuffer,
                "windowed framebuffer state must map to a concrete windowed request");
 
   const PlaybackPresentationState terminalRoundTrip =
@@ -83,12 +82,12 @@ int main() {
                        terminalFullscreen,
                "Ctrl+W in fullscreen must only change the renderer and base surface");
   const auto terminalFullscreenRequest = windowPresentationRequest(
-      terminalFullscreen, PlaybackPresentationFocus::FocusTargetSurface);
+      terminalFullscreen, WindowFocusPolicy::ActivateWindow);
   ok &= expect(terminalFullscreenRequest &&
-                   terminalFullscreenRequest->target ==
-                       PlaybackWindowPresentationMode::Fullscreen &&
-                   terminalFullscreenRequest->visual ==
-                       PlaybackVisualMode::AsciiGrid,
+                   terminalFullscreenRequest->mode ==
+                       WindowPresentationMode::Fullscreen &&
+                   terminalFullscreenRequest->content ==
+                       WindowContentMode::TextGrid,
                "ASCII fullscreen must map directly to one native fullscreen request");
 
   const PlaybackPresentationState terminalPip =
@@ -107,7 +106,7 @@ int main() {
                    PlaybackPrimarySurface::Browser,
                "PiP must make the browser the primary workspace");
   ok &= expect(presentationFocusFor(terminalPip) ==
-                   PlaybackPresentationFocus::KeepCurrentSurface,
+                   WindowFocusPolicy::PreserveCurrent,
                "entering PiP must not steal focus before the browser is activated");
   ok &= expect(entersPictureInPicture(terminal, terminalPip),
                "the policy must identify the transition into PiP");
@@ -126,7 +125,7 @@ int main() {
   ok &= expect(fullscreenPip.togglePictureInPicture() == windowedFullscreen,
                "PiP from fullscreen must return exactly to fullscreen");
   ok &= expect(presentationFocusFor(windowedFullscreen) ==
-                   PlaybackPresentationFocus::FocusTargetSurface,
+                   WindowFocusPolicy::ActivateWindow,
                "leaving PiP for fullscreen must focus the restored surface");
   ok &= expect(!entersPictureInPicture(fullscreenPip, windowedFullscreen),
                "leaving PiP must not be classified as entering PiP");
@@ -144,12 +143,12 @@ int main() {
   const auto windowedPipRequest = windowPresentationRequest(
       windowedPip, presentationFocusFor(windowedPip));
   ok &= expect(windowedPipRequest &&
-                   windowedPipRequest->target ==
-                       PlaybackWindowPresentationMode::PictureInPicture &&
-                   windowedPipRequest->visual ==
-                       PlaybackVisualMode::Framebuffer &&
+                   windowedPipRequest->mode ==
+                       WindowPresentationMode::PictureInPicture &&
+                   windowedPipRequest->content ==
+                       WindowContentMode::Framebuffer &&
                    windowedPipRequest->focus ==
-                       PlaybackPresentationFocus::KeepCurrentSurface,
+                       WindowFocusPolicy::PreserveCurrent,
                "framebuffer PiP must map to one non-activating native request");
 
   const PlaybackPresentationState fullscreenFromPip =
@@ -169,7 +168,7 @@ int main() {
                    framebufferPip.togglePictureInPicture() == windowed,
                "Ctrl+W in PiP must change the visual mode without losing the PiP layer");
   ok &= expect(presentationFocusFor(framebufferPip) ==
-                   PlaybackPresentationFocus::KeepCurrentSurface,
+                   WindowFocusPolicy::PreserveCurrent,
                "changing the renderer inside PiP must preserve workspace focus");
 
   return ok ? 0 : 1;

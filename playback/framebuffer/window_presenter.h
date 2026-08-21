@@ -5,9 +5,9 @@
 #include <memory>
 
 #include "core/native_wait_handle.h"
+#include "playback/framebuffer/window_presentation.h"
 #include "playback/video/gpu/gpu_shared.h"
 #include "presenter.h"
-#include "playback/session/state.h"
 #include "playback/video/player.h"
 #include "playback/video/framebuffer/window/window.h"
 
@@ -24,11 +24,10 @@ class WindowPresenter {
                  buildTextGridPresentation);
   void stop();
   void requestPresent();
-  bool applyPresentation(PlaybackWindowPresentationRequest request);
-  bool restorePresentation(PlaybackWindowPresentationRequest request,
+  bool applyPresentation(WindowPresentationRequest request);
+  bool restorePresentation(WindowPresentationRequest request,
                            const WindowPlacementState& placement);
-  bool capturePlacement(WindowPlacementState& placement,
-                        const PlaybackPresentationState& presentation);
+  bool capturePlacement(WindowPlacementState& placement);
   bool activate();
   void setCursorVisible(bool visible);
   VideoFrameSnapshotResult captureCurrentFrame();

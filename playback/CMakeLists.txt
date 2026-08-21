@@ -22,7 +22,6 @@ radioify_add_module_object_library(radioify_playback
   ${CMAKE_CURRENT_SOURCE_DIR}/session/output.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/presentation_controller.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/video_edit_workspace.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/session/window_presentation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/video/edit/timeline.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/video/edit/overlay_model.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/video/edit/export.cpp
@@ -41,6 +40,7 @@ radioify_add_module_object_library(radioify_playback
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/frame_output_console.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/screen_renderer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/presenter.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/window_presentation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/video_pipeline.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/mini_player_tui.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/framebuffer/window_presenter.cpp

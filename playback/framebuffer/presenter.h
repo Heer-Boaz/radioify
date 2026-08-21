@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -9,13 +10,19 @@
 #include "consolescreen.h"
 #include "playback/video/gpu/gpu_shared.h"
 #include "playback/overlay/overlay.h"
-#include "playback/session/state.h"
 #include "playback/video/player.h"
 #include "playback/video/framebuffer/window/window.h"
 
 class ThreadDispatchQueue;
+enum class PlaybackSessionState : uint8_t;
 
 namespace playback_framebuffer_presenter {
+
+enum class WindowThreadState : uint8_t {
+  Disabled,
+  Enabled,
+  Stopping,
+};
 
 // Immutable session-owned state published to the presenter thread as one
 // revision. Controls are projected only after this complete snapshot exists.

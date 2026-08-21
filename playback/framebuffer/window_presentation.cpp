@@ -6,35 +6,35 @@
 
 namespace {
 
-VideoWindowFocus toVideoWindowFocus(PlaybackPresentationFocus focus) {
+VideoWindowFocus toVideoWindowFocus(WindowFocusPolicy focus) {
   switch (focus) {
-    case PlaybackPresentationFocus::KeepCurrentSurface:
+    case WindowFocusPolicy::PreserveCurrent:
       return VideoWindowFocus::KeepCurrentFocus;
-    case PlaybackPresentationFocus::FocusTargetSurface:
+    case WindowFocusPolicy::ActivateWindow:
       return VideoWindowFocus::TakeForegroundFocus;
   }
-  assert(false && "Unhandled playback presentation focus mode");
+  assert(false && "Unhandled window focus policy");
   return VideoWindowFocus::KeepCurrentFocus;
 }
 
-void setVisualMode(VideoWindow& window, PlaybackVisualMode visual) {
+void setContentMode(VideoWindow& window, WindowContentMode content) {
   window.SetTextGridPresentationEnabled(
-      visual == PlaybackVisualMode::AsciiGrid);
+      content == WindowContentMode::TextGrid);
 }
 
 bool matchesRequest(const VideoWindow& window,
-                    const PlaybackWindowPresentationRequest& request) {
+                    const WindowPresentationRequest& request) {
   if (!window.IsOpen() || !window.IsVisible() ||
       window.IsTextGridPresentationEnabled() !=
-          (request.visual == PlaybackVisualMode::AsciiGrid)) {
+          (request.content == WindowContentMode::TextGrid)) {
     return false;
   }
-  switch (request.target) {
-    case PlaybackWindowPresentationMode::Windowed:
+  switch (request.mode) {
+    case WindowPresentationMode::Windowed:
       return !window.IsFullscreen() && !window.IsPictureInPicture();
-    case PlaybackWindowPresentationMode::Fullscreen:
+    case WindowPresentationMode::Fullscreen:
       return window.IsFullscreen() && !window.IsPictureInPicture();
-    case PlaybackWindowPresentationMode::PictureInPicture:
+    case WindowPresentationMode::PictureInPicture:
       return !window.IsFullscreen() && window.IsPictureInPicture();
   }
   return false;
@@ -42,14 +42,14 @@ bool matchesRequest(const VideoWindow& window,
 
 }  // namespace
 
-namespace playback_session_window {
+namespace playback_window_presentation {
 
 bool apply(VideoWindow& window, WindowPresentationRequest request) {
   const VideoWindowFocus focus = toVideoWindowFocus(request.focus);
   bool surfaceApplied = false;
 
-  switch (request.target) {
-    case PlaybackWindowPresentationMode::Windowed:
+  switch (request.mode) {
+    case WindowPresentationMode::Windowed:
       if (!window.SetPictureInPicture(false,
                                       VideoWindowFocus::KeepCurrentFocus) ||
           !window.SetFullscreen(false,
@@ -58,19 +58,19 @@ bool apply(VideoWindow& window, WindowPresentationRequest request) {
       }
       surfaceApplied = window.Show(focus);
       break;
-    case PlaybackWindowPresentationMode::Fullscreen:
+    case WindowPresentationMode::Fullscreen:
       surfaceApplied = window.IsPictureInPicture()
                            ? window.ExitPictureInPictureToFullscreen(focus)
                            : window.SetFullscreen(true, focus);
       break;
-    case PlaybackWindowPresentationMode::PictureInPicture:
+    case WindowPresentationMode::PictureInPicture:
       surfaceApplied = window.SetPictureInPicture(true, focus);
       break;
   }
   if (!surfaceApplied) {
     return false;
   }
-  setVisualMode(window, request.visual);
+  setContentMode(window, request.content);
   return matchesRequest(window, request);
 }
 
@@ -80,8 +80,7 @@ void applyPlacement(VideoWindow& window, const WindowPlacementState& state) {
   }
 }
 
-void capturePlacement(const VideoWindow& window, WindowPlacementState& state,
-                      const PlaybackPresentationState& presentation) {
+void capturePlacement(const VideoWindow& window, WindowPlacementState& state) {
   if (!window.IsOpen()) {
     return;
   }
@@ -92,8 +91,7 @@ void capturePlacement(const VideoWindow& window, WindowPlacementState& state,
     state.windowedRect = windowedRect;
   }
 
-  if (presentation.layer() ==
-      PlaybackPresentationLayer::PictureInPicture) {
+  if (window.IsPictureInPicture()) {
     RECT pictureInPictureRect{};
     if (window.GetWindowBounds(&pictureInPictureRect)) {
       state.hasPictureInPictureRect = true;
@@ -102,4 +100,4 @@ void capturePlacement(const VideoWindow& window, WindowPlacementState& state,
   }
 }
 
-}  // namespace playback_session_window
+}  // namespace playback_window_presentation

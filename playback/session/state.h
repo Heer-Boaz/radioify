@@ -2,14 +2,6 @@
 
 #include <cstdint>
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-
 #include "presentation_policy.h"
 
 enum class PlaybackSessionState : uint8_t {
@@ -35,19 +27,6 @@ inline bool toggleRequestsPause(PlaybackSessionState sessionState,
 }
 
 }  // namespace playback_session_state
-
-enum class WindowThreadState : uint8_t {
-  Disabled,
-  Enabled,
-  Stopping,
-};
-
-struct WindowPlacementState {
-  bool hasWindowedRect = false;
-  RECT windowedRect{};
-  bool hasPictureInPictureRect = false;
-  RECT pictureInPictureRect{};
-};
 
 struct PlaybackSessionContinuationState {
   bool hasPresentation = false;

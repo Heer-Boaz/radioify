@@ -11,12 +11,14 @@
 #include "core/thread_dispatch_queue.h"
 #include "core/windows_app_resources.h"
 #include "core/windows_handle.h"
+#include "playback/framebuffer/window_presentation.h"
 #include "presenter.h"
-#include "playback/session/window_presentation.h"
 #include "runtime_helpers.h"
 #include "timing_log.h"
 
 namespace {
+
+using playback_framebuffer_presenter::WindowThreadState;
 
 void appendWindowPresenterTimingLog(const char* fmt, ...) {
 #if RADIOIFY_ENABLE_TIMING_LOG
@@ -188,11 +190,11 @@ struct WindowPresenter::Impl {
     notify();
   }
 
-  bool applyPresentation(PlaybackWindowPresentationRequest request) {
+  bool applyPresentation(WindowPresentationRequest request) {
     bool applied = false;
     const bool executed = dispatch.invoke([this, request, &applied]() {
       applied = window.IsOpen() &&
-                playback_session_window::apply(window, request);
+                playback_window_presentation::apply(window, request);
     });
     if (executed && applied) {
       requestPresent();
@@ -200,7 +202,7 @@ struct WindowPresenter::Impl {
     return executed && applied;
   }
 
-  bool restorePresentation(PlaybackWindowPresentationRequest request,
+  bool restorePresentation(WindowPresentationRequest request,
                            const WindowPlacementState& placement) {
     bool applied = false;
     const bool executed = dispatch.invoke(
@@ -208,12 +210,11 @@ struct WindowPresenter::Impl {
           if (!window.IsOpen()) {
             return;
           }
-          playback_session_window::applyPlacement(window, placement);
-          if (!playback_session_window::apply(window, request)) {
+          playback_window_presentation::applyPlacement(window, placement);
+          if (!playback_window_presentation::apply(window, request)) {
             return;
           }
-          if (request.target ==
-                  PlaybackWindowPresentationMode::PictureInPicture &&
+          if (request.mode == WindowPresentationMode::PictureInPicture &&
               placement.hasPictureInPictureRect &&
               !window.SetWindowBounds(placement.pictureInPictureRect)) {
             return;
@@ -226,16 +227,14 @@ struct WindowPresenter::Impl {
     return executed && applied;
   }
 
-  bool capturePlacement(WindowPlacementState& placement,
-                        const PlaybackPresentationState& presentation) {
+  bool capturePlacement(WindowPlacementState& placement) {
     bool captured = false;
     const bool executed = dispatch.invoke(
-        [this, &placement, presentation, &captured]() {
+        [this, &placement, &captured]() {
           if (!window.IsOpen()) {
             return;
           }
-          playback_session_window::capturePlacement(window, placement,
-                                                     presentation);
+          playback_window_presentation::capturePlacement(window, placement);
           captured = true;
         });
     return executed && captured;
@@ -307,20 +306,18 @@ void WindowPresenter::stop() { impl_->stop(); }
 void WindowPresenter::requestPresent() { impl_->requestPresent(); }
 
 bool WindowPresenter::applyPresentation(
-    PlaybackWindowPresentationRequest request) {
+    WindowPresentationRequest request) {
   return impl_->applyPresentation(request);
 }
 
 bool WindowPresenter::restorePresentation(
-    PlaybackWindowPresentationRequest request,
+    WindowPresentationRequest request,
     const WindowPlacementState& placement) {
   return impl_->restorePresentation(request, placement);
 }
 
-bool WindowPresenter::capturePlacement(
-    WindowPlacementState& placement,
-    const PlaybackPresentationState& presentation) {
-  return impl_->capturePlacement(placement, presentation);
+bool WindowPresenter::capturePlacement(WindowPlacementState& placement) {
+  return impl_->capturePlacement(placement);
 }
 
 bool WindowPresenter::activate() { return impl_->activate(); }
