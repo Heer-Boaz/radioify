@@ -164,6 +164,13 @@ The concrete implementation plan lives in
 [`WINDOWS11_EXPLORER_INTEGRATION.md`](WINDOWS11_EXPLORER_INTEGRATION.md).
 
 ## Controls
+
+When video uses a native window (windowed, fullscreen, or picture-in-picture),
+the media browser remains live in the terminal and marks the current video.
+Browser navigation keeps its normal ownership there: Backspace goes up and
+browser Back follows browser history. Escape stops the active video and returns
+to the browser.
+
 - Mouse: select; click to play/open
 - Enter: open folder / play file
 - Backspace: up
@@ -200,16 +207,18 @@ The concrete implementation plan lives in
 - Leaving playback distinguishes exporting the current revision, waiting for
   it, and cancelling a running export. A job must finish or be explicitly
   cancelled before playback can close; no edit is silently lost
-- Ctrl+W: toggle video Window mode (framebuffer-mode)
-- Ctrl+P: toggle picture-in-picture in Window mode
-- T: toggle picture-in-picture TUI in Window mode
+- Ctrl+W: switch between ASCII and framebuffer presentation; base playback
+  switches between the terminal and a normal native window
+- Alt+Enter: toggle fullscreen; from picture-in-picture, enter fullscreen
+- Ctrl+P: enter picture-in-picture or return to its exact previous surface
+- T: cycle the browser view (grid, list, preview)
 - R: cycle dry -> typical 1930s radio -> Philco 37-116 -> dry
 - H: toggle 50Hz mode
 - O: options (KSS/NSF only)
 - V: toggle window vsync
 - Shift+Up/Down: volume +/-10%
 - Ctrl+Up/Down: radio makeup gain (RG)
-- Q or Ctrl+C: quit
+- Ctrl+Q or Ctrl+C: quit
 
 ## Supported files
 - Audio: .wav, .mp3, .flac, .ogg, .wma, .aac, .ac3, .eac3, .aif, .aiff, .aifc, .opus, .oga, .mka, .wv, .tta, .caf, .au, .mp2, .ape, .tak, .amr, .ra, .dts, .dsf, .qcp, .spx, .mpc, .xwma, .w64, .voc, .awb, .gsm, .oma, .aa, .aax, .mlp, .truehd, .ac4, .loas, .latm, .kss, .nsf, .mid, .midi, .vgm, .vgz, .psf, .minipsf, .psf2, .minipsf2
