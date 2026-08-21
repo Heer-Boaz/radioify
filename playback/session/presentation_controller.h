@@ -1,16 +1,11 @@
 #pragma once
 
-#include <functional>
 #include <optional>
-#include <string>
 
-#include "playback/framebuffer/presenter.h"
 #include "presentation_policy.h"
 #include "state.h"
 
 class PlaybackOutputController;
-class Player;
-struct WindowUiState;
 
 struct PlaybackPresentationSyncResult {
   PlaybackPresentationState previousState =
@@ -43,11 +38,7 @@ class PlaybackPresentationController {
   bool toggleFullscreen();
 
   PlaybackPresentationSyncResult synchronize(
-      PlaybackOutputController& output, Player& player,
-      const std::string& mediaTitle,
-      const std::function<WindowUiState()>& buildUiState,
-      const playback_framebuffer_presenter::TextGridPresentationProvider&
-          buildTextGridPresentation);
+      PlaybackOutputController& output);
   void captureWindowPlacement(PlaybackOutputController& output,
                               PlaybackSessionContinuationState& state);
 

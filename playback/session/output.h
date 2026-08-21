@@ -21,7 +21,11 @@ struct PlaybackScreenRenderInputs;
 
 class PlaybackOutputController {
  public:
-  PlaybackOutputController();
+  PlaybackOutputController(
+      Player& player, std::string mediaTitle,
+      std::function<WindowUiState()> buildUiState,
+      playback_framebuffer_presenter::TextGridPresentationProvider
+          buildTextGridPresentation);
   ~PlaybackOutputController();
 
   PlaybackOutputController(PlaybackOutputController&&) noexcept;
@@ -35,11 +39,7 @@ class PlaybackOutputController {
   bool consumeWindowCloseRequested();
   NativeWaitHandle windowInputWaitHandle() const;
   NativeWaitHandle windowCloseRequestedWaitHandle() const;
-  bool openWindow(
-      Player& player, const std::string& mediaTitle,
-      const std::function<WindowUiState()>& buildUiState,
-      const playback_framebuffer_presenter::TextGridPresentationProvider&
-          buildTextGridPresentation);
+  bool openWindow();
   void closeWindow();
 
   bool pollWindowInput(InputEvent& event);

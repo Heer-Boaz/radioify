@@ -10,12 +10,26 @@
 #include "playback/framebuffer/window_presenter.h"
 
 struct PlaybackOutputController::Impl {
+  Impl(Player& player, std::string mediaTitle,
+       std::function<WindowUiState()> buildUiState,
+       playback_framebuffer_presenter::TextGridPresentationProvider
+           buildTextGridPresentation)
+      : windowPresenter(player, std::move(mediaTitle),
+                        std::move(buildUiState),
+                        std::move(buildTextGridPresentation)) {}
+
   WindowPresenter windowPresenter;
   GpuVideoFrameCache terminalFrameCache;
 };
 
-PlaybackOutputController::PlaybackOutputController()
-    : impl_(std::make_unique<Impl>()) {}
+PlaybackOutputController::PlaybackOutputController(
+    Player& player, std::string mediaTitle,
+    std::function<WindowUiState()> buildUiState,
+    playback_framebuffer_presenter::TextGridPresentationProvider
+        buildTextGridPresentation)
+    : impl_(std::make_unique<Impl>(
+          player, std::move(mediaTitle), std::move(buildUiState),
+          std::move(buildTextGridPresentation))) {}
 
 PlaybackOutputController::~PlaybackOutputController() = default;
 
@@ -46,13 +60,8 @@ PlaybackOutputController::windowCloseRequestedWaitHandle() const {
   return impl_->windowPresenter.closeRequestedWaitHandle();
 }
 
-bool PlaybackOutputController::openWindow(
-    Player& player, const std::string& mediaTitle,
-    const std::function<WindowUiState()>& buildUiState,
-    const playback_framebuffer_presenter::TextGridPresentationProvider&
-        buildTextGridPresentation) {
-  return impl_->windowPresenter.start(player, mediaTitle, buildUiState,
-                                      buildTextGridPresentation);
+bool PlaybackOutputController::openWindow() {
+  return impl_->windowPresenter.start();
 }
 
 void PlaybackOutputController::closeWindow() {

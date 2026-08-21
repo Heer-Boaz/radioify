@@ -111,9 +111,9 @@ struct PlaybackLoopRunner::Impl {
   const bool enableAudio;
   const bool hasSubtitles;
 
-  PlaybackOutputController output;
   PlaybackPresentationController presentationController;
   PlaybackSessionCore core;
+  PlaybackOutputController output;
   GpuAsciiRenderer& gpuRenderer;
   AsciiArt art;
   playback_screen_renderer::TimelinePreviewAsciiCache timelinePreviewArt;
@@ -182,6 +182,21 @@ struct PlaybackLoopRunner::Impl {
         core({args.player, args.perfLog, args.enableAudio,
               initialPlaybackPresentation(config, args.continuityState)
                   .usesAsciiGrid()}),
+        output(
+            args.player, windowTitle,
+            [this]() { return buildWindowUiState(); },
+            [this](int pixelWidth, int pixelHeight, int cellPixelWidth,
+                   int cellPixelHeight, const VideoFrame* frame,
+                   bool frameChanged,
+                   const std::string& enhancementDebugLine,
+                   std::vector<ScreenCell>& outCells, int& outCols,
+                   int& outRows,
+                   playback_overlay::InteractionMap& outInteractions) {
+              return buildTextGridPresentation(
+                  pixelWidth, pixelHeight, cellPixelWidth, cellPixelHeight,
+                  frame, frameChanged, enhancementDebugLine, outCells,
+                  outCols, outRows, outInteractions);
+            }),
         gpuRenderer(sharedGpuRenderer()),
         videoEditWorkspace(file, core.player(), timelinePreviewModel,
                            timelinePreviewProvider) {
@@ -201,6 +216,12 @@ struct PlaybackLoopRunner::Impl {
       executeVideoEditCommand(playback_video_edit::Command::Open, false);
     }
     applyPresenterSync(syncPresentation());
+  }
+
+  ~Impl() {
+    // The presenter owns callbacks into this session. Join its thread while
+    // every callback dependency is still alive.
+    output.closeWindow();
   }
 
   void showEditMessage(const std::string& message) {
@@ -840,21 +861,7 @@ struct PlaybackLoopRunner::Impl {
   }
 
   PlaybackPresentationSyncResult syncPresentation() {
-    auto buildUiState = [&]() { return buildWindowUiState(); };
-    auto buildTextGridPresentation =
-        [&](int pixelWidth, int pixelHeight, int cellPixelWidth,
-            int cellPixelHeight, const VideoFrame* frame, bool frameChanged,
-            const std::string& enhancementDebugLine,
-            std::vector<ScreenCell>& outCells, int& outCols, int& outRows,
-            playback_overlay::InteractionMap& outInteractions) {
-          return this->buildTextGridPresentation(
-              pixelWidth, pixelHeight, cellPixelWidth, cellPixelHeight, frame,
-              frameChanged, enhancementDebugLine, outCells, outCols, outRows,
-              outInteractions);
-        };
-    return presentationController.synchronize(
-        output, core.player(), windowTitle, buildUiState,
-        buildTextGridPresentation);
+    return presentationController.synchronize(output);
   }
 
   void applyPresenterSync(const PlaybackPresentationSyncResult& syncResult) {

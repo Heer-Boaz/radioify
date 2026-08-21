@@ -6,6 +6,7 @@
 #include <fstream>
 #include <mutex>
 #include <thread>
+#include <utility>
 
 #include "core/native_wait_handle.h"
 #include "core/thread_dispatch_queue.h"
@@ -50,9 +51,19 @@ struct WindowStartGate {
   bool opened = false;
 };
 
+std::string nativePlaybackWindowTitle(const std::string& mediaTitle) {
+  return mediaTitle.empty() ? std::string(RADIOIFY_APP_NAME)
+                            : mediaTitle + " - " RADIOIFY_APP_NAME;
+}
+
 }  // namespace
 
 struct WindowPresenter::Impl {
+  Player& player;
+  const std::string nativeWindowTitle;
+  const std::function<WindowUiState()> uiStateBuilder;
+  const playback_framebuffer_presenter::TextGridPresentationProvider
+      textGridPresentationBuilder;
   VideoWindow window;
   GpuVideoFrameCache frameCache;
   ThreadDispatchQueue dispatch;
@@ -62,9 +73,16 @@ struct WindowPresenter::Impl {
   std::atomic<HWND> windowHandle{nullptr};
   UniqueWindowsHandle wakeEvent{CreateEventW(nullptr, FALSE, FALSE, nullptr)};
   std::thread thread;
-  std::function<WindowUiState()> uiStateBuilder;
-
-  Impl() { window.SetVsync(true); }
+  Impl(Player& player, std::string mediaTitle,
+       std::function<WindowUiState()> buildUiState,
+       playback_framebuffer_presenter::TextGridPresentationProvider
+           buildTextGridPresentation)
+      : player(player),
+        nativeWindowTitle(nativePlaybackWindowTitle(mediaTitle)),
+        uiStateBuilder(std::move(buildUiState)),
+        textGridPresentationBuilder(std::move(buildTextGridPresentation)) {
+    window.SetVsync(true);
+  }
 
   ~Impl() {
     stop();
@@ -76,10 +94,7 @@ struct WindowPresenter::Impl {
     }
   }
 
-  bool start(Player& player, const std::string& mediaTitle,
-             const std::function<WindowUiState()>& buildUiState,
-             const playback_framebuffer_presenter::TextGridPresentationProvider&
-                 buildTextGridPresentation) {
+  bool start() {
     if (thread.joinable()) {
       HWND hwnd = nativeWindowHandle();
       if (hwnd && IsWindow(hwnd)) {
@@ -93,51 +108,44 @@ struct WindowPresenter::Impl {
     }
 
     auto startGate = std::make_shared<WindowStartGate>();
-    uiStateBuilder = buildUiState;
     windowHandle.store(nullptr, std::memory_order_release);
     cursorVisible.store(true, std::memory_order_relaxed);
     threadState.store(WindowThreadState::Enabled, std::memory_order_relaxed);
     forcePresent.store(true, std::memory_order_relaxed);
-    const std::string nativeWindowTitle =
-        mediaTitle.empty() ? std::string(RADIOIFY_APP_NAME)
-                           : mediaTitle + " - " RADIOIFY_APP_NAME;
+    thread = std::thread([this, startGate]() {
+      dispatch.openOnCurrentThread();
+      const bool opened = window.Open(
+          VideoWindow::kDefaultVideoClientWidth,
+          VideoWindow::kDefaultVideoClientHeight,
+          nativeWindowTitle);
+      if (opened) {
+        windowHandle.store(window.NativeWindowHandle(),
+                           std::memory_order_release);
+        window.EnableFileDrop();
+      }
+      {
+        std::lock_guard<std::mutex> lock(startGate->mutex);
+        startGate->opened = opened;
+        startGate->completed = true;
+      }
+      startGate->ready.notify_one();
 
-    thread = std::thread(
-        [this, &player, buildTextGridPresentation, startGate,
-         nativeWindowTitle]() {
-          dispatch.openOnCurrentThread();
-          const bool opened = window.Open(
-              VideoWindow::kDefaultVideoClientWidth,
-              VideoWindow::kDefaultVideoClientHeight,
-              nativeWindowTitle);
-          if (opened) {
-            windowHandle.store(window.NativeWindowHandle(),
-                               std::memory_order_release);
-            window.EnableFileDrop();
-          }
-          {
-            std::lock_guard<std::mutex> lock(startGate->mutex);
-            startGate->opened = opened;
-            startGate->completed = true;
-          }
-          startGate->ready.notify_one();
+      if (opened) {
+        playback_framebuffer_presenter::runFramebufferPresenterLoop(
+            player, window, frameCache, threadState, forcePresent,
+            NativeWaitHandle(wakeEvent.get()), dispatch, uiStateBuilder,
+            textGridPresentationBuilder);
+        dispatch.close();
+        window.Close();
+        windowHandle.store(nullptr, std::memory_order_release);
+      } else {
+        dispatch.close();
+      }
 
-          if (opened) {
-            playback_framebuffer_presenter::runFramebufferPresenterLoop(
-                player, window, frameCache, threadState, forcePresent,
-                NativeWaitHandle(wakeEvent.get()), dispatch, uiStateBuilder,
-                buildTextGridPresentation);
-            dispatch.close();
-            window.Close();
-            windowHandle.store(nullptr, std::memory_order_release);
-          } else {
-            dispatch.close();
-          }
-
-          threadState.store(WindowThreadState::Disabled,
-                            std::memory_order_relaxed);
-          forcePresent.store(false, std::memory_order_relaxed);
-        });
+      threadState.store(WindowThreadState::Disabled,
+                        std::memory_order_relaxed);
+      forcePresent.store(false, std::memory_order_relaxed);
+    });
 
     bool opened = false;
     {
@@ -153,7 +161,6 @@ struct WindowPresenter::Impl {
       if (thread.joinable()) {
         thread.join();
       }
-      uiStateBuilder = {};
       return false;
     }
 
@@ -181,7 +188,6 @@ struct WindowPresenter::Impl {
     threadState.store(WindowThreadState::Disabled, std::memory_order_relaxed);
     forcePresent.store(false, std::memory_order_relaxed);
     windowHandle.store(nullptr, std::memory_order_release);
-    uiStateBuilder = {};
     cursorVisible.store(true, std::memory_order_relaxed);
     {
       std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
@@ -286,19 +292,18 @@ struct WindowPresenter::Impl {
   }
 };
 
-WindowPresenter::WindowPresenter()
-    : impl_(std::make_unique<Impl>()) {}
+WindowPresenter::WindowPresenter(
+    Player& player, std::string mediaTitle,
+    std::function<WindowUiState()> buildUiState,
+    playback_framebuffer_presenter::TextGridPresentationProvider
+        buildTextGridPresentation)
+    : impl_(std::make_unique<Impl>(
+          player, std::move(mediaTitle), std::move(buildUiState),
+          std::move(buildTextGridPresentation))) {}
 
 WindowPresenter::~WindowPresenter() = default;
 
-bool WindowPresenter::start(
-    Player& player, const std::string& mediaTitle,
-    const std::function<WindowUiState()>& buildUiState,
-    const playback_framebuffer_presenter::TextGridPresentationProvider&
-        buildTextGridPresentation) {
-  return impl_->start(player, mediaTitle, buildUiState,
-                      buildTextGridPresentation);
-}
+bool WindowPresenter::start() { return impl_->start(); }
 
 void WindowPresenter::stop() { impl_->stop(); }
 

@@ -14,16 +14,17 @@
 
 class WindowPresenter {
  public:
-  WindowPresenter();
+  WindowPresenter(
+      Player& player, std::string mediaTitle,
+      std::function<WindowUiState()> buildUiState,
+      playback_framebuffer_presenter::TextGridPresentationProvider
+          buildTextGridPresentation);
   ~WindowPresenter();
 
   WindowPresenter(const WindowPresenter&) = delete;
   WindowPresenter& operator=(const WindowPresenter&) = delete;
 
-  bool start(Player& player, const std::string& mediaTitle,
-             const std::function<WindowUiState()>& buildUiState,
-             const playback_framebuffer_presenter::TextGridPresentationProvider&
-                 buildTextGridPresentation);
+  bool start();
   void stop();
   void requestPresent();
   bool applyPresentation(WindowPresentationRequest request);
