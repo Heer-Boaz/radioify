@@ -23,7 +23,7 @@ struct PlaybackSession::Impl {
   };
 
   explicit Impl(Args args)
-      : file(args.file),
+      : file(std::move(args.file)),
         input(args.input),
         screen(args.screen),
         baseStyle(args.baseStyle),
@@ -33,7 +33,7 @@ struct PlaybackSession::Impl {
         progressFrameStyle(args.progressFrameStyle),
         progressStart(args.progressStart),
         progressEnd(args.progressEnd),
-        config(args.config),
+        config(std::move(args.config)),
         requestTransportCommand(std::move(args.requestTransportCommand)),
         requestOpenFiles(std::move(args.requestOpenFiles)),
         continuityState(args.continuityState),
@@ -162,7 +162,7 @@ struct PlaybackSession::Impl {
                     lifecycle == Lifecycle::Running);
   }
 
-  const std::filesystem::path& file;
+  std::filesystem::path file;
   ConsoleInput& input;
   ConsoleScreen& screen;
   const Style& baseStyle;
@@ -172,7 +172,7 @@ struct PlaybackSession::Impl {
   const Style& progressFrameStyle;
   const Color& progressStart;
   const Color& progressEnd;
-  const VideoPlaybackConfig& config;
+  VideoPlaybackConfig config;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
   PlaybackSessionContinuationState* continuityState = nullptr;

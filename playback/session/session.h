@@ -11,13 +11,13 @@
 #include "playback/control/transport.h"
 #include "playback/session/presentation_policy.h"
 #include "playback/session/state.h"
+#include "playback/video/playback.h"
 
 class ConsoleInput;
 class ConsoleScreen;
 struct Color;
 struct InputEvent;
 struct Style;
-struct VideoPlaybackConfig;
 
 enum class PlaybackSessionOpenOutcome {
   Ready,
@@ -28,7 +28,7 @@ enum class PlaybackSessionOpenOutcome {
 class PlaybackSession {
  public:
   struct Args {
-    const std::filesystem::path& file;
+    std::filesystem::path file;
     ConsoleInput& input;
     ConsoleScreen& screen;
     const Style& baseStyle;
@@ -38,7 +38,7 @@ class PlaybackSession {
     const Style& progressFrameStyle;
     const Color& progressStart;
     const Color& progressEnd;
-    const VideoPlaybackConfig& config;
+    VideoPlaybackConfig config;
     bool* quitAppRequested = nullptr;
     std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
     std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
