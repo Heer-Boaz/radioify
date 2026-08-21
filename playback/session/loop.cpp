@@ -877,11 +877,7 @@ struct PlaybackLoopRunner::Impl {
     if (syncResult.shellFocusTarget) {
       switch (*syncResult.shellFocusTarget) {
         case PlaybackShellFocusTarget::Browser:
-          if (activateBrowserSurface) {
-            activateBrowserSurface();
-          } else {
-            activateWindowsConsoleWindow();
-          }
+          activateBrowser();
           break;
         case PlaybackShellFocusTarget::TerminalPlayback:
           activateWindowsConsoleWindow();
@@ -892,6 +888,14 @@ struct PlaybackLoopRunner::Impl {
       copiedFrameNeedsRender = true;
       forceRefreshArt = true;
       redraw = true;
+    }
+  }
+
+  void activateBrowser() {
+    if (activateBrowserSurface) {
+      activateBrowserSurface();
+    } else {
+      activateWindowsConsoleWindow();
     }
   }
 
@@ -1336,11 +1340,17 @@ struct PlaybackLoopRunner::Impl {
 
   bool activatePresentation() {
     if (finished) return false;
-    if (output.windowOpen()) {
-      return output.activateWindow();
+    switch (presentationController.state().primarySurface()) {
+      case PlaybackPrimarySurface::Browser:
+        activateBrowser();
+        return true;
+      case PlaybackPrimarySurface::TerminalPlayback:
+        activateWindowsConsoleWindow();
+        return true;
+      case PlaybackPrimarySurface::NativePlayback:
+        return output.windowOpen() && output.activateWindow();
     }
-    activateWindowsConsoleWindow();
-    return true;
+    return false;
   }
 
   bool requestHandoff(std::function<void(bool)> completion) {

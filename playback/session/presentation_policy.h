@@ -28,6 +28,12 @@ enum class PlaybackShellTerminalRole {
   Playback,
 };
 
+enum class PlaybackPrimarySurface {
+  Browser,
+  TerminalPlayback,
+  NativePlayback,
+};
+
 // User-visible presentation state. Construction is intentionally constrained:
 // framebuffer playback can never target the terminal and PiP can only return
 // to the base surface or to fullscreen.
@@ -70,6 +76,14 @@ class PlaybackPresentationState {
   constexpr PlaybackShellTerminalRole terminalRole() const {
     return requiresNativeWindow() ? PlaybackShellTerminalRole::Browser
                                   : PlaybackShellTerminalRole::Playback;
+  }
+
+  constexpr PlaybackPrimarySurface primarySurface() const {
+    if (layer_ == PlaybackPresentationLayer::PictureInPicture) {
+      return PlaybackPrimarySurface::Browser;
+    }
+    return requiresNativeWindow() ? PlaybackPrimarySurface::NativePlayback
+                                  : PlaybackPrimarySurface::TerminalPlayback;
   }
 
   constexpr PlaybackPresentationState toggleWindowMode() const {

@@ -27,6 +27,9 @@ int main() {
   ok &= expect(terminal.terminalRole() ==
                    PlaybackShellTerminalRole::Playback,
                "terminal playback must reserve the terminal for playback");
+  ok &= expect(terminal.primarySurface() ==
+                   PlaybackPrimarySurface::TerminalPlayback,
+               "terminal ASCII must be the primary playback surface");
   ok &= expect(!windowPresentationRequest(
                     terminal,
                     PlaybackPresentationFocus::KeepCurrentSurface),
@@ -40,6 +43,9 @@ int main() {
                "Ctrl+W must select a normal native window");
   ok &= expect(windowed.terminalRole() == PlaybackShellTerminalRole::Browser,
                "native playback must release the terminal to the browser");
+  ok &= expect(windowed.primarySurface() ==
+                   PlaybackPrimarySurface::NativePlayback,
+               "a normal video window must remain the primary surface");
   const auto windowedRequest = windowPresentationRequest(
       windowed, PlaybackPresentationFocus::FocusTargetSurface);
   ok &= expect(windowedRequest &&
@@ -59,6 +65,9 @@ int main() {
                    PlaybackPresentationLayer::Fullscreen &&
                    terminalFullscreen.usesAsciiGrid(),
                "Alt+Enter from terminal must open ASCII fullscreen");
+  ok &= expect(terminalFullscreen.primarySurface() ==
+                   PlaybackPrimarySurface::NativePlayback,
+               "ASCII fullscreen must be the primary native surface");
   ok &= expect(terminalFullscreen.toggleFullscreen() == terminal,
                "Alt+Enter from ASCII fullscreen must return to terminal playback");
 
@@ -94,6 +103,9 @@ int main() {
   ok &= expect(terminalPip.terminalRole() ==
                    PlaybackShellTerminalRole::Browser,
                "PiP must release the terminal to the browser");
+  ok &= expect(terminalPip.primarySurface() ==
+                   PlaybackPrimarySurface::Browser,
+               "PiP must make the browser the primary workspace");
   ok &= expect(presentationFocusFor(terminalPip) ==
                    PlaybackPresentationFocus::KeepCurrentSurface,
                "entering PiP must not steal focus before the browser is activated");
@@ -126,6 +138,9 @@ int main() {
       windowed.togglePictureInPicture();
   ok &= expect(windowedPip.togglePictureInPicture() == windowed,
                "PiP from a normal window must return to that normal window");
+  ok &= expect(windowedPip.primarySurface() ==
+                   PlaybackPrimarySurface::Browser,
+               "framebuffer PiP must also leave the browser primary");
   const auto windowedPipRequest = windowPresentationRequest(
       windowedPip, presentationFocusFor(windowedPip));
   ok &= expect(windowedPipRequest &&
