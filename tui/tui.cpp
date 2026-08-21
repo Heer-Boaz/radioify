@@ -1775,6 +1775,11 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     return startPlayback(std::move(route),
                          browser_playback_source::capture(browser.entries));
   };
+  auto playBrowserEntry = [&](const BrowserEntry& entry) {
+    const std::optional<PlaybackTarget> target =
+        browser_playback_source::targetFor(entry);
+    return target && openBrowserMediaTarget(*target);
+  };
   auto playOpenFilesRequest = [&](const OpenFilesRequest& request) {
     return mediaCoordinator.openFiles(request);
   };
@@ -2095,12 +2100,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     if (optionsResult == OptionsBrowserResult::Handled) {
       return true;
     }
-    std::optional<PlaybackTarget> target =
-        browser_playback_source::targetFor(entry);
-    if (!target) {
-      return false;
-    }
-    return openBrowserMediaTarget(*target);
+    return playBrowserEntry(entry);
   };
   callbacks.onPlayFiles =
       [&](const std::vector<std::filesystem::path>& files) {
@@ -2723,9 +2723,9 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     fileContextMenu.items.clear();
     dirty = true;
     if (action == FileContextAction::Play) {
-      const bool played =
-          callbacks.onActivateEntry && callbacks.onActivateEntry(entry);
-      (void)played;
+      if (playBrowserEntry(entry)) {
+        markDirty(UiDirtyFlags::Async);
+      }
     } else if (action == FileContextAction::BrowseTracks) {
       browserNavigator.navigate(
           browserTrackLocation(normalizeTrackBrowserPath(entry.path)));
