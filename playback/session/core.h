@@ -47,6 +47,7 @@ class PlaybackSessionCore {
   bool finalizeAudioStart();
   bool applyPresenterSync(const PlaybackPresenterSyncResult& syncResult);
   bool refresh(bool useWindowPresenter, bool windowActive, bool& redraw);
+  void setAsciiPresentation(ConsoleScreen& screen, bool enabled);
   uint64_t videoFrameCounter() const;
   bool waitForVideoFrame(uint64_t lastCounter, int timeoutMs) const;
   NativeWaitHandle videoFrameWaitHandle() const;

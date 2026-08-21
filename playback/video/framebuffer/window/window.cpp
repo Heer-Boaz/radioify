@@ -1381,6 +1381,21 @@ bool VideoWindow::GetWindowBounds(RECT* outRect) const {
     return GetWindowRect(m_hWnd, outRect) != FALSE;
 }
 
+bool VideoWindow::GetWindowedBounds(RECT* outRect) const {
+    if (!outRect || !m_hWnd) {
+        return false;
+    }
+    if (m_pictureInPicture.load(std::memory_order_relaxed)) {
+        *outRect = m_pipRestoreRect;
+        return true;
+    }
+    if (m_isFullscreen) {
+        *outRect = m_prevRect;
+        return true;
+    }
+    return GetWindowRect(m_hWnd, outRect) != FALSE;
+}
+
 bool VideoWindow::GetPictureInPictureRestoreBounds(RECT* outRect) const {
     if (!outRect || !m_hWnd ||
         !m_pictureInPicture.load(std::memory_order_relaxed)) {

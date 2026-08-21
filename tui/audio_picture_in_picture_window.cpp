@@ -84,13 +84,17 @@ bool AudioPictureInPictureWindow::open() {
   }
   window_.SetVsync(true);
   window_.SetTextGridMinimumSize(kMinCols, kMinRows);
-  WindowPlacementState placement;
-  placement.fullscreenActive = false;
-  placement.pictureInPictureActive = true;
-  placement.pictureInPictureRestoreFullscreen = false;
-  placement.textGridPresentationEnabled = true;
-  placement.pictureInPictureStartedFromTerminal = false;
-  playback_session_window::applyPlacement(window_, placement);
+  const PlaybackPresentationState presentation =
+      PlaybackPresentationState::nativeWindowed(
+          PlaybackVisualMode::AsciiGrid)
+          .togglePictureInPicture();
+  const auto request = windowPresentationRequest(
+      presentation, PlaybackPresentationFocus::KeepCurrentSurface);
+  if (!request || !playback_session_window::apply(window_, *request)) {
+    lastError_ = "The picture-in-picture presentation could not be applied.";
+    close();
+    return false;
+  }
   window_.ShowWindow(true);
   refreshGridSize();
   return true;
@@ -124,7 +128,11 @@ bool AudioPictureInPictureWindow::ensureOpen() {
 
 WindowPlacementState AudioPictureInPictureWindow::capturePlacement() const {
   WindowPlacementState placement;
-  playback_session_window::capturePlacement(window_, placement, false);
+  const PlaybackPresentationState presentation =
+      PlaybackPresentationState::nativeWindowed(
+          PlaybackVisualMode::AsciiGrid)
+          .togglePictureInPicture();
+  playback_session_window::capturePlacement(window_, placement, presentation);
   return placement;
 }
 

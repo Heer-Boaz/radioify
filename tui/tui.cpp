@@ -206,11 +206,11 @@ static bool isVideoExt(const std::filesystem::path& p) {
   return isSupportedVideoExt(p);
 }
 
-static std::optional<PlaybackWindowPresentationRequest> routeVideoPresentation(
+static std::optional<PlaybackPresentationState> routeVideoPresentation(
     OpenVideoMode mode) {
   return mode == OpenVideoMode::Framebuffer
-             ? std::optional{restoredWindowPresentation(
-                   PlaybackPresentationMode::Fullscreen, false)}
+             ? std::optional{
+                   PlaybackPresentationState::nativeWindowed()}
              : std::nullopt;
 }
 
@@ -222,9 +222,9 @@ static std::optional<playback_route::Route> resolveOpenFilesPlaybackRoute(
   if (route && request.videoMode == OpenVideoMode::Ascii &&
       isVideoExt(route->target.file)) {
     PlaybackSessionContinuationState asciiContinuation;
-    asciiContinuation.hasLayout = true;
-    asciiContinuation.layout = PlaybackLayout::Terminal;
-    asciiContinuation.asciiRenderingEnabled = true;
+    asciiContinuation.hasPresentation = true;
+    asciiContinuation.presentation =
+        PlaybackPresentationState::terminalAscii();
     route->videoContinuation = asciiContinuation;
   }
   return route;
@@ -1053,8 +1053,8 @@ class TuiMediaCoordinator {
       const VideoPlaybackConfig& base,
       const PlaybackSessionContinuationState& continuation) {
     VideoPlaybackConfig config = base;
-    if (continuation.hasLayout) {
-      config.enableAscii = continuation.asciiRenderingEnabled;
+    if (continuation.hasPresentation) {
+      config.enableAscii = continuation.presentation.usesAsciiGrid();
     }
     return config;
   }
@@ -2156,10 +2156,13 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       [&](const std::vector<std::filesystem::path>& files) {
     WindowPlacementState sourcePlacement =
         audioPictureInPicture.capturePlacement();
+    PlaybackPresentationState videoPresentation =
+        videoConfig.enableAscii
+            ? PlaybackPresentationState::terminalAscii()
+            : PlaybackPresentationState::nativeWindowed();
+    videoPresentation = videoPresentation.togglePictureInPicture();
     auto route = playback_route::resolveDroppedTarget(
-        files, &sourcePlacement,
-        restoredWindowPresentation(PlaybackPresentationMode::PictureInPicture,
-                                    videoConfig.enableAscii));
+        files, &sourcePlacement, videoPresentation);
     if (!route) {
       return false;
     }

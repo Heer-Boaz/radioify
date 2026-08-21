@@ -55,14 +55,19 @@ bool shouldRenderPlaybackFrame(bool redraw, bool presented,
          (debugRefreshDue && playbackState != PlaybackSessionState::Ended);
 }
 
-PlaybackLayout initialPlaybackLayout(
+PlaybackPresentationState initialPlaybackPresentation(
     const VideoPlaybackConfig& config,
     const PlaybackSessionContinuationState* continuityState) {
-  if (continuityState && continuityState->hasLayout) {
-    return continuityState->layout;
+  if (continuityState && continuityState->hasPresentation) {
+    return continuityState->presentation;
   }
-  return config.enableWindow ? PlaybackLayout::Window
-                             : PlaybackLayout::Terminal;
+  return config.enableAscii ? PlaybackPresentationState::terminalAscii()
+                            : PlaybackPresentationState::nativeWindowed();
+}
+
+PlaybackLayout playbackLayoutFor(const PlaybackPresentationState& state) {
+  return state.requiresNativeWindow() ? PlaybackLayout::Window
+                                      : PlaybackLayout::Terminal;
 }
 
 }  // namespace
@@ -116,7 +121,6 @@ struct PlaybackLoopRunner::Impl {
   PlaybackSessionContinuationState* continuityState = nullptr;
   const PlaybackSessionIntent sessionIntent;
   PlaybackSessionContinuationState capturedContinuationState;
-  const bool enableAscii;
   const bool enableAudio;
   const bool hasSubtitles;
 
@@ -186,16 +190,19 @@ struct PlaybackLoopRunner::Impl {
         requestOpenFiles(std::move(args.requestOpenFiles)),
         continuityState(args.continuityState),
         sessionIntent(args.sessionIntent),
-        enableAscii(args.enableAscii),
         enableAudio(args.enableAudio),
         hasSubtitles(args.hasSubtitles),
-        output(initialPlaybackLayout(args.config, args.continuityState),
+        output(playbackLayoutFor(initialPlaybackPresentation(
+                   args.config, args.continuityState)),
                args.continuityState
                    ? std::optional<PlaybackSessionContinuationState>(
                          *args.continuityState)
                    : std::nullopt),
-        presentationController(args.continuityState),
-        core({args.player, args.perfLog, args.enableAudio, args.enableAscii}),
+        presentationController(
+            initialPlaybackPresentation(args.config, args.continuityState)),
+        core({args.player, args.perfLog, args.enableAudio,
+              initialPlaybackPresentation(args.config, args.continuityState)
+                  .usesAsciiGrid()}),
         gpuRenderer(sharedGpuRenderer()),
         videoEditWorkspace(args.file, core.player(), timelinePreviewModel,
                            timelinePreviewProvider) {
@@ -678,17 +685,21 @@ struct PlaybackLoopRunner::Impl {
           }
         };
     inputSignals.toggleWindowPresentation = [this]() {
-      return presentationController.toggleWindow(output, redraw,
-                                                 forceRefreshArt);
+      const bool wasAscii = presentationController.usesAsciiGrid();
+      const bool changed = presentationController.toggleWindow(
+          output, redraw, forceRefreshArt);
+      if (changed && wasAscii != presentationController.usesAsciiGrid()) {
+        core.setAsciiPresentation(screen,
+                                  presentationController.usesAsciiGrid());
+      }
+      return changed;
     };
     inputSignals.togglePictureInPicture = [this]() {
-      const bool audioOnlyPlayback =
-          core.player().sourceWidth() <= 0 || core.player().sourceHeight() <= 0;
       return presentationController.togglePictureInPicture(
-          output, enableAscii, audioOnlyPlayback, redraw, forceRefreshArt);
+          output, redraw, forceRefreshArt);
     };
     inputSignals.toggleFullscreen = [this]() {
-      return presentationController.toggleFullscreen(output, enableAscii, redraw,
+      return presentationController.toggleFullscreen(output, redraw,
                                                      forceRefreshArt);
     };
     inputSignals.requestPlaybackExit =
@@ -892,9 +903,6 @@ struct PlaybackLoopRunner::Impl {
 
   PlaybackSessionContinuationState buildContinuationState() {
     PlaybackSessionContinuationState state;
-    state.hasLayout = true;
-    state.layout = output.desiredLayout();
-    state.asciiRenderingEnabled = enableAscii;
     presentationController.captureWindowPlacement(output, state);
     return state;
   }
@@ -907,7 +915,8 @@ struct PlaybackLoopRunner::Impl {
 
   void updateRenderInputs(bool clearHistory, bool frameChanged) {
     renderInputs.debugOverlay = config.debugOverlay;
-    renderInputs.currentMode = output.renderMode(enableAscii);
+    renderInputs.currentMode =
+        output.renderMode(presentationController.usesAsciiGrid());
     renderInputs.enableAudio = enableAudio;
     renderInputs.canPlayPrevious = requestTransportCommand != nullptr;
     renderInputs.canPlayNext = requestTransportCommand != nullptr;
@@ -1190,7 +1199,9 @@ struct PlaybackLoopRunner::Impl {
   }
 
   void handlePendingResize() {
-    core.handlePendingResize(screen, output.renderMode(enableAscii), redraw);
+    core.handlePendingResize(
+        screen, output.renderMode(presentationController.usesAsciiGrid()),
+        redraw);
   }
 
   struct RefreshState {

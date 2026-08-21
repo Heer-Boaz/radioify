@@ -25,13 +25,13 @@ struct Route {
 
 Route resolveTarget(const PlaybackTarget& target,
                     const WindowPlacementState* sourcePlacement = nullptr,
-                    std::optional<PlaybackWindowPresentationRequest>
+                    std::optional<PlaybackPresentationState>
                         videoPresentation = std::nullopt);
 
 std::optional<Route> resolveDroppedTarget(
     const std::vector<std::filesystem::path>& files,
     const WindowPlacementState* sourcePlacement = nullptr,
-    std::optional<PlaybackWindowPresentationRequest> videoPresentation =
+    std::optional<PlaybackPresentationState> videoPresentation =
         std::nullopt);
 
 }  // namespace playback_route

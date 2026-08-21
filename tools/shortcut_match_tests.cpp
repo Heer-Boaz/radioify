@@ -1896,33 +1896,24 @@ int main() {
                        kPlaybackShortcutContextShared |
                        kPlaybackShortcutContextImageViewer),
                "Alt+Enter must be playback-session scoped");
-  ok &= expect(planFullscreenToggle({PlaybackPresentationFamily::Ascii,
-                                     PlaybackPresentationMode::
-                                         DefaultNonFullscreen})
-                   .target == PlaybackPresentationMode::Fullscreen,
-               "ASCII default presentation must enter fullscreen");
-  ok &= expect(planFullscreenToggle({PlaybackPresentationFamily::Ascii,
-                                     PlaybackPresentationMode::Fullscreen})
-                   .target ==
-                   PlaybackPresentationMode::DefaultNonFullscreen,
-               "ASCII fullscreen must exit to the default non-fullscreen "
-               "presentation");
-  ok &= expect(planFullscreenToggle({PlaybackPresentationFamily::Ascii,
-                                     PlaybackPresentationMode::PictureInPicture})
-                   .target == PlaybackPresentationMode::Fullscreen,
-               "ASCII PiP must enter fullscreen");
-  ok &= expect(planFullscreenToggle({PlaybackPresentationFamily::Framebuffer,
-                                     PlaybackPresentationMode::Fullscreen})
-                   .target == PlaybackPresentationMode::PictureInPicture,
-               "Framebuffer fullscreen must exit to PiP");
-  ok &= expect(planFullscreenToggle({PlaybackPresentationFamily::Framebuffer,
-                                     PlaybackPresentationMode::PictureInPicture})
-                   .target == PlaybackPresentationMode::Fullscreen,
-               "Framebuffer PiP must enter fullscreen");
-  ok &= expect(defaultNonFullscreenPresentation(
-                   PlaybackPresentationFamily::Framebuffer) ==
-                   PlaybackPresentationMode::PictureInPicture,
-               "Framebuffer non-fullscreen default must be PiP");
+  const PlaybackPresentationState terminalPresentation =
+      PlaybackPresentationState::terminalAscii();
+  const PlaybackPresentationState windowedPresentation =
+      terminalPresentation.toggleWindowMode();
+  ok &= expect(terminalPresentation.toggleFullscreen().toggleFullscreen() ==
+                   terminalPresentation,
+               "ASCII fullscreen must return to terminal playback");
+  ok &= expect(windowedPresentation.toggleFullscreen().toggleFullscreen() ==
+                   windowedPresentation,
+               "Framebuffer fullscreen must return to its normal window");
+  ok &= expect(terminalPresentation.togglePictureInPicture()
+                       .togglePictureInPicture() == terminalPresentation,
+               "ASCII PiP must return to terminal playback");
+  ok &= expect(windowedPresentation.toggleFullscreen()
+                       .togglePictureInPicture()
+                       .togglePictureInPicture() ==
+                   windowedPresentation.toggleFullscreen(),
+               "PiP entered from fullscreen must return to fullscreen");
   ok &= expect(playback_overlay::overlayCellCountForPixels(719, 21) == 35,
                "overlayCellCountForPixels must round rows up");
   ok &= expect(playback_overlay::overlayCellCountForPixels(960, 9) == 107,

@@ -130,6 +130,25 @@ struct PlaybackSessionCore::Impl {
     return presented;
   }
 
+  void setAsciiPresentation(ConsoleScreen& screen, bool enabled) {
+    if (enabled) {
+      screen.updateSize();
+      requestTargetSize(screen.width(), screen.height(),
+                        screen.cellPixelWidth(), screen.cellPixelHeight());
+      return;
+    }
+
+    const int sourceW = player.sourceWidth();
+    const int sourceH = player.sourceHeight();
+    if (sourceW <= 0 || sourceH <= 0 ||
+        (sourceW == requestedTargetW && sourceH == requestedTargetH)) {
+      return;
+    }
+    requestedTargetW = sourceW;
+    requestedTargetH = sourceH;
+    player.requestResize(sourceW, sourceH);
+  }
+
   void markPendingResize() { pendingResize = true; }
 
   void handlePendingResize(ConsoleScreen& screen, PlaybackRenderMode renderMode,
@@ -230,6 +249,11 @@ bool PlaybackSessionCore::applyPresenterSync(
 bool PlaybackSessionCore::refresh(bool useWindowPresenter, bool windowActive,
                                   bool& redraw) {
   return impl_->refresh(useWindowPresenter, windowActive, redraw);
+}
+
+void PlaybackSessionCore::setAsciiPresentation(ConsoleScreen& screen,
+                                               bool enabled) {
+  impl_->setAsciiPresentation(screen, enabled);
 }
 
 uint64_t PlaybackSessionCore::videoFrameCounter() const {

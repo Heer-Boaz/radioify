@@ -179,6 +179,9 @@ public:
     void GetTextGridCellSize(int& outCellWidth,
                                          int& outCellHeight) const;
     bool GetWindowBounds(RECT* outRect) const;
+    // Must be called on the window owner thread. Returns the normal restored
+    // bounds even while the window is fullscreen or in PiP.
+    bool GetWindowedBounds(RECT* outRect) const;
     bool GetPictureInPictureRestoreBounds(RECT* outRect) const;
     bool SetWindowBounds(const RECT& rect);
     

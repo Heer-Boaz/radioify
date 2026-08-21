@@ -101,9 +101,20 @@ struct WindowPresenter::Impl {
             windowHandle.store(window.NativeWindowHandle(),
                                std::memory_order_release);
             window.EnableFileDrop();
-            if (initialState && initialState->hasLayout) {
+            if (initialState && initialState->hasPresentation) {
               playback_session_window::applyPlacement(
                   window, initialState->windowPlacement);
+              if (const auto request = windowPresentationRequest(
+                      initialState->presentation,
+                      PlaybackPresentationFocus::KeepCurrentSurface)) {
+                playback_session_window::apply(window, *request);
+              }
+              if (initialState->presentation.layer() ==
+                      PlaybackPresentationLayer::PictureInPicture &&
+                  initialState->windowPlacement.hasPictureInPictureRect) {
+                window.SetWindowBounds(
+                    initialState->windowPlacement.pictureInPictureRect);
+              }
             }
           }
           {

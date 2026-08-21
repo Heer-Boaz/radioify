@@ -10,7 +10,7 @@
 #endif
 #include <windows.h>
 
-#include "playback_mode.h"
+#include "presentation_policy.h"
 
 enum class PlaybackSessionState : uint8_t {
   Active,
@@ -43,22 +43,15 @@ enum class WindowThreadState : uint8_t {
 };
 
 struct WindowPlacementState {
-  bool hasWindowRect = false;
-  RECT windowRect{};
-  bool fullscreenActive = false;
-  bool pictureInPictureActive = false;
-  bool pictureInPictureRestoreFullscreen = false;
-  bool textGridPresentationEnabled = false;
-  bool pictureInPictureStartedFromTerminal = false;
+  bool hasWindowedRect = false;
+  RECT windowedRect{};
   bool hasPictureInPictureRect = false;
   RECT pictureInPictureRect{};
-  bool hasPictureInPictureRestoreRect = false;
-  RECT pictureInPictureRestoreRect{};
 };
 
 struct PlaybackSessionContinuationState {
-  bool hasLayout = false;
-  PlaybackLayout layout = PlaybackLayout::Terminal;
-  bool asciiRenderingEnabled = true;
+  bool hasPresentation = false;
+  PlaybackPresentationState presentation =
+      PlaybackPresentationState::terminalAscii();
   WindowPlacementState windowPlacement;
 };

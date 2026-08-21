@@ -12,21 +12,13 @@ bool isVisualTargetKind(PlaybackTargetKind kind) {
 
 PlaybackSessionContinuationState videoContinuation(
     const WindowPlacementState* sourcePlacement,
-    PlaybackWindowPresentationRequest presentation) {
+    PlaybackPresentationState presentation) {
   PlaybackSessionContinuationState state;
-  state.hasLayout = true;
-  state.layout = PlaybackLayout::Window;
-  state.asciiRenderingEnabled = presentation.textGrid;
+  state.hasPresentation = true;
+  state.presentation = presentation;
   if (sourcePlacement) {
     state.windowPlacement = *sourcePlacement;
   }
-  state.windowPlacement.fullscreenActive =
-      presentation.target == PlaybackPresentationMode::Fullscreen;
-  state.windowPlacement.pictureInPictureActive =
-      presentation.target == PlaybackPresentationMode::PictureInPicture;
-  state.windowPlacement.pictureInPictureRestoreFullscreen = false;
-  state.windowPlacement.textGridPresentationEnabled = presentation.textGrid;
-  state.windowPlacement.pictureInPictureStartedFromTerminal = false;
   return state;
 }
 
@@ -34,7 +26,7 @@ PlaybackSessionContinuationState videoContinuation(
 
 Route resolveTarget(
     const PlaybackTarget& target, const WindowPlacementState* sourcePlacement,
-    std::optional<PlaybackWindowPresentationRequest> videoPresentation) {
+    std::optional<PlaybackPresentationState> videoPresentation) {
   Route route;
   route.target = target;
   const PlaybackTargetKind targetKind = classifyPlaybackTarget(route.target);
@@ -54,7 +46,7 @@ Route resolveTarget(
 std::optional<Route> resolveDroppedTarget(
     const std::vector<std::filesystem::path>& files,
     const WindowPlacementState* sourcePlacement,
-    std::optional<PlaybackWindowPresentationRequest> videoPresentation) {
+    std::optional<PlaybackPresentationState> videoPresentation) {
   std::optional<PlaybackTarget> target =
       playback_target_resolver::resolveDroppedTarget(files);
   if (!target) {

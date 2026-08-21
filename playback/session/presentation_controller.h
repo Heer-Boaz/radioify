@@ -8,15 +8,15 @@ class PlaybackOutputController;
 class PlaybackPresentationController {
  public:
   explicit PlaybackPresentationController(
-      const PlaybackSessionContinuationState* continuationState = nullptr);
+      PlaybackPresentationState initialState =
+          PlaybackPresentationState::terminalAscii());
 
   bool toggleWindow(PlaybackOutputController& output, bool& redraw,
                     bool& forceRefreshArt);
   bool togglePictureInPicture(PlaybackOutputController& output,
-                              bool enableAscii, bool audioOnlyPlayback,
                               bool& redraw, bool& forceRefreshArt);
-  bool toggleFullscreen(PlaybackOutputController& output, bool enableAscii,
-                        bool& redraw, bool& forceRefreshArt);
+  bool toggleFullscreen(PlaybackOutputController& output, bool& redraw,
+                        bool& forceRefreshArt);
 
   void closePresentation(PlaybackOutputController& output, bool& redraw,
                          bool& forceRefreshArt);
@@ -26,15 +26,18 @@ class PlaybackPresentationController {
   void captureWindowPlacement(PlaybackOutputController& output,
                               PlaybackSessionContinuationState& state) const;
 
+  const PlaybackPresentationState& state() const { return desiredState_; }
+  bool usesAsciiGrid() const { return desiredState_.usesAsciiGrid(); }
+  PlaybackShellTerminalRole terminalRole() const {
+    return desiredState_.terminalRole();
+  }
+
  private:
-  struct PendingWindowPresentation {
-    bool active = false;
-    PlaybackWindowPresentationRequest request;
-  };
+  bool transitionTo(PlaybackPresentationState next,
+                    PlaybackOutputController& output, bool& redraw,
+                    bool& forceRefreshArt);
+  void queueWindowPresentation(PlaybackPresentationFocus focus);
 
-  void clearPendingWindowPresentation();
-  void requestWindowPresentation(PlaybackWindowPresentationRequest request);
-
-  PendingWindowPresentation pendingWindowPresentation;
-  bool pictureInPictureStartedFromTerminal = false;
+  PlaybackPresentationState desiredState_;
+  std::optional<PlaybackWindowPresentationRequest> pendingWindowPresentation_;
 };

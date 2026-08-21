@@ -1,9 +1,8 @@
 #include "presentation_controller.h"
 
-#include "playback_mode.h"
 #include "output.h"
+#include "playback_mode.h"
 #include "window_presentation.h"
-#include "playback/video/framebuffer/window/window.h"
 
 namespace {
 
@@ -12,210 +11,89 @@ void markPresentationChanged(bool& redraw, bool& forceRefreshArt) {
   redraw = true;
 }
 
-PlaybackFullscreenToggleRequest fullscreenToggleRequest(
-    PlaybackOutputController& output, bool enableAscii) {
-  const VideoWindow& window = output.window();
-  const bool windowOpen = window.IsOpen();
-  const bool textGrid = windowOpen && window.IsTextGridPresentationEnabled();
-  const bool terminalAscii = !output.windowActive() && enableAscii;
-
-  PlaybackFullscreenToggleRequest request;
-  request.family = (terminalAscii || textGrid)
-                       ? PlaybackPresentationFamily::Ascii
-                       : PlaybackPresentationFamily::Framebuffer;
-
-  if (terminalAscii) {
-    request.current = PlaybackPresentationMode::DefaultNonFullscreen;
-  } else if (windowOpen && window.IsPictureInPicture()) {
-    request.current = PlaybackPresentationMode::PictureInPicture;
-  } else {
-    request.current = PlaybackPresentationMode::Fullscreen;
-  }
-  return request;
+PlaybackLayout layoutFor(const PlaybackPresentationState& state) {
+  return state.requiresNativeWindow() ? PlaybackLayout::Window
+                                      : PlaybackLayout::Terminal;
 }
 
 }  // namespace
 
 PlaybackPresentationController::PlaybackPresentationController(
-    const PlaybackSessionContinuationState* continuationState) {
-  if (continuationState) {
-    pictureInPictureStartedFromTerminal =
-        continuationState->windowPlacement.pictureInPictureStartedFromTerminal;
+    PlaybackPresentationState initialState)
+    : desiredState_(initialState) {
+  queueWindowPresentation(PlaybackPresentationFocus::KeepCurrentSurface);
+}
+
+void PlaybackPresentationController::queueWindowPresentation(
+    PlaybackPresentationFocus focus) {
+  pendingWindowPresentation_ =
+      windowPresentationRequest(desiredState_, focus);
+}
+
+bool PlaybackPresentationController::transitionTo(
+    PlaybackPresentationState next, PlaybackOutputController& output,
+    bool& redraw, bool& forceRefreshArt) {
+  if (next == desiredState_) {
+    return true;
   }
-}
 
-void PlaybackPresentationController::clearPendingWindowPresentation() {
-  pendingWindowPresentation = {};
-}
+  desiredState_ = next;
+  queueWindowPresentation(PlaybackPresentationFocus::FocusTargetSurface);
+  output.requestLayout(layoutFor(desiredState_));
+  markPresentationChanged(redraw, forceRefreshArt);
 
-void PlaybackPresentationController::requestWindowPresentation(
-    PlaybackWindowPresentationRequest request) {
-  pendingWindowPresentation.active = true;
-  pendingWindowPresentation.request = request;
+  if (output.windowOpen() && pendingWindowPresentation_) {
+    if (playback_session_window::apply(output.window(),
+                                       *pendingWindowPresentation_)) {
+      pendingWindowPresentation_.reset();
+    }
+  }
+  if (desiredState_.requiresNativeWindow()) {
+    output.requestWindowPresent();
+  }
+  return true;
 }
 
 bool PlaybackPresentationController::toggleWindow(
     PlaybackOutputController& output, bool& redraw, bool& forceRefreshArt) {
-  const bool enteringWindow = !isWindowPlaybackLayout(output.desiredLayout());
-  if (enteringWindow) {
-    const PlaybackPresentationMode target =
-        defaultNonFullscreenPresentation(PlaybackPresentationFamily::Framebuffer);
-    requestWindowPresentation(userRequestedWindowPresentation(target, false));
-  } else {
-    clearPendingWindowPresentation();
-    pictureInPictureStartedFromTerminal = false;
-  }
-  output.requestLayout(togglePlaybackLayout(output.desiredLayout()));
-  markPresentationChanged(redraw, forceRefreshArt);
-  if (isWindowPlaybackLayout(output.desiredLayout())) {
-    output.requestWindowPresent();
-  }
-  return true;
+  return transitionTo(desiredState_.toggleWindowMode(), output, redraw,
+                      forceRefreshArt);
 }
 
 bool PlaybackPresentationController::togglePictureInPicture(
-    PlaybackOutputController& output, bool enableAscii, bool audioOnlyPlayback,
-    bool& redraw, bool& forceRefreshArt) {
-  VideoWindow& window = output.window();
-  if (window.IsOpen() && window.IsPictureInPicture()) {
-    const bool textGrid = window.IsTextGridPresentationEnabled();
-    clearPendingWindowPresentation();
-    if (pictureInPictureStartedFromTerminal) {
-      pictureInPictureStartedFromTerminal = false;
-      playback_session_window::setTextGrid(window, false);
-      output.requestLayout(PlaybackLayout::Terminal);
-      markPresentationChanged(redraw, forceRefreshArt);
-      return true;
-    }
-
-    pictureInPictureStartedFromTerminal = false;
-    markPresentationChanged(redraw, forceRefreshArt);
-    output.requestWindowPresent();
-    if (textGrid) {
-      return playback_session_window::exitPictureInPicture(
-          window, userRequestedWindowPresentation(
-                      PlaybackPresentationMode::Fullscreen, true));
-    }
-    return playback_session_window::exitPictureInPicture(
-        window, userRequestedWindowPresentation(
-                    PlaybackPresentationMode::DefaultNonFullscreen, false));
-  }
-
-  const bool fromTerminalAscii = !output.windowActive() && enableAscii;
-  const bool fromAsciiWindow =
-      window.IsOpen() && window.IsTextGridPresentationEnabled();
-  const bool textGrid =
-      fromTerminalAscii || fromAsciiWindow || audioOnlyPlayback;
-  requestWindowPresentation(userRequestedWindowPresentation(
-      PlaybackPresentationMode::PictureInPicture, textGrid));
-  pictureInPictureStartedFromTerminal = fromTerminalAscii;
-  output.requestLayout(PlaybackLayout::Window);
-  markPresentationChanged(redraw, forceRefreshArt);
-
-  if (window.IsOpen()) {
-    if (playback_session_window::apply(
-            window,
-            userRequestedWindowPresentation(
-                PlaybackPresentationMode::PictureInPicture, textGrid))) {
-      clearPendingWindowPresentation();
-    }
-  }
-  output.requestWindowPresent();
-  return true;
+    PlaybackOutputController& output, bool& redraw, bool& forceRefreshArt) {
+  return transitionTo(desiredState_.togglePictureInPicture(), output, redraw,
+                      forceRefreshArt);
 }
 
 bool PlaybackPresentationController::toggleFullscreen(
-    PlaybackOutputController& output, bool enableAscii, bool& redraw,
-    bool& forceRefreshArt) {
-  const PlaybackFullscreenToggleRequest request =
-      fullscreenToggleRequest(output, enableAscii);
-  const PlaybackFullscreenTogglePlan plan = planFullscreenToggle(request);
-  VideoWindow& window = output.window();
-
-  clearPendingWindowPresentation();
-  pictureInPictureStartedFromTerminal = false;
-
-  if (plan.target == PlaybackPresentationMode::Fullscreen) {
-    output.requestLayout(PlaybackLayout::Window);
-    markPresentationChanged(redraw, forceRefreshArt);
-    requestWindowPresentation(userRequestedWindowPresentation(
-        PlaybackPresentationMode::Fullscreen,
-        request.family == PlaybackPresentationFamily::Ascii));
-    if (request.family == PlaybackPresentationFamily::Ascii) {
-      if (window.IsOpen()) {
-        if (playback_session_window::apply(
-                window, userRequestedWindowPresentation(
-                            PlaybackPresentationMode::Fullscreen, true))) {
-          clearPendingWindowPresentation();
-        }
-        output.requestWindowPresent();
-      }
-      return true;
-    }
-
-    if (window.IsOpen()) {
-      if (playback_session_window::apply(
-              window, userRequestedWindowPresentation(
-                          PlaybackPresentationMode::Fullscreen, false))) {
-        clearPendingWindowPresentation();
-      }
-      output.requestWindowPresent();
-    }
-    return true;
-  }
-
-  if (request.family == PlaybackPresentationFamily::Ascii) {
-    if (window.IsOpen()) {
-      playback_session_window::setTextGrid(window, false);
-    }
-    output.requestLayout(PlaybackLayout::Terminal);
-    markPresentationChanged(redraw, forceRefreshArt);
-    return true;
-  }
-
-  requestWindowPresentation(userRequestedWindowPresentation(
-      PlaybackPresentationMode::PictureInPicture, false));
-  output.requestLayout(PlaybackLayout::Window);
-  markPresentationChanged(redraw, forceRefreshArt);
-  if (window.IsOpen()) {
-    if (playback_session_window::apply(
-            window,
-            userRequestedWindowPresentation(
-                PlaybackPresentationMode::PictureInPicture, false))) {
-      clearPendingWindowPresentation();
-    }
-    output.requestWindowPresent();
-  }
-  return true;
+    PlaybackOutputController& output, bool& redraw, bool& forceRefreshArt) {
+  return transitionTo(desiredState_.toggleFullscreen(), output, redraw,
+                      forceRefreshArt);
 }
 
 void PlaybackPresentationController::reconcile(
     PlaybackOutputController& output) {
-  if (!output.windowRequested()) {
-    clearPendingWindowPresentation();
-    pictureInPictureStartedFromTerminal = false;
+  if (!desiredState_.requiresNativeWindow()) {
+    pendingWindowPresentation_.reset();
     return;
   }
 
-  if (!pendingWindowPresentation.active || !output.windowOpen()) {
+  if (!pendingWindowPresentation_ || !output.windowOpen()) {
     return;
   }
 
-  const bool applied = playback_session_window::apply(
-      output.window(), pendingWindowPresentation.request);
-  if (applied) {
-    clearPendingWindowPresentation();
+  if (playback_session_window::apply(output.window(),
+                                     *pendingWindowPresentation_)) {
+    pendingWindowPresentation_.reset();
   }
   output.requestWindowPresent();
 }
 
 void PlaybackPresentationController::closePresentation(
     PlaybackOutputController& output, bool& redraw, bool& forceRefreshArt) {
-  clearPendingWindowPresentation();
-  pictureInPictureStartedFromTerminal = false;
-  playback_session_window::setTextGrid(output.window(), false);
-  output.requestLayout(PlaybackLayout::Terminal);
-  markPresentationChanged(redraw, forceRefreshArt);
+  transitionTo(PlaybackPresentationState::terminalAscii(), output, redraw,
+               forceRefreshArt);
 }
 
 void PlaybackPresentationController::handleWindowClosed(
@@ -226,7 +104,8 @@ void PlaybackPresentationController::handleWindowClosed(
 void PlaybackPresentationController::captureWindowPlacement(
     PlaybackOutputController& output,
     PlaybackSessionContinuationState& state) const {
+  state.hasPresentation = true;
+  state.presentation = desiredState_;
   playback_session_window::capturePlacement(
-      output.window(), state.windowPlacement,
-      pictureInPictureStartedFromTerminal);
+      output.window(), state.windowPlacement, desiredState_);
 }
