@@ -11,8 +11,8 @@
 #include "playback/video/gpu/gpu_shared.h"
 #include "playback/video/player.h"
 #include "frame_output.h"
-#include "playback_mode.h"
 #include "playback/overlay/overlay.h"
+#include "playback/session/presentation_policy.h"
 #include "playback/session/state.h"
 #include "playback/video/subtitle/manager.h"
 #include "playback/video/framebuffer/window/window.h"
@@ -47,17 +47,16 @@ struct PlaybackScreenRenderInputs {
   const Color* progressEnd = nullptr;
   bool debugOverlay = false;
   std::vector<std::string> debugLines;
-  PlaybackRenderMode currentMode = PlaybackRenderMode::Other;
+  PlaybackVisualMode visualMode = PlaybackVisualMode::Framebuffer;
   PlaybackSessionState playbackState = PlaybackSessionState::Active;
   bool enableAudio = false;
   bool audioOk = false;
   bool audioStarting = false;
   bool canPlayPrevious = false;
   bool canPlayNext = false;
-  bool windowActive = false;
+  bool nativeWindowActive = false;
   bool hasSubtitles = false;
   bool allowAsciiCpuFallback = false;
-  bool useWindowPresenter = false;
   playback_overlay::PlaybackOsdSnapshot osd;
   playback_overlay::ContextMenuSnapshot contextMenu;
   playback_video_timeline_preview::Snapshot timelinePreview;

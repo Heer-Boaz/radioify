@@ -76,11 +76,11 @@ struct PlaybackSession::Impl {
         enableSubtitlesShared,
         host.windowTitle(),
         std::move(request.file),
-        enableAscii,
         enableAudio,
         hasSubtitles,
         std::move(request.requestTransportCommand),
         std::move(request.requestOpenFiles),
+        std::move(request.activateBrowserSurface),
         std::move(request.continuityState),
         request.sessionIntent});
   }

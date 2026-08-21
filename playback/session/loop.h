@@ -43,12 +43,12 @@ class PlaybackLoopRunner {
     std::atomic<bool>& enableSubtitlesShared;
     std::string windowTitle;
     std::filesystem::path file;
-    bool enableAscii;
     bool enableAudio;
     bool hasSubtitles = false;
     std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
     std::function<bool(const std::vector<std::filesystem::path>&)>
         requestOpenFiles;
+    std::function<void()> activateBrowserSurface;
     PlaybackSessionContinuationState continuityState;
     PlaybackSessionIntent sessionIntent = PlaybackSessionIntent::View;
   };

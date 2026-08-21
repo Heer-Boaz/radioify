@@ -20,7 +20,6 @@ radioify_add_module_object_library(radioify_playback
   ${CMAKE_CURRENT_SOURCE_DIR}/session/log.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/osd_timeline.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/output.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/session/presentation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/presentation_controller.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/video_edit_workspace.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/window_presentation.cpp

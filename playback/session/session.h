@@ -48,6 +48,7 @@ class PlaybackSession {
     std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
     std::function<bool(const std::vector<std::filesystem::path>&)>
         requestOpenFiles;
+    std::function<void()> activateBrowserSurface;
   };
 
   // These dependencies are borrowed and must outlive the session.

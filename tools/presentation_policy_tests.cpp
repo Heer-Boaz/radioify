@@ -69,6 +69,18 @@ int main() {
                "Alt+Enter from a normal window must enter fullscreen");
   ok &= expect(windowedFullscreen.toggleFullscreen() == windowed,
                "Alt+Enter from framebuffer fullscreen must return to its normal window");
+  ok &= expect(terminalFullscreen.toggleWindowMode() == windowedFullscreen &&
+                   windowedFullscreen.toggleWindowMode() ==
+                       terminalFullscreen,
+               "Ctrl+W in fullscreen must only change the renderer and base surface");
+  const auto terminalFullscreenRequest = windowPresentationRequest(
+      terminalFullscreen, PlaybackPresentationFocus::FocusTargetSurface);
+  ok &= expect(terminalFullscreenRequest &&
+                   terminalFullscreenRequest->target ==
+                       PlaybackWindowPresentationMode::Fullscreen &&
+                   terminalFullscreenRequest->visual ==
+                       PlaybackVisualMode::AsciiGrid,
+               "ASCII fullscreen must map directly to one native fullscreen request");
 
   const PlaybackPresentationState terminalPip =
       terminal.togglePictureInPicture();
@@ -79,6 +91,20 @@ int main() {
                "PiP from terminal must remember the terminal base origin");
   ok &= expect(terminalPip.togglePictureInPicture() == terminal,
                "PiP from terminal must return exactly to terminal playback");
+  ok &= expect(terminalPip.terminalRole() ==
+                   PlaybackShellTerminalRole::Browser,
+               "PiP must release the terminal to the browser");
+  ok &= expect(presentationFocusFor(terminalPip) ==
+                   PlaybackPresentationFocus::KeepCurrentSurface,
+               "entering PiP must not steal focus before the browser is activated");
+  ok &= expect(entersPictureInPicture(terminal, terminalPip),
+               "the policy must identify the transition into PiP");
+  ok &= expect(shellFocusAfterTransition(terminal, terminalPip) ==
+                   PlaybackShellFocusTarget::Browser,
+               "entering PiP must return focus ownership to the browser");
+  ok &= expect(shellFocusAfterTransition(terminalPip, terminal) ==
+                   PlaybackShellFocusTarget::TerminalPlayback,
+               "returning from terminal-origin PiP must focus terminal playback");
 
   const PlaybackPresentationState fullscreenPip =
       windowedFullscreen.togglePictureInPicture();
@@ -87,6 +113,29 @@ int main() {
                "PiP from fullscreen must remember fullscreen as its origin");
   ok &= expect(fullscreenPip.togglePictureInPicture() == windowedFullscreen,
                "PiP from fullscreen must return exactly to fullscreen");
+  ok &= expect(presentationFocusFor(windowedFullscreen) ==
+                   PlaybackPresentationFocus::FocusTargetSurface,
+               "leaving PiP for fullscreen must focus the restored surface");
+  ok &= expect(!entersPictureInPicture(fullscreenPip, windowedFullscreen),
+               "leaving PiP must not be classified as entering PiP");
+  ok &= expect(!shellFocusAfterTransition(fullscreenPip,
+                                          windowedFullscreen),
+               "native PiP return must leave focus to the native request");
+
+  const PlaybackPresentationState windowedPip =
+      windowed.togglePictureInPicture();
+  ok &= expect(windowedPip.togglePictureInPicture() == windowed,
+               "PiP from a normal window must return to that normal window");
+  const auto windowedPipRequest = windowPresentationRequest(
+      windowedPip, presentationFocusFor(windowedPip));
+  ok &= expect(windowedPipRequest &&
+                   windowedPipRequest->target ==
+                       PlaybackWindowPresentationMode::PictureInPicture &&
+                   windowedPipRequest->visual ==
+                       PlaybackVisualMode::Framebuffer &&
+                   windowedPipRequest->focus ==
+                       PlaybackPresentationFocus::KeepCurrentSurface,
+               "framebuffer PiP must map to one non-activating native request");
 
   const PlaybackPresentationState fullscreenFromPip =
       terminalPip.toggleFullscreen();
@@ -104,6 +153,9 @@ int main() {
                        PlaybackPresentationLayer::PictureInPicture &&
                    framebufferPip.togglePictureInPicture() == windowed,
                "Ctrl+W in PiP must change the visual mode without losing the PiP layer");
+  ok &= expect(presentationFocusFor(framebufferPip) ==
+                   PlaybackPresentationFocus::KeepCurrentSurface,
+               "changing the renderer inside PiP must preserve workspace focus");
 
   return ok ? 0 : 1;
 }

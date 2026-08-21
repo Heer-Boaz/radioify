@@ -22,37 +22,56 @@ void setVisualMode(VideoWindow& window, PlaybackVisualMode visual) {
       visual == PlaybackVisualMode::AsciiGrid);
 }
 
+bool matchesRequest(const VideoWindow& window,
+                    const PlaybackWindowPresentationRequest& request) {
+  if (!window.IsOpen() || !window.IsVisible() ||
+      window.IsTextGridPresentationEnabled() !=
+          (request.visual == PlaybackVisualMode::AsciiGrid)) {
+    return false;
+  }
+  switch (request.target) {
+    case PlaybackWindowPresentationMode::Windowed:
+      return !window.IsFullscreen() && !window.IsPictureInPicture();
+    case PlaybackWindowPresentationMode::Fullscreen:
+      return window.IsFullscreen() && !window.IsPictureInPicture();
+    case PlaybackWindowPresentationMode::PictureInPicture:
+      return !window.IsFullscreen() && window.IsPictureInPicture();
+  }
+  return false;
+}
+
 }  // namespace
 
 namespace playback_session_window {
 
 bool apply(VideoWindow& window, WindowPresentationRequest request) {
-  setVisualMode(window, request.visual);
   const VideoWindowFocus focus = toVideoWindowFocus(request.focus);
+  bool surfaceApplied = false;
 
   switch (request.target) {
     case PlaybackWindowPresentationMode::Windowed:
-      if (window.IsPictureInPicture() &&
-          !window.SetPictureInPicture(false,
-                                      VideoWindowFocus::KeepCurrentFocus)) {
+      if (!window.SetPictureInPicture(false,
+                                      VideoWindowFocus::KeepCurrentFocus) ||
+          !window.SetFullscreen(false,
+                                VideoWindowFocus::KeepCurrentFocus)) {
         return false;
       }
-      if (window.IsFullscreen() &&
-          !window.SetFullscreen(false, VideoWindowFocus::KeepCurrentFocus)) {
-        return false;
-      }
-      if (focus == VideoWindowFocus::TakeForegroundFocus) {
-        window.Activate();
-      }
-      return true;
+      surfaceApplied = window.Show(focus);
+      break;
     case PlaybackWindowPresentationMode::Fullscreen:
-      return window.IsPictureInPicture()
-                 ? window.ExitPictureInPictureToFullscreen(focus)
-                 : window.SetFullscreen(true, focus);
+      surfaceApplied = window.IsPictureInPicture()
+                           ? window.ExitPictureInPictureToFullscreen(focus)
+                           : window.SetFullscreen(true, focus);
+      break;
     case PlaybackWindowPresentationMode::PictureInPicture:
-      return window.SetPictureInPicture(true, focus);
+      surfaceApplied = window.SetPictureInPicture(true, focus);
+      break;
   }
-  return false;
+  if (!surfaceApplied) {
+    return false;
+  }
+  setVisualMode(window, request.visual);
+  return matchesRequest(window, request);
 }
 
 void applyPlacement(VideoWindow& window, const WindowPlacementState& state) {

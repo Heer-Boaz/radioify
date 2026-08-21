@@ -6,7 +6,7 @@
 
 #include "core/native_wait_handle.h"
 #include "playback/framebuffer/presenter.h"
-#include "playback_mode.h"
+#include "playback/session/presentation_policy.h"
 #include "state.h"
 
 class Player;
@@ -19,12 +19,9 @@ namespace playback_screen_renderer {
 struct PlaybackScreenRenderInputs;
 }
 
-struct PlaybackPresenterSyncResult;
-
 class PlaybackOutputController {
  public:
-  explicit PlaybackOutputController(
-      PlaybackLayout initialLayout);
+  PlaybackOutputController();
   ~PlaybackOutputController();
 
   PlaybackOutputController(PlaybackOutputController&&) noexcept;
@@ -33,31 +30,23 @@ class PlaybackOutputController {
   PlaybackOutputController(const PlaybackOutputController&) = delete;
   PlaybackOutputController& operator=(const PlaybackOutputController&) = delete;
 
-  bool windowRequested() const;
-  bool windowActive() const;
   bool windowOpen() const;
   bool windowVisible() const;
   bool consumeWindowCloseRequested();
   NativeWaitHandle windowInputWaitHandle() const;
   NativeWaitHandle windowCloseRequestedWaitHandle() const;
-  PlaybackRenderMode renderMode(bool enableAscii) const;
-  void requestLayout(PlaybackLayout layout);
-  PlaybackLayout desiredLayout() const;
-
-  PlaybackPresenterSyncResult sync(
+  bool openWindow(
       Player& player,
       const std::function<WindowUiState()>& buildUiState,
       const playback_framebuffer_presenter::TextGridPresentationProvider&
-          buildTextGridPresentation,
-      bool& redraw, bool& forceRefreshArt);
+          buildTextGridPresentation);
+  void closeWindow();
 
   bool pollWindowInput(InputEvent& event);
   void updateWindowCursor(Player& player, PlaybackSessionState playbackState,
                           bool overlayVisible);
   void renderTerminal(
       playback_screen_renderer::PlaybackScreenRenderInputs& inputs);
-
-  void stop();
 
   bool applyWindowPresentation(PlaybackWindowPresentationRequest request);
   bool restoreWindowPresentation(

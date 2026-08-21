@@ -132,8 +132,9 @@ public:
     VideoWindow();
     ~VideoWindow();
 
-    bool Open(int width, int height, const std::string& title,
-              bool startFullscreen = true);
+    // Creates the native resources without exposing an intermediate window.
+    // The owner thread must apply the requested presentation or call Show().
+    bool Open(int width, int height, const std::string& title);
     void Close();
 
     void Present(GpuVideoFrameCache& frameCache, const WindowUiState& ui);
@@ -180,6 +181,7 @@ public:
     // Must be called on the window owner thread. Returns the normal restored
     // bounds even while the window is fullscreen or in PiP.
     bool GetWindowedBounds(RECT* outRect) const;
+    // Changes geometry without changing visibility or foreground ownership.
     bool SetWindowBounds(const RECT& rect);
     
     bool IsOpen() const { return m_hWnd != nullptr; }
@@ -200,7 +202,7 @@ public:
         outViewH = m_viewportH;
     }
     void Activate();
-    void ShowWindow(bool show);
+    bool Show(VideoWindowFocus focus);
     bool PollEvents();
     bool PollInput(InputEvent& ev);
     NativeWaitHandle InputWaitHandle() const;
@@ -383,5 +385,5 @@ private:
     std::string m_subtitleRenderError;
     void setSubtitleRenderError(std::string error);
     bool MakeFullscreen(VideoWindowFocus focus);
-    bool ExitFullscreen();
+    bool ExitFullscreen(VideoWindowFocus focus);
 };

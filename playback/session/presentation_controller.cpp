@@ -1,127 +1,137 @@
 #include "presentation_controller.h"
 
 #include "output.h"
-#include "playback_mode.h"
-
-namespace {
-
-void markPresentationChanged(bool& redraw, bool& forceRefreshArt) {
-  forceRefreshArt = true;
-  redraw = true;
-}
-
-PlaybackLayout layoutFor(const PlaybackPresentationState& state) {
-  return state.requiresNativeWindow() ? PlaybackLayout::Window
-                                      : PlaybackLayout::Terminal;
-}
-
-}  // namespace
 
 PlaybackPresentationController::PlaybackPresentationController(
     PlaybackPresentationState initialState,
     WindowPlacementState initialPlacement)
     : desiredState_(initialState),
-      appliedState_(initialState.requiresNativeWindow()
-                        ? PlaybackPresentationState::terminalAscii()
-                        : initialState),
+      pendingFocus_(presentationFocusFor(initialState)),
       windowPlacement_(initialPlacement) {}
 
 bool PlaybackPresentationController::transitionTo(
-    PlaybackPresentationState next, PlaybackOutputController& output,
-    bool& redraw, bool& forceRefreshArt) {
+    PlaybackPresentationState next, PlaybackPresentationFocus focus) {
   if (next == desiredState_) {
-    return true;
+    return false;
   }
-
   desiredState_ = next;
-  output.requestLayout(layoutFor(desiredState_));
-  markPresentationChanged(redraw, forceRefreshArt);
-
-  if (!desiredState_.requiresNativeWindow()) {
-    if (appliedState_.requiresNativeWindow() && output.windowOpen()) {
-      output.captureWindowPlacement(windowPlacement_, appliedState_);
-    }
-    appliedState_ = desiredState_;
-    return true;
-  }
-
-  if (output.windowOpen()) {
-    const auto request = windowPresentationRequest(
-        desiredState_, PlaybackPresentationFocus::FocusTargetSurface);
-    if (!request || !output.applyWindowPresentation(*request)) {
-      desiredState_ = appliedState_;
-      output.requestLayout(layoutFor(desiredState_));
-      markPresentationChanged(redraw, forceRefreshArt);
-      return false;
-    }
-    appliedState_ = desiredState_;
-    output.captureWindowPlacement(windowPlacement_, appliedState_);
-  }
+  pendingFocus_ = focus;
   return true;
 }
 
-bool PlaybackPresentationController::toggleWindow(
-    PlaybackOutputController& output, bool& redraw, bool& forceRefreshArt) {
-  return transitionTo(desiredState_.toggleWindowMode(), output, redraw,
-                      forceRefreshArt);
+bool PlaybackPresentationController::toggleWindow() {
+  const PlaybackPresentationState next = desiredState_.toggleWindowMode();
+  return transitionTo(next, presentationFocusFor(next));
 }
 
-bool PlaybackPresentationController::togglePictureInPicture(
-    PlaybackOutputController& output, bool& redraw, bool& forceRefreshArt) {
-  return transitionTo(desiredState_.togglePictureInPicture(), output, redraw,
-                      forceRefreshArt);
+bool PlaybackPresentationController::togglePictureInPicture() {
+  const PlaybackPresentationState next =
+      desiredState_.togglePictureInPicture();
+  return transitionTo(next, presentationFocusFor(next));
 }
 
-bool PlaybackPresentationController::toggleFullscreen(
-    PlaybackOutputController& output, bool& redraw, bool& forceRefreshArt) {
-  return transitionTo(desiredState_.toggleFullscreen(), output, redraw,
-                      forceRefreshArt);
+bool PlaybackPresentationController::toggleFullscreen() {
+  const PlaybackPresentationState next = desiredState_.toggleFullscreen();
+  return transitionTo(next, presentationFocusFor(next));
 }
 
-void PlaybackPresentationController::reconcile(
-    PlaybackOutputController& output, bool windowStartFailed, bool& redraw,
-    bool& forceRefreshArt) {
-  if (windowStartFailed) {
-    desiredState_ = appliedState_;
-    output.requestLayout(layoutFor(desiredState_));
-    markPresentationChanged(redraw, forceRefreshArt);
-    return;
+PlaybackPresentationSyncResult
+PlaybackPresentationController::synchronize(
+    PlaybackOutputController& output, Player& player,
+    const std::function<WindowUiState()>& buildUiState,
+    const playback_framebuffer_presenter::TextGridPresentationProvider&
+        buildTextGridPresentation) {
+  PlaybackPresentationSyncResult result;
+  result.previousState = state();
+  result.previousWindowOpen = output.windowOpen();
+
+  const auto finish =
+      [this, &result, &output](
+          bool failed,
+          std::optional<PlaybackShellFocusTarget> focusTarget) {
+        result.appliedState = state();
+        result.windowOpen = output.windowOpen();
+        result.transitionFailed = failed;
+        result.shellFocusTarget = focusTarget;
+        pendingFocus_ = PlaybackPresentationFocus::KeepCurrentSurface;
+        return result;
+      };
+
+  const bool statePending =
+      !appliedState_ || desiredState_ != *appliedState_;
+  const bool physicalStateMatches =
+      desiredState_.requiresNativeWindow() == output.windowOpen();
+  if (!statePending && physicalStateMatches) {
+    return finish(false, std::nullopt);
   }
 
   if (!desiredState_.requiresNativeWindow()) {
-    return;
+    if (output.windowOpen()) {
+      if (appliedState_ && appliedState_->requiresNativeWindow()) {
+        output.captureWindowPlacement(windowPlacement_, *appliedState_);
+      }
+      output.closeWindow();
+    }
+    appliedState_ = desiredState_;
+    std::optional<PlaybackShellFocusTarget> focusTarget =
+        shellFocusAfterTransition(result.previousState, *appliedState_);
+    if (!focusTarget && result.previousWindowOpen &&
+        pendingFocus_ == PlaybackPresentationFocus::FocusTargetSurface) {
+      focusTarget = PlaybackShellFocusTarget::TerminalPlayback;
+    }
+    return finish(false, focusTarget);
   }
 
-  if (desiredState_ == appliedState_ || !output.windowOpen()) {
-    return;
+  const std::optional<PlaybackPresentationState> previousApplied =
+      appliedState_;
+  const bool openedWindow = !output.windowOpen();
+  if (openedWindow &&
+      !output.openWindow(player, buildUiState, buildTextGridPresentation)) {
+    desiredState_ = PlaybackPresentationState::terminalAscii();
+    appliedState_ = desiredState_;
+    return finish(true, PlaybackShellFocusTarget::TerminalPlayback);
   }
 
-  const auto request = windowPresentationRequest(
-      desiredState_, PlaybackPresentationFocus::FocusTargetSurface);
-  const bool startingNativeWindow = !appliedState_.requiresNativeWindow();
+  const auto request = windowPresentationRequest(desiredState_, pendingFocus_);
   const bool applied =
       request &&
-      (startingNativeWindow
+      (openedWindow
            ? output.restoreWindowPresentation(*request, windowPlacement_)
            : output.applyWindowPresentation(*request));
   if (applied) {
     appliedState_ = desiredState_;
-    output.captureWindowPlacement(windowPlacement_, appliedState_);
-    return;
+    output.captureWindowPlacement(windowPlacement_, *appliedState_);
+    return finish(false, shellFocusAfterTransition(result.previousState,
+                                                    *appliedState_));
   }
 
-  desiredState_ = appliedState_;
-  output.requestLayout(layoutFor(desiredState_));
-  markPresentationChanged(redraw, forceRefreshArt);
+  const bool canRestorePreviousWindowState =
+      !openedWindow && previousApplied &&
+      previousApplied->requiresNativeWindow() && output.windowOpen();
+  if (canRestorePreviousWindowState) {
+    const auto rollback = windowPresentationRequest(
+        *previousApplied, PlaybackPresentationFocus::KeepCurrentSurface);
+    if (rollback && output.applyWindowPresentation(*rollback)) {
+      desiredState_ = *previousApplied;
+      appliedState_ = *previousApplied;
+      return finish(true, std::nullopt);
+    }
+  }
+
+  output.closeWindow();
+  desiredState_ = PlaybackPresentationState::terminalAscii();
+  appliedState_ = desiredState_;
+  return finish(true, PlaybackShellFocusTarget::TerminalPlayback);
 }
 
 void PlaybackPresentationController::captureWindowPlacement(
     PlaybackOutputController& output,
     PlaybackSessionContinuationState& state) {
-  if (appliedState_.requiresNativeWindow() && output.windowOpen()) {
-    output.captureWindowPlacement(windowPlacement_, appliedState_);
+  const PlaybackPresentationState& applied = this->state();
+  if (applied.requiresNativeWindow() && output.windowOpen()) {
+    output.captureWindowPlacement(windowPlacement_, applied);
   }
   state.hasPresentation = true;
-  state.presentation = appliedState_;
+  state.presentation = applied;
   state.windowPlacement = windowPlacement_;
 }

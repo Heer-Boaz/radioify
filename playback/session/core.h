@@ -3,13 +3,12 @@
 #include <memory>
 
 #include "core/native_wait_handle.h"
-#include "playback_mode.h"
+#include "presentation_policy.h"
 #include "state.h"
 
 class ConsoleScreen;
 class Player;
 struct PerfLog;
-struct PlaybackPresenterSyncResult;
 
 namespace playback_session_input {
 struct PlaybackInputView;
@@ -45,15 +44,15 @@ class PlaybackSessionCore {
       playback_screen_renderer::PlaybackScreenRenderInputs& renderInputs) const;
 
   bool finalizeAudioStart();
-  bool applyPresenterSync(const PlaybackPresenterSyncResult& syncResult);
-  bool refresh(bool useWindowPresenter, bool windowActive, bool& redraw);
+  bool applyPresentationSync(bool switchedAwayFromWindow);
+  bool refresh(bool nativeWindowActive, bool& redraw);
   void setAsciiPresentation(ConsoleScreen& screen, bool enabled);
   uint64_t videoFrameCounter() const;
   bool waitForVideoFrame(uint64_t lastCounter, int timeoutMs) const;
   NativeWaitHandle videoFrameWaitHandle() const;
   void markPendingResize();
-  void handlePendingResize(ConsoleScreen& screen, PlaybackRenderMode renderMode,
-                           bool& redraw);
+  void handlePendingResize(ConsoleScreen& screen,
+                           PlaybackVisualMode visualMode, bool& redraw);
   void shutdownPlayer();
   void shutdownAudio();
   void shutdown();

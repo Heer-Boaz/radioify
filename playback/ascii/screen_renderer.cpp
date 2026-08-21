@@ -142,17 +142,16 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   const Color& progressStart = *inputs.progressStart;
   const Color& progressEnd = *inputs.progressEnd;
   bool debugOverlay = inputs.debugOverlay;
-  PlaybackRenderMode currentMode = inputs.currentMode;
+  const PlaybackVisualMode visualMode = inputs.visualMode;
   PlaybackSessionState playbackState = inputs.playbackState;
   bool enableAudio = inputs.enableAudio;
   bool audioOk = inputs.audioOk;
   bool audioStarting = inputs.audioStarting;
   bool canPlayPrevious = inputs.canPlayPrevious;
   bool canPlayNext = inputs.canPlayNext;
-  bool windowActive = inputs.windowActive;
+  const bool nativeWindowActive = inputs.nativeWindowActive;
   bool hasSubtitles = inputs.hasSubtitles;
   bool allowAsciiCpuFallback = inputs.allowAsciiCpuFallback;
-  bool useWindowPresenter = inputs.useWindowPresenter;
   const bool overlayVisibleNow = inputs.osd.controlsVisible;
   bool clearHistory = inputs.clearHistory;
   bool frameChanged = inputs.frameChanged;
@@ -191,7 +190,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     debugLines.insert(debugLines.end(), inputs.debugLines.begin(),
                       inputs.debugLines.end());
   }
-  if (debugOverlay && currentMode == PlaybackRenderMode::AsciiTerminal) {
+  if (debugOverlay && visualMode == PlaybackVisualMode::AsciiGrid) {
     debugLines.push_back(
         playback_debug_lines::videoFrameDebugLine(player.debugInfo()));
 
@@ -295,7 +294,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   bool isPaused =
       playbackState == PlaybackSessionState::Paused || playerTransportPaused;
   frameOutput.haveFrame = frameAvailable;
-  bool allowFrame = frameOutput.haveFrame && !useWindowPresenter;
+  bool allowFrame = frameOutput.haveFrame && !nativeWindowActive;
 
   auto waitingLabel = [&]() -> std::string {
     if (playbackState == PlaybackSessionState::Ended) return "Ended";
@@ -320,7 +319,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
        std::abs(cellPixelWidth - frameOutput.cachedCellPixelWidth) > 0.01 ||
        std::abs(cellPixelHeight - frameOutput.cachedCellPixelHeight) > 0.01);
 
-  if (currentMode == PlaybackRenderMode::AsciiTerminal) {
+  if (visualMode == PlaybackVisualMode::AsciiGrid) {
     playback_frame_output::AsciiModePrepareInput asciiInput;
     asciiInput.allowFrame = allowFrame;
     asciiInput.clearHistory = clearHistory;
@@ -349,7 +348,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
         frameOutput, warningSink);
   }
 
-  if (currentMode == PlaybackRenderMode::AsciiTerminal && allowFrame &&
+  if (visualMode == PlaybackVisualMode::AsciiGrid && allowFrame &&
       art.width > 0 && art.height > 0) {
     const int visibleArtHeight = std::min(art.height, maxHeight);
     asciiArtTop = playback_frame_output::centerContentTop(
@@ -423,7 +422,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     screen.writeText(0, headerY++, fitLine(statusLine, width), dimStyle);
   }
 
-  if (currentMode == PlaybackRenderMode::AsciiTerminal) {
+  if (visualMode == PlaybackVisualMode::AsciiGrid) {
     playback_frame_output::renderAsciiModeContent(
         screen, art, width, height, maxHeight, asciiArtTop, waitingLabel(),
         allowFrame, baseStyle, overlayVisibleNow, overlayReservedLines,
@@ -449,7 +448,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     playback_ascii_subtitles::renderAsciiSubtitles(subtitleInput);
   } else {
     playback_frame_output::renderNonAsciiModeContent(
-        screen, windowActive, allowFrame, width, artTop, maxHeight, frame,
+        screen, nativeWindowActive, allowFrame, width, artTop, maxHeight, frame,
         videoWindow.GetWidth(), videoWindow.GetHeight(), dimStyle);
   }
 

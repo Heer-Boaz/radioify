@@ -72,7 +72,7 @@ bool AudioPictureInPictureWindow::open() {
   lastError_.clear();
   if (window_.IsOpen()) return true;
   if (!window_.Open(kDefaultWindowWidth, kDefaultWindowHeight,
-                    RADIOIFY_APP_NAME " Picture-in-Picture", false)) {
+                    RADIOIFY_APP_NAME " Picture-in-Picture")) {
     lastError_ = "The picture-in-picture window could not be created.";
     return false;
   }
@@ -95,7 +95,6 @@ bool AudioPictureInPictureWindow::open() {
     close();
     return false;
   }
-  window_.ShowWindow(true);
   refreshGridSize();
   return true;
 }

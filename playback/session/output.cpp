@@ -7,18 +7,15 @@
 #include "playback/video/framebuffer/frame_clipboard.h"
 #include "playback/video/gpu/videoprocessor.h"
 #include "playback/ascii/screen_renderer.h"
-#include "presentation.h"
+#include "playback/framebuffer/window_presenter.h"
 
 struct PlaybackOutputController::Impl {
-  explicit Impl(PlaybackLayout initialLayout) : presentation(initialLayout) {}
-
-  PlaybackPresentation presentation;
+  WindowPresenter windowPresenter;
   GpuVideoFrameCache terminalFrameCache;
 };
 
-PlaybackOutputController::PlaybackOutputController(
-    PlaybackLayout initialLayout)
-    : impl_(std::make_unique<Impl>(initialLayout)) {}
+PlaybackOutputController::PlaybackOutputController()
+    : impl_(std::make_unique<Impl>()) {}
 
 PlaybackOutputController::~PlaybackOutputController() = default;
 
@@ -28,75 +25,56 @@ PlaybackOutputController::PlaybackOutputController(
 PlaybackOutputController& PlaybackOutputController::operator=(
     PlaybackOutputController&&) noexcept = default;
 
-bool PlaybackOutputController::windowRequested() const {
-  return impl_->presentation.windowRequested();
-}
-
-bool PlaybackOutputController::windowActive() const {
-  return impl_->presentation.windowActive();
-}
-
 bool PlaybackOutputController::windowOpen() const {
-  return impl_->presentation.windowOpen();
+  return impl_->windowPresenter.isOpen();
 }
 
 bool PlaybackOutputController::windowVisible() const {
-  return impl_->presentation.windowVisible();
+  return impl_->windowPresenter.isVisible();
 }
 
 bool PlaybackOutputController::consumeWindowCloseRequested() {
-  return impl_->presentation.consumeWindowCloseRequested();
+  return impl_->windowPresenter.consumeCloseRequested();
 }
 
 NativeWaitHandle PlaybackOutputController::windowInputWaitHandle() const {
-  return impl_->presentation.windowInputWaitHandle();
+  return impl_->windowPresenter.window().InputWaitHandle();
 }
 
 NativeWaitHandle
 PlaybackOutputController::windowCloseRequestedWaitHandle() const {
-  return impl_->presentation.windowCloseRequestedWaitHandle();
+  return impl_->windowPresenter.closeRequestedWaitHandle();
 }
 
-PlaybackRenderMode PlaybackOutputController::renderMode(bool enableAscii) const {
-  return impl_->presentation.renderMode(enableAscii);
-}
-
-void PlaybackOutputController::requestLayout(PlaybackLayout layout) {
-  impl_->presentation.requestLayout(layout);
-}
-
-PlaybackLayout PlaybackOutputController::desiredLayout() const {
-  return impl_->presentation.desiredLayout();
-}
-
-PlaybackPresenterSyncResult PlaybackOutputController::sync(
+bool PlaybackOutputController::openWindow(
     Player& player,
     const std::function<WindowUiState()>& buildUiState,
     const playback_framebuffer_presenter::TextGridPresentationProvider&
-        buildTextGridPresentation,
-    bool& redraw, bool& forceRefreshArt) {
-  return impl_->presentation.sync(player, buildUiState,
-                                  buildTextGridPresentation, redraw,
-                                  forceRefreshArt);
+        buildTextGridPresentation) {
+  return impl_->windowPresenter.start(player, buildUiState,
+                                      buildTextGridPresentation);
+}
+
+void PlaybackOutputController::closeWindow() {
+  impl_->windowPresenter.stop();
 }
 
 bool PlaybackOutputController::pollWindowInput(InputEvent& event) {
-  return impl_->presentation.window().PollInput(event);
+  return impl_->windowPresenter.window().PollInput(event);
 }
 
 void PlaybackOutputController::updateWindowCursor(
     Player& player, PlaybackSessionState playbackState, bool overlayVisible) {
-  if (impl_->presentation.windowActive() &&
-      impl_->presentation.windowVisible()) {
+  if (impl_->windowPresenter.isOpen() && impl_->windowPresenter.isVisible()) {
     const PlayerState state = player.state();
     const bool isActivelyPlaying =
         state == PlayerState::Playing || state == PlayerState::Draining;
     const bool showCursor = overlayVisible || playbackState == PlaybackSessionState::Paused ||
                             !isActivelyPlaying;
-    impl_->presentation.setWindowCursorVisible(showCursor);
+    impl_->windowPresenter.setCursorVisible(showCursor);
     return;
   }
-  impl_->presentation.setWindowCursorVisible(true);
+  impl_->windowPresenter.setCursorVisible(true);
 }
 
 void PlaybackOutputController::renderTerminal(
@@ -104,37 +82,33 @@ void PlaybackOutputController::renderTerminal(
   playback_screen_renderer::renderPlaybackScreen(inputs);
 }
 
-void PlaybackOutputController::stop() {
-  impl_->presentation.stop();
-}
-
 bool PlaybackOutputController::applyWindowPresentation(
     PlaybackWindowPresentationRequest request) {
-  return impl_->presentation.applyWindowPresentation(request);
+  return impl_->windowPresenter.applyPresentation(request);
 }
 
 bool PlaybackOutputController::restoreWindowPresentation(
     PlaybackWindowPresentationRequest request,
     const WindowPlacementState& placement) {
-  return impl_->presentation.restoreWindowPresentation(request, placement);
+  return impl_->windowPresenter.restorePresentation(request, placement);
 }
 
 bool PlaybackOutputController::captureWindowPlacement(
     WindowPlacementState& placement,
     const PlaybackPresentationState& presentation) {
-  return impl_->presentation.captureWindowPlacement(placement, presentation);
+  return impl_->windowPresenter.capturePlacement(placement, presentation);
 }
 
 bool PlaybackOutputController::activateWindow() {
-  return impl_->presentation.activateWindow();
+  return impl_->windowPresenter.activate();
 }
 
 VideoWindow& PlaybackOutputController::window() {
-  return impl_->presentation.window();
+  return impl_->windowPresenter.window();
 }
 
 const VideoWindow& PlaybackOutputController::window() const {
-  return impl_->presentation.window();
+  return impl_->windowPresenter.window();
 }
 
 GpuVideoFrameCache& PlaybackOutputController::frameCache() {
@@ -142,13 +116,13 @@ GpuVideoFrameCache& PlaybackOutputController::frameCache() {
 }
 
 void PlaybackOutputController::requestWindowPresent() {
-  impl_->presentation.requestPresent();
+  impl_->windowPresenter.requestPresent();
 }
 
 bool PlaybackOutputController::copyCurrentVideoFrameToClipboard(
     std::string* error) {
   VideoFrameSnapshotResult result =
-      impl_->presentation.captureCurrentFrame();
+      impl_->windowPresenter.captureCurrentFrame();
   if (!result.succeeded()) {
     if (error) {
       *error = std::move(result.error);
@@ -156,5 +130,5 @@ bool PlaybackOutputController::copyCurrentVideoFrameToClipboard(
     return false;
   }
   return playback_video_frame_clipboard::copyToClipboard(
-      impl_->presentation.nativeWindowHandle(), result.snapshot, error);
+      impl_->windowPresenter.nativeWindowHandle(), result.snapshot, error);
 }

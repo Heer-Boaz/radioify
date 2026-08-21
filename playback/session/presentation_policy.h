@@ -157,6 +157,37 @@ enum class PlaybackPresentationFocus {
   FocusTargetSurface,
 };
 
+enum class PlaybackShellFocusTarget {
+  Browser,
+  TerminalPlayback,
+};
+
+inline constexpr PlaybackPresentationFocus presentationFocusFor(
+    const PlaybackPresentationState& target) {
+  return target.layer() == PlaybackPresentationLayer::PictureInPicture
+             ? PlaybackPresentationFocus::KeepCurrentSurface
+             : PlaybackPresentationFocus::FocusTargetSurface;
+}
+
+inline constexpr bool entersPictureInPicture(
+    const PlaybackPresentationState& previous,
+    const PlaybackPresentationState& target) {
+  return previous.layer() != PlaybackPresentationLayer::PictureInPicture &&
+         target.layer() == PlaybackPresentationLayer::PictureInPicture;
+}
+
+inline constexpr std::optional<PlaybackShellFocusTarget>
+shellFocusAfterTransition(const PlaybackPresentationState& previous,
+                          const PlaybackPresentationState& target) {
+  if (entersPictureInPicture(previous, target)) {
+    return PlaybackShellFocusTarget::Browser;
+  }
+  if (previous.requiresNativeWindow() && !target.requiresNativeWindow()) {
+    return PlaybackShellFocusTarget::TerminalPlayback;
+  }
+  return std::nullopt;
+}
+
 struct PlaybackWindowPresentationRequest {
   PlaybackWindowPresentationMode target =
       PlaybackWindowPresentationMode::Windowed;

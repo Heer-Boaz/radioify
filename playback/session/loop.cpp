@@ -27,14 +27,12 @@
 #include "playback/session/osd_timeline.h"
 #include "playback/session/context_menu_controller.h"
 #include "playback/session/video_edit_workspace.h"
-#include "playback_mode.h"
 #include "core/windows_console_window.h"
 #include "core/runtime_helpers.h"
 #include "core.h"
 #include "handoff.h"
 #include "input.h"
 #include "output.h"
-#include "presentation.h"
 #include "presentation_controller.h"
 #include "state.h"
 #include "playback/video/subtitle/manager.h"
@@ -61,11 +59,6 @@ PlaybackPresentationState initialPlaybackPresentation(
   }
   return config.enableAscii ? PlaybackPresentationState::terminalAscii()
                             : PlaybackPresentationState::nativeWindowed();
-}
-
-PlaybackLayout playbackLayoutFor(const PlaybackPresentationState& state) {
-  return state.requiresNativeWindow() ? PlaybackLayout::Window
-                                      : PlaybackLayout::Terminal;
 }
 
 }  // namespace
@@ -111,6 +104,7 @@ struct PlaybackLoopRunner::Impl {
   const std::filesystem::path file;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
+  std::function<void()> activateBrowserSurface;
   const PlaybackSessionIntent sessionIntent;
   PlaybackSessionContinuationState capturedContinuationState;
   bool quitApplicationRequested = false;
@@ -178,11 +172,10 @@ struct PlaybackLoopRunner::Impl {
         file(std::move(args.file)),
         requestTransportCommand(std::move(args.requestTransportCommand)),
         requestOpenFiles(std::move(args.requestOpenFiles)),
+        activateBrowserSurface(std::move(args.activateBrowserSurface)),
         sessionIntent(args.sessionIntent),
         enableAudio(args.enableAudio),
         hasSubtitles(args.hasSubtitles),
-        output(playbackLayoutFor(initialPlaybackPresentation(
-                   config, args.continuityState))),
         presentationController(
             initialPlaybackPresentation(config, args.continuityState),
             args.continuityState.windowPlacement),
@@ -687,22 +680,22 @@ struct PlaybackLoopRunner::Impl {
           }
         };
     inputSignals.toggleWindowPresentation = [this]() {
-      const bool wasAscii = presentationController.usesAsciiGrid();
-      const bool changed = presentationController.toggleWindow(
-          output, redraw, forceRefreshArt);
-      if (changed && wasAscii != presentationController.usesAsciiGrid()) {
-        core.setAsciiPresentation(screen,
-                                  presentationController.usesAsciiGrid());
-      }
+      const bool changed = presentationController.toggleWindow();
+      redraw = redraw || changed;
+      forceRefreshArt = forceRefreshArt || changed;
       return changed;
     };
     inputSignals.togglePictureInPicture = [this]() {
-      return presentationController.togglePictureInPicture(
-          output, redraw, forceRefreshArt);
+      const bool changed = presentationController.togglePictureInPicture();
+      redraw = redraw || changed;
+      forceRefreshArt = forceRefreshArt || changed;
+      return changed;
     };
     inputSignals.toggleFullscreen = [this]() {
-      return presentationController.toggleFullscreen(output, redraw,
-                                                     forceRefreshArt);
+      const bool changed = presentationController.toggleFullscreen();
+      redraw = redraw || changed;
+      forceRefreshArt = forceRefreshArt || changed;
+      return changed;
     };
     inputSignals.requestPlaybackExit =
         [this](bool quitApplication) {
@@ -805,9 +798,8 @@ struct PlaybackLoopRunner::Impl {
     inputs.frameCache = &textGridPresentationFrameCache;
     inputs.art = &textGridPresentationArt;
     inputs.timelinePreviewCache = &textGridTimelinePreviewArt;
-    inputs.currentMode = PlaybackRenderMode::AsciiTerminal;
-    inputs.windowActive = false;
-    inputs.useWindowPresenter = false;
+    inputs.visualMode = PlaybackVisualMode::AsciiGrid;
+    inputs.nativeWindowActive = false;
     const bool audioOnlyPlayback =
         core.player().sourceWidth() <= 0 || core.player().sourceHeight() <= 0;
     const auto windowUi = windowUiStateSnapshot();
@@ -847,8 +839,7 @@ struct PlaybackLoopRunner::Impl {
     return textGridPresentationScreen.snapshot(outCells, outCols, outRows);
   }
 
-  PlaybackPresenterSyncResult syncPresentation() {
-    const bool wasAscii = presentationController.usesAsciiGrid();
+  PlaybackPresentationSyncResult syncPresentation() {
     auto buildUiState = [&]() { return buildWindowUiState(); };
     auto buildTextGridPresentation =
         [&](int pixelWidth, int pixelHeight, int cellPixelWidth,
@@ -861,34 +852,43 @@ struct PlaybackLoopRunner::Impl {
               frameChanged, enhancementDebugLine, outCells, outCols, outRows,
               outInteractions);
         };
-    PlaybackPresenterSyncResult result =
-        output.sync(core.player(), buildUiState, buildTextGridPresentation,
-                    redraw, forceRefreshArt);
-    presentationController.reconcile(output, result.windowStartFailed, redraw,
-                                     forceRefreshArt);
-    const bool activeWindow =
-        result.activeLayout == PlaybackLayout::Window;
-    if (activeWindow != output.windowRequested()) {
-      const bool windowStartFailed = result.windowStartFailed;
-      result = output.sync(core.player(), buildUiState,
-                           buildTextGridPresentation, redraw,
-                           forceRefreshArt);
-      result.windowStartFailed =
-          result.windowStartFailed || windowStartFailed;
-    }
-    if (wasAscii != presentationController.usesAsciiGrid()) {
-      core.setAsciiPresentation(screen,
-                                presentationController.usesAsciiGrid());
-    }
-    return result;
+    return presentationController.synchronize(
+        output, core.player(), buildUiState, buildTextGridPresentation);
   }
 
-  void applyPresenterSync(const PlaybackPresenterSyncResult& syncResult) {
-    if (syncResult.switchedAwayFromWindow() || syncResult.windowStartFailed) {
+  void applyPresenterSync(const PlaybackPresentationSyncResult& syncResult) {
+    if (syncResult.switchedAwayFromWindow() || syncResult.transitionFailed) {
       osd.clearControls();
       overlayControlHover.store(-1, std::memory_order_relaxed);
     }
-    if (core.applyPresenterSync(syncResult)) {
+    if (syncResult.transitionFailed) {
+      osd.showMessage(
+          syncResult.appliedState.requiresNativeWindow()
+              ? "The requested presentation could not be applied."
+              : "Native playback is unavailable; using terminal mode.",
+          playback_session::PlaybackOsdTimeline::Clock::now(),
+          kEditMessageDuration);
+      publishWindowUiState();
+      output.requestWindowPresent();
+    }
+    if (syncResult.visualModeChanged()) {
+      core.setAsciiPresentation(screen, syncResult.appliedState.usesAsciiGrid());
+    }
+    if (syncResult.shellFocusTarget) {
+      switch (*syncResult.shellFocusTarget) {
+        case PlaybackShellFocusTarget::Browser:
+          if (activateBrowserSurface) {
+            activateBrowserSurface();
+          } else {
+            activateWindowsConsoleWindow();
+          }
+          break;
+        case PlaybackShellFocusTarget::TerminalPlayback:
+          activateWindowsConsoleWindow();
+          break;
+      }
+    }
+    if (core.applyPresentationSync(syncResult.switchedAwayFromWindow())) {
       copiedFrameNeedsRender = true;
       forceRefreshArt = true;
       redraw = true;
@@ -904,7 +904,7 @@ struct PlaybackLoopRunner::Impl {
     videoEditWorkspace.stop();
     perfLogAppendf(&perfLog, "video_shutdown output_stop_begin");
     perfLogFlush(&perfLog);
-    output.stop();
+    output.closeWindow();
     perfLogAppendf(&perfLog, "video_shutdown output_stop_end");
     perfLogFlush(&perfLog);
     perfLogAppendf(&perfLog, "video_shutdown player_close_begin");
@@ -933,15 +933,13 @@ struct PlaybackLoopRunner::Impl {
 
   void updateRenderInputs(bool clearHistory, bool frameChanged) {
     renderInputs.debugOverlay = config.debugOverlay;
-    renderInputs.currentMode =
-        output.renderMode(presentationController.usesAsciiGrid());
+    renderInputs.visualMode = presentationController.state().visual();
     renderInputs.enableAudio = enableAudio;
     renderInputs.canPlayPrevious = requestTransportCommand != nullptr;
     renderInputs.canPlayNext = requestTransportCommand != nullptr;
-    renderInputs.windowActive = output.windowActive();
+    renderInputs.nativeWindowActive = output.windowOpen();
     renderInputs.hasSubtitles = hasSubtitles;
     renderInputs.allowAsciiCpuFallback = false;
-    renderInputs.useWindowPresenter = output.windowActive();
     renderInputs.osd = osdSnapshot();
     renderInputs.timelinePreview = timelinePreviewModel.snapshotFor(
         playback_video_timeline_preview::PresentationSurface::Terminal);
@@ -989,10 +987,10 @@ struct PlaybackLoopRunner::Impl {
   }
 
   bool initialize() {
-    bool useWindowPresenter = output.windowActive();
+    const bool nativeWindowActive = output.windowOpen();
     const auto now = std::chrono::steady_clock::now();
     lastDebugRefresh = now;
-    if (!useWindowPresenter) {
+    if (!nativeWindowActive) {
       updateRenderInputs(true, true);
       output.renderTerminal(renderInputs);
     } else {
@@ -1004,7 +1002,8 @@ struct PlaybackLoopRunner::Impl {
 
   void pollWindowEvents() {
     if (output.consumeWindowCloseRequested() ||
-        (output.windowRequested() && !output.windowVisible())) {
+        (presentationController.state().requiresNativeWindow() &&
+         !output.windowVisible())) {
       requestPlaybackExit(false);
     }
   }
@@ -1117,13 +1116,12 @@ struct PlaybackLoopRunner::Impl {
   }
 
   void handlePendingResize() {
-    core.handlePendingResize(
-        screen, output.renderMode(presentationController.usesAsciiGrid()),
-        redraw);
+    core.handlePendingResize(screen, presentationController.state().visual(),
+                             redraw);
   }
 
   struct RefreshState {
-    bool useWindowPresenter = false;
+    bool nativeWindowActive = false;
     bool presented = false;
     bool debugRefreshDue = false;
   };
@@ -1146,13 +1144,13 @@ struct PlaybackLoopRunner::Impl {
     if (const auto osdDeadline = osd.nextDeadline()) {
       tightenToDeadline(*osdDeadline);
     }
-    if (!refresh.useWindowPresenter && config.debugOverlay) {
+    if (!refresh.nativeWindowActive && config.debugOverlay) {
       tightenToDeadline(lastDebugRefresh + std::chrono::milliseconds(250));
     }
     if (seekState.seekQueued) {
       tightenToDeadline(seekState.lastSeekSentTime + kSeekThrottleInterval);
     }
-    if (!refresh.useWindowPresenter &&
+    if (!refresh.nativeWindowActive &&
         core.playbackState() == PlaybackSessionState::Active) {
       timeoutMs = std::min(timeoutMs, 16);
     }
@@ -1161,12 +1159,11 @@ struct PlaybackLoopRunner::Impl {
 
   RefreshState refreshState() {
     RefreshState state;
-    state.useWindowPresenter = output.windowActive();
-    state.presented =
-        core.refresh(state.useWindowPresenter, output.windowActive(), redraw);
+    state.nativeWindowActive = output.windowOpen();
+    state.presented = core.refresh(state.nativeWindowActive, redraw);
     const auto nowForRefresh = std::chrono::steady_clock::now();
     state.debugRefreshDue =
-        !state.useWindowPresenter && config.debugOverlay &&
+        !state.nativeWindowActive && config.debugOverlay &&
         (lastDebugRefresh == std::chrono::steady_clock::time_point::min() ||
          nowForRefresh - lastDebugRefresh >= std::chrono::milliseconds(250));
     return state;
@@ -1231,7 +1228,7 @@ struct PlaybackLoopRunner::Impl {
                                     refresh.debugRefreshDue,
                                     core.playbackState())) {
         renderPlaybackFrame(refresh.presented, loopState);
-      } else if (refresh.useWindowPresenter) {
+      } else if (refresh.nativeWindowActive) {
         redraw = false;
         forceRefreshArt = false;
       }
@@ -1256,10 +1253,10 @@ struct PlaybackLoopRunner::Impl {
     const auto append = [&](NativeWaitHandle handle) {
       if (handle) handles.push_back(handle);
     };
-    append(output.windowActive() ? core.player().statusChangeWaitHandle()
-                                 : core.videoFrameWaitHandle());
+    append(output.windowOpen() ? core.player().statusChangeWaitHandle()
+                               : core.videoFrameWaitHandle());
     append(output.windowInputWaitHandle());
-    if (output.windowActive()) {
+    if (output.windowOpen()) {
       append(output.windowCloseRequestedWaitHandle());
     }
     if (timelinePreviewStarted) {
@@ -1271,7 +1268,7 @@ struct PlaybackLoopRunner::Impl {
   int nextWakeTimeoutMs() const {
     if (loopStopRequested || redraw) return 0;
     RefreshState state;
-    state.useWindowPresenter = output.windowActive();
+    state.nativeWindowActive = output.windowOpen();
     return computeWaitTimeoutMs(state);
   }
 
@@ -1339,7 +1336,7 @@ struct PlaybackLoopRunner::Impl {
 
   bool activatePresentation() {
     if (finished) return false;
-    if (output.windowActive() && output.windowOpen()) {
+    if (output.windowOpen()) {
       return output.activateWindow();
     }
     activateWindowsConsoleWindow();

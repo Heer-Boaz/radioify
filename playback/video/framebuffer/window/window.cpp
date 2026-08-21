@@ -1269,7 +1269,8 @@ bool VideoWindow::EnterPictureInPicture(VideoWindowFocus focus) {
     }
 
     const bool restoreFullscreen = m_isFullscreen;
-    if (restoreFullscreen && !ExitFullscreen()) {
+    if (restoreFullscreen &&
+        !ExitFullscreen(VideoWindowFocus::KeepCurrentFocus)) {
         return false;
     }
 
@@ -1415,9 +1416,7 @@ bool VideoWindow::ApplyWindowBounds(const RECT& rect) {
     }
     auto displayTransition = m_displayLifecycle.ownerTransition();
     SetWindowPos(m_hWnd, nullptr, rect.left, rect.top, width, height,
-                 SWP_SHOWWINDOW | SWP_FRAMECHANGED | SWP_NOZORDER |
-                     SWP_NOACTIVATE);
-    ::ShowWindow(m_hWnd, SW_SHOWNOACTIVATE);
+                 SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE);
     UpdateWindow(m_hWnd);
 
     RECT client{};
@@ -1432,7 +1431,13 @@ bool VideoWindow::SetFullscreen(bool enabled, VideoWindowFocus focus) {
         GetCurrentThreadId() != m_windowThreadId) {
         return false;
     }
-    return enabled ? MakeFullscreen(focus) : ExitFullscreen();
+    if (enabled) {
+        return MakeFullscreen(focus);
+    }
+    if (!m_isFullscreen) {
+        return m_hWnd && m_swapChain;
+    }
+    return ExitFullscreen(focus);
 }
 
 bool VideoWindow::MakeFullscreen(VideoWindowFocus focus) {
@@ -1490,7 +1495,7 @@ bool VideoWindow::MakeFullscreen(VideoWindowFocus focus) {
     return false;
 }
 
-bool VideoWindow::ExitFullscreen() {
+bool VideoWindow::ExitFullscreen(VideoWindowFocus focus) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain) return false;
     auto displayTransition = m_displayLifecycle.ownerTransition();
@@ -1502,12 +1507,20 @@ bool VideoWindow::ExitFullscreen() {
     // Make sure fullscreen leaves the window in the normal z-order group.
     SetWindowPos(m_hWnd, HWND_NOTOPMOST, m_prevRect.left, m_prevRect.top,
                  m_prevRect.right - m_prevRect.left,
-                 m_prevRect.bottom - m_prevRect.top, SWP_FRAMECHANGED);
+                 m_prevRect.bottom - m_prevRect.top,
+                 SWP_SHOWWINDOW | SWP_FRAMECHANGED |
+                     (focus == VideoWindowFocus::TakeForegroundFocus
+                          ? 0
+                          : SWP_NOACTIVATE));
 
     // Resize back to previous logical size
     Resize(m_prevRect.right - m_prevRect.left, m_prevRect.bottom - m_prevRect.top);
 
-    ::ShowWindow(m_hWnd, SW_RESTORE);
+    const bool takeFocus = focus == VideoWindowFocus::TakeForegroundFocus;
+    ::ShowWindow(m_hWnd, takeFocus ? SW_RESTORE : SW_SHOWNOACTIVATE);
+    if (takeFocus) {
+        (void)ActivateForegroundSurface();
+    }
 
     m_isFullscreen = false;
     return true;
@@ -1574,8 +1587,7 @@ void VideoWindow::Cleanup() {
     m_trackingMouseLeave = false;
 }
 
-bool VideoWindow::Open(int width, int height, const std::string& title,
-                       bool startFullscreen) {
+bool VideoWindow::Open(int width, int height, const std::string& title) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (m_hWnd) {
         return false;
@@ -1622,12 +1634,6 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
     if (!CreateSwapChain(width, height)) {
         Close();
         return false;
-    }
-
-    // Video playback uses fullscreen by default, but callers can opt out
-    // (used by windowed TUI mode).
-    if (startFullscreen) {
-        MakeFullscreen(VideoWindowFocus::KeepCurrentFocus);
     }
 
     ID3D11Device* device = getSharedGpuDevice();
@@ -1687,7 +1693,6 @@ bool VideoWindow::Open(int width, int height, const std::string& title,
     hr = device->CreateBlendState(&blendDesc, &m_uiBlendState);
     if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateBlendState(UI) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); return false; }
 
-    ::ShowWindow(m_hWnd, SW_SHOW);
     m_width = width;
     m_height = height;
 
@@ -1955,21 +1960,24 @@ void VideoWindow::Close() {
     m_windowThreadId = 0;
 }
 
-void VideoWindow::ShowWindow(bool show) {
-    if (m_hWnd) {
-        ::ShowWindow(m_hWnd, show ? SW_SHOW : SW_HIDE);
+bool VideoWindow::Show(VideoWindowFocus focus) {
+    if (m_hWnd && m_windowThreadId != 0 &&
+        GetCurrentThreadId() != m_windowThreadId) {
+        return false;
     }
+    if (!m_hWnd) {
+        return false;
+    }
+    const bool takeFocus = focus == VideoWindowFocus::TakeForegroundFocus;
+    ::ShowWindow(m_hWnd, takeFocus ? SW_RESTORE : SW_SHOWNOACTIVATE);
+    if (takeFocus) {
+        (void)ActivateForegroundSurface();
+    }
+    return IsWindowVisible(m_hWnd) != FALSE;
 }
 
 void VideoWindow::Activate() {
-    if (!m_hWnd) {
-        return;
-    }
-    if (m_windowThreadId != 0 && GetCurrentThreadId() != m_windowThreadId) {
-        return;
-    }
-    ::ShowWindow(m_hWnd, SW_RESTORE);
-    (void)ActivateForegroundSurface();
+    (void)Show(VideoWindowFocus::TakeForegroundFocus);
 }
 
 bool VideoWindow::PollEvents() {

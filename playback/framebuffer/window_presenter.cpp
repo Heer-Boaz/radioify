@@ -78,10 +78,15 @@ struct WindowPresenter::Impl {
              const playback_framebuffer_presenter::TextGridPresentationProvider&
                  buildTextGridPresentation) {
     if (thread.joinable()) {
-      threadState.store(WindowThreadState::Enabled, std::memory_order_relaxed);
-      forcePresent.store(true, std::memory_order_relaxed);
-      notify();
-      return true;
+      HWND hwnd = nativeWindowHandle();
+      if (hwnd && IsWindow(hwnd)) {
+        threadState.store(WindowThreadState::Enabled,
+                          std::memory_order_relaxed);
+        forcePresent.store(true, std::memory_order_relaxed);
+        notify();
+        return true;
+      }
+      stop();
     }
 
     auto startGate = std::make_shared<WindowStartGate>();
@@ -94,10 +99,10 @@ struct WindowPresenter::Impl {
     thread = std::thread(
         [this, &player, buildTextGridPresentation, startGate]() {
           dispatch.openOnCurrentThread();
-          const bool opened =
-              window.Open(VideoWindow::kDefaultVideoClientWidth,
-                          VideoWindow::kDefaultVideoClientHeight,
-                          RADIOIFY_APP_NAME " Output", false);
+          const bool opened = window.Open(
+              VideoWindow::kDefaultVideoClientWidth,
+              VideoWindow::kDefaultVideoClientHeight,
+              RADIOIFY_APP_NAME " Output");
           if (opened) {
             windowHandle.store(window.NativeWindowHandle(),
                                std::memory_order_release);

@@ -902,6 +902,7 @@ class TuiMediaCoordinator {
     std::function<void(const std::filesystem::path&)> openBrowserDirectory;
     std::function<void()> requestQuit;
     std::function<void()> presentationFinished;
+    std::function<void()> activateBrowserSurface;
   };
 
   explicit TuiMediaCoordinator(Services services)
@@ -1233,7 +1234,8 @@ class TuiMediaCoordinator {
         continuationState_,
         route.sessionIntent,
         std::move(requestTransport),
-        std::move(requestDroppedFiles)};
+        std::move(requestDroppedFiles),
+        services_.activateBrowserSurface};
     PlaybackSession::Dependencies sessionDependencies{
         services_.input,
         services_.screen,
@@ -1479,14 +1481,17 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   bool windowTuiEnabled = o.enableWindow;
   if (windowTuiEnabled) {
     const WindowClientSize clientSize = initialWindowTuiClientSize(screen);
-    if (!tuiWindow.Open(clientSize.width, clientSize.height, RADIOIFY_APP_NAME,
-                        false)) {
+    if (!tuiWindow.Open(clientSize.width, clientSize.height,
+                        RADIOIFY_APP_NAME)) {
       windowTuiEnabled = false;
     } else {
       tuiWindow.EnableFileDrop();
       tuiWindow.SetCaptureAllMouseInput(true);
       tuiWindow.SetVsync(true);
-      tuiWindow.ShowWindow(true);
+      if (!tuiWindow.Show(VideoWindowFocus::TakeForegroundFocus)) {
+        tuiWindow.Close();
+        windowTuiEnabled = false;
+      }
     }
   }
 
@@ -1500,10 +1505,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   videoConfig.enableAscii = o.enableAscii;
   videoConfig.enableAudio = o.enableAudio;
   videoConfig.debugOverlay = o.asciiDebugOverlay;
-  // If dedicated window-TUI is active, keep video playback out of the legacy
-  // window path. If window-TUI could not be opened, fall back to normal
-  // window playback behavior.
-  videoConfig.enableWindow = o.enableWindow && !windowTuiEnabled;
 
   std::filesystem::path pendingImage;
   bool hasPendingImage = false;
@@ -1756,7 +1757,14 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
          return tryStartAudioFile(file, trackIndex);
        },
        applyAudioPictureInPicturePlan, openBrowserDirectory,
-       [&]() { running = false; }, [&]() { markDirty(); }});
+       [&]() { running = false; }, [&]() { markDirty(); },
+       [&]() {
+         if (windowTuiEnabled && tuiWindow.IsOpen()) {
+           tuiWindow.Activate();
+         } else {
+           activateWindowsConsoleWindow();
+         }
+       }});
   currentPlaybackFile =
       [&]() { return mediaCoordinator.currentPlaybackFile(); };
   currentPlaybackTrackIndex =

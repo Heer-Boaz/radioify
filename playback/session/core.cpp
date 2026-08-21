@@ -12,7 +12,6 @@
 #include "playback/ascii/screen_renderer.h"
 #include "input.h"
 #include "log.h"
-#include "presentation.h"
 
 namespace {
 
@@ -83,7 +82,7 @@ struct PlaybackSessionCore::Impl {
     renderInputs.audioStarting = audioStarting;
     renderInputs.frameAvailable =
         frameRefresh.frameAvailable ||
-        (renderInputs.useWindowPresenter && player.hasVideoFrame());
+        (renderInputs.nativeWindowActive && player.hasVideoFrame());
   }
 
   bool finalizeAudioStart() {
@@ -107,8 +106,8 @@ struct PlaybackSessionCore::Impl {
     return true;
   }
 
-  bool applyPresenterSync(const PlaybackPresenterSyncResult& syncResult) {
-    if (!syncResult.switchedAwayFromWindow()) {
+  bool applyPresentationSync(bool switchedAwayFromWindow) {
+    if (!switchedAwayFromWindow) {
       return false;
     }
     playback_frame_refresh::PlaybackFrameRefreshRequest request;
@@ -117,13 +116,13 @@ struct PlaybackSessionCore::Impl {
         .frameChanged;
   }
 
-  bool refresh(bool useWindowPresenter, bool windowActive, bool& redraw) {
+  bool refresh(bool nativeWindowActive, bool& redraw) {
     playback_frame_refresh::PlaybackFrameRefreshRequest request;
-    request.acceptNewFrames = !useWindowPresenter;
+    request.acceptNewFrames = !nativeWindowActive;
     playback_frame_refresh::PlaybackFrameRefreshResult result =
         playback_frame_refresh::refresh(player, frameRefresh, request);
-    bool presented = !useWindowPresenter && result.frameChanged;
-    if (presented && !windowActive) {
+    bool presented = !nativeWindowActive && result.frameChanged;
+    if (presented) {
       redraw = true;
     }
     syncPlaybackEndedState(player, playbackState);
@@ -151,15 +150,15 @@ struct PlaybackSessionCore::Impl {
 
   void markPendingResize() { pendingResize = true; }
 
-  void handlePendingResize(ConsoleScreen& screen, PlaybackRenderMode renderMode,
-                           bool& redraw) {
+  void handlePendingResize(ConsoleScreen& screen,
+                           PlaybackVisualMode visualMode, bool& redraw) {
     if (!pendingResize) {
       return;
     }
     screen.updateSize();
     int width = screen.width();
     int height = screen.height();
-    if (isAsciiPlaybackMode(renderMode)) {
+    if (visualMode == PlaybackVisualMode::AsciiGrid) {
       requestTargetSize(width, height, screen.cellPixelWidth(),
                         screen.cellPixelHeight());
     }
@@ -241,14 +240,13 @@ bool PlaybackSessionCore::finalizeAudioStart() {
   return impl_->finalizeAudioStart();
 }
 
-bool PlaybackSessionCore::applyPresenterSync(
-    const PlaybackPresenterSyncResult& syncResult) {
-  return impl_->applyPresenterSync(syncResult);
+bool PlaybackSessionCore::applyPresentationSync(
+    bool switchedAwayFromWindow) {
+  return impl_->applyPresentationSync(switchedAwayFromWindow);
 }
 
-bool PlaybackSessionCore::refresh(bool useWindowPresenter, bool windowActive,
-                                  bool& redraw) {
-  return impl_->refresh(useWindowPresenter, windowActive, redraw);
+bool PlaybackSessionCore::refresh(bool nativeWindowActive, bool& redraw) {
+  return impl_->refresh(nativeWindowActive, redraw);
 }
 
 void PlaybackSessionCore::setAsciiPresentation(ConsoleScreen& screen,
@@ -272,9 +270,9 @@ NativeWaitHandle PlaybackSessionCore::videoFrameWaitHandle() const {
 void PlaybackSessionCore::markPendingResize() { impl_->markPendingResize(); }
 
 void PlaybackSessionCore::handlePendingResize(ConsoleScreen& screen,
-                                              PlaybackRenderMode renderMode,
+                                              PlaybackVisualMode visualMode,
                                               bool& redraw) {
-  impl_->handlePendingResize(screen, renderMode, redraw);
+  impl_->handlePendingResize(screen, visualMode, redraw);
 }
 
 void PlaybackSessionCore::shutdownPlayer() { impl_->shutdownPlayer(); }

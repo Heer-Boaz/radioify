@@ -167,6 +167,7 @@ The concrete implementation plan lives in
 
 When video uses a native window (windowed, fullscreen, or picture-in-picture),
 the media browser remains live in the terminal and marks the current video.
+Entering picture-in-picture returns keyboard focus to that browser surface.
 Browser navigation keeps its normal ownership there: Backspace goes up and
 browser Back follows browser history. Escape stops the active video and returns
 to the browser.
