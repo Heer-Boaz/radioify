@@ -350,12 +350,26 @@ static std::optional<std::vector<BrowserEntry>> listEntries(
     const auto& p = entry.path();
     std::error_code ec;
     if (entry.is_directory(ec) && !ec) {
-      items.emplace_back(toUtf8String(p.filename()), p,
-                         browser_entry::OpenDirectory{});
+      BrowserEntry item{toUtf8String(p.filename()), p,
+                        browser_entry::OpenDirectory{}};
+      item.sortMetadata.modifiedAt = entry.last_write_time(ec);
+      if (ec) {
+        item.sortMetadata.modifiedAt.reset();
+      }
+      items.push_back(std::move(item));
     } else if (entry.is_regular_file(ec) && !ec && isSupportedMediaExt(p) &&
                !shouldHideBrowserMediaMetadataFile(entry)) {
-      items.emplace_back(toUtf8String(p.filename()), p,
-                         browser_entry::OpenFile{});
+      BrowserEntry item{toUtf8String(p.filename()), p,
+                        browser_entry::OpenFile{}};
+      item.sortMetadata.modifiedAt = entry.last_write_time(ec);
+      if (ec) {
+        item.sortMetadata.modifiedAt.reset();
+      }
+      item.sortMetadata.size = entry.file_size(ec);
+      if (ec) {
+        item.sortMetadata.size.reset();
+      }
+      items.push_back(std::move(item));
     }
     iterator.increment(iteratorError);
     if (iteratorError) {
@@ -433,80 +447,7 @@ static bool populateBrowser(BrowserState& state,
   }
 
   if (!state.entries.empty() && !optionsActive) {
-    const bool sortingRootLevel = state.location.path.empty();
-#ifdef _WIN32
-    auto isDriveEntry = [](const BrowserEntry& entry) {
-      if (entry.path.empty()) return false;
-      return entry.path.has_root_name() &&
-             entry.path.has_root_directory() &&
-             entry.path.relative_path().empty();
-    };
-#else
-    auto isDriveEntry = [](const BrowserEntry&) { return false; };
-#endif
-    const bool hasSectionHeaders =
-        std::any_of(state.entries.begin(), state.entries.end(),
-                    [](const BrowserEntry& e) {
-                      return e.isSectionHeader();
-                    });
-    auto sectionComparator = [&](const BrowserEntry& a,
-                                 const BrowserEntry& b) {
-      if (a.isDirectory() != b.isDirectory()) {
-        return a.isDirectory() > b.isDirectory();
-      }
-      if (sortingRootLevel && !hasSectionHeaders && isDriveEntry(a) != isDriveEntry(b)) {
-        return isDriveEntry(a);
-      }
-      bool aLessB = false;
-      if (state.sortMode == BrowserState::SortMode::Date) {
-        try {
-          aLessB = std::filesystem::last_write_time(a.path) <
-                   std::filesystem::last_write_time(b.path);
-        } catch (...) {
-          aLessB = toLower(a.name) < toLower(b.name);
-        }
-      } else if (state.sortMode == BrowserState::SortMode::Size) {
-        try {
-          if (!a.isDirectory() && !b.isDirectory()) {
-            aLessB = std::filesystem::file_size(a.path) <
-                     std::filesystem::file_size(b.path);
-          } else {
-            aLessB = toLower(a.name) < toLower(b.name);
-          }
-        } catch (...) {
-          aLessB = toLower(a.name) < toLower(b.name);
-        }
-      } else {
-        aLessB = toLower(a.name) < toLower(b.name);
-      }
-
-      if (state.sortDescending) return !aLessB;
-      return aLessB;
-    };
-    auto sortSection = [&](size_t begin, size_t end) {
-      if (end <= begin + 1) return;
-      std::sort(state.entries.begin() + static_cast<long long>(begin),
-                state.entries.begin() + static_cast<long long>(end),
-                sectionComparator);
-    };
-
-    size_t sectionStart = 0;
-    if (state.entries.front().actionAs<browser_entry::NavigateUp>()) {
-      ++sectionStart;
-    }
-    while (sectionStart < state.entries.size()) {
-      if (state.entries[sectionStart].isSectionHeader()) {
-        ++sectionStart;
-        continue;
-      }
-      size_t sectionEnd = sectionStart;
-      while (sectionEnd < state.entries.size() &&
-             !state.entries[sectionEnd].isSectionHeader()) {
-        ++sectionEnd;
-      }
-      sortSection(sectionStart, sectionEnd);
-      sectionStart = sectionEnd;
-    }
+    sortBrowserEntries(state);
   }
 
   if (cancellation && cancellation->requested()) {

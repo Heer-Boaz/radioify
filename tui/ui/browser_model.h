@@ -67,6 +67,11 @@ using Action =
 }  // namespace browser_entry
 
 struct BrowserEntry {
+  struct SortMetadata {
+    std::optional<std::filesystem::file_time_type> modifiedAt;
+    std::optional<std::uintmax_t> size;
+  };
+
   BrowserEntry() = delete;
   BrowserEntry(std::string entryName, std::filesystem::path entryPath,
                browser_entry::Action entryAction)
@@ -112,6 +117,7 @@ struct BrowserEntry {
   std::filesystem::path path;
   PathIdentity pathIdentity;
   browser_entry::Action action;
+  SortMetadata sortMetadata;
 };
 
 struct BrowserState {
@@ -199,6 +205,8 @@ struct DriveEntry {
 };
 
 std::vector<DriveEntry> listDriveEntries();
+
+void sortBrowserEntries(BrowserState& state);
 
 GridLayout buildLayout(const BrowserState& state, int width, int listHeight);
 void drawBrowserEntries(ConsoleScreen& screen,

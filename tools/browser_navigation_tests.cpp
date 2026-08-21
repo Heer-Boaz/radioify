@@ -73,6 +73,29 @@ int main() {
 
   std::vector<BrowserEntry> files{fileEntry("A.flac", songA),
                                   fileEntry("B.flac", songB)};
+
+  BrowserState sortedBrowser;
+  sortedBrowser.location = browserDirectoryLocation("C:/Media");
+  BrowserEntry older = fileEntry("Equal.flac", "C:/Media/older.flac");
+  BrowserEntry newer = fileEntry("Equal.flac", "C:/Media/newer.flac");
+  const auto now = std::filesystem::file_time_type::clock::now();
+  older.sortMetadata.modifiedAt = now - std::chrono::hours(1);
+  newer.sortMetadata.modifiedAt = now;
+  older.sortMetadata.size = 100;
+  newer.sortMetadata.size = 200;
+  sortedBrowser.entries = {newer, older};
+  sortedBrowser.sortMode = BrowserState::SortMode::Date;
+  sortBrowserEntries(sortedBrowser);
+  ok &= expect(sortedBrowser.entries.front().path == older.path,
+               "date sorting must use the enumerated metadata snapshot");
+  sortedBrowser.sortDescending = true;
+  sortBrowserEntries(sortedBrowser);
+  ok &= expect(sortedBrowser.entries.front().path == newer.path,
+               "descending sorting must reverse a strict ordering");
+  sortedBrowser.sortMode = BrowserState::SortMode::Size;
+  sortBrowserEntries(sortedBrowser);
+  ok &= expect(sortedBrowser.entries.front().path == newer.path,
+               "equal names must remain strictly ordered by their size key");
   browser_input::EntryClickTracker entryClickTracker;
   entryClickTracker.recordPress(files[0]);
   const auto sameEntryAnchor =
