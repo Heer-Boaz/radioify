@@ -2,7 +2,6 @@
 
 #include <functional>
 #include <memory>
-#include <optional>
 
 #include "core/native_wait_handle.h"
 #include "playback/video/gpu/gpu_shared.h"
@@ -26,9 +25,7 @@ struct PlaybackPresenterSyncResult {
 
 class PlaybackPresentation {
  public:
-  explicit PlaybackPresentation(
-      PlaybackLayout initialLayout,
-      std::optional<PlaybackSessionContinuationState> initialState = std::nullopt);
+  explicit PlaybackPresentation(PlaybackLayout initialLayout);
   ~PlaybackPresentation();
 
   PlaybackPresentation(PlaybackPresentation&&) noexcept;
@@ -57,6 +54,15 @@ class PlaybackPresentation {
 
   void stop();
 
+  bool applyWindowPresentation(PlaybackWindowPresentationRequest request);
+  bool restoreWindowPresentation(
+      PlaybackWindowPresentationRequest request,
+      const WindowPlacementState& placement);
+  bool captureWindowPlacement(
+      WindowPlacementState& placement,
+      const PlaybackPresentationState& presentation);
+  bool activateWindow();
+  void setWindowCursorVisible(bool visible);
   VideoWindow& window();
   const VideoWindow& window() const;
   void requestPresent();

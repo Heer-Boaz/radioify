@@ -56,6 +56,7 @@ struct WindowPresenter::Impl {
   ThreadDispatchQueue dispatch;
   std::atomic<WindowThreadState> threadState{WindowThreadState::Disabled};
   std::atomic<bool> forcePresent{false};
+  std::atomic<bool> cursorVisible{true};
   std::atomic<HWND> windowHandle{nullptr};
   UniqueWindowsHandle wakeEvent{CreateEventW(nullptr, FALSE, FALSE, nullptr)};
   std::thread thread;
@@ -75,8 +76,7 @@ struct WindowPresenter::Impl {
 
   bool start(Player& player, const std::function<WindowUiState()>& buildUiState,
              const playback_framebuffer_presenter::TextGridPresentationProvider&
-                 buildTextGridPresentation,
-             const PlaybackSessionContinuationState* initialState) {
+                 buildTextGridPresentation) {
     if (thread.joinable()) {
       threadState.store(WindowThreadState::Enabled, std::memory_order_relaxed);
       forcePresent.store(true, std::memory_order_relaxed);
@@ -87,11 +87,12 @@ struct WindowPresenter::Impl {
     auto startGate = std::make_shared<WindowStartGate>();
     uiStateBuilder = buildUiState;
     windowHandle.store(nullptr, std::memory_order_release);
+    cursorVisible.store(true, std::memory_order_relaxed);
     threadState.store(WindowThreadState::Enabled, std::memory_order_relaxed);
     forcePresent.store(true, std::memory_order_relaxed);
 
     thread = std::thread(
-        [this, &player, buildTextGridPresentation, startGate, initialState]() {
+        [this, &player, buildTextGridPresentation, startGate]() {
           dispatch.openOnCurrentThread();
           const bool opened =
               window.Open(VideoWindow::kDefaultVideoClientWidth,
@@ -101,21 +102,6 @@ struct WindowPresenter::Impl {
             windowHandle.store(window.NativeWindowHandle(),
                                std::memory_order_release);
             window.EnableFileDrop();
-            if (initialState && initialState->hasPresentation) {
-              playback_session_window::applyPlacement(
-                  window, initialState->windowPlacement);
-              if (const auto request = windowPresentationRequest(
-                      initialState->presentation,
-                      PlaybackPresentationFocus::KeepCurrentSurface)) {
-                playback_session_window::apply(window, *request);
-              }
-              if (initialState->presentation.layer() ==
-                      PlaybackPresentationLayer::PictureInPicture &&
-                  initialState->windowPlacement.hasPictureInPictureRect) {
-                window.SetWindowBounds(
-                    initialState->windowPlacement.pictureInPictureRect);
-              }
-            }
           }
           {
             std::lock_guard<std::mutex> lock(startGate->mutex);
@@ -184,6 +170,7 @@ struct WindowPresenter::Impl {
     forcePresent.store(false, std::memory_order_relaxed);
     windowHandle.store(nullptr, std::memory_order_release);
     uiStateBuilder = {};
+    cursorVisible.store(true, std::memory_order_relaxed);
     {
       std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
       frameCache.Reset();
@@ -194,6 +181,79 @@ struct WindowPresenter::Impl {
   void requestPresent() {
     forcePresent.store(true, std::memory_order_relaxed);
     notify();
+  }
+
+  bool applyPresentation(PlaybackWindowPresentationRequest request) {
+    bool applied = false;
+    const bool executed = dispatch.invoke([this, request, &applied]() {
+      applied = window.IsOpen() &&
+                playback_session_window::apply(window, request);
+    });
+    if (executed && applied) {
+      requestPresent();
+    }
+    return executed && applied;
+  }
+
+  bool restorePresentation(PlaybackWindowPresentationRequest request,
+                           const WindowPlacementState& placement) {
+    bool applied = false;
+    const bool executed = dispatch.invoke(
+        [this, request, placement, &applied]() {
+          if (!window.IsOpen()) {
+            return;
+          }
+          playback_session_window::applyPlacement(window, placement);
+          if (!playback_session_window::apply(window, request)) {
+            return;
+          }
+          if (request.target ==
+                  PlaybackWindowPresentationMode::PictureInPicture &&
+              placement.hasPictureInPictureRect &&
+              !window.SetWindowBounds(placement.pictureInPictureRect)) {
+            return;
+          }
+          applied = true;
+        });
+    if (executed && applied) {
+      requestPresent();
+    }
+    return executed && applied;
+  }
+
+  bool capturePlacement(WindowPlacementState& placement,
+                        const PlaybackPresentationState& presentation) {
+    bool captured = false;
+    const bool executed = dispatch.invoke(
+        [this, &placement, presentation, &captured]() {
+          if (!window.IsOpen()) {
+            return;
+          }
+          playback_session_window::capturePlacement(window, placement,
+                                                     presentation);
+          captured = true;
+        });
+    return executed && captured;
+  }
+
+  bool activate() {
+    bool activated = false;
+    const bool executed = dispatch.invoke([this, &activated]() {
+      if (!window.IsOpen()) {
+        return;
+      }
+      window.Activate();
+      activated = true;
+    });
+    return executed && activated;
+  }
+
+  void setCursorVisible(bool visible) {
+    if (cursorVisible.exchange(visible, std::memory_order_relaxed) == visible) {
+      return;
+    }
+    (void)dispatch.invoke(
+        [this, visible]() { window.SetCursorVisible(visible); });
   }
 
   VideoFrameSnapshotResult captureCurrentFrame() {
@@ -233,15 +293,36 @@ WindowPresenter::~WindowPresenter() = default;
 bool WindowPresenter::start(
     Player& player, const std::function<WindowUiState()>& buildUiState,
     const playback_framebuffer_presenter::TextGridPresentationProvider&
-        buildTextGridPresentation,
-    const PlaybackSessionContinuationState* initialState) {
-  return impl_->start(player, buildUiState, buildTextGridPresentation,
-                      initialState);
+        buildTextGridPresentation) {
+  return impl_->start(player, buildUiState, buildTextGridPresentation);
 }
 
 void WindowPresenter::stop() { impl_->stop(); }
 
 void WindowPresenter::requestPresent() { impl_->requestPresent(); }
+
+bool WindowPresenter::applyPresentation(
+    PlaybackWindowPresentationRequest request) {
+  return impl_->applyPresentation(request);
+}
+
+bool WindowPresenter::restorePresentation(
+    PlaybackWindowPresentationRequest request,
+    const WindowPlacementState& placement) {
+  return impl_->restorePresentation(request, placement);
+}
+
+bool WindowPresenter::capturePlacement(
+    WindowPlacementState& placement,
+    const PlaybackPresentationState& presentation) {
+  return impl_->capturePlacement(placement, presentation);
+}
+
+bool WindowPresenter::activate() { return impl_->activate(); }
+
+void WindowPresenter::setCursorVisible(bool visible) {
+  impl_->setCursorVisible(visible);
+}
 
 VideoFrameSnapshotResult WindowPresenter::captureCurrentFrame() {
   return impl_->captureCurrentFrame();

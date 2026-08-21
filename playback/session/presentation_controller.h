@@ -9,7 +9,8 @@ class PlaybackPresentationController {
  public:
   explicit PlaybackPresentationController(
       PlaybackPresentationState initialState =
-          PlaybackPresentationState::terminalAscii());
+          PlaybackPresentationState::terminalAscii(),
+      WindowPlacementState initialPlacement = {});
 
   bool toggleWindow(PlaybackOutputController& output, bool& redraw,
                     bool& forceRefreshArt);
@@ -20,11 +21,12 @@ class PlaybackPresentationController {
 
   void closePresentation(PlaybackOutputController& output, bool& redraw,
                          bool& forceRefreshArt);
-  void reconcile(PlaybackOutputController& output);
+  void reconcile(PlaybackOutputController& output, bool windowStartFailed,
+                 bool& redraw, bool& forceRefreshArt);
   void handleWindowClosed(PlaybackOutputController& output, bool& redraw,
                           bool& forceRefreshArt);
   void captureWindowPlacement(PlaybackOutputController& output,
-                              PlaybackSessionContinuationState& state) const;
+                              PlaybackSessionContinuationState& state);
 
   const PlaybackPresentationState& state() const { return desiredState_; }
   bool usesAsciiGrid() const { return desiredState_.usesAsciiGrid(); }
@@ -36,8 +38,8 @@ class PlaybackPresentationController {
   bool transitionTo(PlaybackPresentationState next,
                     PlaybackOutputController& output, bool& redraw,
                     bool& forceRefreshArt);
-  void queueWindowPresentation(PlaybackPresentationFocus focus);
 
   PlaybackPresentationState desiredState_;
-  std::optional<PlaybackWindowPresentationRequest> pendingWindowPresentation_;
+  PlaybackPresentationState appliedState_;
+  WindowPlacementState windowPlacement_;
 };

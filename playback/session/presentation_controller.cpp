@@ -2,7 +2,6 @@
 
 #include "output.h"
 #include "playback_mode.h"
-#include "window_presentation.h"
 
 namespace {
 
@@ -19,16 +18,13 @@ PlaybackLayout layoutFor(const PlaybackPresentationState& state) {
 }  // namespace
 
 PlaybackPresentationController::PlaybackPresentationController(
-    PlaybackPresentationState initialState)
-    : desiredState_(initialState) {
-  queueWindowPresentation(PlaybackPresentationFocus::KeepCurrentSurface);
-}
-
-void PlaybackPresentationController::queueWindowPresentation(
-    PlaybackPresentationFocus focus) {
-  pendingWindowPresentation_ =
-      windowPresentationRequest(desiredState_, focus);
-}
+    PlaybackPresentationState initialState,
+    WindowPlacementState initialPlacement)
+    : desiredState_(initialState),
+      appliedState_(initialState.requiresNativeWindow()
+                        ? PlaybackPresentationState::terminalAscii()
+                        : initialState),
+      windowPlacement_(initialPlacement) {}
 
 bool PlaybackPresentationController::transitionTo(
     PlaybackPresentationState next, PlaybackOutputController& output,
@@ -38,18 +34,28 @@ bool PlaybackPresentationController::transitionTo(
   }
 
   desiredState_ = next;
-  queueWindowPresentation(PlaybackPresentationFocus::FocusTargetSurface);
   output.requestLayout(layoutFor(desiredState_));
   markPresentationChanged(redraw, forceRefreshArt);
 
-  if (output.windowOpen() && pendingWindowPresentation_) {
-    if (playback_session_window::apply(output.window(),
-                                       *pendingWindowPresentation_)) {
-      pendingWindowPresentation_.reset();
+  if (!desiredState_.requiresNativeWindow()) {
+    if (appliedState_.requiresNativeWindow() && output.windowOpen()) {
+      output.captureWindowPlacement(windowPlacement_, appliedState_);
     }
+    appliedState_ = desiredState_;
+    return true;
   }
-  if (desiredState_.requiresNativeWindow()) {
-    output.requestWindowPresent();
+
+  if (output.windowOpen()) {
+    const auto request = windowPresentationRequest(
+        desiredState_, PlaybackPresentationFocus::FocusTargetSurface);
+    if (!request || !output.applyWindowPresentation(*request)) {
+      desiredState_ = appliedState_;
+      output.requestLayout(layoutFor(desiredState_));
+      markPresentationChanged(redraw, forceRefreshArt);
+      return false;
+    }
+    appliedState_ = desiredState_;
+    output.captureWindowPlacement(windowPlacement_, appliedState_);
   }
   return true;
 }
@@ -73,21 +79,40 @@ bool PlaybackPresentationController::toggleFullscreen(
 }
 
 void PlaybackPresentationController::reconcile(
-    PlaybackOutputController& output) {
+    PlaybackOutputController& output, bool windowStartFailed, bool& redraw,
+    bool& forceRefreshArt) {
+  if (windowStartFailed) {
+    desiredState_ = appliedState_;
+    output.requestLayout(layoutFor(desiredState_));
+    markPresentationChanged(redraw, forceRefreshArt);
+    return;
+  }
+
   if (!desiredState_.requiresNativeWindow()) {
-    pendingWindowPresentation_.reset();
     return;
   }
 
-  if (!pendingWindowPresentation_ || !output.windowOpen()) {
+  if (desiredState_ == appliedState_ || !output.windowOpen()) {
     return;
   }
 
-  if (playback_session_window::apply(output.window(),
-                                     *pendingWindowPresentation_)) {
-    pendingWindowPresentation_.reset();
+  const auto request = windowPresentationRequest(
+      desiredState_, PlaybackPresentationFocus::FocusTargetSurface);
+  const bool startingNativeWindow = !appliedState_.requiresNativeWindow();
+  const bool applied =
+      request &&
+      (startingNativeWindow
+           ? output.restoreWindowPresentation(*request, windowPlacement_)
+           : output.applyWindowPresentation(*request));
+  if (applied) {
+    appliedState_ = desiredState_;
+    output.captureWindowPlacement(windowPlacement_, appliedState_);
+    return;
   }
-  output.requestWindowPresent();
+
+  desiredState_ = appliedState_;
+  output.requestLayout(layoutFor(desiredState_));
+  markPresentationChanged(redraw, forceRefreshArt);
 }
 
 void PlaybackPresentationController::closePresentation(
@@ -103,9 +128,11 @@ void PlaybackPresentationController::handleWindowClosed(
 
 void PlaybackPresentationController::captureWindowPlacement(
     PlaybackOutputController& output,
-    PlaybackSessionContinuationState& state) const {
+    PlaybackSessionContinuationState& state) {
+  if (appliedState_.requiresNativeWindow() && output.windowOpen()) {
+    output.captureWindowPlacement(windowPlacement_, appliedState_);
+  }
   state.hasPresentation = true;
-  state.presentation = desiredState_;
-  playback_session_window::capturePlacement(
-      output.window(), state.windowPlacement, desiredState_);
+  state.presentation = appliedState_;
+  state.windowPlacement = windowPlacement_;
 }

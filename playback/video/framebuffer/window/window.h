@@ -157,7 +157,8 @@ public:
     bool OverlayEditBoundaryHandleAt(double x, double y) const;
     void SetTextGridMinimumSize(int cols, int rows);
     void SetCursorVisible(bool visible);
-    bool TogglePictureInPicture(VideoWindowFocus focus);
+    // Presentation mutations are owner-thread operations. Cross-thread
+    // callers must dispatch through WindowPresenter.
     bool SetPictureInPicture(bool enabled, VideoWindowFocus focus);
     bool ExitPictureInPictureToFullscreen(VideoWindowFocus focus);
     void SetTextGridPresentationEnabled(bool enabled);
@@ -168,9 +169,6 @@ public:
         return m_pictureInPicture.load(std::memory_order_relaxed);
     }
     bool IsFullscreen() const { return m_isFullscreen; }
-    bool PictureInPictureRestoresFullscreen() const {
-        return m_pipRestoreFullscreen;
-    }
     bool SetFullscreen(bool enabled, VideoWindowFocus focus);
     void GetTextGridSize(int& outCols, int& outRows) const {
         outCols = m_textGridCols.load(std::memory_order_relaxed);
@@ -182,7 +180,6 @@ public:
     // Must be called on the window owner thread. Returns the normal restored
     // bounds even while the window is fullscreen or in PiP.
     bool GetWindowedBounds(RECT* outRect) const;
-    bool GetPictureInPictureRestoreBounds(RECT* outRect) const;
     bool SetWindowBounds(const RECT& rect);
     
     bool IsOpen() const { return m_hWnd != nullptr; }
@@ -214,16 +211,6 @@ public:
     void Cleanup();
 
 private:
-    static constexpr UINT kTogglePictureInPictureMessage = WM_APP + 0x440;
-    static constexpr UINT kSetPictureInPictureMessage = WM_APP + 0x441;
-    static constexpr UINT kExitPictureInPictureToFullscreenMessage =
-        WM_APP + 0x442;
-    static constexpr UINT kSetFullscreenMessage = WM_APP + 0x443;
-    static constexpr UINT kSetWindowBoundsMessage = WM_APP + 0x444;
-    static constexpr UINT kActivateWindowMessage = WM_APP + 0x445;
-    static constexpr LPARAM kKeepCurrentFocusMessageParam = 0;
-    static constexpr LPARAM kTakeForegroundFocusMessageParam = 1;
-
     struct FrameRenderGeometry {
         int width = 0;
         int height = 0;
@@ -254,8 +241,6 @@ private:
                      playback_overlay::InteractionMap* outInteractions);
     void UpdateViewport(int width, int height);
     static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
-    static LPARAM EncodeFocusMessageParam(VideoWindowFocus focus);
-    static VideoWindowFocus DecodeFocusMessageParam(LPARAM param);
     void ReleaseSwapChainBackBufferReferences();
     bool CreateSwapChain(int width, int height);
     bool RecreateSwapChainForCurrentDisplay(const char* reason);
@@ -271,7 +256,7 @@ private:
     void AdjustPictureInPictureSizingRect(WPARAM edge, RECT* rect) const;
     bool EnterPictureInPicture(VideoWindowFocus focus);
     enum class PictureInPictureExitTarget {
-        Restore,
+        Windowed,
         Fullscreen,
     };
     bool ExitPictureInPicture(PictureInPictureExitTarget target,
@@ -384,7 +369,6 @@ private:
     std::atomic<int> m_textGridMinRows{0};
     mutable std::mutex m_overlayInteractionMutex;
     playback_overlay::InteractionMap m_overlayInteractions;
-    bool m_pipRestoreFullscreen = false;
     LONG m_pipRestoreStyle = 0;
     LONG m_pipRestoreExStyle = 0;
     RECT m_pipRestoreRect{};

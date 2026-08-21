@@ -5,30 +5,7 @@
 #include <windowsx.h>
 
 #include <atomic>
-#include <cassert>
 #include <utility>
-
-LPARAM VideoWindow::EncodeFocusMessageParam(VideoWindowFocus focus) {
-    switch (focus) {
-        case VideoWindowFocus::KeepCurrentFocus:
-            return kKeepCurrentFocusMessageParam;
-        case VideoWindowFocus::TakeForegroundFocus:
-            return kTakeForegroundFocusMessageParam;
-    }
-    assert(false && "Unhandled video window focus mode");
-    return kKeepCurrentFocusMessageParam;
-}
-
-VideoWindowFocus VideoWindow::DecodeFocusMessageParam(LPARAM param) {
-    switch (param) {
-        case kKeepCurrentFocusMessageParam:
-            return VideoWindowFocus::KeepCurrentFocus;
-        case kTakeForegroundFocusMessageParam:
-            return VideoWindowFocus::TakeForegroundFocus;
-    }
-    assert(false && "Unexpected video window focus message parameter");
-    return VideoWindowFocus::KeepCurrentFocus;
-}
 
 bool VideoWindow::ShouldQueueWindowMouseEvent(int x, int y) const {
     if (m_captureAllMouseInput) {
@@ -54,35 +31,6 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         return DefWindowProcW(hWnd, uMsg, wParam, lParam);
     }
 
-    if (uMsg == kTogglePictureInPictureMessage) {
-        const VideoWindowFocus focus = DecodeFocusMessageParam(lParam);
-        pThis->SetPictureInPicture(
-            !pThis->IsPictureInPicture(), focus);
-        return 0;
-    }
-    if (uMsg == kSetPictureInPictureMessage) {
-        const VideoWindowFocus focus = DecodeFocusMessageParam(lParam);
-        pThis->SetPictureInPicture(wParam != 0, focus);
-        return 0;
-    }
-    if (uMsg == kExitPictureInPictureToFullscreenMessage) {
-        const VideoWindowFocus focus = DecodeFocusMessageParam(lParam);
-        pThis->ExitPictureInPictureToFullscreen(focus);
-        return 0;
-    }
-    if (uMsg == kSetFullscreenMessage) {
-        const VideoWindowFocus focus = DecodeFocusMessageParam(lParam);
-        pThis->SetFullscreen(wParam != 0, focus);
-        return 0;
-    }
-    if (uMsg == kActivateWindowMessage) {
-        pThis->Activate();
-        return 0;
-    }
-    if (uMsg == kSetWindowBoundsMessage) {
-        const auto* rect = reinterpret_cast<const RECT*>(lParam);
-        return rect && pThis->ApplyWindowBounds(*rect) ? TRUE : FALSE;
-    }
     if (uMsg == WM_NCHITTEST &&
         pThis->m_pictureInPicture.load(std::memory_order_relaxed)) {
         LRESULT hit = DefWindowProcW(hWnd, uMsg, wParam, lParam);

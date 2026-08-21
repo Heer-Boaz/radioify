@@ -1,7 +1,6 @@
 #pragma once
 
 #include <functional>
-#include <optional>
 #include <memory>
 #include <string>
 
@@ -26,9 +25,7 @@ struct PlaybackPresenterSyncResult;
 class PlaybackOutputController {
  public:
   explicit PlaybackOutputController(
-      PlaybackLayout initialLayout,
-      std::optional<PlaybackSessionContinuationState> initialState =
-          std::nullopt);
+      PlaybackLayout initialLayout);
   ~PlaybackOutputController();
 
   PlaybackOutputController(PlaybackOutputController&&) noexcept;
@@ -66,6 +63,14 @@ class PlaybackOutputController {
 
   void stop();
 
+  bool applyWindowPresentation(PlaybackWindowPresentationRequest request);
+  bool restoreWindowPresentation(
+      PlaybackWindowPresentationRequest request,
+      const WindowPlacementState& placement);
+  bool captureWindowPlacement(
+      WindowPlacementState& placement,
+      const PlaybackPresentationState& presentation);
+  bool activateWindow();
   VideoWindow& window();
   const VideoWindow& window() const;
   GpuVideoFrameCache& frameCache();

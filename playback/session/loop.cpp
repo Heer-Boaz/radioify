@@ -193,13 +193,11 @@ struct PlaybackLoopRunner::Impl {
         enableAudio(args.enableAudio),
         hasSubtitles(args.hasSubtitles),
         output(playbackLayoutFor(initialPlaybackPresentation(
-                   args.config, args.continuityState)),
-               args.continuityState
-                   ? std::optional<PlaybackSessionContinuationState>(
-                         *args.continuityState)
-                   : std::nullopt),
+                   args.config, args.continuityState))),
         presentationController(
-            initialPlaybackPresentation(args.config, args.continuityState)),
+            initialPlaybackPresentation(args.config, args.continuityState),
+            args.continuityState ? args.continuityState->windowPlacement
+                                 : WindowPlacementState{}),
         core({args.player, args.perfLog, args.enableAudio,
               initialPlaybackPresentation(args.config, args.continuityState)
                   .usesAsciiGrid()}),
@@ -846,6 +844,7 @@ struct PlaybackLoopRunner::Impl {
   }
 
   PlaybackPresenterSyncResult syncPresentation() {
+    const bool wasAscii = presentationController.usesAsciiGrid();
     auto buildUiState = [&]() { return buildWindowUiState(); };
     auto buildTextGridPresentation =
         [&](int pixelWidth, int pixelHeight, int cellPixelWidth,
@@ -861,7 +860,22 @@ struct PlaybackLoopRunner::Impl {
     PlaybackPresenterSyncResult result =
         output.sync(core.player(), buildUiState, buildTextGridPresentation,
                     redraw, forceRefreshArt);
-    presentationController.reconcile(output);
+    presentationController.reconcile(output, result.windowStartFailed, redraw,
+                                     forceRefreshArt);
+    const bool activeWindow =
+        result.activeLayout == PlaybackLayout::Window;
+    if (activeWindow != output.windowRequested()) {
+      const bool windowStartFailed = result.windowStartFailed;
+      result = output.sync(core.player(), buildUiState,
+                           buildTextGridPresentation, redraw,
+                           forceRefreshArt);
+      result.windowStartFailed =
+          result.windowStartFailed || windowStartFailed;
+    }
+    if (wasAscii != presentationController.usesAsciiGrid()) {
+      core.setAsciiPresentation(screen,
+                                presentationController.usesAsciiGrid());
+    }
     return result;
   }
 
@@ -1099,7 +1113,7 @@ struct PlaybackLoopRunner::Impl {
       switch (command.kind) {
         case PlaybackNotificationAreaCommand::Kind::Activate:
           if (output.windowActive() && output.windowOpen()) {
-            output.window().Activate();
+            output.activateWindow();
           } else {
             activateWindowsConsoleWindow();
           }

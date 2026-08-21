@@ -13,18 +13,15 @@
 #include "presentation.h"
 
 struct PlaybackOutputController::Impl {
-  explicit Impl(PlaybackLayout initialLayout,
-                std::optional<PlaybackSessionContinuationState> initialState)
-      : presentation(initialLayout, std::move(initialState)) {}
+  explicit Impl(PlaybackLayout initialLayout) : presentation(initialLayout) {}
 
   PlaybackPresentation presentation;
   GpuVideoFrameCache terminalFrameCache;
 };
 
 PlaybackOutputController::PlaybackOutputController(
-    PlaybackLayout initialLayout,
-    std::optional<PlaybackSessionContinuationState> initialState)
-    : impl_(std::make_unique<Impl>(initialLayout, std::move(initialState))) {}
+    PlaybackLayout initialLayout)
+    : impl_(std::make_unique<Impl>(initialLayout)) {}
 
 PlaybackOutputController::~PlaybackOutputController() = default;
 
@@ -132,10 +129,10 @@ void PlaybackOutputController::updateWindowCursor(
         state == PlayerState::Playing || state == PlayerState::Draining;
     const bool showCursor = overlayVisible || playbackState == PlaybackSessionState::Paused ||
                             !isActivelyPlaying;
-    impl_->presentation.window().SetCursorVisible(showCursor);
+    impl_->presentation.setWindowCursorVisible(showCursor);
     return;
   }
-  impl_->presentation.window().SetCursorVisible(true);
+  impl_->presentation.setWindowCursorVisible(true);
 }
 
 void PlaybackOutputController::renderTerminal(
@@ -145,6 +142,27 @@ void PlaybackOutputController::renderTerminal(
 
 void PlaybackOutputController::stop() {
   impl_->presentation.stop();
+}
+
+bool PlaybackOutputController::applyWindowPresentation(
+    PlaybackWindowPresentationRequest request) {
+  return impl_->presentation.applyWindowPresentation(request);
+}
+
+bool PlaybackOutputController::restoreWindowPresentation(
+    PlaybackWindowPresentationRequest request,
+    const WindowPlacementState& placement) {
+  return impl_->presentation.restoreWindowPresentation(request, placement);
+}
+
+bool PlaybackOutputController::captureWindowPlacement(
+    WindowPlacementState& placement,
+    const PlaybackPresentationState& presentation) {
+  return impl_->presentation.captureWindowPlacement(placement, presentation);
+}
+
+bool PlaybackOutputController::activateWindow() {
+  return impl_->presentation.activateWindow();
 }
 
 VideoWindow& PlaybackOutputController::window() {

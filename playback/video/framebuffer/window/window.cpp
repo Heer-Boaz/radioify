@@ -1262,8 +1262,10 @@ bool VideoWindow::EnterPictureInPicture(VideoWindowFocus focus) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain) return false;
     if (m_pictureInPicture.load(std::memory_order_relaxed)) {
-        return focus == VideoWindowFocus::KeepCurrentFocus ||
-               ActivateForegroundSurface();
+        if (focus == VideoWindowFocus::TakeForegroundFocus) {
+            (void)ActivateForegroundSurface();
+        }
+        return true;
     }
 
     const bool restoreFullscreen = m_isFullscreen;
@@ -1271,7 +1273,6 @@ bool VideoWindow::EnterPictureInPicture(VideoWindowFocus focus) {
         return false;
     }
 
-    m_pipRestoreFullscreen = restoreFullscreen;
     m_pipRestoreStyle = GetWindowLong(m_hWnd, GWL_STYLE);
     m_pipRestoreExStyle = GetWindowLong(m_hWnd, GWL_EXSTYLE);
     GetWindowRect(m_hWnd, &m_pipRestoreRect);
@@ -1290,14 +1291,16 @@ bool VideoWindow::EnterPictureInPicture(VideoWindowFocus focus) {
                  SWP_SHOWWINDOW | SWP_FRAMECHANGED |
                      (takeFocus ? 0 : SWP_NOACTIVATE));
     ::ShowWindow(m_hWnd, takeFocus ? SW_SHOW : SW_SHOWNOACTIVATE);
-    const bool focusReady = !takeFocus || ActivateForegroundSurface();
+    if (takeFocus) {
+        (void)ActivateForegroundSurface();
+    }
     UpdateWindow(m_hWnd);
 
     RECT client{};
     if (GetClientRect(m_hWnd, &client)) {
         Resize(client.right - client.left, client.bottom - client.top);
     }
-    return focusReady;
+    return true;
 }
 
 bool VideoWindow::ExitPictureInPicture(PictureInPictureExitTarget target,
@@ -1311,8 +1314,7 @@ bool VideoWindow::ExitPictureInPicture(PictureInPictureExitTarget target,
     }
 
     const bool targetFullscreen =
-        target == PictureInPictureExitTarget::Fullscreen ||
-        m_pipRestoreFullscreen;
+        target == PictureInPictureExitTarget::Fullscreen;
     auto displayTransition = m_displayLifecycle.ownerTransition();
     SetWindowLong(m_hWnd, GWL_STYLE, m_pipRestoreStyle);
     SetWindowLong(m_hWnd, GWL_EXSTYLE, m_pipRestoreExStyle & ~WS_EX_TOPMOST);
@@ -1325,7 +1327,9 @@ bool VideoWindow::ExitPictureInPicture(PictureInPictureExitTarget target,
                  SWP_SHOWWINDOW | SWP_FRAMECHANGED |
                      (takeFocus ? 0 : SWP_NOACTIVATE));
     ::ShowWindow(m_hWnd, takeFocus ? SW_SHOW : SW_SHOWNOACTIVATE);
-    const bool focusReady = !takeFocus || ActivateForegroundSurface();
+    if (takeFocus) {
+        (void)ActivateForegroundSurface();
+    }
     UpdateWindow(m_hWnd);
 
     RECT client{};
@@ -1333,25 +1337,21 @@ bool VideoWindow::ExitPictureInPicture(PictureInPictureExitTarget target,
         Resize(client.right - client.left, client.bottom - client.top);
     }
     m_pictureInPicture.store(false, std::memory_order_relaxed);
-    m_pipRestoreFullscreen = false;
-
     if (targetFullscreen) {
         return MakeFullscreen(focus);
     }
-    return focusReady;
+    return true;
 }
 
 bool VideoWindow::SetPictureInPicture(bool enabled,
                                       VideoWindowFocus focus) {
     if (m_hWnd && m_windowThreadId != 0 &&
         GetCurrentThreadId() != m_windowThreadId) {
-        return PostMessage(m_hWnd, kSetPictureInPictureMessage,
-                           enabled ? TRUE : FALSE,
-                           EncodeFocusMessageParam(focus)) != 0;
+        return false;
     }
     return enabled
                ? EnterPictureInPicture(focus)
-               : ExitPictureInPicture(PictureInPictureExitTarget::Restore,
+               : ExitPictureInPicture(PictureInPictureExitTarget::Windowed,
                                       focus);
 }
 
@@ -1359,8 +1359,7 @@ bool VideoWindow::ExitPictureInPictureToFullscreen(
     VideoWindowFocus focus) {
     if (m_hWnd && m_windowThreadId != 0 &&
         GetCurrentThreadId() != m_windowThreadId) {
-        return PostMessage(m_hWnd, kExitPictureInPictureToFullscreenMessage,
-                           0, EncodeFocusMessageParam(focus)) != 0;
+        return false;
     }
     return ExitPictureInPicture(PictureInPictureExitTarget::Fullscreen,
                                 focus);
@@ -1396,20 +1395,10 @@ bool VideoWindow::GetWindowedBounds(RECT* outRect) const {
     return GetWindowRect(m_hWnd, outRect) != FALSE;
 }
 
-bool VideoWindow::GetPictureInPictureRestoreBounds(RECT* outRect) const {
-    if (!outRect || !m_hWnd ||
-        !m_pictureInPicture.load(std::memory_order_relaxed)) {
-        return false;
-    }
-    *outRect = m_pipRestoreRect;
-    return true;
-}
-
 bool VideoWindow::SetWindowBounds(const RECT& rect) {
     if (m_hWnd && m_windowThreadId != 0 &&
         GetCurrentThreadId() != m_windowThreadId) {
-        return ::SendMessageW(m_hWnd, kSetWindowBoundsMessage, 0,
-                              reinterpret_cast<LPARAM>(&rect)) != 0;
+        return false;
     }
     return ApplyWindowBounds(rect);
 }
@@ -1438,22 +1427,10 @@ bool VideoWindow::ApplyWindowBounds(const RECT& rect) {
     return true;
 }
 
-bool VideoWindow::TogglePictureInPicture(VideoWindowFocus focus) {
-    if (m_hWnd && m_windowThreadId != 0 &&
-        GetCurrentThreadId() != m_windowThreadId) {
-        return PostMessage(m_hWnd, kTogglePictureInPictureMessage, 0,
-                           EncodeFocusMessageParam(focus)) != 0;
-    }
-    return SetPictureInPicture(
-        !m_pictureInPicture.load(std::memory_order_relaxed),
-        focus);
-}
-
 bool VideoWindow::SetFullscreen(bool enabled, VideoWindowFocus focus) {
     if (m_hWnd && m_windowThreadId != 0 &&
         GetCurrentThreadId() != m_windowThreadId) {
-        return PostMessage(m_hWnd, kSetFullscreenMessage, enabled ? TRUE : FALSE,
-                           EncodeFocusMessageParam(focus)) != 0;
+        return false;
     }
     return enabled ? MakeFullscreen(focus) : ExitFullscreen();
 }
@@ -1462,8 +1439,10 @@ bool VideoWindow::MakeFullscreen(VideoWindowFocus focus) {
     std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
     if (!m_hWnd || !m_swapChain) return false;
     if (m_isFullscreen) {
-        return focus == VideoWindowFocus::KeepCurrentFocus ||
-               ActivateForegroundSurface();
+        if (focus == VideoWindowFocus::TakeForegroundFocus) {
+            (void)ActivateForegroundSurface();
+        }
+        return true;
     }
     // Save current style and rect
     m_prevStyle = GetWindowLong(m_hWnd, GWL_STYLE);
@@ -1490,7 +1469,9 @@ bool VideoWindow::MakeFullscreen(VideoWindowFocus focus) {
                      SWP_SHOWWINDOW | SWP_FRAMECHANGED |
                          (takeFocus ? 0 : SWP_NOACTIVATE));
         ::ShowWindow(m_hWnd, takeFocus ? SW_SHOW : SW_SHOWNOACTIVATE);
-        const bool focusReady = !takeFocus || ActivateForegroundSurface();
+        if (takeFocus) {
+            (void)ActivateForegroundSurface();
+        }
         UpdateWindow(m_hWnd);
 
         ReleaseSwapChainBackBufferReferences();
@@ -1502,7 +1483,7 @@ bool VideoWindow::MakeFullscreen(VideoWindowFocus focus) {
 
         Resize(static_cast<int>(monW), static_cast<int>(monH));
         m_isFullscreen = true;
-        return focusReady;
+        return true;
     }
 
     std::fprintf(stderr, "VideoWindow: failed to resolve monitor for fullscreen\n");
@@ -1965,7 +1946,6 @@ void VideoWindow::Close() {
     m_textGridCols.store(0, std::memory_order_relaxed);
     m_textGridRows.store(0, std::memory_order_relaxed);
     SetOverlayInteractionMap({});
-    m_pipRestoreFullscreen = false;
     m_displayLifecycle.clear();
 
     if (m_hWnd) {
@@ -1986,7 +1966,6 @@ void VideoWindow::Activate() {
         return;
     }
     if (m_windowThreadId != 0 && GetCurrentThreadId() != m_windowThreadId) {
-        PostMessage(m_hWnd, kActivateWindowMessage, 0, 0);
         return;
     }
     ::ShowWindow(m_hWnd, SW_RESTORE);

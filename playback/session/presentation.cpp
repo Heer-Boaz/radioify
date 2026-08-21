@@ -1,8 +1,6 @@
 #include "presentation.h"
 
 #include <memory>
-#include <optional>
-#include <utility>
 
 #include "playback/video/player.h"
 #include "playback/framebuffer/window_presenter.h"
@@ -12,11 +10,8 @@ struct PlaybackPresentation::Impl {
   WindowPresenter windowPresenter;
   PlaybackLayout desiredLayout = PlaybackLayout::Terminal;
   PlaybackLayout activeLayout = PlaybackLayout::Terminal;
-  std::optional<PlaybackSessionContinuationState> initialState;
 
-  explicit Impl(PlaybackLayout initialLayout,
-                std::optional<PlaybackSessionContinuationState> placement)
-      : desiredLayout(initialLayout), initialState(std::move(placement)) {}
+  explicit Impl(PlaybackLayout initialLayout) : desiredLayout(initialLayout) {}
 
   bool windowRequested() const { return isWindowPlaybackLayout(desiredLayout); }
 
@@ -24,9 +19,8 @@ struct PlaybackPresentation::Impl {
 };
 
 PlaybackPresentation::PlaybackPresentation(
-    PlaybackLayout initialLayout,
-    std::optional<PlaybackSessionContinuationState> initialState)
-    : impl_(std::make_unique<Impl>(initialLayout, std::move(initialState))) {}
+    PlaybackLayout initialLayout)
+    : impl_(std::make_unique<Impl>(initialLayout)) {}
 
 PlaybackPresentation::~PlaybackPresentation() = default;
 
@@ -83,12 +77,9 @@ PlaybackPresenterSyncResult PlaybackPresentation::sync(
   PlaybackPresenterSyncResult result;
   result.previousActiveLayout = impl_->activeLayout;
   if (impl_->windowRequested()) {
-    const PlaybackSessionContinuationState* initialState =
-        impl_->initialState ? &*impl_->initialState : nullptr;
     if (impl_->windowPresenter.start(player, buildUiState,
-                                     buildTextGridPresentation, initialState)) {
+                                     buildTextGridPresentation)) {
       impl_->activeLayout = PlaybackLayout::Window;
-      impl_->initialState.reset();
     } else {
       impl_->desiredLayout = PlaybackLayout::Terminal;
       impl_->activeLayout = PlaybackLayout::Terminal;
@@ -109,6 +100,31 @@ PlaybackPresenterSyncResult PlaybackPresentation::sync(
 void PlaybackPresentation::stop() {
   impl_->windowPresenter.stop();
   impl_->activeLayout = PlaybackLayout::Terminal;
+}
+
+bool PlaybackPresentation::applyWindowPresentation(
+    PlaybackWindowPresentationRequest request) {
+  return impl_->windowPresenter.applyPresentation(request);
+}
+
+bool PlaybackPresentation::restoreWindowPresentation(
+    PlaybackWindowPresentationRequest request,
+    const WindowPlacementState& placement) {
+  return impl_->windowPresenter.restorePresentation(request, placement);
+}
+
+bool PlaybackPresentation::captureWindowPlacement(
+    WindowPlacementState& placement,
+    const PlaybackPresentationState& presentation) {
+  return impl_->windowPresenter.capturePlacement(placement, presentation);
+}
+
+bool PlaybackPresentation::activateWindow() {
+  return impl_->windowPresenter.activate();
+}
+
+void PlaybackPresentation::setWindowCursorVisible(bool visible) {
+  impl_->windowPresenter.setCursorVisible(visible);
 }
 
 VideoWindow& PlaybackPresentation::window() {

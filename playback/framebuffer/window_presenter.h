@@ -21,10 +21,16 @@ class WindowPresenter {
 
   bool start(Player& player, const std::function<WindowUiState()>& buildUiState,
              const playback_framebuffer_presenter::TextGridPresentationProvider&
-                 buildTextGridPresentation,
-             const PlaybackSessionContinuationState* initialState = nullptr);
+                 buildTextGridPresentation);
   void stop();
   void requestPresent();
+  bool applyPresentation(PlaybackWindowPresentationRequest request);
+  bool restorePresentation(PlaybackWindowPresentationRequest request,
+                           const WindowPlacementState& placement);
+  bool capturePlacement(WindowPlacementState& placement,
+                        const PlaybackPresentationState& presentation);
+  bool activate();
+  void setCursorVisible(bool visible);
   VideoFrameSnapshotResult captureCurrentFrame();
 
   bool isOpen() const;
