@@ -160,6 +160,7 @@ void ConsoleInput::enableTerminalMouseInput() {
 }
 
 void ConsoleInput::disableTerminalMouseInput() {
+  terminalDoubleClickTracker_.reset();
   if (!terminalMouseInput_) return;
   writeTerminalSequence(output_, L"\x1b[?1016l\x1b[?1006l\x1b[?1003l");
   terminalMouseInput_ = false;
@@ -197,6 +198,50 @@ void ConsoleInput::mapPixelMousePosition(MouseEvent& mouse) const {
   mouse.pos.Y = static_cast<SHORT>(gy);
 }
 
+void ConsoleInput::normalizeTerminalMouseGesture(MouseEvent& mouse) {
+  if (mouse.eventFlags == DOUBLE_CLICK) {
+    terminalDoubleClickTracker_.reset();
+    return;
+  }
+
+  const bool leftPressed =
+      (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+  terminal_input::MouseClickTransition transition;
+  if (mouse.eventFlags == MOUSE_MOVED) {
+    if (!leftPressed) return;
+    transition = terminal_input::MouseClickTransition::Move;
+  } else if (mouse.eventFlags == 0) {
+    if (leftPressed) {
+      transition = terminal_input::MouseClickTransition::Press;
+    } else if (mouse.buttonState == 0) {
+      transition = terminal_input::MouseClickTransition::Release;
+    } else {
+      terminalDoubleClickTracker_.reset();
+      return;
+    }
+  } else {
+    return;
+  }
+
+  const bool pixelCoordinates = mouse.hasPixelPosition;
+  const int x = pixelCoordinates ? mouse.pixelX : mouse.pos.X;
+  const int y = pixelCoordinates ? mouse.pixelY : mouse.pos.Y;
+  int maximumDeltaX = std::max(0, GetSystemMetrics(SM_CXDOUBLECLK) / 2);
+  int maximumDeltaY = std::max(0, GetSystemMetrics(SM_CYDOUBLECLK) / 2);
+  if (!pixelCoordinates) {
+    maximumDeltaX = static_cast<int>(
+        maximumDeltaX / std::max(1.0, cellPixelWidth_));
+    maximumDeltaY = static_cast<int>(
+        maximumDeltaY / std::max(1.0, cellPixelHeight_));
+  }
+
+  if (terminalDoubleClickTracker_.observe(
+          transition, x, y, pixelCoordinates, GetTickCount64(),
+          GetDoubleClickTime(), maximumDeltaX, maximumDeltaY)) {
+    mouse.eventFlags = DOUBLE_CLICK;
+  }
+}
+
 bool ConsoleInput::ownsForegroundConsoleWindow() const {
   return focusActive_ && isRadioifyConsoleForegroundWindow();
 }
@@ -210,6 +255,7 @@ bool ConsoleInput::handleTerminalInputCharacter(wchar_t ch, InputEvent& out) {
   if (parsedResult == TerminalInputSequenceParser::Result::Event) {
     if (parsed.type == InputEvent::Type::Mouse) {
       mapPixelMousePosition(parsed.mouse);
+      normalizeTerminalMouseGesture(parsed.mouse);
     }
     out = parsed;
     return true;
@@ -246,6 +292,7 @@ bool ConsoleInput::pollBrowserButtonFallback(InputEvent& out) {
   if (!ownsForegroundConsoleWindow()) {
     xButton1Down_ = false;
     xButton2Down_ = false;
+    terminalDoubleClickTracker_.reset();
     return false;
   }
 
@@ -295,6 +342,7 @@ bool ConsoleInput::poll(InputEvent& out) {
         if (parsedResult == TerminalInputSequenceParser::Result::Event) {
           if (parsed.type == InputEvent::Type::Mouse) {
             mapPixelMousePosition(parsed.mouse);
+            normalizeTerminalMouseGesture(parsed.mouse);
           }
           out = parsed;
           return true;
@@ -361,6 +409,7 @@ bool ConsoleInput::poll(InputEvent& out) {
       if (!focusActive_) {
         xButton1Down_ = false;
         xButton2Down_ = false;
+        terminalDoubleClickTracker_.reset();
       }
       count--;
       continue;

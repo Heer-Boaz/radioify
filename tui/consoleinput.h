@@ -13,8 +13,9 @@
 
 #include "core/native_wait_handle.h"
 #include "playback/input/input_action.h"
-#include "terminal_input_sequence.h"
 #include "file_drop_event.h"
+#include "mouse_double_click_tracker.h"
+#include "terminal_input_sequence.h"
 
 struct BreadcrumbLine;
 
@@ -95,6 +96,7 @@ class ConsoleInput {
   void disableTerminalMouseInput();
   void updateTerminalGridSize();
   void mapPixelMousePosition(MouseEvent& mouse) const;
+  void normalizeTerminalMouseGesture(MouseEvent& mouse);
   bool ownsForegroundConsoleWindow() const;
   bool pollTerminalInputStream(InputEvent& out);
   bool handleTerminalInputCharacter(wchar_t ch, InputEvent& out);
@@ -114,6 +116,7 @@ class ConsoleInput {
   std::wstring originalConsoleTitle_;
   std::wstring activeConsoleTitle_;
   TerminalInputSequenceParser terminalParser_;
+  terminal_input::MouseDoubleClickTracker terminalDoubleClickTracker_;
 };
 
 #endif

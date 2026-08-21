@@ -1977,6 +1977,40 @@ int main() {
   ok &= expect(!playback_session_input::isPlaybackFullscreenGesture(
                    windowSingleClick),
                "A playback single click must not toggle fullscreen");
+
+  terminal_input::MouseDoubleClickTracker terminalClickTracker;
+  using terminal_input::MouseClickTransition;
+  ok &= expect(!terminalClickTracker.observe(
+                   MouseClickTransition::Press, 100, 80, true, 1000, 500,
+                   2, 2),
+               "A first VT mouse press must remain a single click");
+  ok &= expect(!terminalClickTracker.observe(
+                   MouseClickTransition::Release, 100, 80, true, 1020, 500,
+                   2, 2),
+               "A VT mouse release must arm double-click recognition");
+  ok &= expect(terminalClickTracker.observe(
+                   MouseClickTransition::Press, 101, 79, true, 1200, 500,
+                   2, 2),
+               "A nearby second VT press within the system interval must be "
+               "a double-click");
+
+  terminalClickTracker.reset();
+  terminalClickTracker.observe(MouseClickTransition::Press, 10, 5, false,
+                               2000, 500, 0, 0);
+  terminalClickTracker.observe(MouseClickTransition::Release, 10, 5, false,
+                               2020, 500, 0, 0);
+  ok &= expect(!terminalClickTracker.observe(
+                   MouseClickTransition::Press, 11, 5, false, 2100, 500, 0,
+                   0),
+               "A second VT press outside the double-click rectangle must "
+               "start a new click");
+  terminalClickTracker.observe(MouseClickTransition::Release, 11, 5, false,
+                               2120, 500, 0, 0);
+  ok &= expect(!terminalClickTracker.observe(
+                   MouseClickTransition::Press, 11, 5, false, 2700, 500, 0,
+                   0),
+               "A second VT press after the system interval must remain a "
+               "single click");
   ok &= expect(playback_frame_output::centerContentTop(0, 30, 20) == 5,
                "centerContentTop must center smaller content vertically");
   ok &= expect(playback_frame_output::centerContentTop(4, 30, 30) == 4,
