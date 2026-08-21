@@ -174,6 +174,13 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         return 0;
     }
 
+    if (uMsg == WM_LBUTTONDBLCLK) {
+        pThis->m_input.push(window_input_events::mouseEvent(
+            GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam),
+            FROM_LEFT_1ST_BUTTON_PRESSED, DOUBLE_CLICK));
+        return 0;
+    }
+
     if (uMsg == WM_LBUTTONDOWN) {
         const int x = GET_X_LPARAM(lParam);
         const int y = GET_Y_LPARAM(lParam);

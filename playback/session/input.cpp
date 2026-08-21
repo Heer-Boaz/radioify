@@ -692,6 +692,15 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     }
     return;
   }
+  const bool interactiveHit = progressHit || boundaryHit || controlHit ||
+                              contextMenuItemHit;
+  if (isVideoWindowFullscreenGesture(mouse) && !interactiveHit &&
+      editPrompt == playback_video_edit::Prompt::None) {
+    if (signals.toggleFullscreen) {
+      signals.toggleFullscreen();
+    }
+    return;
+  }
   if (progressHit) {
     triggerOverlay(view, signals);
     *signals.redraw = true;

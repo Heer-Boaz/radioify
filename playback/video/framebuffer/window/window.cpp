@@ -1603,6 +1603,7 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(WNDCLASSEXW);
     if (!GetClassInfoExW(hInstance, className, &wc)) {
+        wc.style = CS_DBLCLKS;
         wc.lpfnWndProc = WindowProc;
         wc.hInstance = hInstance;
         wc.lpszClassName = className;

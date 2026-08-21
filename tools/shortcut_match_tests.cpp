@@ -1960,6 +1960,23 @@ int main() {
   ok &= expect(playback_session_input::isBackMousePressed(
                    makeMouse(FROM_LEFT_2ND_BUTTON_PRESSED)),
                "Side/back mouse button must still act as playback back/exit");
+  MouseEvent windowDoubleClick =
+      makeMouse(FROM_LEFT_1ST_BUTTON_PRESSED);
+  windowDoubleClick.eventFlags = DOUBLE_CLICK;
+  markWindowMouseEvent(windowDoubleClick);
+  ok &= expect(playback_session_input::isVideoWindowFullscreenGesture(
+                   windowDoubleClick),
+               "A video-window left double-click must toggle fullscreen");
+  MouseEvent terminalDoubleClick = windowDoubleClick;
+  clearWindowMouseEvent(terminalDoubleClick);
+  ok &= expect(!playback_session_input::isVideoWindowFullscreenGesture(
+                   terminalDoubleClick),
+               "A terminal double-click must remain terminal input");
+  MouseEvent windowSingleClick = windowDoubleClick;
+  windowSingleClick.eventFlags = 0;
+  ok &= expect(!playback_session_input::isVideoWindowFullscreenGesture(
+                   windowSingleClick),
+               "A video-window single click must not toggle fullscreen");
   ok &= expect(playback_frame_output::centerContentTop(0, 30, 20) == 5,
                "centerContentTop must center smaller content vertically");
   ok &= expect(playback_frame_output::centerContentTop(4, 30, 30) == 4,
