@@ -49,20 +49,16 @@ DWORD terminalMouseModifiers(int buttonCode) {
 }
 
 void assignTerminalMouseEvent(InputEvent& out, int buttonCode, int x, int y,
-                              bool release, bool pixelPosition) {
+                              bool release) {
   const bool wheel = (buttonCode & 0x40) != 0;
   const bool motion = (buttonCode & 0x20) != 0;
   out.type = InputEvent::Type::Mouse;
   out.mouse.control = terminalMouseModifiers(buttonCode);
-  if (pixelPosition) {
-    out.mouse.pixelX = std::max(0, x - 1);
-    out.mouse.pixelY = std::max(0, y - 1);
-    out.mouse.hasPixelPosition = true;
-  } else {
-    out.mouse.pos.X = static_cast<SHORT>(std::max(0, x - 1));
-    out.mouse.pos.Y = static_cast<SHORT>(std::max(0, y - 1));
-    out.mouse.hasPixelPosition = false;
-  }
+  // ConsoleInput explicitly selects SGR cell coordinates (1006 with 1016
+  // reset), while legacy reports are cell-based by definition.
+  out.mouse.pos.X = static_cast<SHORT>(std::max(0, x - 1));
+  out.mouse.pos.Y = static_cast<SHORT>(std::max(0, y - 1));
+  out.mouse.hasPixelPosition = false;
   if (wheel) {
     const SHORT delta = ((buttonCode & 0x01) == 0) ? WHEEL_DELTA : -WHEEL_DELTA;
     out.mouse.buttonState = 0;
@@ -235,7 +231,7 @@ bool TerminalInputSequenceParser::parseMouse(InputEvent& out,
 
   const bool wheel = (buttonCode & 0x40) != 0;
   const bool release = final == L'm' || (!wheel && (buttonCode & 0x03) == 3);
-  assignTerminalMouseEvent(out, buttonCode, x, y, release, true);
+  assignTerminalMouseEvent(out, buttonCode, x, y, release);
   return true;
 }
 
@@ -251,7 +247,7 @@ bool TerminalInputSequenceParser::parseLegacyMouse(InputEvent& out,
   const int x = std::max(1, static_cast<int>(buffer_[4]) - 32);
   const int y = std::max(1, static_cast<int>(buffer_[5]) - 32);
   const bool release = (buttonCode & 0x03) == 3;
-  assignTerminalMouseEvent(out, buttonCode, x, y, release, false);
+  assignTerminalMouseEvent(out, buttonCode, x, y, release);
   return true;
 }
 

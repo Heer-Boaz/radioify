@@ -35,8 +35,6 @@ class ConsoleInput {
  private:
   void enableTerminalMouseInput();
   void disableTerminalMouseInput();
-  void updateTerminalGridSize();
-  void mapPixelMousePosition(MouseEvent& mouse) const;
   void normalizeTerminalMouseGesture(MouseEvent& mouse);
   void normalizeTerminalEvent(InputEvent& event);
   bool ownsForegroundConsoleWindow() const;
@@ -46,8 +44,6 @@ class ConsoleInput {
   HANDLE handle_ = INVALID_HANDLE_VALUE;
   HANDLE output_ = INVALID_HANDLE_VALUE;
   DWORD originalMode_ = 0;
-  int columns_ = 80;
-  int rows_ = 25;
   double cellPixelWidth_ = 1.0;
   double cellPixelHeight_ = 1.0;
   bool active_ = false;

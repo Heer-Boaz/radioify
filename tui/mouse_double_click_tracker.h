@@ -18,9 +18,8 @@ enum class MouseClickTransition : uint8_t {
 class MouseDoubleClickTracker {
  public:
   bool observe(MouseClickTransition transition, int x, int y,
-               bool pixelCoordinates, uint64_t timestampMs,
-               uint32_t maximumIntervalMs, int maximumDeltaX,
-               int maximumDeltaY) {
+               uint64_t timestampMs, uint32_t maximumIntervalMs,
+               int maximumDeltaX, int maximumDeltaY) {
     maximumDeltaX = std::max(0, maximumDeltaX);
     maximumDeltaY = std::max(0, maximumDeltaY);
     if (phase_ != Phase::Idle &&
@@ -32,18 +31,16 @@ class MouseDoubleClickTracker {
     switch (transition) {
       case MouseClickTransition::Press:
         if (phase_ == Phase::AwaitingSecondPress &&
-            sameLocation(x, y, pixelCoordinates, maximumDeltaX,
-                         maximumDeltaY)) {
+            sameLocation(x, y, maximumDeltaX, maximumDeltaY)) {
           reset();
           return true;
         }
-        beginFirstPress(x, y, pixelCoordinates, timestampMs);
+        beginFirstPress(x, y, timestampMs);
         return false;
 
       case MouseClickTransition::Release:
         if (phase_ == Phase::FirstButtonDown) {
-          phase_ = sameLocation(x, y, pixelCoordinates, maximumDeltaX,
-                                maximumDeltaY)
+          phase_ = sameLocation(x, y, maximumDeltaX, maximumDeltaY)
                        ? Phase::AwaitingSecondPress
                        : Phase::Idle;
         }
@@ -51,8 +48,7 @@ class MouseDoubleClickTracker {
 
       case MouseClickTransition::Move:
         if (phase_ == Phase::FirstButtonDown &&
-            !sameLocation(x, y, pixelCoordinates, maximumDeltaX,
-                          maximumDeltaY)) {
+            !sameLocation(x, y, maximumDeltaX, maximumDeltaY)) {
           reset();
         }
         return false;
@@ -72,26 +68,22 @@ class MouseDoubleClickTracker {
     AwaitingSecondPress,
   };
 
-  void beginFirstPress(int x, int y, bool pixelCoordinates,
-                       uint64_t timestampMs) {
+  void beginFirstPress(int x, int y, uint64_t timestampMs) {
     phase_ = Phase::FirstButtonDown;
     firstPressX_ = x;
     firstPressY_ = y;
-    firstPressUsesPixels_ = pixelCoordinates;
     firstPressTimestampMs_ = timestampMs;
   }
 
-  bool sameLocation(int x, int y, bool pixelCoordinates, int maximumDeltaX,
+  bool sameLocation(int x, int y, int maximumDeltaX,
                     int maximumDeltaY) const {
-    return pixelCoordinates == firstPressUsesPixels_ &&
-           std::abs(x - firstPressX_) <= maximumDeltaX &&
+    return std::abs(x - firstPressX_) <= maximumDeltaX &&
            std::abs(y - firstPressY_) <= maximumDeltaY;
   }
 
   Phase phase_ = Phase::Idle;
   int firstPressX_ = 0;
   int firstPressY_ = 0;
-  bool firstPressUsesPixels_ = false;
   uint64_t firstPressTimestampMs_ = 0;
 };
 

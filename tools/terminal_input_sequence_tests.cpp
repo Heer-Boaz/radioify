@@ -42,10 +42,7 @@ bool observe(terminal_input::MouseDoubleClickTracker& tracker,
              const MouseEvent& mouse, uint64_t timestampMs,
              uint32_t maximumIntervalMs, int maximumDeltaX,
              int maximumDeltaY) {
-  const bool pixelCoordinates = mouse.hasPixelPosition;
-  const int x = pixelCoordinates ? mouse.pixelX : mouse.pos.X;
-  const int y = pixelCoordinates ? mouse.pixelY : mouse.pos.Y;
-  return tracker.observe(transitionFor(mouse), x, y, pixelCoordinates,
+  return tracker.observe(transitionFor(mouse), mouse.pos.X, mouse.pos.Y,
                          timestampMs, maximumIntervalMs, maximumDeltaX,
                          maximumDeltaY);
 }
@@ -65,11 +62,11 @@ int main() {
                    firstPress.mouse.kind == MouseEventKind::Press &&
                    firstPress.mouse.buttonState ==
                        FROM_LEFT_1ST_BUTTON_PRESSED &&
-                   firstPress.mouse.hasPixelPosition &&
-                   firstPress.mouse.pixelX == 100 &&
-                   firstPress.mouse.pixelY == 80,
+                   !firstPress.mouse.hasPixelPosition &&
+                   firstPress.mouse.pos.X == 100 &&
+                   firstPress.mouse.pos.Y == 80,
                "SGR mouse press must preserve its semantic transition and "
-               "pixel position");
+               "cell position");
 
   ok &= expect(parseSequence(parser, L"\x1b[<0;101;81m", firstRelease),
                "SGR mouse release must parse as an input event");

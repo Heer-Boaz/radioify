@@ -13,6 +13,12 @@ namespace {
 
 constexpr DWORD kTerminalInputSequenceWaitMs = 10;
 constexpr DWORD kConsoleTitleBufferChars = 512;
+// SGR 1006 and SGR-Pixels 1016 use the same wire format. Reset 1016 first so
+// every parsed SGR coordinate has the single, explicit meaning "terminal cell".
+constexpr wchar_t kEnableTerminalMouseInput[] =
+    L"\x1b[?1016l\x1b[?1006h\x1b[?1003h";
+constexpr wchar_t kDisableTerminalMouseInput[] =
+    L"\x1b[?1003l\x1b[?1006l\x1b[?1016l";
 constexpr DWORD kMouseButtonMask =
     FROM_LEFT_1ST_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED |
     FROM_LEFT_2ND_BUTTON_PRESSED | FROM_LEFT_3RD_BUTTON_PRESSED |
@@ -163,7 +169,6 @@ void ConsoleInput::init() {
       RADIOIFY_APP_NAME_W L" [" + std::to_wstring(GetCurrentProcessId()) +
       L"]";
   SetConsoleTitleW(activeConsoleTitle_.c_str());
-  updateTerminalGridSize();
   active_ = true;
 }
 
@@ -186,7 +191,7 @@ void ConsoleInput::setCellPixelSize(double width, double height) {
 
 void ConsoleInput::enableTerminalMouseInput() {
   if (terminalMouseInput_) return;
-  if (writeTerminalSequence(output_, L"\x1b[?1003h\x1b[?1006h\x1b[?1016h")) {
+  if (writeTerminalSequence(output_, kEnableTerminalMouseInput)) {
     terminalMouseInput_ = true;
   }
 }
@@ -194,40 +199,9 @@ void ConsoleInput::enableTerminalMouseInput() {
 void ConsoleInput::disableTerminalMouseInput() {
   terminalDoubleClickTracker_.reset();
   if (!terminalMouseInput_) return;
-  writeTerminalSequence(output_, L"\x1b[?1016l\x1b[?1006l\x1b[?1003l");
+  writeTerminalSequence(output_, kDisableTerminalMouseInput);
   terminalMouseInput_ = false;
   terminalParser_.reset();
-}
-
-void ConsoleInput::updateTerminalGridSize() {
-  if (output_ == INVALID_HANDLE_VALUE) return;
-  CONSOLE_SCREEN_BUFFER_INFO info{};
-  if (!GetConsoleScreenBufferInfo(output_, &info)) return;
-  columns_ = static_cast<int>(info.srWindow.Right - info.srWindow.Left + 1);
-  rows_ = static_cast<int>(info.srWindow.Bottom - info.srWindow.Top + 1);
-}
-
-void ConsoleInput::mapPixelMousePosition(MouseEvent& mouse) const {
-  if (!mouse.hasPixelPosition) return;
-  if (mouse.pixelX >= 0 && mouse.pixelX < columns_ && mouse.pixelY >= 0 &&
-      mouse.pixelY < rows_) {
-    mouse.pos.X = static_cast<SHORT>(mouse.pixelX);
-    mouse.pos.Y = static_cast<SHORT>(mouse.pixelY);
-    mouse.unitWidth = 1.0;
-    mouse.unitHeight = 1.0;
-    mouse.hasPixelPosition = false;
-    return;
-  }
-  const double cellW = cellPixelWidth_;
-  const double cellH = cellPixelHeight_;
-  mouse.unitWidth = cellW;
-  mouse.unitHeight = cellH;
-  const int gx = std::clamp(static_cast<int>(mouse.pixelX / cellW), 0,
-                            columns_ - 1);
-  const int gy = std::clamp(static_cast<int>(mouse.pixelY / cellH), 0,
-                            rows_ - 1);
-  mouse.pos.X = static_cast<SHORT>(gx);
-  mouse.pos.Y = static_cast<SHORT>(gy);
 }
 
 void ConsoleInput::normalizeTerminalMouseGesture(MouseEvent& mouse) {
@@ -253,20 +227,15 @@ void ConsoleInput::normalizeTerminalMouseGesture(MouseEvent& mouse) {
     return;
   }
 
-  const bool pixelCoordinates = mouse.hasPixelPosition;
-  const int x = pixelCoordinates ? mouse.pixelX : mouse.pos.X;
-  const int y = pixelCoordinates ? mouse.pixelY : mouse.pos.Y;
-  int maximumDeltaX = std::max(0, GetSystemMetrics(SM_CXDOUBLECLK) / 2);
-  int maximumDeltaY = std::max(0, GetSystemMetrics(SM_CYDOUBLECLK) / 2);
-  if (!pixelCoordinates) {
-    maximumDeltaX = static_cast<int>(
-        maximumDeltaX / std::max(1.0, cellPixelWidth_));
-    maximumDeltaY = static_cast<int>(
-        maximumDeltaY / std::max(1.0, cellPixelHeight_));
-  }
+  const int maximumDeltaX = static_cast<int>(
+      std::max(0, GetSystemMetrics(SM_CXDOUBLECLK) / 2) /
+      std::max(1.0, cellPixelWidth_));
+  const int maximumDeltaY = static_cast<int>(
+      std::max(0, GetSystemMetrics(SM_CYDOUBLECLK) / 2) /
+      std::max(1.0, cellPixelHeight_));
 
   if (terminalDoubleClickTracker_.observe(
-          transition, x, y, pixelCoordinates, GetTickCount64(),
+          transition, mouse.pos.X, mouse.pos.Y, GetTickCount64(),
           GetDoubleClickTime(), maximumDeltaX, maximumDeltaY)) {
     mouse.kind = MouseEventKind::DoubleClick;
   }
@@ -274,7 +243,6 @@ void ConsoleInput::normalizeTerminalMouseGesture(MouseEvent& mouse) {
 
 void ConsoleInput::normalizeTerminalEvent(InputEvent& event) {
   if (event.type == InputEvent::Type::Mouse) {
-    mapPixelMousePosition(event.mouse);
     normalizeTerminalMouseGesture(event.mouse);
   }
 }
@@ -445,7 +413,6 @@ bool ConsoleInput::poll(InputEvent& out) {
       return true;
     }
     if (rec.EventType == WINDOW_BUFFER_SIZE_EVENT) {
-      updateTerminalGridSize();
       out.type = InputEvent::Type::Resize;
       out.size = rec.Event.WindowBufferSizeEvent.dwSize;
       return true;
