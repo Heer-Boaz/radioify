@@ -124,6 +124,13 @@ enum class VideoWindowFocus {
     TakeForegroundFocus,
 };
 
+// The durable windowed state behind fullscreen and picture-in-picture.
+// normalBounds uses the same workspace coordinates as WINDOWPLACEMENT.
+struct VideoWindowedPlacement {
+    RECT normalBounds{};
+    bool maximized = false;
+};
+
 class VideoWindow {
 public:
     static constexpr int kDefaultVideoClientWidth = 1280;
@@ -171,6 +178,14 @@ public:
     }
     bool IsFullscreen() const { return m_isFullscreen; }
     bool SetFullscreen(bool enabled, VideoWindowFocus focus);
+    // Restores a persisted presentation without first exposing an
+    // intermediate windowed surface.
+    bool RestoreWindowed(const VideoWindowedPlacement& placement,
+                         VideoWindowFocus focus);
+    bool RestoreFullscreen(const VideoWindowedPlacement& placement,
+                           VideoWindowFocus focus);
+    bool RestorePictureInPicture(const VideoWindowedPlacement& placement,
+                                 VideoWindowFocus focus);
     void GetTextGridSize(int& outCols, int& outRows) const {
         outCols = m_textGridCols.load(std::memory_order_relaxed);
         outRows = m_textGridRows.load(std::memory_order_relaxed);
@@ -178,9 +193,9 @@ public:
     void GetTextGridCellSize(int& outCellWidth,
                                          int& outCellHeight) const;
     bool GetWindowBounds(RECT* outRect) const;
-    // Must be called on the window owner thread. Returns the normal restored
-    // bounds even while the window is fullscreen or in PiP.
-    bool GetWindowedBounds(RECT* outRect) const;
+    // Must be called on the window owner thread. Returns the durable windowed
+    // placement even while the window is fullscreen or in PiP.
+    bool GetWindowedPlacement(VideoWindowedPlacement* outPlacement) const;
     // Changes geometry without changing visibility or foreground ownership.
     bool SetWindowBounds(const RECT& rect);
     
@@ -213,6 +228,16 @@ public:
     void Cleanup();
 
 private:
+    struct WindowRestoreState {
+        LONG style = 0;
+        LONG exStyle = 0;
+        WINDOWPLACEMENT placement{};
+
+        WindowRestoreState() {
+            placement.length = sizeof(WINDOWPLACEMENT);
+        }
+    };
+
     struct FrameRenderGeometry {
         int width = 0;
         int height = 0;
@@ -256,7 +281,8 @@ private:
     double PictureInPictureAspectRatio() const;
     SIZE PictureInPictureMinimumSize() const;
     void AdjustPictureInPictureSizingRect(WPARAM edge, RECT* rect) const;
-    bool EnterPictureInPicture(VideoWindowFocus focus);
+    bool EnterPictureInPicture(VideoWindowFocus focus,
+                               const WindowRestoreState* restoreState = nullptr);
     enum class PictureInPictureExitTarget {
         Windowed,
         Fullscreen,
@@ -296,6 +322,11 @@ private:
     void ApplyPendingDisplayChange();
     bool ApplyWindowBounds(const RECT& rect);
     bool ActivateForegroundSurface();
+    bool CaptureWindowRestoreState(WindowRestoreState& state) const;
+    WindowRestoreState WindowRestoreStateFor(
+        const VideoWindowedPlacement& placement) const;
+    bool ApplyWindowRestoreState(const WindowRestoreState& state,
+                                 VideoWindowFocus focus);
 
     HWND m_hWnd = nullptr;
     Microsoft::WRL::ComPtr<IDXGISwapChain> m_swapChain;
@@ -355,10 +386,8 @@ private:
     bool m_trackingMouseLeave = false;
     bool m_trackingNonClientMouseLeave = false;
 
-    // Fullscreen helpers
-    LONG m_prevStyle = 0;
-    LONG m_prevExStyle = 0; // saved extended style for restoring on exit
-    RECT m_prevRect{};
+    // Exact native state to restore after temporary presentation modes.
+    WindowRestoreState m_fullscreenRestoreState;
     bool m_isFullscreen = false;
     std::atomic<bool> m_pictureInPicture{false};
     std::atomic<bool> m_textGridPresentationEnabled{false};
@@ -368,9 +397,7 @@ private:
     std::atomic<int> m_textGridMinRows{0};
     mutable std::mutex m_overlayInteractionMutex;
     playback_overlay::InteractionMap m_overlayInteractions;
-    LONG m_pipRestoreStyle = 0;
-    LONG m_pipRestoreExStyle = 0;
-    RECT m_pipRestoreRect{};
+    WindowRestoreState m_pictureInPictureRestoreState;
     WindowDisplayLifecycle m_displayLifecycle;
     bool m_captureAllMouseInput = false;
     bool m_leftMouseCaptureActive = false;
@@ -381,6 +408,7 @@ private:
     mutable std::mutex m_subtitleStateMutex;
     std::string m_subtitleRenderError;
     void setSubtitleRenderError(std::string error);
-    bool MakeFullscreen(VideoWindowFocus focus);
+    bool MakeFullscreen(VideoWindowFocus focus,
+                        const WindowRestoreState* restoreState = nullptr);
     bool ExitFullscreen(VideoWindowFocus focus);
 };

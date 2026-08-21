@@ -215,16 +215,8 @@ struct WindowPresenter::Impl {
           if (!window.IsOpen()) {
             return;
           }
-          playback_window_presentation::applyPlacement(window, placement);
-          if (!playback_window_presentation::apply(window, request)) {
-            return;
-          }
-          if (request.mode == WindowPresentationMode::PictureInPicture &&
-              placement.hasPictureInPictureRect &&
-              !window.SetWindowBounds(placement.pictureInPictureRect)) {
-            return;
-          }
-          applied = true;
+          applied = playback_window_presentation::restore(
+              window, request, placement);
         });
     if (executed && applied) {
       requestPresent();

@@ -47,6 +47,7 @@ namespace playback_window_presentation {
 bool apply(VideoWindow& window, WindowPresentationRequest request) {
   const VideoWindowFocus focus = toVideoWindowFocus(request.focus);
   bool surfaceApplied = false;
+  setContentMode(window, request.content);
 
   switch (request.mode) {
     case WindowPresentationMode::Windowed:
@@ -70,14 +71,41 @@ bool apply(VideoWindow& window, WindowPresentationRequest request) {
   if (!surfaceApplied) {
     return false;
   }
-  setContentMode(window, request.content);
   return matchesRequest(window, request);
 }
 
-void applyPlacement(VideoWindow& window, const WindowPlacementState& state) {
-  if (state.hasWindowedRect) {
-    window.SetWindowBounds(state.windowedRect);
+bool restore(VideoWindow& window, WindowPresentationRequest request,
+             const WindowPlacementState& state) {
+  if (!state.hasWindowedPlacement) {
+    if (!apply(window, request)) {
+      return false;
+    }
+  } else {
+    const VideoWindowedPlacement placement{
+        state.windowedNormalRect, state.windowedMaximized};
+    const VideoWindowFocus focus = toVideoWindowFocus(request.focus);
+    setContentMode(window, request.content);
+
+    bool restored = false;
+    switch (request.mode) {
+      case WindowPresentationMode::Windowed:
+        restored = window.RestoreWindowed(placement, focus);
+        break;
+      case WindowPresentationMode::Fullscreen:
+        restored = window.RestoreFullscreen(placement, focus);
+        break;
+      case WindowPresentationMode::PictureInPicture:
+        restored = window.RestorePictureInPicture(placement, focus);
+        break;
+    }
+    if (!restored || !matchesRequest(window, request)) {
+      return false;
+    }
   }
+
+  return request.mode != WindowPresentationMode::PictureInPicture ||
+         !state.hasPictureInPictureRect ||
+         window.SetWindowBounds(state.pictureInPictureRect);
 }
 
 void capturePlacement(const VideoWindow& window, WindowPlacementState& state) {
@@ -85,10 +113,11 @@ void capturePlacement(const VideoWindow& window, WindowPlacementState& state) {
     return;
   }
 
-  RECT windowedRect{};
-  if (window.GetWindowedBounds(&windowedRect)) {
-    state.hasWindowedRect = true;
-    state.windowedRect = windowedRect;
+  VideoWindowedPlacement windowedPlacement;
+  if (window.GetWindowedPlacement(&windowedPlacement)) {
+    state.hasWindowedPlacement = true;
+    state.windowedNormalRect = windowedPlacement.normalBounds;
+    state.windowedMaximized = windowedPlacement.maximized;
   }
 
   if (window.IsPictureInPicture()) {

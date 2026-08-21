@@ -33,8 +33,9 @@ struct WindowPresentationRequest {
 };
 
 struct WindowPlacementState {
-  bool hasWindowedRect = false;
-  RECT windowedRect{};
+  bool hasWindowedPlacement = false;
+  RECT windowedNormalRect{};
+  bool windowedMaximized = false;
   bool hasPictureInPictureRect = false;
   RECT pictureInPictureRect{};
 };
@@ -42,7 +43,8 @@ struct WindowPlacementState {
 namespace playback_window_presentation {
 
 bool apply(VideoWindow& window, WindowPresentationRequest request);
-void applyPlacement(VideoWindow& window, const WindowPlacementState& state);
+bool restore(VideoWindow& window, WindowPresentationRequest request,
+             const WindowPlacementState& state);
 void capturePlacement(const VideoWindow& window, WindowPlacementState& state);
 
 }  // namespace playback_window_presentation
