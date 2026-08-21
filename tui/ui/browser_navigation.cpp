@@ -213,6 +213,7 @@ void BrowserNavigator::commit(const BrowserLocation& target,
   browser_.entries = std::move(prepared.entries);
   browser_.content = std::move(prepared.content);
   browser_.selected = prepared.selected;
+  browser_.hovered = -1;
   browser_.scrollRow = prepared.scrollRow;
   browser_.viewportRestoreMode = prepared.viewportRestoreMode;
   browser_.viewportRestoreScrollRow = prepared.viewportRestoreScrollRow;

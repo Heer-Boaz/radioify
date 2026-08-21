@@ -210,6 +210,31 @@ int actionStripIndexAt(const ActionStripLayout& layout, int x, int y) {
   }
   return -1;
 }
+
+int browserEntryIndexAt(const BrowserState& browser, const GridLayout& layout,
+                        int x, int y, int listTop) {
+  const int count = static_cast<int>(browser.entries.size());
+  if (count == 0 || layout.cols <= 0) {
+    return -1;
+  }
+  const int cellHeight = std::max(1, layout.cellHeight);
+  const int visibleHeight = layout.rowsVisible * cellHeight;
+  if (y < listTop || y >= listTop + visibleHeight) {
+    return -1;
+  }
+  const int row = (y - listTop) / cellHeight + browser.scrollRow;
+  const int col = layout.colWidth > 0 ? x / layout.colWidth : 0;
+  if (col < 0 || col >= layout.cols) {
+    return -1;
+  }
+  const int index = browserGridEntryIndex(layout, browser.viewMode, row, col,
+                                          count);
+  if (index < 0 || index >= count ||
+      !browser.entries[static_cast<std::size_t>(index)].isSelectable()) {
+    return -1;
+  }
+  return index;
+}
 }  // namespace
 
 void browser_input::EntryClickTracker::recordPress(
@@ -225,6 +250,16 @@ browser_input::EntryClickTracker::consumeDoubleClickAnchor() {
 }
 
 void browser_input::EntryClickTracker::reset() { anchor_.reset(); }
+
+std::optional<ActionStripItem> BrowserPointerState::releaseAction(
+    std::optional<ActionStripItem> releasedOver) {
+  const std::optional<ActionStripItem> pressed = pressedAction_;
+  pressedAction_.reset();
+  if (pressed && releasedOver && *pressed == *releasedOver) {
+    return pressed;
+  }
+  return std::nullopt;
+}
 
 void setBrowserSearchFocus(BrowserState& browser, BrowserSearchFocus focus,
                           bool& dirty) {
@@ -262,6 +297,7 @@ void setBrowserSearchFocus(BrowserState& browser, BrowserSearchFocus focus,
 
 void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
                       browser_input::EntryClickTracker& entryClickTracker,
+                      BrowserPointerState& pointerState,
                       const GridLayout& layout,
                       const BreadcrumbLine& breadcrumbLine, int breadcrumbY,
                       int searchBarY, int searchBarWidth, int listTop,
@@ -286,6 +322,21 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
     }
   } else {
     entryClickTracker.reset();
+  }
+
+  if (ev.type == InputEvent::Type::PointerLeave) {
+    const bool pointerVisualChanged =
+        browser.hovered != -1 || breadcrumbHover != -1 || actionHover != -1 ||
+        searchBarHover;
+    browser.hovered = -1;
+    breadcrumbHover = -1;
+    actionHover = -1;
+    searchBarHover = false;
+    pointerState.cancelPress();
+    if (pointerVisualChanged) {
+      dirty = true;
+    }
+    return;
   }
   auto navigateDirectoryWithHistory = [&](const std::filesystem::path& dir) {
     const bool navigated = navigator.navigate(browserDirectoryLocation(dir));
@@ -675,6 +726,15 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       actionHover = nextActionHover;
       dirty = true;
     }
+    int nextEntryHover =
+        browserInteractionEnabled
+            ? browserEntryIndexAt(browser, layout, mouse.pos.X, mouse.pos.Y,
+                                  listTop)
+            : -1;
+    if (nextEntryHover != browser.hovered) {
+      browser.hovered = nextEntryHover;
+      dirty = true;
+    }
     if (mouse.kind == MouseEventKind::VerticalWheel) {
       int delta = mouse.wheelDelta;
       if (delta != 0) {
@@ -734,48 +794,66 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       }
     }
 
-    if (leftPressed && (mouse.kind == MouseEventKind::Press ||
-                        mouse.kind == MouseEventKind::Move)) {
+    auto actionAtPointer = [&]() -> std::optional<ActionStripItem> {
       int actionIndex = actionStripIndexAt(actionStrip, mouse.pos.X, mouse.pos.Y);
       if (actionIndex >= 0) {
-        const auto& btn = actionStrip.buttons[static_cast<size_t>(actionIndex)];
-        switch (btn.id) {
-          case ActionStripItem::Previous:
-            if (callbacks.onPlayPrevious) callbacks.onPlayPrevious();
-            dirty = true;
-            return;
-          case ActionStripItem::PlayPause:
-            if (callbacks.onTogglePause) callbacks.onTogglePause();
-            dirty = true;
-            return;
-          case ActionStripItem::Next:
-            if (callbacks.onPlayNext) callbacks.onPlayNext();
-            dirty = true;
-            return;
-          case ActionStripItem::Radio:
-            if (callbacks.onToggleRadio) callbacks.onToggleRadio();
-            dirty = true;
-            return;
-          case ActionStripItem::Hz50:
-            if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
-            dirty = true;
-            return;
-          case ActionStripItem::View:
-            browser.viewMode = nextViewMode(browser.viewMode);
-            dirty = true;
-            return;
-          case ActionStripItem::Options:
-            if (callbacks.onToggleOptions) callbacks.onToggleOptions();
-            dirty = true;
-            return;
-          case ActionStripItem::PictureInPicture:
-            if (callbacks.onTogglePictureInPicture) {
-              callbacks.onTogglePictureInPicture();
-            }
-            dirty = true;
-            return;
-        }
+        return actionStrip.buttons[static_cast<size_t>(actionIndex)].id;
       }
+      return std::nullopt;
+    };
+    auto invokeAction = [&](ActionStripItem action) {
+      switch (action) {
+        case ActionStripItem::Previous:
+          if (callbacks.onPlayPrevious) callbacks.onPlayPrevious();
+          break;
+        case ActionStripItem::PlayPause:
+          if (callbacks.onTogglePause) callbacks.onTogglePause();
+          break;
+        case ActionStripItem::Next:
+          if (callbacks.onPlayNext) callbacks.onPlayNext();
+          break;
+        case ActionStripItem::Radio:
+          if (callbacks.onToggleRadio) callbacks.onToggleRadio();
+          break;
+        case ActionStripItem::Hz50:
+          if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
+          break;
+        case ActionStripItem::View:
+          browser.viewMode = nextViewMode(browser.viewMode);
+          break;
+        case ActionStripItem::Options:
+          if (callbacks.onToggleOptions) callbacks.onToggleOptions();
+          break;
+        case ActionStripItem::PictureInPicture:
+          if (callbacks.onTogglePictureInPicture) {
+            callbacks.onTogglePictureInPicture();
+          }
+          break;
+        }
+      dirty = true;
+    };
+    if (mouse.kind == MouseEventKind::Press && leftPressed) {
+      if (const auto action = actionAtPointer()) {
+        pointerState.pressAction(*action);
+        return;
+      }
+      pointerState.cancelPress();
+    } else if (mouse.kind == MouseEventKind::Release &&
+               mouse.button == MouseButton::Left) {
+      if (const auto action = pointerState.releaseAction(actionAtPointer())) {
+        invokeAction(*action);
+        return;
+      }
+    } else if (mouse.kind == MouseEventKind::Move &&
+               pointerState.hasPressedAction()) {
+      if (leftPressed) {
+        return;
+      }
+      pointerState.cancelPress();
+    }
+
+    if (leftPressed && (mouse.kind == MouseEventKind::Press ||
+                        mouse.kind == MouseEventKind::Move)) {
       if (layout.showScrollBar && layout.scrollBarX >= 0 &&
           layout.scrollBarWidth > 0 && mouse.pos.X >= layout.scrollBarX &&
           mouse.pos.X < layout.scrollBarX + layout.scrollBarWidth &&
@@ -811,28 +889,9 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
 
     int count = static_cast<int>(browser.entries.size());
     if (count == 0) return;
-    int x = mouse.pos.X;
-    int y = mouse.pos.Y;
-    int cellHeight = std::max(1, layout.cellHeight);
-    int visibleHeight = layout.rowsVisible * cellHeight;
-    if (y < listTop || y >= listTop + visibleHeight) return;
-    int row = (y - listTop) / cellHeight + browser.scrollRow;
-    int col = layout.colWidth > 0 ? x / layout.colWidth : 0;
-    if (col < 0 || col >= layout.cols) return;
-    int idx =
-        browserGridEntryIndex(layout, browser.viewMode, row, col, count);
+    int idx = browserEntryIndexAt(browser, layout, mouse.pos.X, mouse.pos.Y,
+                                  listTop);
     if (idx < 0 || idx >= count) return;
-
-    if (mouse.kind == MouseEventKind::Move && !leftPressed) {
-      if (!browser.entries[static_cast<size_t>(idx)].isSelectable()) {
-        return;
-      }
-      if (browser.selected != idx) {
-        browser.selected = idx;
-        dirty = true;
-      }
-      return;
-    }
 
     if (mouse.kind == MouseEventKind::Press && rightPressed) {
       if (!browser.entries[static_cast<size_t>(idx)].isSelectable()) {

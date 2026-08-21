@@ -1498,6 +1498,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   const Style kStyleAlert{{255, 92, 92}, kBgBase};
   const Style kStyleDir{{110, 231, 183}, kBgBase};
   const Style kStyleHighlight{{15, 20, 28}, {230, 238, 248}};
+  const Style kStyleBrowserHover{{215, 220, 226}, {35, 43, 54}};
   const Style kStyleBreadcrumbHover{{15, 20, 28}, {255, 214, 120}};
   const Style kStyleActionActive{{15, 20, 28}, {255, 214, 120}};
   const Color kProgressStart{110, 231, 183};
@@ -1590,6 +1591,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   ConsoleInputPump consoleInputPump;
   pointer_input::MouseDoubleClickTracker browserDoubleClickTracker;
   browser_input::EntryClickTracker browserEntryClickTracker;
+  BrowserPointerState browserPointerState;
   BrowserViewport viewport;
   BrowserFooterLayout footerLayout;
   auto midiToNoteName = [](int midi) {
@@ -3217,7 +3219,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         }
       }
       handleInputEvent(
-          ev, browserNavigator, browserEntryClickTracker, layout,
+          ev, browserNavigator, browserEntryClickTracker, browserPointerState,
+          layout,
           breadcrumbLine, breadcrumbY, searchBarY, searchBarWidth, listTop,
           listHeight, progressBarX, progressBarY, progressBarWidth, actionStrip,
           browserInteractionEnabled, o.play, audioIsReady(), breadcrumbHover,
@@ -3513,7 +3516,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
             browser.entries, {nowPlaying, nowPlayingTrackIndex});
         drawBrowserEntries(screen, browser, layout, listTop, listHeight,
                            kStyleNormal, kStyleNormal, kStyleDir,
-                           kStyleHighlight, kStyleDim, kStyleAccent,
+                           kStyleHighlight, kStyleBrowserHover, kStyleDim,
+                           kStyleAccent,
                            playingEntryIndex, isSupportedImageExt, isVideoExt,
                            isSupportedAudioExt);
       } else {

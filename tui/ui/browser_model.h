@@ -152,6 +152,7 @@ struct BrowserState {
   std::vector<BrowserEntry> entries;
   BrowserContent content;
   int selected = 0;
+  int hovered = -1;
   int scrollRow = 0;
   enum class ViewMode {
     Thumbnails,
@@ -218,6 +219,7 @@ void drawBrowserEntries(ConsoleScreen& screen,
                         const Style& normalStyle,
                         const Style& dirStyle,
                         const Style& highlightStyle,
+                        const Style& hoverStyle,
                         const Style& dimStyle,
                         const Style& playbackStyle,
                         int playingEntryIndex,

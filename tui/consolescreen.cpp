@@ -678,6 +678,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
                         const GridLayout& layout, int listTop, int listHeight,
                         const Style& baseStyle, const Style& normalStyle,
                         const Style& dirStyle, const Style& highlightStyle,
+                        const Style& hoverStyle,
                         const Style& dimStyle, const Style& playbackStyle,
                         int playingEntryIndex,
                         bool (*isImage)(const std::filesystem::path&),
@@ -782,6 +783,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
         if (idx < 0 || idx >= static_cast<int>(browser.entries.size())) continue;
         const auto& entry = browser.entries[static_cast<size_t>(idx)];
         bool isSelected = (idx == browser.selected);
+        bool isHovered = (idx == browser.hovered);
 
         if (entry.isSectionHeader()) {
           std::string cell = fitName("[" + entry.name + "]", layout.colWidth);
@@ -816,6 +818,9 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
                                        ? dimStyle
                                        : (entry.isDirectory() ? dirStyle
                                                               : normalStyle));
+        if (isHovered && !isSelected) {
+          attr.bg = hoverStyle.bg;
+        }
         screen.writeRun(cellLeft, y, layout.colWidth, L' ', attr);
         if (idx == playingEntryIndex) {
           screen.writeChar(cellLeft, y, L'\u258C', playbackStyle);
@@ -889,6 +894,7 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
       if (idx >= static_cast<int>(browser.entries.size())) continue;
       const auto& entry = browser.entries[static_cast<size_t>(idx)];
       bool isSelected = (idx == browser.selected);
+      bool isHovered = (idx == browser.hovered);
       int cellLeft = c * layout.colWidth;
       int thumbX = cellLeft + 1;
       int thumbY = cellTop;
@@ -949,7 +955,10 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
                        : (entry.isStatus()
                               ? dimStyle
                               : (entry.isDirectory() ? dirStyle : normalStyle));
-        if (isSelected) {
+        if (isHovered && !isSelected) {
+          labelStyle.bg = hoverStyle.bg;
+        }
+        if (isSelected || isHovered) {
           screen.writeRun(cellLeft, labelY, layout.colWidth, L' ', labelStyle);
         }
         if (idx == playingEntryIndex) {

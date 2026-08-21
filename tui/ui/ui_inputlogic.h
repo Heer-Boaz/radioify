@@ -102,6 +102,18 @@ struct ActionStripLayout {
   std::vector<ActionStripButton> buttons;
 };
 
+class BrowserPointerState {
+ public:
+  void pressAction(ActionStripItem action) { pressedAction_ = action; }
+  std::optional<ActionStripItem> releaseAction(
+      std::optional<ActionStripItem> releasedOver);
+  bool hasPressedAction() const { return pressedAction_.has_value(); }
+  void cancelPress() { pressedAction_.reset(); }
+
+ private:
+  std::optional<ActionStripItem> pressedAction_;
+};
+
 PlaybackInputResult handlePlaybackInput(
     const InputEvent& ev, const InputCallbacks& callbacks,
     uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
@@ -109,6 +121,7 @@ PlaybackInputResult handlePlaybackInput(
 
 void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
                       browser_input::EntryClickTracker& entryClickTracker,
+                      BrowserPointerState& pointerState,
                       const GridLayout& layout,
                       const BreadcrumbLine& breadcrumbLine, int breadcrumbY,
                       int searchBarY, int searchBarWidth, int listTop,

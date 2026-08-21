@@ -105,6 +105,64 @@ int main() {
                "a double-click must retain the identity of its first entry");
   ok &= expect(!entryClickTracker.consumeDoubleClickAnchor(),
                "a completed double-click must consume its entry anchor");
+
+  BrowserPointerState pointerState;
+  pointerState.pressAction(ActionStripItem::Radio);
+  ok &= expect(pointerState.hasPressedAction(),
+               "an action button press must establish pointer capture");
+  ok &= expect(!pointerState.releaseAction(ActionStripItem::Options) &&
+                   !pointerState.hasPressedAction(),
+               "releasing over another button must cancel the action");
+  pointerState.pressAction(ActionStripItem::Radio);
+  const auto releasedAction =
+      pointerState.releaseAction(ActionStripItem::Radio);
+  ok &= expect(releasedAction && *releasedAction == ActionStripItem::Radio &&
+                   !pointerState.hasPressedAction(),
+               "a button action must fire once on matching release");
+
+  BrowserState pointerBrowser;
+  pointerBrowser.location = browserDirectoryLocation("C:/Media");
+  pointerBrowser.entries = files;
+  pointerBrowser.selected = 0;
+  BrowserNavigator::Callbacks pointerCallbacks;
+  BrowserNavigator pointerNavigator(pointerBrowser,
+                                    std::move(pointerCallbacks));
+  GridLayout pointerLayout = verticalLayout(2, 2);
+  pointerLayout.colWidth = 40;
+  BreadcrumbLine pointerBreadcrumb;
+  ActionStripLayout pointerActions;
+  browser_input::EntryClickTracker pointerClickTracker;
+  BrowserPointerState pointerInteraction;
+  int pointerBreadcrumbHover = -1;
+  int pointerActionHover = -1;
+  bool pointerSearchHover = false;
+  bool pointerDirty = false;
+  bool pointerRunning = true;
+  InputCallbacks pointerInputCallbacks;
+  InputEvent pointerMove;
+  pointerMove.type = InputEvent::Type::Mouse;
+  pointerMove.mouse.kind = MouseEventKind::Move;
+  pointerMove.mouse.pos = {0, 1};
+  handleInputEvent(pointerMove, pointerNavigator, pointerClickTracker,
+                   pointerInteraction, pointerLayout, pointerBreadcrumb, -1,
+                   -1, 0, 0, 2, -1, -1, 0, pointerActions, true, true, false,
+                   pointerBreadcrumbHover, pointerActionHover,
+                   pointerSearchHover, pointerDirty, pointerRunning,
+                   pointerInputCallbacks);
+  ok &= expect(pointerBrowser.selected == 0 && pointerBrowser.hovered == 1,
+               "pointer hover must not mutate the browser selection");
+  InputEvent pointerPress = pointerMove;
+  pointerPress.mouse.kind = MouseEventKind::Press;
+  pointerPress.mouse.buttons = MouseButtons::Left;
+  pointerPress.mouse.button = MouseButton::Left;
+  handleInputEvent(pointerPress, pointerNavigator, pointerClickTracker,
+                   pointerInteraction, pointerLayout, pointerBreadcrumb, -1,
+                   -1, 0, 0, 2, -1, -1, 0, pointerActions, true, true, false,
+                   pointerBreadcrumbHover, pointerActionHover,
+                   pointerSearchHover, pointerDirty, pointerRunning,
+                   pointerInputCallbacks);
+  ok &= expect(pointerBrowser.selected == 1 && pointerBrowser.hovered == 1,
+               "a primary click must select the hovered browser entry");
   entryClickTracker.recordPress(files[0]);
   const auto differentEntryAnchor =
       entryClickTracker.consumeDoubleClickAnchor();
