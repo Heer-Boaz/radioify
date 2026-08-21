@@ -4,22 +4,42 @@
 #include <cstdint>
 #include <cstdlib>
 
-namespace terminal_input {
+#include "input_event.h"
 
-enum class MouseClickTransition : uint8_t {
-  Press,
-  Release,
-  Move,
-};
+namespace pointer_input {
 
-// Recognizes the second press of a double-click for terminal protocols that
-// report only pointer transitions. Timing and distance limits are supplied by
-// the platform adapter so this state machine remains deterministic in tests.
+// Terminal protocols report pointer transitions without assigning a gesture
+// to a widget. Each interaction surface owns an instance so clicks cannot be
+// combined across the browser and playback surfaces.
 class MouseDoubleClickTracker {
  public:
-  bool observe(MouseClickTransition transition, int x, int y,
-               uint64_t timestampMs, uint32_t maximumIntervalMs,
-               int maximumDeltaX, int maximumDeltaY) {
+  void classify(MouseEvent& mouse, uint64_t timestampMs,
+                uint32_t maximumIntervalMs, int maximumDeltaX,
+                int maximumDeltaY) {
+    if (isWindowMouseEvent(mouse)) {
+      reset();
+      return;
+    }
+    if (mouse.kind == MouseEventKind::DoubleClick) {
+      reset();
+      return;
+    }
+
+    const bool leftPressed = isMouseButtonDown(mouse, MouseButton::Left);
+    Transition transition;
+    if (mouse.kind == MouseEventKind::Move && leftPressed) {
+      transition = Transition::Move;
+    } else if (mouse.kind == MouseEventKind::Press &&
+               mouse.button == MouseButton::Left) {
+      transition = Transition::Press;
+    } else if (mouse.kind == MouseEventKind::Release &&
+               mouse.button == MouseButton::Left) {
+      transition = Transition::Release;
+    } else {
+      if (mouse.kind != MouseEventKind::Move) reset();
+      return;
+    }
+
     maximumDeltaX = std::max(0, maximumDeltaX);
     maximumDeltaY = std::max(0, maximumDeltaY);
     if (phase_ != Phase::Idle &&
@@ -29,31 +49,34 @@ class MouseDoubleClickTracker {
     }
 
     switch (transition) {
-      case MouseClickTransition::Press:
+      case Transition::Press:
         if (phase_ == Phase::AwaitingSecondPress &&
-            sameLocation(x, y, maximumDeltaX, maximumDeltaY)) {
+            sameLocation(mouse.pos.X, mouse.pos.Y, maximumDeltaX,
+                         maximumDeltaY)) {
           reset();
-          return true;
+          mouse.kind = MouseEventKind::DoubleClick;
+          return;
         }
-        beginFirstPress(x, y, timestampMs);
-        return false;
+        beginFirstPress(mouse.pos.X, mouse.pos.Y, timestampMs);
+        return;
 
-      case MouseClickTransition::Release:
+      case Transition::Release:
         if (phase_ == Phase::FirstButtonDown) {
-          phase_ = sameLocation(x, y, maximumDeltaX, maximumDeltaY)
+          phase_ = sameLocation(mouse.pos.X, mouse.pos.Y, maximumDeltaX,
+                                maximumDeltaY)
                        ? Phase::AwaitingSecondPress
                        : Phase::Idle;
         }
-        return false;
+        return;
 
-      case MouseClickTransition::Move:
+      case Transition::Move:
         if (phase_ == Phase::FirstButtonDown &&
-            !sameLocation(x, y, maximumDeltaX, maximumDeltaY)) {
+            !sameLocation(mouse.pos.X, mouse.pos.Y, maximumDeltaX,
+                          maximumDeltaY)) {
           reset();
         }
-        return false;
+        return;
     }
-    return false;
   }
 
   void reset() {
@@ -62,6 +85,12 @@ class MouseDoubleClickTracker {
   }
 
  private:
+  enum class Transition : uint8_t {
+    Press,
+    Release,
+    Move,
+  };
+
   enum class Phase : uint8_t {
     Idle,
     FirstButtonDown,
@@ -87,4 +116,4 @@ class MouseDoubleClickTracker {
   uint64_t firstPressTimestampMs_ = 0;
 };
 
-}  // namespace terminal_input
+}  // namespace pointer_input

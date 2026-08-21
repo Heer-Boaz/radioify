@@ -1,6 +1,5 @@
 #include "consoleinput.h"
 
-#include <algorithm>
 #include <cwchar>
 #include <optional>
 #include <string>
@@ -162,7 +161,9 @@ MouseEventKind mouseEventKind(const MOUSE_EVENT_RECORD& event) {
     case 0:
       return MouseEventKind::Unknown;
     case DOUBLE_CLICK:
-      return MouseEventKind::DoubleClick;
+      // A console double-click record is the second physical press. Gesture
+      // meaning belongs to the browser or playback surface that receives it.
+      return MouseEventKind::Press;
     case MOUSE_MOVED:
       return MouseEventKind::Move;
     case MOUSE_WHEELED:
@@ -185,7 +186,6 @@ int mouseWheelDelta(const MOUSE_EVENT_RECORD& event) {
 
 void ConsoleInput::init() {
   consoleMouseButtonState_ = 0;
-  terminalDoubleClickTracker_.reset();
   handle_ = GetStdHandle(STD_INPUT_HANDLE);
   output_ = GetStdHandle(STD_OUTPUT_HANDLE);
   if (handle_ == INVALID_HANDLE_VALUE) return;
@@ -219,12 +219,6 @@ void ConsoleInput::restore() {
   }
 }
 
-void ConsoleInput::setCellPixelSize(double width, double height) {
-  cellPixelWidth_ = width;
-  cellPixelHeight_ = height;
-  enableTerminalMouseInput();
-}
-
 void ConsoleInput::enableTerminalMouseInput() {
   if (terminalMouseInput_) return;
   if (writeTerminalSequence(output_, kEnableTerminalMouseInput)) {
@@ -233,55 +227,10 @@ void ConsoleInput::enableTerminalMouseInput() {
 }
 
 void ConsoleInput::disableTerminalMouseInput() {
-  terminalDoubleClickTracker_.reset();
   if (!terminalMouseInput_) return;
   writeTerminalSequence(output_, kDisableTerminalMouseInput);
   terminalMouseInput_ = false;
   terminalParser_.reset();
-}
-
-void ConsoleInput::normalizeTerminalMouseGesture(MouseEvent& mouse) {
-  if (mouse.kind == MouseEventKind::DoubleClick) {
-    terminalDoubleClickTracker_.reset();
-    return;
-  }
-
-  const bool leftPressed = isMouseButtonDown(mouse, MouseButton::Left);
-  terminal_input::MouseClickTransition transition;
-  if (mouse.kind == MouseEventKind::Move) {
-    if (!leftPressed) return;
-    transition = terminal_input::MouseClickTransition::Move;
-  } else if (mouse.kind == MouseEventKind::Press &&
-             mouse.button == MouseButton::Left) {
-    transition = terminal_input::MouseClickTransition::Press;
-  } else if (mouse.kind == MouseEventKind::Release &&
-             mouse.button == MouseButton::Left) {
-    transition = terminal_input::MouseClickTransition::Release;
-  } else {
-    if (mouse.kind == MouseEventKind::Press) {
-      terminalDoubleClickTracker_.reset();
-    }
-    return;
-  }
-
-  const int maximumDeltaX = static_cast<int>(
-      std::max(0, GetSystemMetrics(SM_CXDOUBLECLK) / 2) /
-      std::max(1.0, cellPixelWidth_));
-  const int maximumDeltaY = static_cast<int>(
-      std::max(0, GetSystemMetrics(SM_CYDOUBLECLK) / 2) /
-      std::max(1.0, cellPixelHeight_));
-
-  if (terminalDoubleClickTracker_.observe(
-          transition, mouse.pos.X, mouse.pos.Y, GetTickCount64(),
-          GetDoubleClickTime(), maximumDeltaX, maximumDeltaY)) {
-    mouse.kind = MouseEventKind::DoubleClick;
-  }
-}
-
-void ConsoleInput::normalizeTerminalEvent(InputEvent& event) {
-  if (event.type == InputEvent::Type::Mouse) {
-    normalizeTerminalMouseGesture(event.mouse);
-  }
 }
 
 bool ConsoleInput::ownsForegroundConsoleWindow() const {
@@ -295,7 +244,6 @@ bool ConsoleInput::handleTerminalInputCharacter(wchar_t ch, InputEvent& out) {
   TerminalInputSequenceParser::Result parsedResult =
       terminalParser_.feed(ch, parsed);
   if (parsedResult == TerminalInputSequenceParser::Result::Event) {
-    normalizeTerminalEvent(parsed);
     out = std::move(parsed);
     return true;
   }
@@ -331,7 +279,6 @@ bool ConsoleInput::pollBrowserButtonFallback(InputEvent& out) {
   if (!ownsForegroundConsoleWindow()) {
     xButton1Down_ = false;
     xButton2Down_ = false;
-    terminalDoubleClickTracker_.reset();
     return false;
   }
 
@@ -379,7 +326,6 @@ bool ConsoleInput::poll(InputEvent& out) {
         TerminalInputSequenceParser::Result parsedResult =
             terminalParser_.feed(kev.uChar.UnicodeChar, parsed);
         if (parsedResult == TerminalInputSequenceParser::Result::Event) {
-          normalizeTerminalEvent(parsed);
           out = std::move(parsed);
           return true;
         }
@@ -414,12 +360,10 @@ bool ConsoleInput::poll(InputEvent& out) {
     if (rec.EventType == MOUSE_EVENT) {
       const auto& mev = rec.Event.MouseEvent;
       const DWORD buttonState = mev.dwButtonState & kMouseButtonMask;
-      DWORD pressed = 0;
-      DWORD released = 0;
+      const DWORD pressed = buttonState & ~consoleMouseButtonState_;
+      const DWORD released = consoleMouseButtonState_ & ~buttonState;
       MouseEventKind kind = mouseEventKind(mev);
       if (mev.dwEventFlags == 0) {
-        pressed = buttonState & ~consoleMouseButtonState_;
-        released = consoleMouseButtonState_ & ~buttonState;
         kind = pressed != 0 ? MouseEventKind::Press
                             : (released != 0 ? MouseEventKind::Release
                                              : MouseEventKind::Unknown);
@@ -450,14 +394,11 @@ bool ConsoleInput::poll(InputEvent& out) {
         changedButtonState = pressed & kPointerButtonMask;
       } else if (kind == MouseEventKind::Release) {
         changedButtonState = released & kPointerButtonMask;
-      } else if (kind == MouseEventKind::DoubleClick) {
-        changedButtonState = buttonState & kPointerButtonMask;
       }
       const MouseButton changedButton =
           mouseButtonFromConsoleState(changedButtonState);
       if ((kind == MouseEventKind::Press ||
-           kind == MouseEventKind::Release ||
-           kind == MouseEventKind::DoubleClick) &&
+           kind == MouseEventKind::Release) &&
           changedButton == MouseButton::None) {
         count--;
         continue;
@@ -483,7 +424,6 @@ bool ConsoleInput::poll(InputEvent& out) {
         xButton1Down_ = false;
         xButton2Down_ = false;
         consoleMouseButtonState_ = 0;
-        terminalDoubleClickTracker_.reset();
       }
       count--;
       continue;

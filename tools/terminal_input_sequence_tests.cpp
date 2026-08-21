@@ -25,26 +25,13 @@ bool parseSequence(TerminalInputSequenceParser& parser,
   return result == TerminalInputSequenceParser::Result::Event;
 }
 
-terminal_input::MouseClickTransition transitionFor(const MouseEvent& mouse) {
-  switch (mouse.kind) {
-    case MouseEventKind::Press:
-      return terminal_input::MouseClickTransition::Press;
-    case MouseEventKind::Release:
-      return terminal_input::MouseClickTransition::Release;
-    case MouseEventKind::Move:
-      return terminal_input::MouseClickTransition::Move;
-    default:
-      return terminal_input::MouseClickTransition::Move;
-  }
-}
-
-bool observe(terminal_input::MouseDoubleClickTracker& tracker,
-             const MouseEvent& mouse, uint64_t timestampMs,
-             uint32_t maximumIntervalMs, int maximumDeltaX,
-             int maximumDeltaY) {
-  return tracker.observe(transitionFor(mouse), mouse.pos.X, mouse.pos.Y,
-                         timestampMs, maximumIntervalMs, maximumDeltaX,
-                         maximumDeltaY);
+MouseEvent classify(pointer_input::MouseDoubleClickTracker& tracker,
+                    MouseEvent mouse, uint64_t timestampMs,
+                    uint32_t maximumIntervalMs, int maximumDeltaX,
+                    int maximumDeltaY) {
+  tracker.classify(mouse, timestampMs, maximumIntervalMs, maximumDeltaX,
+                   maximumDeltaY);
+  return mouse;
 }
 
 }  // namespace
@@ -78,15 +65,18 @@ int main() {
 
   ok &= expect(parseSequence(parser, L"\x1b[<0;102;80M", secondPress),
                "A second SGR mouse press must parse as an input event");
-  terminal_input::MouseDoubleClickTracker doubleClickTracker;
-  ok &= expect(!observe(doubleClickTracker, firstPress.mouse, 1000, 500, 2, 2),
+  pointer_input::MouseDoubleClickTracker doubleClickTracker;
+  ok &= expect(classify(doubleClickTracker, firstPress.mouse, 1000, 500, 2, 2)
+                       .kind == MouseEventKind::Press,
                "A first terminal press must remain a single click");
-  ok &= expect(
-      !observe(doubleClickTracker, firstRelease.mouse, 1020, 500, 2, 2),
-      "A terminal release must arm double-click recognition");
-  ok &= expect(observe(doubleClickTracker, secondPress.mouse, 1200, 500, 2, 2),
+  ok &= expect(classify(doubleClickTracker, firstRelease.mouse, 1020, 500, 2,
+                        2)
+                       .kind == MouseEventKind::Release,
+               "A terminal release must arm double-click recognition");
+  ok &= expect(classify(doubleClickTracker, secondPress.mouse, 1200, 500, 2, 2)
+                       .kind == MouseEventKind::DoubleClick,
                "A nearby second terminal press within the configured interval "
-               "must be recognized as a double-click");
+               "must be recognized as a double-click by its surface owner");
 
   InputEvent drag{};
   ok &= expect(parseSequence(parser, L"\x1b[<32;120;90M", drag) &&
@@ -113,20 +103,29 @@ int main() {
                "than a browser-back command");
 
   doubleClickTracker.reset();
-  observe(doubleClickTracker, firstPress.mouse, 2000, 500, 0, 0);
-  observe(doubleClickTracker, firstRelease.mouse, 2020, 500, 0, 0);
-  ok &= expect(!observe(doubleClickTracker, secondPress.mouse, 2100, 500, 0,
-                        0),
+  classify(doubleClickTracker, firstPress.mouse, 2000, 500, 0, 0);
+  classify(doubleClickTracker, firstRelease.mouse, 2020, 500, 0, 0);
+  ok &= expect(classify(doubleClickTracker, secondPress.mouse, 2100, 500, 0, 0)
+                       .kind == MouseEventKind::Press,
                "A second press outside the configured rectangle must start a "
                "new click");
 
   doubleClickTracker.reset();
-  observe(doubleClickTracker, firstPress.mouse, 3000, 500, 2, 2);
-  observe(doubleClickTracker, firstRelease.mouse, 3020, 500, 2, 2);
-  ok &= expect(!observe(doubleClickTracker, secondPress.mouse, 3600, 500, 2,
-                        2),
+  classify(doubleClickTracker, firstPress.mouse, 3000, 500, 2, 2);
+  classify(doubleClickTracker, firstRelease.mouse, 3020, 500, 2, 2);
+  ok &= expect(classify(doubleClickTracker, secondPress.mouse, 3600, 500, 2, 2)
+                       .kind == MouseEventKind::Press,
                "A second press after the configured interval must remain a "
                "single click");
+
+  pointer_input::MouseDoubleClickTracker playbackSurfaceTracker;
+  classify(doubleClickTracker, firstPress.mouse, 4000, 500, 2, 2);
+  classify(doubleClickTracker, firstRelease.mouse, 4020, 500, 2, 2);
+  ok &= expect(classify(playbackSurfaceTracker, secondPress.mouse, 4100, 500,
+                        2, 2)
+                       .kind == MouseEventKind::Press,
+               "clicks owned by different surfaces must never combine into "
+               "a double-click");
 
   return ok ? 0 : 1;
 }

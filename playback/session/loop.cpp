@@ -35,6 +35,7 @@
 #include "output.h"
 #include "presentation_controller.h"
 #include "state.h"
+#include "mouse_double_click_tracker.h"
 #include "playback/video/subtitle/manager.h"
 
 namespace {
@@ -150,6 +151,7 @@ struct PlaybackLoopRunner::Impl {
 
   playback_session_input::PlaybackInputView inputView;
   playback_session_input::PlaybackInputSignals inputSignals;
+  pointer_input::MouseDoubleClickTracker mouseDoubleClickTracker;
   playback_session_input::PlaybackSeekGestureState seekState;
   playback_screen_renderer::PlaybackScreenRenderInputs renderInputs;
 
@@ -1050,9 +1052,20 @@ struct PlaybackLoopRunner::Impl {
       playback_session_input::handlePlaybackInputEvent(
           inputView, inputSignals, seekState, event);
     } else if (event.type == InputEvent::Type::Mouse) {
+      MouseEvent mouse = event.mouse;
+      const int maximumDeltaX = static_cast<int>(
+          std::max(0, GetSystemMetrics(SM_CXDOUBLECLK) / 2) /
+          std::max(1.0, screen.cellPixelWidth()));
+      const int maximumDeltaY = static_cast<int>(
+          std::max(0, GetSystemMetrics(SM_CYDOUBLECLK) / 2) /
+          std::max(1.0, screen.cellPixelHeight()));
+      mouseDoubleClickTracker.classify(
+          mouse, GetTickCount64(), GetDoubleClickTime(), maximumDeltaX,
+          maximumDeltaY);
       playback_session_input::handlePlaybackMouseEvent(
-          inputView, inputSignals, seekState, event.mouse);
+          inputView, inputSignals, seekState, mouse);
     } else if (event.type == InputEvent::Type::PointerLeave) {
+      mouseDoubleClickTracker.reset();
       playback_session_input::handlePlaybackPointerLeave(
           inputSignals, seekState, inputView);
     }

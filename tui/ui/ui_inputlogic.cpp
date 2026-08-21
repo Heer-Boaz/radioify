@@ -821,7 +821,9 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       return;
     }
 
-    if (mouse.kind == MouseEventKind::Press && leftPressed) {
+    if ((mouse.kind == MouseEventKind::Press ||
+         mouse.kind == MouseEventKind::DoubleClick) &&
+        leftPressed) {
       if (!browser.entries[static_cast<size_t>(idx)].isSelectable()) {
         return;
       }
@@ -829,8 +831,11 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
         browser.selected = idx;
         dirty = true;
       }
-      const auto& pick = browser.entries[static_cast<size_t>(browser.selected)];
-      activateEntry(pick);
+      if (browser_input::pointerActivatesEntry(mouse.kind)) {
+        const auto& pick =
+            browser.entries[static_cast<size_t>(browser.selected)];
+        activateEntry(pick);
+      }
     }
   }
 }

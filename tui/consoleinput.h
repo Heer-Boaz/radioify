@@ -13,7 +13,6 @@
 
 #include "core/native_wait_handle.h"
 #include "input_event.h"
-#include "mouse_double_click_tracker.h"
 #include "terminal_input_sequence.h"
 
 struct BreadcrumbLine;
@@ -27,16 +26,13 @@ class ConsoleInput {
 
   void init();
   void restore();
-  void setCellPixelSize(double width, double height);
+  void enableTerminalMouseInput();
   bool poll(InputEvent& out);
   bool active() const;
   NativeWaitHandle waitHandle() const;
 
  private:
-  void enableTerminalMouseInput();
   void disableTerminalMouseInput();
-  void normalizeTerminalMouseGesture(MouseEvent& mouse);
-  void normalizeTerminalEvent(InputEvent& event);
   bool ownsForegroundConsoleWindow() const;
   bool pollTerminalInputStream(InputEvent& out);
   bool handleTerminalInputCharacter(wchar_t ch, InputEvent& out);
@@ -44,8 +40,6 @@ class ConsoleInput {
   HANDLE handle_ = INVALID_HANDLE_VALUE;
   HANDLE output_ = INVALID_HANDLE_VALUE;
   DWORD originalMode_ = 0;
-  double cellPixelWidth_ = 1.0;
-  double cellPixelHeight_ = 1.0;
   bool active_ = false;
   bool focusActive_ = true;
   bool xButton1Down_ = false;
@@ -55,7 +49,6 @@ class ConsoleInput {
   std::wstring originalConsoleTitle_;
   std::wstring activeConsoleTitle_;
   TerminalInputSequenceParser terminalParser_;
-  terminal_input::MouseDoubleClickTracker terminalDoubleClickTracker_;
 };
 
 #endif

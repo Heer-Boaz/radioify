@@ -9,6 +9,14 @@
 #include "input_event.h"
 #include "playback/input/shortcut_types.h"
 
+namespace browser_input {
+
+inline constexpr bool pointerActivatesEntry(MouseEventKind kind) {
+  return kind == MouseEventKind::DoubleClick;
+}
+
+}  // namespace browser_input
+
 struct InputCallbacks {
   std::function<void()> onQuit;
   std::function<void()> onResize;

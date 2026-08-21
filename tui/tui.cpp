@@ -70,6 +70,7 @@
 #include "playback/system_media_transport/controls.h"
 #include "playback_target_match.h"
 #include "playback/target.h"
+#include "mouse_double_click_tracker.h"
 #include "tracklist.h"
 #include "track_browser_state.h"
 #include "loopsplit_cli.h"
@@ -772,7 +773,6 @@ static ImageViewerExit showAsciiArt(
   };
 
   screen.updateSize();
-  input.setCellPixelSize(screen.cellPixelWidth(), screen.cellPixelHeight());
   renderFrame();
 
   InputEvent ev{};
@@ -786,7 +786,6 @@ static ImageViewerExit showAsciiArt(
     while (input.poll(ev)) {
       if (ev.type == InputEvent::Type::Resize) {
         screen.updateSize();
-        input.setCellPixelSize(screen.cellPixelWidth(), screen.cellPixelHeight());
         renderFrame();
         continue;
       }
@@ -1473,7 +1472,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
 
   ConsoleScreen screen;
   screen.init();
-  input.setCellPixelSize(screen.cellPixelWidth(), screen.cellPixelHeight());
+  input.enableTerminalMouseInput();
 
   VideoWindow tuiWindow;
   bool windowTuiEnabled = o.enableWindow;
@@ -1660,6 +1659,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   std::vector<ScreenCell> windowCells;
   AudioPictureInPictureWindow audioPictureInPicture;
   ConsoleInputPump consoleInputPump;
+  pointer_input::MouseDoubleClickTracker browserDoubleClickTracker;
   BrowserViewport viewport;
   BrowserFooterLayout footerLayout;
   auto midiToNoteName = [](int midi) {
@@ -2058,7 +2058,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   auto rebuildLayout = [&]() {
     if (screenSizeDirty) {
       screen.updateSize();
-      input.setCellPixelSize(screen.cellPixelWidth(), screen.cellPixelHeight());
       screenSizeDirty = false;
     }
     footerLayout = buildFooterLayout();
@@ -2921,6 +2920,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         mediaCoordinator.terminalRole();
     if (terminalRole != previousTerminalRole) {
       previousTerminalRole = terminalRole;
+      browserDoubleClickTracker.reset();
       markLayoutDirty();
       forceFullRedraw = true;
     }
@@ -2966,8 +2966,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       if (consoleInputPump.pollNext(input, playbackEvent)) {
         if (playbackEvent.type == InputEvent::Type::Resize) {
           screen.updateSize();
-          input.setCellPixelSize(screen.cellPixelWidth(),
-                                 screen.cellPixelHeight());
         }
         mediaCoordinator.handleVideoInputEvent(playbackEvent);
         continue;
@@ -2990,6 +2988,19 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
 
     auto processInputEvent = [&](InputEvent ev) {
+      if (ev.type == InputEvent::Type::Mouse) {
+        const int maximumDeltaX = static_cast<int>(
+            std::max(0, GetSystemMetrics(SM_CXDOUBLECLK) / 2) /
+            std::max(1.0, screen.cellPixelWidth()));
+        const int maximumDeltaY = static_cast<int>(
+            std::max(0, GetSystemMetrics(SM_CYDOUBLECLK) / 2) /
+            std::max(1.0, screen.cellPixelHeight()));
+        browserDoubleClickTracker.classify(
+            ev.mouse, GetTickCount64(), GetDoubleClickTime(), maximumDeltaX,
+            maximumDeltaY);
+      } else {
+        browserDoubleClickTracker.reset();
+      }
       if (ev.type == InputEvent::Type::Resize) {
         dirty = true;
         if (callbacks.onResize) callbacks.onResize();

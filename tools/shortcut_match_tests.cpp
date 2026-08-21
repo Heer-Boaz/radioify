@@ -14,6 +14,7 @@
 #include "playback/session/presentation_policy.h"
 #include "playback/session/input.h"
 #include "playback/session/state.h"
+#include "ui_inputlogic.h"
 #include "clock.h"
 #include "queues.h"
 
@@ -130,6 +131,14 @@ int main() {
   ok &= expect(resolveLiveBrowserVideoShortcut(makeKeyEvent(VK_SPACE, ' ')) ==
                    PlaybackShortcutAction::TogglePause,
                "Space must remain a playback shortcut in the live browser");
+  ok &= expect(!resolveLiveBrowserVideoShortcut(makeKeyEvent(VK_RETURN)),
+               "Plain Enter must remain browser-entry activation while video "
+               "plays beside the live browser");
+  ok &= expect(!browser_input::pointerActivatesEntry(MouseEventKind::Press) &&
+                   browser_input::pointerActivatesEntry(
+                       MouseEventKind::DoubleClick),
+               "browser entries must select on one click and activate on a "
+               "double-click");
   ok &= expect(resolveLiveBrowserVideoShortcut(
                    makeKeyEvent(VK_RETURN, 0, kPlaybackShortcutAltMask)) ==
                    PlaybackShortcutAction::ToggleFullscreen,
