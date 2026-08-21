@@ -35,9 +35,8 @@ inline bool isBackMousePressed(const MouseEvent& mouse) {
   return (mouse.buttonState & kBackButtons) != 0;
 }
 
-inline bool isVideoWindowFullscreenGesture(const MouseEvent& mouse) {
-  return isWindowMouseEvent(mouse) &&
-         (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0 &&
+inline bool isPlaybackFullscreenGesture(const MouseEvent& mouse) {
+  return (mouse.buttonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0 &&
          mouse.eventFlags == DOUBLE_CLICK;
 }
 

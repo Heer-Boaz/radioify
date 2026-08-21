@@ -694,7 +694,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   }
   const bool interactiveHit = progressHit || boundaryHit || controlHit ||
                               contextMenuItemHit;
-  if (isVideoWindowFullscreenGesture(mouse) && !interactiveHit &&
+  if (isPlaybackFullscreenGesture(mouse) && !interactiveHit &&
       editPrompt == playback_video_edit::Prompt::None) {
     if (signals.toggleFullscreen) {
       signals.toggleFullscreen();

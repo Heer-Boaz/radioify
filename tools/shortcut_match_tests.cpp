@@ -1964,19 +1964,19 @@ int main() {
       makeMouse(FROM_LEFT_1ST_BUTTON_PRESSED);
   windowDoubleClick.eventFlags = DOUBLE_CLICK;
   markWindowMouseEvent(windowDoubleClick);
-  ok &= expect(playback_session_input::isVideoWindowFullscreenGesture(
+  ok &= expect(playback_session_input::isPlaybackFullscreenGesture(
                    windowDoubleClick),
                "A video-window left double-click must toggle fullscreen");
   MouseEvent terminalDoubleClick = windowDoubleClick;
   clearWindowMouseEvent(terminalDoubleClick);
-  ok &= expect(!playback_session_input::isVideoWindowFullscreenGesture(
+  ok &= expect(playback_session_input::isPlaybackFullscreenGesture(
                    terminalDoubleClick),
-               "A terminal double-click must remain terminal input");
+               "A terminal playback double-click must toggle fullscreen");
   MouseEvent windowSingleClick = windowDoubleClick;
   windowSingleClick.eventFlags = 0;
-  ok &= expect(!playback_session_input::isVideoWindowFullscreenGesture(
+  ok &= expect(!playback_session_input::isPlaybackFullscreenGesture(
                    windowSingleClick),
-               "A video-window single click must not toggle fullscreen");
+               "A playback single click must not toggle fullscreen");
   ok &= expect(playback_frame_output::centerContentTop(0, 30, 20) == 5,
                "centerContentTop must center smaller content vertically");
   ok &= expect(playback_frame_output::centerContentTop(4, 30, 30) == 4,
