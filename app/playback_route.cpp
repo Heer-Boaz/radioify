@@ -14,7 +14,6 @@ PlaybackSessionContinuationState videoContinuation(
     const WindowPlacementState* sourcePlacement,
     PlaybackPresentationState presentation) {
   PlaybackSessionContinuationState state;
-  state.hasPresentation = true;
   state.presentation = presentation;
   if (sourcePlacement) {
     state.windowPlacement = *sourcePlacement;

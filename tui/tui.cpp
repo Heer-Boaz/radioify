@@ -218,7 +218,6 @@ static std::optional<playback_route::Route> resolveOpenFilesPlaybackRoute(
   if (route && request.videoMode == OpenVideoMode::Ascii &&
       isVideoExt(playbackTargetFile(route->target))) {
     PlaybackSessionContinuationState asciiContinuation;
-    asciiContinuation.hasPresentation = true;
     asciiContinuation.presentation =
         PlaybackPresentationState::terminalAscii();
     route->videoContinuation = asciiContinuation;
@@ -1120,8 +1119,8 @@ class TuiMediaCoordinator {
       const VideoPlaybackConfig& base,
       const PlaybackSessionContinuationState& continuation) {
     VideoPlaybackConfig config = base;
-    if (continuation.hasPresentation) {
-      config.enableAscii = continuation.presentation.usesAsciiGrid();
+    if (continuation.presentation) {
+      config.enableAscii = continuation.presentation->usesAsciiGrid();
     }
     return config;
   }

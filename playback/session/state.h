@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "presentation_policy.h"
 
@@ -29,8 +30,6 @@ inline bool toggleRequestsPause(PlaybackSessionState sessionState,
 }  // namespace playback_session_state
 
 struct PlaybackSessionContinuationState {
-  bool hasPresentation = false;
-  PlaybackPresentationState presentation =
-      PlaybackPresentationState::terminalAscii();
+  std::optional<PlaybackPresentationState> presentation;
   WindowPlacementState windowPlacement;
 };

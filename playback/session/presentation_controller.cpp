@@ -127,7 +127,6 @@ void PlaybackPresentationController::captureWindowPlacement(
   if (applied.requiresNativeWindow() && output.windowOpen()) {
     output.captureWindowPlacement(windowPlacement_);
   }
-  state.hasPresentation = true;
   state.presentation = applied;
   state.windowPlacement = windowPlacement_;
 }

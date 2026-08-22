@@ -55,8 +55,8 @@ bool shouldRenderPlaybackFrame(bool redraw, bool presented,
 PlaybackPresentationState initialPlaybackPresentation(
     const VideoPlaybackConfig& config,
     const PlaybackSessionContinuationState& continuityState) {
-  if (continuityState.hasPresentation) {
-    return continuityState.presentation;
+  if (continuityState.presentation) {
+    return *continuityState.presentation;
   }
   return config.enableAscii ? PlaybackPresentationState::terminalAscii()
                             : PlaybackPresentationState::nativeWindowed();
