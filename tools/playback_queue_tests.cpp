@@ -1,4 +1,5 @@
 #include <iostream>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -22,10 +23,18 @@ playback_route::Route routeFor(const PlaybackTarget& target) {
   return route;
 }
 
-bool isTarget(const PlaybackTarget& actual, const std::filesystem::path& file,
-              int trackIndex) {
+bool isTrackTarget(const PlaybackTarget& actual,
+                   const std::filesystem::path& file, int trackIndex) {
+  const std::optional<int> actualTrackIndex =
+      playbackTargetTrackIndex(actual);
   return samePath(playbackTargetFile(actual), file) &&
-         playbackTargetTrackIndex(actual).value_or(-1) == trackIndex;
+         actualTrackIndex && *actualTrackIndex == trackIndex;
+}
+
+bool isFileTarget(const PlaybackTarget& actual,
+                  const std::filesystem::path& file) {
+  return samePath(playbackTargetFile(actual), file) &&
+         !playbackTargetTrackIndex(actual);
 }
 
 PlaybackTarget trackTarget(const std::filesystem::path& file, int trackIndex) {
@@ -61,7 +70,7 @@ int main() {
   requestedFiles.clear();
   std::optional<playback_queue::Queue::PreparedActivation> initial =
       queue.prepareStart(routeFor(trackTarget(songB, 0)), std::move(files));
-  ok &= expect(initial && isTarget(initial->route().target, songB, 0),
+  ok &= expect(initial && isTrackTarget(initial->route().target, songB, 0),
                "a source containing its target must prepare");
   ok &= expect(resolveCalls == 0,
                "preparing a source must not eagerly resolve its items");
@@ -71,7 +80,7 @@ int main() {
 
   std::optional<playback_queue::Queue::PreparedActivation> previous =
       queue.prepareTransport(playback_queue::Direction::Previous);
-  ok &= expect(previous && isTarget(previous->route().target, songA, 0),
+  ok &= expect(previous && isTrackTarget(previous->route().target, songA, 0),
                "previous must lazily skip an unresolvable source item");
   ok &= expect(resolveCalls > 0,
                "transport must resolve path-only items at the playback owner");
@@ -79,13 +88,14 @@ int main() {
   std::optional<playback_queue::Queue::PreparedActivation> nextBeforeCommit =
       queue.prepareTransport(playback_queue::Direction::Next);
   ok &= expect(
-      nextBeforeCommit && isTarget(nextBeforeCommit->route().target, songC, 0),
+      nextBeforeCommit &&
+          isTrackTarget(nextBeforeCommit->route().target, songC, 0),
       "preparation must not mutate the committed position");
 
   queue.commit(std::move(*previous));
   std::optional<playback_queue::Queue::PreparedActivation> next =
       queue.prepareTransport(playback_queue::Direction::Next);
-  ok &= expect(next && isTarget(next->route().target, songB, 0),
+  ok &= expect(next && isTrackTarget(next->route().target, songB, 0),
                "transport must advance from the committed position");
   queue.commit(std::move(*next));
 
@@ -97,7 +107,8 @@ int main() {
       nextAfterRejectedSource =
           queue.prepareTransport(playback_queue::Direction::Next);
   ok &= expect(nextAfterRejectedSource &&
-                   isTarget(nextAfterRejectedSource->route().target, songC, 0),
+                   isTrackTarget(nextAfterRejectedSource->route().target,
+                                 songC, 0),
                "a rejected source must leave the active source intact");
 
   std::optional<playback_queue::Queue::PreparedActivation>
@@ -106,13 +117,15 @@ int main() {
                              playback_queue::singleSource(
                                  trackTarget(unrelated, 0)));
   ok &= expect(discardedReplacement &&
-                   isTarget(discardedReplacement->route().target, unrelated, 0),
+                   isTrackTarget(discardedReplacement->route().target,
+                                 unrelated, 0),
                "a valid replacement source must prepare independently");
   discardedReplacement.reset();
   std::optional<playback_queue::Queue::PreparedActivation> nextAfterDiscard =
       queue.prepareTransport(playback_queue::Direction::Next);
   ok &= expect(
-      nextAfterDiscard && isTarget(nextAfterDiscard->route().target, songC, 0),
+      nextAfterDiscard &&
+          isTrackTarget(nextAfterDiscard->route().target, songC, 0),
       "discarding a prepared source must preserve active playback");
 
   std::vector<BrowserEntry> trackEntries;
@@ -127,8 +140,7 @@ int main() {
                                     browser_entry::OpenFile{});
   const std::optional<PlaybackTarget> audioFileTarget =
       browser_playback_source::targetFor(audioFileEntry);
-  ok &= expect(audioFileTarget &&
-                   isTarget(*audioFileTarget, songB, -1),
+  ok &= expect(audioFileTarget && isFileTarget(*audioFileTarget, songB),
                "activating a regular audio file must produce a direct "
                "playback target rather than a browser-navigation request");
   const int resolvesBeforeExactTransport = resolveCalls;
@@ -141,7 +153,8 @@ int main() {
   std::optional<playback_queue::Queue::PreparedActivation> previousTrack =
       queue.prepareTransport(playback_queue::Direction::Previous);
   ok &=
-      expect(previousTrack && isTarget(previousTrack->route().target, songA, 0),
+      expect(previousTrack &&
+                 isTrackTarget(previousTrack->route().target, songA, 0),
              "track-browser previous must preserve exact track order");
 
   exactTrack = queue.prepareStart(
@@ -150,7 +163,8 @@ int main() {
   queue.commit(std::move(*exactTrack));
   std::optional<playback_queue::Queue::PreparedActivation> nextTrack =
       queue.prepareTransport(playback_queue::Direction::Next);
-  ok &= expect(nextTrack && isTarget(nextTrack->route().target, songA, 8),
+  ok &= expect(nextTrack &&
+                   isTrackTarget(nextTrack->route().target, songA, 8),
                "track-browser next must preserve exact track order");
   ok &= expect(resolveCalls == resolvesBeforeExactTransport,
                "exact track targets must not invoke the path resolver");
@@ -178,7 +192,8 @@ int main() {
   queue.commit(std::move(*windowsPath));
   std::optional<playback_queue::Queue::PreparedActivation> windowsNext =
       queue.prepareTransport(playback_queue::Direction::Next);
-  ok &= expect(windowsNext && isTarget(windowsNext->route().target, songB, 0),
+  ok &= expect(windowsNext &&
+                   isTrackTarget(windowsNext->route().target, songB, 0),
                "Windows transport must preserve path-identity matching");
 #endif
 
