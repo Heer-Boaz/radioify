@@ -15,6 +15,7 @@
 #include "runtime_helpers.h"
 #include "shell_open_protocol.h"
 #include "shell_open_mode.h"
+#include "utf8.h"
 #include "windows_app_resources.h"
 #include "windows_handle.h"
 
@@ -77,15 +78,7 @@ std::string readEnvironmentString(const wchar_t* name) {
   }
   value.resize(copied);
 
-  const int utf8Length = WideCharToMultiByte(CP_UTF8, 0, value.c_str(),
-                                             -1, nullptr, 0, nullptr, nullptr);
-  if (utf8Length <= 1) {
-    return {};
-  }
-  std::string result(static_cast<size_t>(utf8Length - 1), '\0');
-  WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, result.data(),
-                      utf8Length, nullptr, nullptr);
-  return result;
+  return wideToUtf8Lossy(value);
 }
 
 std::wstring shellOpenObjectSuffix() {

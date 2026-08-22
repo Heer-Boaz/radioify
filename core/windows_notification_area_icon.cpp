@@ -22,6 +22,7 @@
 
 #include "windows_app_identity.h"
 #include "windows_app_resources.h"
+#include "utf8.h"
 
 namespace {
 
@@ -35,30 +36,14 @@ constexpr GUID kRadioifyNotificationAreaIconGuid = {
     0x4ece,
     {0x8f, 0xa4, 0x78, 0xb4, 0x83, 0x1f, 0x50, 0xb9}};
 
-std::wstring utf8ToWide(const std::string& value) {
-  if (value.empty()) {
-    return {};
-  }
-  const int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
-                                         value.data(),
-                                         static_cast<int>(value.size()),
-                                         nullptr, 0);
-  if (length <= 0) {
-    return {};
-  }
-  std::wstring result(static_cast<size_t>(length), L'\0');
-  MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
-                      static_cast<int>(value.size()), result.data(), length);
-  return result;
-}
-
 std::wstring menuText(const std::string& label) {
-  std::wstring result = utf8ToWide(label);
-  return result.empty() ? RADIOIFY_APP_NAME_W : result;
+  std::optional<std::wstring> result = utf8ToWideStrict(label);
+  return result && !result->empty() ? std::move(*result)
+                                    : std::wstring(RADIOIFY_APP_NAME_W);
 }
 
 std::wstring tooltipText(const std::string& tooltip) {
-  std::wstring result = utf8ToWide(tooltip);
+  std::wstring result = utf8ToWideLossy(tooltip);
   if (result.empty()) {
     result = RADIOIFY_APP_NAME_W;
   }

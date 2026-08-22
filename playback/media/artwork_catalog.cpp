@@ -15,6 +15,7 @@ extern "C" {
 
 #include "media_artwork_sidecar.h"
 #include "runtime_helpers.h"
+#include "core/utf8.h"
 #include "ui_helpers.h"
 #include "playback/video/ascii/asciiart.h"
 #include "playback/video/framebuffer/text_grid_bitmap_renderer.h"
@@ -61,30 +62,6 @@ std::string fallbackMediaTitle(const std::filesystem::path& file) {
     return title;
   }
   return toUtf8String(file);
-}
-
-std::wstring utf8ToWideLossy(const std::string& text) {
-#ifdef _WIN32
-  if (text.empty()) {
-    return {};
-  }
-  int needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
-                                   static_cast<int>(text.size()), nullptr, 0);
-  if (needed <= 0) {
-    std::wstring fallback;
-    fallback.reserve(text.size());
-    for (unsigned char ch : text) {
-      fallback.push_back(static_cast<wchar_t>(ch));
-    }
-    return fallback;
-  }
-  std::wstring out(static_cast<size_t>(needed), L'\0');
-  MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
-                      static_cast<int>(text.size()), out.data(), needed);
-  return out;
-#else
-  return std::wstring(text.begin(), text.end());
-#endif
 }
 
 void fillPosterRect(AsciiArt* art, int x0, int y0, int x1, int y1,

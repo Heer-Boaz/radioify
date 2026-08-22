@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "runtime_helpers.h"
+#include "core/utf8.h"
 
 #ifndef RADIOIFY_HAS_ONNXRUNTIME
 #define RADIOIFY_HAS_ONNXRUNTIME 0
@@ -380,16 +381,6 @@ void summarizeTensorShape(const OrtApi* api,
   }
 }
 
-#ifdef _WIN32
-std::wstring utf8ToWide(const std::string& text) {
-  if (text.empty()) return {};
-  int wideLen = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
-  if (wideLen <= 0) return {};
-  std::wstring out(static_cast<size_t>(wideLen - 1), L'\0');
-  MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, out.data(), wideLen);
-  return out;
-}
-#endif
 #endif
 
 [[maybe_unused]] std::filesystem::path resolveModelPath() {
@@ -573,14 +564,15 @@ bool neuralPitchInit(NeuralPitchState* state, uint32_t sourceSampleRate,
                                                   ORT_ENABLE_EXTENDED);
 
 #ifdef _WIN32
-  std::wstring widePath = utf8ToWide(modelPath.u8string());
-  if (widePath.empty()) {
+  std::optional<std::wstring> widePath =
+      utf8ToWideStrict(toUtf8String(modelPath));
+  if (!widePath || widePath->empty()) {
     if (error) *error = "CreateSession: invalid model path encoding.";
     return false;
   }
   if (!checkStatus(runtime->api,
                    runtime->api->CreateSession(runtime->env,
-                                               widePath.c_str(),
+                                               widePath->c_str(),
                                                runtime->sessionOptions,
                                                &runtime->session),
                    error,

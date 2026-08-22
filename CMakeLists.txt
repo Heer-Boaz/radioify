@@ -655,12 +655,21 @@ add_executable(shell_open_protocol_tests)
 target_sources(shell_open_protocol_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_shell_open_protocol_tests>
   ${CMAKE_SOURCE_DIR}/core/shell_open_protocol.cpp
+  ${CMAKE_SOURCE_DIR}/core/utf8.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
 radioify_link_repo_target(shell_open_protocol_tests)
 add_test(NAME shell_open_protocol_tests
          COMMAND $<TARGET_FILE:shell_open_protocol_tests>)
+
+add_executable(utf8_tests)
+target_sources(utf8_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_utf8_tests>
+  ${CMAKE_SOURCE_DIR}/core/utf8.cpp
+)
+radioify_link_repo_target(utf8_tests)
+add_test(NAME utf8_tests COMMAND $<TARGET_FILE:utf8_tests>)
 
 add_executable(browser_navigation_tests)
 target_sources(browser_navigation_tests PRIVATE

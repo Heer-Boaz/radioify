@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 
+#include "core/utf8.h"
 #include "playback/video/edit/overlay_model.h"
 #include "playback/video/image.h"
 #include "subtitle_effects.h"
@@ -57,40 +58,12 @@ GpuTextGridCell overlayGpuCell(wchar_t ch, const Style& style,
 }
 
 std::wstring overlayUtf8ToWide(const std::string& text) {
-  if (text.empty()) return {};
-
-#ifdef _WIN32
-  int needed =
-      MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
-                          static_cast<int>(text.size()), nullptr, 0);
-  if (needed <= 0) {
-    needed = MultiByteToWideChar(CP_UTF8, 0, text.data(),
-                                 static_cast<int>(text.size()), nullptr, 0);
-  }
-  if (needed > 0) {
-    std::wstring out(static_cast<size_t>(needed), L'\0');
-    const int written =
-        MultiByteToWideChar(CP_UTF8, 0, text.data(),
-                            static_cast<int>(text.size()), out.data(),
-                            needed);
-    if (written > 0) {
-      out.resize(static_cast<size_t>(written));
-      out.erase(std::remove_if(out.begin(), out.end(),
-                               [](wchar_t ch) {
-                                 return ch == L'\r' || ch == L'\n';
-                               }),
-                out.end());
-      return out;
-    }
-  }
-#endif
-
-  std::wstring out;
-  out.reserve(text.size());
-  for (unsigned char ch : text) {
-    if (ch == '\r' || ch == '\n') continue;
-    out.push_back(static_cast<wchar_t>(ch));
-  }
+  std::wstring out = utf8ToWideLossy(text);
+  out.erase(std::remove_if(out.begin(), out.end(),
+                           [](wchar_t ch) {
+                             return ch == L'\r' || ch == L'\n';
+                           }),
+            out.end());
   return out;
 }
 }  // namespace

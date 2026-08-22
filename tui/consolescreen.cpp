@@ -18,30 +18,13 @@
 #include "asciiart.h"
 #include "browser_grid_index.h"
 #include "core/windows_handle.h"
+#include "core/utf8.h"
 #include "playback/media/artwork_catalog.h"
 #include "runtime_helpers.h"
 #include "terminal_cell_metrics.h"
 #include "ui_helpers.h"
 #include "unicode_display_width.h"
 #include "playback/video/decoder.h"
-
-static bool wideToUtf8(const std::wstring& text, std::string& out) {
-  if (text.empty()) {
-    out.clear();
-    return true;
-  }
-  int needed = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(),
-                                   static_cast<int>(text.size()), nullptr, 0,
-                                   nullptr, nullptr);
-  if (needed <= 0) return false;
-  out.resize(static_cast<size_t>(needed));
-  int written = WideCharToMultiByte(
-      CP_UTF8, WC_ERR_INVALID_CHARS, text.data(),
-      static_cast<int>(text.size()), out.data(), needed, nullptr, nullptr);
-  if (written <= 0) return false;
-  if (written != needed) out.resize(static_cast<size_t>(written));
-  return true;
-}
 
 static bool decodeUtf8Codepoint(std::string_view text, size_t* offset,
                                 char32_t* outCodepoint, size_t* outStart,
@@ -1476,11 +1459,13 @@ bool ConsoleScreen::writeOutput(const std::wstring& text) {
   if (text.empty()) return true;
   if (outputFailed_) return false;
   if (useUtf8Output_) {
-    if (!wideToUtf8(text, drawUtf8Buffer_)) {
-      outputError_ = GetLastError();
+    std::optional<std::string> converted = wideToUtf8Strict(text);
+    if (!converted) {
+      outputError_ = ERROR_NO_UNICODE_TRANSLATION;
       outputFailed_ = true;
       return false;
     }
+    drawUtf8Buffer_ = std::move(*converted);
     DWORD written = 0;
     if (!WriteFile(out_, drawUtf8Buffer_.data(),
                    static_cast<DWORD>(drawUtf8Buffer_.size()), &written,

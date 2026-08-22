@@ -3,6 +3,7 @@
 #include "core/windows_app_resources.h"
 #include "core/windows_console_window.h"
 #include "core/windows_message_pump.h"
+#include "core/utf8.h"
 #include "playback/video/gpu/gpu_shared.h"
 #include "playback/video/image.h"
 #include "internal.h"
@@ -54,30 +55,6 @@ static inline std::string thread_id_str() {
 #pragma comment(lib, "dxgi.lib")
 
 namespace {
-    static std::wstring utf8ToWide(const std::string& text) {
-        if (text.empty()) return {};
-        int needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
-                                         static_cast<int>(text.size()), nullptr, 0);
-        if (needed <= 0) {
-            needed = MultiByteToWideChar(CP_UTF8, 0, text.data(),
-                                         static_cast<int>(text.size()), nullptr, 0);
-        }
-        if (needed <= 0) {
-            std::wstring fallback;
-            fallback.reserve(text.size());
-            for (unsigned char ch : text) {
-                fallback.push_back(static_cast<wchar_t>(ch));
-            }
-            return fallback;
-        }
-        std::wstring out(static_cast<size_t>(needed), L'\0');
-        int written = MultiByteToWideChar(CP_UTF8, 0, text.data(),
-                                          static_cast<int>(text.size()),
-                                          out.data(), needed);
-        if (written <= 0) return {};
-        return out;
-    }
-
     static bool windowPlacementIsMaximized(
         const WINDOWPLACEMENT& placement) {
         return placement.showCmd == SW_SHOWMAXIMIZED ||
@@ -538,7 +515,7 @@ namespace {
         outPixels.clear();
         if (layout.width <= 0 || layout.height <= 0 || text.empty()) return false;
 
-        std::wstring wide = utf8ToWide(text);
+        std::wstring wide = utf8ToWideLossy(text);
         if (wide.empty()) return false;
 
         BITMAPINFO bmi = {};
@@ -1737,7 +1714,7 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
     RECT wr = { 0, 0, width, height };
     AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE);
 
-    const std::wstring windowTitle = utf8ToWide(title);
+    const std::wstring windowTitle = utf8ToWideLossy(title);
     m_hWnd = CreateWindowExW(
         0, className, windowTitle.c_str(),
         WS_OVERLAPPEDWINDOW,
@@ -2811,9 +2788,10 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
                 cueStyle.sizeScale = std::clamp(
                     baseCaptionStyle.sizeScale * std::max(0.40f, cue.sizeScale), 0.35f,
                     3.0f);
-                const std::wstring cueTextWide = utf8ToWide(cue.text);
+                const std::wstring cueTextWide = utf8ToWideLossy(cue.text);
                 if (cueTextWide.empty()) continue;
-                const std::wstring cueFontNameWide = utf8ToWide(cue.fontName);
+                const std::wstring cueFontNameWide =
+                    utf8ToWideLossy(cue.fontName);
 
                 SubtitleBitmapLayout layout{};
                 if (!computeSubtitleLayout(
@@ -2929,7 +2907,7 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
 
                 const std::string errorText =
                     "ASS subtitle render error: " + assRenderErrorText;
-                const std::wstring errorWide = utf8ToWide(errorText);
+                const std::wstring errorWide = utf8ToWideLossy(errorText);
                 SubtitleBitmapLayout errorLayout{};
                 if (!errorWide.empty() &&
                     computeSubtitleLayout(errorWide, canvasW, canvasH, errorStyle,

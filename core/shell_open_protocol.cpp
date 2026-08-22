@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "runtime_helpers.h"
+#include "utf8.h"
 
 namespace shell_open_protocol {
 namespace {
@@ -196,6 +197,7 @@ std::optional<std::vector<std::uint8_t>> encodeRequest(
   for (const std::filesystem::path& file : request.openFiles.files) {
     const std::string path = toUtf8String(file);
     if (path.empty() || path.find('\0') != std::string::npos ||
+        !isValidUtf8(path) ||
         path.size() > std::numeric_limits<std::uint32_t>::max()) {
       return std::nullopt;
     }
@@ -250,7 +252,8 @@ RequestDecodeResult decodeRequest(
         !payload.readString(length, pathBytes)) {
       return {std::nullopt, DecodeError::InvalidPayload};
     }
-    if (pathBytes.find('\0') != std::string::npos) {
+    if (pathBytes.find('\0') != std::string::npos ||
+        !isValidUtf8(pathBytes)) {
       return {std::nullopt, DecodeError::InvalidPayload};
     }
     std::filesystem::path path;

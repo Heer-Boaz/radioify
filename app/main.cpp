@@ -1,4 +1,5 @@
 #include "app_common.h"
+#include "core/utf8.h"
 #include "core/windows_app_identity.h"
 #include "crash_handler.h"
 #include "playback/target_resolver.h"
@@ -20,22 +21,6 @@
 #include <vector>
 
 namespace {
-
-std::string wideToUtf8(const wchar_t* value) {
-  if (!value || value[0] == L'\0') {
-    return {};
-  }
-  const int length =
-      WideCharToMultiByte(CP_UTF8, 0, value, -1, nullptr, 0, nullptr, nullptr);
-  if (length <= 1) {
-    return {};
-  }
-  std::string result(static_cast<size_t>(length - 1), '\0');
-  WideCharToMultiByte(CP_UTF8, 0, value, -1, result.data(), length, nullptr,
-                      nullptr);
-  return result;
-}
-
 Options parseWindowsCommandLineUtf8(int fallbackArgc, char** fallbackArgv) {
   int argc = 0;
   LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -48,7 +33,7 @@ Options parseWindowsCommandLineUtf8(int fallbackArgc, char** fallbackArgv) {
   std::vector<char*> argvUtf8;
   argvUtf8.reserve(static_cast<size_t>(argc));
   for (int i = 0; i < argc; ++i) {
-    utf8Args.push_back(wideToUtf8(argv[i]));
+    utf8Args.push_back(wideToUtf8Lossy(argv[i]));
     argvUtf8.push_back(utf8Args.back().data());
   }
 

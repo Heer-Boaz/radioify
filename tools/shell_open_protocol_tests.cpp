@@ -87,6 +87,12 @@ int main() {
                      shell_open_protocol::DecodeError::InvalidPayload,
                  "an unknown presentation directive must be rejected");
 
+    std::vector<std::uint8_t> invalidUtf8 = *valid;
+    invalidUtf8[44] = 0xff;
+    ok &= expect(shell_open_protocol::decodeRequest(invalidUtf8).error ==
+                     shell_open_protocol::DecodeError::InvalidPayload,
+                 "invalid UTF-8 paths must be rejected");
+
     std::vector<std::uint8_t> trailingBytes = *valid;
     trailingBytes.push_back(0);
     ok &= expect(shell_open_protocol::decodeRequest(trailingBytes).error ==
