@@ -671,6 +671,15 @@ target_sources(utf8_tests PRIVATE
 radioify_link_repo_target(utf8_tests)
 add_test(NAME utf8_tests COMMAND $<TARGET_FILE:utf8_tests>)
 
+add_executable(subtitle_pixel_compositor_tests)
+target_sources(subtitle_pixel_compositor_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_subtitle_pixel_compositor_tests>
+  ${CMAKE_SOURCE_DIR}/playback/video/framebuffer/subtitle_pixel_compositor.cpp
+)
+radioify_link_repo_target(subtitle_pixel_compositor_tests)
+add_test(NAME subtitle_pixel_compositor_tests
+         COMMAND $<TARGET_FILE:subtitle_pixel_compositor_tests>)
+
 add_executable(browser_navigation_tests)
 target_sources(browser_navigation_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_browser_navigation_tests>

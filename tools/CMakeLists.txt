@@ -106,6 +106,11 @@ radioify_add_module_object_library(radioify_tool_utf8_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/utf8_tests.cpp
 )
 
+radioify_add_module_object_library(
+  radioify_tool_subtitle_pixel_compositor_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_pixel_compositor_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_browser_navigation_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_navigation_tests.cpp
 )

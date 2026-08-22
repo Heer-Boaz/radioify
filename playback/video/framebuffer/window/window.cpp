@@ -36,6 +36,7 @@
 #include "playback/overlay/overlay.h"
 #include "playback/input/media_keys.h"
 #include "playback/video/subtitle/caption_style.h"
+#include "playback/video/framebuffer/subtitle_pixel_compositor.h"
 #include "ui_helpers.h"
 #if RADIOIFY_HAS_LIBASS
 extern "C" {
@@ -401,6 +402,66 @@ namespace {
         RECT textRect{0, 0, 0, 0};
     };
 
+    class GdiBitmapSurface {
+    public:
+        GdiBitmapSurface() = default;
+        ~GdiBitmapSurface() { reset(); }
+
+        GdiBitmapSurface(const GdiBitmapSurface&) = delete;
+        GdiBitmapSurface& operator=(const GdiBitmapSurface&) = delete;
+
+        bool create(const BITMAPINFO& bitmapInfo, int width, int height,
+                    uint8_t background) {
+            reset();
+            dc_ = CreateCompatibleDC(nullptr);
+            if (!dc_) return false;
+
+            void* bits = nullptr;
+            bitmap_ = CreateDIBSection(dc_, &bitmapInfo, DIB_RGB_COLORS, &bits,
+                                       nullptr, 0);
+            if (!bitmap_ || !bits) {
+                reset();
+                return false;
+            }
+            oldBitmap_ = SelectObject(dc_, bitmap_);
+            if (!oldBitmap_ || oldBitmap_ == HGDI_ERROR) {
+                reset();
+                return false;
+            }
+            pixels_ = static_cast<uint8_t*>(bits);
+            const size_t pixelCount =
+                static_cast<size_t>(width) * static_cast<size_t>(height);
+            for (size_t index = 0; index < pixelCount; ++index) {
+                pixels_[index * 4u + 0] = background;
+                pixels_[index * 4u + 1] = background;
+                pixels_[index * 4u + 2] = background;
+                pixels_[index * 4u + 3] = 0;
+            }
+            return true;
+        }
+
+        HDC dc() const { return dc_; }
+        const uint8_t* pixels() const { return pixels_; }
+
+    private:
+        void reset() {
+            if (dc_ && oldBitmap_ && oldBitmap_ != HGDI_ERROR) {
+                SelectObject(dc_, oldBitmap_);
+            }
+            if (bitmap_) DeleteObject(bitmap_);
+            if (dc_) DeleteDC(dc_);
+            dc_ = nullptr;
+            bitmap_ = nullptr;
+            oldBitmap_ = nullptr;
+            pixels_ = nullptr;
+        }
+
+        HDC dc_ = nullptr;
+        HBITMAP bitmap_ = nullptr;
+        HGDIOBJ oldBitmap_ = nullptr;
+        uint8_t* pixels_ = nullptr;
+    };
+
     static HFONT createCaptionFont(int fontPx, const CaptionStyleProfile& captionStyle,
                                    const wchar_t* cueFontName, float cueScaleX,
                                    bool cueBold, bool cueItalic,
@@ -423,7 +484,8 @@ namespace {
                            cueItalic ? TRUE : FALSE,
                            cueUnderline ? TRUE : FALSE, FALSE, DEFAULT_CHARSET,
                            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, face);
+                           ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+                           face);
     }
 
     static bool computeSubtitleLayout(const std::wstring& text,
@@ -526,22 +588,22 @@ namespace {
         bmi.bmiHeader.biBitCount = 32;
         bmi.bmiHeader.biCompression = BI_RGB;
 
-        HDC hdc = CreateCompatibleDC(nullptr);
-        if (!hdc) return false;
-        void* bits = nullptr;
-        HBITMAP dib = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
-        if (!dib || !bits) {
-            if (dib) DeleteObject(dib);
-            DeleteDC(hdc);
+        GdiBitmapSurface blackSurface;
+        GdiBitmapSurface whiteSurface;
+        if (!blackSurface.create(bmi, layout.width, layout.height, 0) ||
+            !whiteSurface.create(bmi, layout.width, layout.height, 255)) {
             return false;
         }
 
-        HGDIOBJ oldBmp = SelectObject(hdc, dib);
         HFONT font = createCaptionFont(layout.fontPx, captionStyle,
                                        cueFontName.c_str(), cueScaleX, cueBold,
                                        cueItalic, cueUnderline);
-        HGDIOBJ oldFont = nullptr;
-        if (font) oldFont = SelectObject(hdc, font);
+        HGDIOBJ oldBlackFont = nullptr;
+        HGDIOBJ oldWhiteFont = nullptr;
+        if (font) {
+            oldBlackFont = SelectObject(blackSurface.dc(), font);
+            oldWhiteFont = SelectObject(whiteSurface.dc(), font);
+        }
 
         const uint8_t bgR = captionStyle.backgroundR;
         const uint8_t bgG = captionStyle.backgroundG;
@@ -551,40 +613,23 @@ namespace {
         const uint8_t textA = static_cast<uint8_t>(std::lround(
             255.0f * std::clamp(captionStyle.textAlpha, 0.0f, 1.0f)));
 
-        uint8_t* px = reinterpret_cast<uint8_t*>(bits);
         const size_t pixelBytes =
             static_cast<size_t>(layout.width) * static_cast<size_t>(layout.height) * 4u;
-        constexpr uint8_t kSentinelB = 1;
-        constexpr uint8_t kSentinelG = 0;
-        constexpr uint8_t kSentinelR = 1;
-        for (size_t i = 0; i < pixelBytes; i += 4) {
-            px[i + 0] = kSentinelB;
-            px[i + 1] = kSentinelG;
-            px[i + 2] = kSentinelR;
-            px[i + 3] = 0;
-        }
 
-        if (bgA > 0) {
-            for (int y = 0; y < layout.height; ++y) {
-                for (int x = 0; x < layout.width; ++x) {
-                    size_t i = static_cast<size_t>(y * layout.width + x) * 4u;
-                    px[i + 0] = bgB;
-                    px[i + 1] = bgG;
-                    px[i + 2] = bgR;
-                    px[i + 3] = bgA;
-                }
-            }
-        }
-
-        SetBkMode(hdc, TRANSPARENT);
+        SetBkMode(blackSurface.dc(), TRANSPARENT);
+        SetBkMode(whiteSurface.dc(), TRANSPARENT);
         UINT drawFlags = DT_CENTER | DT_TOP | DT_WORDBREAK | DT_NOPREFIX;
 
-        auto drawTextOffset = [&](int dx, int dy, COLORREF color) {
+        auto drawTextOffset = [&](HDC dc, int dx, int dy, COLORREF color) {
             RECT r = layout.textRect;
             OffsetRect(&r, dx, dy);
-            SetTextColor(hdc, color);
-            DrawTextW(hdc, wide.c_str(), static_cast<int>(wide.size()), &r,
+            SetTextColor(dc, color);
+            DrawTextW(dc, wide.c_str(), static_cast<int>(wide.size()), &r,
                       drawFlags);
+        };
+        auto drawTextPair = [&](int dx, int dy, COLORREF color) {
+            drawTextOffset(blackSurface.dc(), dx, dy, color);
+            drawTextOffset(whiteSurface.dc(), dx, dy, color);
         };
 
         const int outlinePx =
@@ -596,62 +641,60 @@ namespace {
                 for (int dx = -radius; dx <= radius; ++dx) {
                     if (dx == 0 && dy == 0) continue;
                     if (dx * dx + dy * dy > radius * radius + radius) continue;
-                    drawTextOffset(dx, dy, color);
+                    drawTextPair(dx, dy, color);
                 }
             }
         };
 
         switch (captionStyle.fontEffect) {
             case 2:  // Raised
-                drawTextOffset(-1, -1, RGB(245, 245, 245));
-                drawTextOffset(1, 1, RGB(25, 25, 25));
+                drawTextPair(-1, -1, RGB(245, 245, 245));
+                drawTextPair(1, 1, RGB(25, 25, 25));
                 break;
             case 3:  // Depressed
-                drawTextOffset(-1, -1, RGB(25, 25, 25));
-                drawTextOffset(1, 1, RGB(245, 245, 245));
+                drawTextPair(-1, -1, RGB(25, 25, 25));
+                drawTextPair(1, 1, RGB(245, 245, 245));
                 break;
             case 4:  // Uniform outline
                 drawOutline(outlinePx, RGB(0, 0, 0));
                 break;
             case 5:  // Drop shadow
-                drawTextOffset(shadowPx, shadowPx, RGB(0, 0, 0));
+                drawTextPair(shadowPx, shadowPx, RGB(0, 0, 0));
                 break;
             default:
                 break;  // None/default
         }
 
-        SetTextColor(hdc, RGB(captionStyle.textR, captionStyle.textG, captionStyle.textB));
-        RECT mainTextRect = layout.textRect;
-        DrawTextW(hdc, wide.c_str(), static_cast<int>(wide.size()), &mainTextRect,
-                  drawFlags);
+        drawTextPair(0, 0,
+                     RGB(captionStyle.textR, captionStyle.textG,
+                         captionStyle.textB));
 
-        outPixels.assign(px, px + pixelBytes);
+        outPixels.resize(pixelBytes);
         bool hasText = false;
-        const uint8_t baseB = (bgA > 0) ? bgB : kSentinelB;
-        const uint8_t baseG = (bgA > 0) ? bgG : kSentinelG;
-        const uint8_t baseR = (bgA > 0) ? bgR : kSentinelR;
+        const uint8_t* black = blackSurface.pixels();
+        const uint8_t* white = whiteSurface.pixels();
+        const subtitle_pixel_compositor::Bgra8 background{
+            bgB, bgG, bgR, bgA};
         for (size_t i = 0; i < outPixels.size(); i += 4) {
-            const uint8_t b = outPixels[i + 0];
-            const uint8_t g = outPixels[i + 1];
-            const uint8_t r = outPixels[i + 2];
-            const int diff = std::abs(static_cast<int>(b) - static_cast<int>(baseB)) +
-                             std::abs(static_cast<int>(g) - static_cast<int>(baseG)) +
-                             std::abs(static_cast<int>(r) - static_cast<int>(baseR));
-            if (diff > 8) {
-                outPixels[i + 3] = std::max(textA, bgA);
-                hasText = true;
-            } else if (bgA == 0) {
-                outPixels[i + 3] = 0;
-            } else {
-                outPixels[i + 3] = bgA;
-            }
+            const auto composition =
+                subtitle_pixel_compositor::composeOpaqueTextPair(
+                    {black[i + 0], black[i + 1], black[i + 2], 0},
+                    {white[i + 0], white[i + 1], white[i + 2], 0},
+                    textA, background);
+            outPixels[i + 0] = composition.pixel.b;
+            outPixels[i + 1] = composition.pixel.g;
+            outPixels[i + 2] = composition.pixel.r;
+            outPixels[i + 3] = composition.pixel.a;
+            hasText = hasText || composition.textCoverage > 0;
         }
 
-        if (oldFont) SelectObject(hdc, oldFont);
+        if (oldBlackFont && oldBlackFont != HGDI_ERROR) {
+            SelectObject(blackSurface.dc(), oldBlackFont);
+        }
+        if (oldWhiteFont && oldWhiteFont != HGDI_ERROR) {
+            SelectObject(whiteSurface.dc(), oldWhiteFont);
+        }
         if (font) DeleteObject(font);
-        if (oldBmp) SelectObject(hdc, oldBmp);
-        DeleteObject(dib);
-        DeleteDC(hdc);
 
         return hasText;
     }
