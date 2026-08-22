@@ -178,6 +178,7 @@ struct BrowserState {
   ViewportRestoreMode viewportRestoreMode = ViewportRestoreMode::None;
   int viewportRestoreScrollRow = 0;
   bool contentLoading = false;
+  std::string contentError;
 };
 
 struct GridLayout {

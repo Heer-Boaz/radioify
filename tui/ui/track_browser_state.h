@@ -19,7 +19,7 @@ bool listTracksForFile(const std::filesystem::path& path,
                        std::vector<TrackEntry>* tracks,
                        std::string* error);
 std::shared_ptr<const TrackBrowserContent> prepareTrackBrowserContent(
-    const std::filesystem::path& file);
+    const std::filesystem::path& file, std::string* error = nullptr);
 bool isTrackBrowserActive(const BrowserState& state);
 const TrackBrowserContent* trackBrowserContent(const BrowserState& state);
 const TrackEntry* findTrackEntry(const BrowserState& state, int trackIndex);

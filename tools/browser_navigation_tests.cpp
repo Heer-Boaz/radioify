@@ -40,6 +40,13 @@ BrowserEntry trackEntry(const std::string& name,
   return {name, path, browser_entry::PlayTrack{trackIndex}};
 }
 
+BrowserPreparationError unavailableBrowserContent(
+    const BrowserLocation& location,
+    std::string message = "Browser content is unavailable.") {
+  return {BrowserPreparationErrorKind::Unavailable, location,
+          std::move(message)};
+}
+
 GridLayout verticalLayout(int totalRows, int visibleRows) {
   GridLayout layout;
   layout.totalRows = totalRows;
@@ -279,7 +286,8 @@ int main() {
          rejectDirectory) ||
         (request.location.kind() == BrowserLocationKind::TrackBrowser &&
          rejectTracks)) {
-      return BrowserContentPreparation::complete(std::nullopt);
+      return BrowserContentPreparation::failed(
+          unavailableBrowserContent(request.location));
     }
     PreparedBrowserContent prepared;
     prepared.entries =
@@ -324,6 +332,7 @@ int main() {
 
   rejectDirectory = true;
   ok &= expect(!historyNavigator.back() &&
+                   !historyBrowser.contentError.empty() &&
                    historyBrowser.location == trackBrowserLocation.route &&
                    historyBrowser.entries.size() == tracks.size() &&
                    historyBrowser.entries[1]
@@ -335,7 +344,7 @@ int main() {
                    historyBrowser.forwardHistory.empty(),
                "a failed Back restore must leave content and history intact");
   rejectDirectory = false;
-  ok &= expect(historyNavigator.back(),
+  ok &= expect(historyNavigator.back() && historyBrowser.contentError.empty(),
                "Back must remain usable after a rejected restore");
   rejectTracks = true;
   ok &= expect(!historyNavigator.forward() &&
@@ -367,7 +376,8 @@ int main() {
     ++preparedCount;
     if (request.location.kind() == BrowserLocationKind::Directory &&
         rejectRoutedDirectory) {
-      return BrowserContentPreparation::complete(std::nullopt);
+      return BrowserContentPreparation::failed(
+          unavailableBrowserContent(request.location));
     }
     PreparedBrowserContent prepared;
     prepared.entries = routedBrowser.entries;
@@ -524,8 +534,10 @@ int main() {
       asynchronousPreparationIds.back();
   ok &= expect(
       !asynchronousNavigator.completePreparation(failedPreparationId,
-                                                  std::nullopt) &&
+          unavailableBrowserContent(browserTrackLocation(songB),
+                                    "Track scan failed.")) &&
           !asynchronousBrowser.contentLoading &&
+          asynchronousBrowser.contentError == "Track scan failed." &&
           asynchronousBrowser.location == otherDirectory &&
           asynchronousBrowser.backHistory.size() == asynchronousHistorySize,
       "failed asynchronous preparation must preserve content and history");
@@ -649,10 +661,14 @@ int main() {
       std::shared_ptr<const TrackBrowserContent>(committedTrackContent);
   int rejectedChangedCount = 0;
   BrowserNavigator::Callbacks rejectedCallbacks;
+  int rejectedFailureCount = 0;
   rejectedCallbacks.prepare = [](BrowserPreparationId,
-                                 const BrowserContentRequest&) {
-    return BrowserContentPreparation::complete(std::nullopt);
+                                 const BrowserContentRequest& request) {
+    return BrowserContentPreparation::failed(
+        unavailableBrowserContent(request.location));
   };
+  rejectedCallbacks.failed =
+      [&](const BrowserPreparationError&) { ++rejectedFailureCount; };
   rejectedCallbacks.changed = [&]() { ++rejectedChangedCount; };
   BrowserNavigator rejectedNavigator(rejectedBrowser,
                                      std::move(rejectedCallbacks));
@@ -667,7 +683,8 @@ int main() {
                    rejectedBrowser.filter == "B" &&
                    hasTrackContent(rejectedBrowser, committedTrackContent) &&
                    rejectedBrowser.backHistory.empty() &&
-                   rejectedChangedCount == 0,
+                   !rejectedBrowser.contentError.empty() &&
+                   rejectedFailureCount == 1 && rejectedChangedCount == 1,
                "a rejected content snapshot must not mutate browser state");
   ok &= expect(!rejectedNavigator.reload() &&
                    rejectedBrowser.entries.size() == files.size() &&
@@ -675,7 +692,8 @@ int main() {
                    rejectedBrowser.scrollRow == 3 &&
                    rejectedBrowser.filter == "B" &&
                    hasTrackContent(rejectedBrowser, committedTrackContent) &&
-                   rejectedChangedCount == 0,
+                   !rejectedBrowser.contentError.empty() &&
+                   rejectedFailureCount == 2 && rejectedChangedCount == 2,
                "a failed reload must preserve the committed snapshot");
 
 #ifdef _WIN32

@@ -15,11 +15,19 @@ bool listTracksForFile(const std::filesystem::path& path,
 }
 
 std::shared_ptr<const TrackBrowserContent> prepareTrackBrowserContent(
-    const std::filesystem::path& file) {
+    const std::filesystem::path& file, std::string* error) {
   std::filesystem::path trackPath = normalizeTrackBrowserPath(file);
   std::vector<TrackEntry> tracks;
-  std::string error;
-  if (!listTracksForFile(trackPath, &tracks, &error) || tracks.size() <= 1) {
+  std::string catalogError;
+  if (!listTracksForFile(trackPath, &tracks, &catalogError)) {
+    if (error) {
+      *error = catalogError.empty() ? "Unable to read the track catalog."
+                                   : std::move(catalogError);
+    }
+    return {};
+  }
+  if (tracks.size() <= 1) {
+    if (error) *error = "This file has no browsable subtracks.";
     return {};
   }
   auto content = std::make_shared<TrackBrowserContent>();

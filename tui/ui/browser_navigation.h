@@ -47,18 +47,31 @@ struct PreparedBrowserContent {
 
 using BrowserPreparationId = std::uint64_t;
 
+enum class BrowserPreparationErrorKind : std::uint8_t {
+  Unavailable,
+  Unsupported,
+  Internal,
+};
+
+struct BrowserPreparationError {
+  BrowserPreparationErrorKind kind;
+  BrowserLocation location;
+  std::string message;
+};
+
+using BrowserPreparationResult =
+    std::variant<PreparedBrowserContent, BrowserPreparationError>;
+
+struct BrowserPreparationPending {};
+
 struct BrowserContentPreparation {
-  enum class State {
-    Pending,
-    Complete,
-  };
-
   static BrowserContentPreparation pending();
-  static BrowserContentPreparation complete(
-      std::optional<PreparedBrowserContent> content);
+  static BrowserContentPreparation complete(PreparedBrowserContent content);
+  static BrowserContentPreparation failed(BrowserPreparationError error);
 
-  State state = State::Pending;
-  std::optional<PreparedBrowserContent> content;
+  std::variant<BrowserPreparationPending, PreparedBrowserContent,
+               BrowserPreparationError>
+      result;
 };
 
 class BrowserNavigator {
@@ -68,6 +81,7 @@ class BrowserNavigator {
         BrowserPreparationId, const BrowserContentRequest&)>
         prepare;
     std::function<void(BrowserPreparationId)> cancelPreparation;
+    std::function<void(const BrowserPreparationError&)> failed;
     std::function<void()> changed;
   };
 
@@ -76,6 +90,8 @@ class BrowserNavigator {
   BrowserState& state() { return browser_; }
   const BrowserState& state() const { return browser_; }
 
+  bool initialize(const BrowserLocation& target,
+                  const std::string& initialName = {});
   bool navigate(const BrowserLocation& target,
                 const std::string& initialName = {},
                 const std::optional<BrowserState::EntryIdentity>& selection =
@@ -90,7 +106,7 @@ class BrowserNavigator {
   bool reload(const std::string& initialName = {});
   bool completePreparation(
       BrowserPreparationId preparationId,
-      std::optional<PreparedBrowserContent> prepared);
+      BrowserPreparationResult result);
   bool cancelPreparation();
 
  private:
