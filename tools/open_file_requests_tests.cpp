@@ -19,7 +19,8 @@ int main() {
   OpenFileRequests requests;
   OpenFilesRequest posted;
   posted.files.emplace_back("video.mp4");
-  posted.videoMode = OpenVideoMode::Framebuffer;
+  posted.presentation =
+      OpenPresentationDirective::NativeWindowedFramebuffer;
   requests.post(std::move(posted));
 
   OpenFilesRequest received;
@@ -30,7 +31,8 @@ int main() {
   ok &= expect(received.files.size() == 1 &&
                    received.files.front() == "video.mp4",
                "request must preserve its file path");
-  ok &= expect(received.videoMode == OpenVideoMode::Framebuffer,
+  ok &= expect(received.presentation ==
+                   OpenPresentationDirective::NativeWindowedFramebuffer,
                "request must preserve its framebuffer video intent");
   ok &= expect(!requests.poll(received),
                "poll must consume the queued request exactly once");
@@ -38,7 +40,8 @@ int main() {
                "consuming the queue must clear pending work");
 
   OpenFilesRequest inherited;
-  ok &= expect(inherited.videoMode == OpenVideoMode::Inherit,
+  ok &= expect(inherited.presentation ==
+                   OpenPresentationDirective::InheritActive,
                "in-process open requests must inherit the active video mode");
   return ok ? 0 : 1;
 }

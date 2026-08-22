@@ -244,6 +244,8 @@ Options parseArgs(int argc, char** argv) {
     }
     if (arg == "--no-ascii") {
       o.enableAscii = false;
+      o.shellOpenPresentationOverride =
+          OpenPresentationDirective::NativeWindowedFramebuffer;
       continue;
     }
     if (arg == "--no-audio") {

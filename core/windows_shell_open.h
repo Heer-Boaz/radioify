@@ -4,14 +4,13 @@
 #include <filesystem>
 #include <memory>
 
+#include "open_file_requests.h"
 #include "shell_open_mode.h"
-
-class OpenFileRequests;
 
 ShellOpenMode configuredWindowsShellOpenMode();
 
 bool forwardWindowsShellOpenFile(const std::filesystem::path& file,
-                                 bool nonAsciiVideo,
+                                 OpenPresentationDirective presentation,
                                  uint32_t timeoutMs = 4000);
 
 class WindowsShellOpenServer {

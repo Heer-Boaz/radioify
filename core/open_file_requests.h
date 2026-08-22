@@ -1,20 +1,23 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <vector>
 
 #include "native_wait_handle.h"
 
-enum class OpenVideoMode {
-  Inherit,
-  Ascii,
-  Framebuffer,
+enum class OpenPresentationDirective : std::uint8_t {
+  InheritActive = 0,
+  UseLaunchDefaults = 1,
+  TerminalAscii = 2,
+  NativeWindowedFramebuffer = 3,
 };
 
 struct OpenFilesRequest {
   std::vector<std::filesystem::path> files;
-  OpenVideoMode videoMode = OpenVideoMode::Inherit;
+  OpenPresentationDirective presentation =
+      OpenPresentationDirective::InheritActive;
 };
 
 class OpenFileRequests {

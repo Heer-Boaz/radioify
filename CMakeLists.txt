@@ -651,6 +651,17 @@ radioify_link_repo_target(open_file_requests_tests)
 add_test(NAME open_file_requests_tests
          COMMAND $<TARGET_FILE:open_file_requests_tests>)
 
+add_executable(shell_open_protocol_tests)
+target_sources(shell_open_protocol_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_shell_open_protocol_tests>
+  ${CMAKE_SOURCE_DIR}/core/shell_open_protocol.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+)
+radioify_link_repo_target(shell_open_protocol_tests)
+add_test(NAME shell_open_protocol_tests
+         COMMAND $<TARGET_FILE:shell_open_protocol_tests>)
+
 add_executable(browser_navigation_tests)
 target_sources(browser_navigation_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_browser_navigation_tests>

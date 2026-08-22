@@ -203,25 +203,28 @@ static bool isVideoExt(const std::filesystem::path& p) {
 }
 
 static std::optional<PlaybackPresentationState> routeVideoPresentation(
-    OpenVideoMode mode) {
-  return mode == OpenVideoMode::Framebuffer
-             ? std::optional{
-                   PlaybackPresentationState::nativeWindowed()}
-             : std::nullopt;
+    OpenPresentationDirective directive, bool launchAsciiEnabled) {
+  switch (directive) {
+    case OpenPresentationDirective::TerminalAscii:
+      return PlaybackPresentationState::terminalAscii();
+    case OpenPresentationDirective::NativeWindowedFramebuffer:
+      return PlaybackPresentationState::nativeWindowed();
+    case OpenPresentationDirective::InheritActive:
+      return std::nullopt;
+    case OpenPresentationDirective::UseLaunchDefaults:
+      return launchAsciiEnabled
+                 ? PlaybackPresentationState::terminalAscii()
+                 : PlaybackPresentationState::nativeWindowed();
+  }
+  return std::nullopt;
 }
 
 static std::optional<playback_route::Route> resolveOpenFilesPlaybackRoute(
-    const OpenFilesRequest& request) {
+    const OpenFilesRequest& request, bool launchAsciiEnabled) {
   std::optional<playback_route::Route> route =
       playback_route::resolveDroppedTarget(
-          request.files, nullptr, routeVideoPresentation(request.videoMode));
-  if (route && request.videoMode == OpenVideoMode::Ascii &&
-      isVideoExt(playbackTargetFile(route->target))) {
-    PlaybackSessionContinuationState asciiContinuation;
-    asciiContinuation.presentation =
-        PlaybackPresentationState::terminalAscii();
-    route->videoContinuation = asciiContinuation;
-  }
+          request.files, nullptr,
+          routeVideoPresentation(request.presentation, launchAsciiEnabled));
   return route;
 }
 
@@ -1037,7 +1040,8 @@ class TuiMediaCoordinator {
       return Command(OpenDirectory{std::move(*directory)});
     }
     std::optional<playback_route::Route> route =
-        resolveOpenFilesPlaybackRoute(request);
+        resolveOpenFilesPlaybackRoute(request,
+                                      services_.videoConfig.enableAscii);
     if (!route) {
       return std::nullopt;
     }
@@ -1329,8 +1333,11 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         shellOpenServer->isAcceptingHandoffs();
     if (!acceptingShellOpenHandoffs && forwardInputToExistingInstance &&
         !o.input.empty()) {
+      const OpenPresentationDirective presentation =
+          o.shellOpenPresentationOverride.value_or(
+              OpenPresentationDirective::InheritActive);
       if (forwardWindowsShellOpenFile(pathFromUtf8String(o.input),
-                                      !o.enableAscii)) {
+                                      presentation)) {
         return 0;
       }
     }
@@ -1555,8 +1562,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       if (!std::filesystem::is_directory(inputPath)) {
         OpenFilesRequest request;
         request.files.push_back(std::move(inputPath));
-        request.videoMode =
-            o.enableAscii ? OpenVideoMode::Ascii : OpenVideoMode::Framebuffer;
+        request.presentation = o.shellOpenPresentationOverride.value_or(
+            OpenPresentationDirective::UseLaunchDefaults);
         initialOpenRequest.emplace(std::move(request));
       }
     }

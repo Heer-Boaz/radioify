@@ -2,10 +2,12 @@
 #define APP_COMMON_H
 
 #include <filesystem>
+#include <optional>
 #include <string>
 
 #include "audio/audiofilter/radio1938/radio_receiver_profile.h"
 #include "audio/audiofilter/radio1938/radio_reception_profile.h"
+#include "core/open_file_requests.h"
 #include "core/runtime_defaults.h"
 #include "core/shell_open_mode.h"
 
@@ -38,6 +40,7 @@ struct Options {
   bool enableWindow = kDefaultWindowPlaybackEnabled;
   bool asciiDebugOverlay = false;
   bool shellOpen = false;
+  std::optional<OpenPresentationDirective> shellOpenPresentationOverride;
   ShellOpenModeSelection shellOpenMode = ShellOpenModeSelection::Configured;
   bool verbose = false;
 };

@@ -9,18 +9,16 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "open_file_requests.h"
 #include "runtime_helpers.h"
+#include "shell_open_protocol.h"
 #include "shell_open_mode.h"
 #include "windows_app_resources.h"
 #include "windows_handle.h"
 
 namespace {
-
-constexpr uint32_t kMaxShellOpenPayloadBytes = 64u * 1024u;
-constexpr uint32_t kShellOpenNonAsciiVideo = 1u << 0;
-constexpr uint32_t kKnownShellOpenFlags = kShellOpenNonAsciiVideo;
 
 class ShellOpenSingleInstanceLock {
  public:
@@ -95,7 +93,7 @@ std::wstring shellOpenObjectSuffix() {
   if (!ProcessIdToSessionId(GetCurrentProcessId(), &sessionId)) {
     sessionId = 0;
   }
-  return RADIOIFY_APP_NAME_W L".ShellOpen.2." + std::to_wstring(sessionId);
+  return RADIOIFY_APP_NAME_W L".ShellOpen.3." + std::to_wstring(sessionId);
 }
 
 std::wstring shellOpenMutexName() {
@@ -133,41 +131,73 @@ void ShellOpenSingleInstanceLock::reset() {
   mutex_.reset();
 }
 
-bool writeShellOpenRequest(std::string_view payload,
-                           bool nonAsciiVideo,
-                           uint32_t timeoutMs) {
-  if (payload.size() > kMaxShellOpenPayloadBytes) {
-    return false;
+std::uint64_t nextShellOpenRequestId() {
+  static std::atomic<std::uint64_t> sequence{
+      (GetTickCount64() << 16) ^
+      static_cast<std::uint64_t>(GetCurrentProcessId())};
+  std::uint64_t requestId =
+      sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (requestId == 0) {
+    requestId = sequence.fetch_add(1, std::memory_order_relaxed) + 1;
   }
+  return requestId;
+}
 
+bool transactShellOpenRequest(const std::vector<std::uint8_t>& request,
+                              std::vector<std::uint8_t>& response,
+                              uint32_t timeoutMs) {
   const std::wstring pipeName = shellOpenPipeName();
   const ULONGLONG deadline =
       GetTickCount64() + static_cast<ULONGLONG>(timeoutMs);
 
   for (;;) {
-    UniqueWindowsHandle pipe(CreateFileW(pipeName.c_str(), GENERIC_WRITE, 0,
-                                         nullptr, OPEN_EXISTING,
-                                         FILE_ATTRIBUTE_NORMAL, nullptr));
+    UniqueWindowsHandle pipe(CreateFileW(
+        pipeName.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, nullptr));
     if (pipe) {
-      const uint32_t flags = nonAsciiVideo ? kShellOpenNonAsciiVideo : 0;
-      const uint32_t length = static_cast<uint32_t>(payload.size());
-      DWORD written = 0;
-      bool ok = WriteFile(pipe.get(), &flags, sizeof(flags), &written,
-                          nullptr) &&
-                written == sizeof(flags);
-      if (ok) {
-        written = 0;
-        ok = WriteFile(pipe.get(), &length, sizeof(length), &written,
-                       nullptr) &&
-                written == sizeof(length);
+      DWORD readMode = PIPE_READMODE_MESSAGE;
+      if (!SetNamedPipeHandleState(pipe.get(), &readMode, nullptr, nullptr)) {
+        return false;
       }
-      if (ok && length > 0) {
-        written = 0;
-        ok = WriteFile(pipe.get(), payload.data(), length, &written, nullptr) &&
-             written == length;
+
+      UniqueWindowsHandle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+      if (!event) return false;
+
+      response.assign(shell_open_protocol::kMaxMessageBytes, 0);
+      OVERLAPPED overlapped{};
+      overlapped.hEvent = event.get();
+      bool pending = false;
+      if (!TransactNamedPipe(
+              pipe.get(), const_cast<std::uint8_t*>(request.data()),
+              static_cast<DWORD>(request.size()), response.data(),
+              static_cast<DWORD>(response.size()), nullptr, &overlapped)) {
+        if (GetLastError() != ERROR_IO_PENDING) return false;
+        pending = true;
       }
-      FlushFileBuffers(pipe.get());
-      return ok;
+
+      if (pending) {
+        const ULONGLONG now = GetTickCount64();
+        const DWORD remaining =
+            now >= deadline
+                ? 0
+                : static_cast<DWORD>((std::min)(
+                      deadline - now,
+                      static_cast<ULONGLONG>(MAXDWORD - 1)));
+        if (WaitForSingleObject(event.get(), remaining) != WAIT_OBJECT_0) {
+          CancelIoEx(pipe.get(), &overlapped);
+          DWORD ignored = 0;
+          GetOverlappedResult(pipe.get(), &overlapped, &ignored, TRUE);
+          return false;
+        }
+      }
+
+      DWORD received = 0;
+      if (!GetOverlappedResult(pipe.get(), &overlapped, &received, FALSE) ||
+          received == 0 || received > response.size()) {
+        return false;
+      }
+      response.resize(received);
+      return true;
     }
 
     const DWORD error = GetLastError();
@@ -177,8 +207,8 @@ bool writeShellOpenRequest(std::string_view payload,
       return false;
     }
 
-    const DWORD waitMs =
-        static_cast<DWORD>((std::min)(deadline - now, ULONGLONG{100}));
+    const DWORD waitMs = static_cast<DWORD>(
+        (std::min)(deadline - now, static_cast<ULONGLONG>(100)));
     if (error == ERROR_PIPE_BUSY) {
       WaitNamedPipeW(pipeName.c_str(), waitMs);
     } else {
@@ -236,12 +266,24 @@ ShellOpenMode configuredWindowsShellOpenMode() {
 }
 
 bool forwardWindowsShellOpenFile(const std::filesystem::path& file,
-                                 bool nonAsciiVideo,
+                                 OpenPresentationDirective presentation,
                                  uint32_t timeoutMs) {
-  if (file.empty()) {
+  shell_open_protocol::Request request;
+  request.requestId = nextShellOpenRequestId();
+  request.openFiles.files.push_back(file);
+  request.openFiles.presentation = presentation;
+  const std::optional<std::vector<std::uint8_t>> encoded =
+      shell_open_protocol::encodeRequest(request);
+  if (!encoded) return false;
+
+  std::vector<std::uint8_t> responseBytes;
+  if (!transactShellOpenRequest(*encoded, responseBytes, timeoutMs)) {
     return false;
   }
-  return writeShellOpenRequest(toUtf8String(file), nonAsciiVideo, timeoutMs);
+  shell_open_protocol::ResponseDecodeResult decoded =
+      shell_open_protocol::decodeResponse(responseBytes);
+  return decoded.value && decoded.value->requestId == request.requestId &&
+         decoded.value->status == shell_open_protocol::ResponseStatus::Accepted;
 }
 
 struct WindowsShellOpenServer::Impl {
@@ -301,9 +343,11 @@ struct WindowsShellOpenServer::Impl {
     const std::wstring pipeName = shellOpenPipeName();
     while (!stopRequested.load(std::memory_order_acquire)) {
       UniqueWindowsHandle pipe(CreateNamedPipeW(
-          pipeName.c_str(), PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
-          PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1,
-          kMaxShellOpenPayloadBytes, kMaxShellOpenPayloadBytes, 0, nullptr));
+          pipeName.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+          PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT, 1,
+          static_cast<DWORD>(shell_open_protocol::kMaxMessageBytes),
+          static_cast<DWORD>(shell_open_protocol::kMaxMessageBytes), 0,
+          nullptr));
       if (!pipe) {
         waitBeforeRetry();
         continue;
@@ -363,65 +407,73 @@ struct WindowsShellOpenServer::Impl {
     return connected && !stopRequested.load(std::memory_order_acquire);
   }
 
-  bool readExact(HANDLE pipe, void* data, DWORD size) {
+  bool readMessage(HANDLE pipe, std::vector<std::uint8_t>& message) {
     UniqueWindowsHandle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-    if (!event) {
-      return false;
-    }
+    if (!event) return false;
 
-    auto* cursor = static_cast<char*>(data);
-    DWORD remaining = size;
-    while (remaining > 0 && !stopRequested.load(std::memory_order_acquire)) {
-      ResetEvent(event.get());
-      OVERLAPPED overlapped{};
-      overlapped.hEvent = event.get();
-      DWORD transferred = 0;
-      bool ok = false;
-      if (ReadFile(pipe, cursor, remaining, nullptr, &overlapped)) {
-        ok = GetOverlappedResult(pipe, &overlapped, &transferred, FALSE) !=
-             FALSE;
-      } else if (GetLastError() == ERROR_IO_PENDING) {
-        ok = waitForPipeIo(pipe, overlapped, transferred);
-      }
-
-      if (!ok || transferred == 0) {
-        return false;
-      }
-      cursor += transferred;
-      remaining -= transferred;
+    message.assign(shell_open_protocol::kMaxMessageBytes, 0);
+    OVERLAPPED overlapped{};
+    overlapped.hEvent = event.get();
+    DWORD transferred = 0;
+    bool ok = false;
+    if (ReadFile(pipe, message.data(), static_cast<DWORD>(message.size()),
+                 nullptr, &overlapped)) {
+      ok = GetOverlappedResult(pipe, &overlapped, &transferred, FALSE) !=
+           FALSE;
+    } else if (GetLastError() == ERROR_IO_PENDING) {
+      ok = waitForPipeIo(pipe, overlapped, transferred);
     }
-    return remaining == 0;
+    if (!ok || transferred == 0 || transferred > message.size()) return false;
+    message.resize(transferred);
+    return true;
+  }
+
+  bool writeMessage(HANDLE pipe,
+                    const std::vector<std::uint8_t>& message) {
+    UniqueWindowsHandle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    if (!event) return false;
+
+    OVERLAPPED overlapped{};
+    overlapped.hEvent = event.get();
+    DWORD transferred = 0;
+    bool ok = false;
+    if (WriteFile(pipe, message.data(), static_cast<DWORD>(message.size()),
+                  nullptr, &overlapped)) {
+      ok = GetOverlappedResult(pipe, &overlapped, &transferred, FALSE) !=
+           FALSE;
+    } else if (GetLastError() == ERROR_IO_PENDING) {
+      ok = waitForPipeIo(pipe, overlapped, transferred);
+    }
+    return ok && transferred == message.size();
   }
 
   void readRequest(HANDLE pipe) {
-    uint32_t flags = 0;
-    if (!readExact(pipe, &flags, sizeof(flags)) ||
-        (flags & ~kKnownShellOpenFlags) != 0) {
-      return;
+    std::vector<std::uint8_t> message;
+    if (!readMessage(pipe, message)) return;
+
+    shell_open_protocol::RequestDecodeResult decoded =
+        shell_open_protocol::decodeRequest(message);
+    shell_open_protocol::Response response;
+    if (!decoded.value) {
+      response.status =
+          decoded.error == shell_open_protocol::DecodeError::UnsupportedVersion
+              ? shell_open_protocol::ResponseStatus::UnsupportedVersion
+              : shell_open_protocol::ResponseStatus::InvalidRequest;
+    } else {
+      response.requestId = decoded.value->requestId;
+      try {
+        requests.post(std::move(decoded.value->openFiles));
+        response.status = shell_open_protocol::ResponseStatus::Accepted;
+      } catch (...) {
+        response.status = shell_open_protocol::ResponseStatus::InternalError;
+      }
     }
 
-    uint32_t length = 0;
-    if (!readExact(pipe, &length, sizeof(length)) || length == 0 ||
-        length > kMaxShellOpenPayloadBytes) {
-      return;
+    const std::vector<std::uint8_t> responseMessage =
+        shell_open_protocol::encodeResponse(response);
+    if (writeMessage(pipe, responseMessage)) {
+      FlushFileBuffers(pipe);
     }
-
-    std::string payload(length, '\0');
-    if (!readExact(pipe, payload.data(), length)) {
-      return;
-    }
-
-    std::filesystem::path file = pathFromUtf8String(payload);
-    if (file.empty()) {
-      return;
-    }
-
-    OpenFilesRequest request;
-    request.files.push_back(std::move(file));
-    request.videoMode = (flags & kShellOpenNonAsciiVideo) != 0
-                            ? OpenVideoMode::Framebuffer
-                            : OpenVideoMode::Ascii;
-    requests.post(std::move(request));
   }
 
   ShellOpenSingleInstanceLock singleInstanceLock;
