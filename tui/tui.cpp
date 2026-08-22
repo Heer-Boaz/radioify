@@ -216,7 +216,7 @@ static std::optional<playback_route::Route> resolveOpenFilesPlaybackRoute(
       playback_route::resolveDroppedTarget(
           request.files, nullptr, routeVideoPresentation(request.videoMode));
   if (route && request.videoMode == OpenVideoMode::Ascii &&
-      isVideoExt(route->target.file)) {
+      isVideoExt(playbackTargetFile(route->target))) {
     PlaybackSessionContinuationState asciiContinuation;
     asciiContinuation.hasPresentation = true;
     asciiContinuation.presentation =
@@ -901,11 +901,14 @@ class TuiMediaCoordinator {
   }
 
   std::filesystem::path currentPlaybackFile() const {
-    return videoTarget_ ? videoTarget_->file : audioGetNowPlaying();
+    return videoTarget_ ? playbackTargetFile(*videoTarget_)
+                        : audioGetNowPlaying();
   }
 
   int currentPlaybackTrackIndex() const {
-    return videoTarget_ ? videoTarget_->trackIndex : audioGetTrackIndex();
+    return videoTarget_
+               ? playbackTargetTrackIndex(*videoTarget_).value_or(-1)
+               : audioGetTrackIndex();
   }
 
   std::vector<NativeWaitHandle> activityWaitHandles() const {
@@ -1009,9 +1012,11 @@ class TuiMediaCoordinator {
   std::optional<Command> mediaCommandFromFiles(
       playback_route::Route route,
       const std::vector<std::filesystem::path>& files) const {
-    if (isSupportedImageExt(route.target.file)) {
+    const std::filesystem::path& targetFile =
+        playbackTargetFile(route.target);
+    if (isSupportedImageExt(targetFile)) {
       std::optional<image_viewer_sequence::Sequence> sequence =
-          imageSequenceFromFiles(files, route.target.file);
+          imageSequenceFromFiles(files, targetFile);
       if (!sequence) {
         return std::nullopt;
       }
@@ -1136,18 +1141,20 @@ class TuiMediaCoordinator {
     services_.applyAudioPictureInPicturePlan(route.audioPictureInPicture);
 
     const PlaybackTarget target = route.target;
-    if (target.trackIndex >= 0) {
-      if (!services_.startAudio(target.file, target.trackIndex)) {
+    const std::filesystem::path& targetFile = playbackTargetFile(target);
+    if (const std::optional<int> trackIndex =
+            playbackTargetTrackIndex(target)) {
+      if (!services_.startAudio(targetFile, *trackIndex)) {
         return false;
       }
       services_.queue.commit(std::move(activation));
       return true;
     }
-    if (isSupportedImageExt(target.file)) {
+    if (isSupportedImageExt(targetFile)) {
       return false;
     }
-    if (!isSupportedVideoExt(target.file)) {
-      if (!services_.startAudio(target.file, 0)) {
+    if (!isSupportedVideoExt(targetFile)) {
+      if (!services_.startAudio(targetFile, 0)) {
         return false;
       }
       services_.queue.commit(std::move(activation));
@@ -1174,7 +1181,7 @@ class TuiMediaCoordinator {
         };
 
     PlaybackSession::Request sessionRequest{
-        target.file,
+        targetFile,
         sessionConfig(services_.videoConfig, continuationState_),
         continuationState_,
         route.sessionIntent,
@@ -1203,7 +1210,7 @@ class TuiMediaCoordinator {
     } else if (openOutcome ==
                PlaybackSessionOpenOutcome::AudioFallbackRequested) {
       videoSession_.reset();
-      if (!services_.startAudio(target.file, 0)) {
+      if (!services_.startAudio(targetFile, 0)) {
         return false;
       }
       services_.queue.commit(std::move(activation));
@@ -1703,6 +1710,14 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       [&]() { return mediaCoordinator.currentPlaybackFile(); };
   currentPlaybackTrackIndex =
       [&]() { return mediaCoordinator.currentPlaybackTrackIndex(); };
+  auto currentPlaybackTarget = [&]() {
+    const std::filesystem::path file = currentPlaybackFile();
+    if (const auto track =
+            playbackTrackTarget(file, currentPlaybackTrackIndex())) {
+      return *track;
+    }
+    return playbackFileTarget(file);
+  };
 
   auto startPlayback = [&](playback_route::Route route,
                            playback_queue::Source source) {
@@ -1713,9 +1728,10 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   };
   auto openBrowserMediaTarget = [&](const PlaybackTarget& target) {
     playback_route::Route route = playback_route::resolveTarget(target);
-    if (isSupportedImageExt(target.file)) {
+    const std::filesystem::path& targetFile = playbackTargetFile(target);
+    if (isSupportedImageExt(targetFile)) {
       std::optional<image_viewer_sequence::Sequence> sequence =
-          imageSequenceFromBrowserEntries(browser.entries, target.file);
+          imageSequenceFromBrowserEntries(browser.entries, targetFile);
       return sequence && mediaCoordinator.startImage(std::move(route),
                                                      std::move(*sequence));
     }
@@ -2484,8 +2500,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       if (!currentPlaybackFile().empty()) {
         cmds.push_back({"Show Playing File", "", true, [&]() {
                           browserPlaybackRevealer.reveal(
-                              {currentPlaybackFile(),
-                               currentPlaybackTrackIndex()});
+                              currentPlaybackTarget());
                         }});
       }
     }
@@ -2694,7 +2709,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           browserTrackLocation(normalizeTrackBrowserPath(entry.path)));
     } else if (action == FileContextAction::EditVideo) {
       playback_route::Route route =
-          playback_route::resolveTarget({entry.path, -1});
+          playback_route::resolveTarget(playbackFileTarget(entry.path));
       route.sessionIntent = PlaybackSessionIntent::EditVideo;
       const PlaybackTarget target = route.target;
       startPlayback(std::move(route), playback_queue::singleSource(target));
@@ -3533,7 +3548,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       }
       if (browserInteractionEnabled) {
         const int playingEntryIndex = findBrowserPlaybackTargetEntry(
-            browser.entries, {nowPlaying, nowPlayingTrackIndex});
+            browser.entries, currentPlaybackTarget());
         drawBrowserEntries(screen, browser, layout, listTop, listHeight,
                            kStyleNormal, kStyleNormal, kStyleDir,
                            kStyleHighlight, kStyleBrowserHover, kStyleDim,

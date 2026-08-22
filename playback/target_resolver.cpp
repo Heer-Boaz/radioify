@@ -1,7 +1,6 @@
 #include "playback/target_resolver.h"
 
 #include "audio/media_formats.h"
-#include "playback/media/track_catalog.h"
 
 namespace playback_target_resolver {
 namespace {
@@ -12,19 +11,13 @@ std::optional<PlaybackTarget> resolveAudioPathTarget(
     return std::nullopt;
   }
 
-  const std::filesystem::path normalized = normalizePlaybackTrackPath(path);
-  std::vector<TrackEntry> tracks;
-  std::string error;
-  if (listPlaybackTracks(normalized, &tracks, &error) && tracks.size() > 1) {
-    return PlaybackTarget{normalized, tracks.front().index};
-  }
-  return PlaybackTarget{path, -1};
+  return playbackFileTarget(path);
 }
 
 std::optional<PlaybackTarget> resolveMediaTarget(
     const std::filesystem::path& path) {
   if (isSupportedImageExt(path)) {
-    return PlaybackTarget{path, -1};
+    return playbackFileTarget(path);
   }
   return resolvePlaybackTarget(path);
 }
@@ -37,7 +30,7 @@ std::optional<PlaybackTarget> resolvePlaybackTarget(
     return std::nullopt;
   }
   if (isSupportedVideoExt(path)) {
-    return PlaybackTarget{path, -1};
+    return playbackFileTarget(path);
   }
   return resolveAudioPathTarget(path);
 }

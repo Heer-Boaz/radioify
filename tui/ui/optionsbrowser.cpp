@@ -588,25 +588,6 @@ bool optionsBrowserIsActive(const BrowserState& browser) {
   return browser.location.kind == BrowserLocationKind::OptionsBrowser;
 }
 
-std::optional<OptionsBrowserSubject> optionsBrowserSubjectForEntry(
-    const BrowserEntry& entry) {
-  if (!entry.isMedia() || entry.path.empty() ||
-      targetForPath(entry.path) == OptionsTarget::None) {
-    return std::nullopt;
-  }
-  OptionsBrowserSubject subject;
-  subject.file = entry.path;
-  if (const auto* track = entry.actionAs<browser_entry::PlayTrack>()) {
-    subject.trackIndex = track->trackIndex;
-  }
-  return subject;
-}
-
-BrowserLocation optionsBrowserOpenLocation(
-    const OptionsBrowserSubject& subject) {
-  return browserOptionsLocation(subject.file, subject.trackIndex.value_or(-1));
-}
-
 bool optionsBrowserSupportsLocation(const BrowserLocation& location) {
   if (location.kind != BrowserLocationKind::OptionsBrowser) {
     return false;

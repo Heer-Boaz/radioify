@@ -13,7 +13,7 @@ Source sourceFromFiles(const std::vector<std::filesystem::path>& files) {
   targets.reserve(files.size());
   for (const std::filesystem::path& file : files) {
     if (!file.empty()) {
-      targets.push_back({file, -1});
+      targets.push_back(playbackFileTarget(file));
     }
   }
   return sourceFromTargets(std::move(targets));
@@ -21,7 +21,7 @@ Source sourceFromFiles(const std::vector<std::filesystem::path>& files) {
 
 Source singleSource(const PlaybackTarget& target) {
   std::vector<PlaybackTarget> targets;
-  if (!target.file.empty()) {
+  if (!playbackTargetFile(target).empty()) {
     targets.push_back(target);
   }
   return sourceFromTargets(std::move(targets));
@@ -33,24 +33,27 @@ Queue::Queue(Services services)
 
 bool Queue::matchesTarget(const Entry& entry, const PlaybackTarget& target,
                           const PathIdentity& targetIdentity) {
-  if (target.file.empty() || entry.fileIdentity != targetIdentity) {
+  if (playbackTargetFile(target).empty() ||
+      entry.fileIdentity != targetIdentity) {
     return false;
   }
 
   // File sources represent a container as one item. Once that item resolves to
   // a concrete internal track, it still identifies the same source position.
   // Track-browser sources carry exact track identities.
-  return entry.target.trackIndex < 0 ||
-         entry.target.trackIndex == target.trackIndex;
+  const std::optional<int> sourceTrack =
+      playbackTargetTrackIndex(entry.target);
+  return !sourceTrack || sourceTrack == playbackTargetTrackIndex(target);
 }
 
 std::optional<std::size_t> Queue::findTarget(const std::vector<Entry>& entries,
                                              const PlaybackTarget& target) {
-  if (target.file.empty()) {
+  if (playbackTargetFile(target).empty()) {
     return std::nullopt;
   }
 
-  const PathIdentity targetIdentity = makePathIdentity(target.file);
+  const PathIdentity targetIdentity =
+      makePathIdentity(playbackTargetFile(target));
   for (std::size_t index = 0; index < entries.size(); ++index) {
     if (matchesTarget(entries[index], target, targetIdentity)) {
       return index;
@@ -64,12 +67,12 @@ std::optional<Queue::PreparedActivation> Queue::prepareStart(
   std::vector<Entry> candidate;
   candidate.reserve(source.targets_.size());
   for (PlaybackTarget& target : source.targets_) {
-    if (target.file.empty()) {
+    if (playbackTargetFile(target).empty()) {
       continue;
     }
     Entry entry;
     entry.target = std::move(target);
-    entry.fileIdentity = makePathIdentity(entry.target.file);
+    entry.fileIdentity = makePathIdentity(playbackTargetFile(entry.target));
     candidate.push_back(std::move(entry));
   }
 
@@ -107,11 +110,11 @@ std::optional<Queue::AdjacentTarget> Queue::adjacent(
     }
 
     const PlaybackTarget& candidate = entries[index].target;
-    if (candidate.trackIndex >= 0) {
+    if (playbackTargetIsTrack(candidate)) {
       return AdjacentTarget{candidate, index};
     }
     if (std::optional<PlaybackTarget> resolved =
-            resolvePathTarget_(candidate.file)) {
+            resolvePathTarget_(playbackTargetFile(candidate))) {
       return AdjacentTarget{std::move(*resolved), index};
     }
   }

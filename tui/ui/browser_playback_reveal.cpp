@@ -12,13 +12,14 @@ namespace {
 
 BrowserState::EntryIdentity playbackSelectionIdentity(
     const PlaybackTarget& target) {
+  const std::filesystem::path& file = playbackTargetFile(target);
+  const std::optional<int> trackIndex = playbackTargetTrackIndex(target);
   const std::filesystem::path path =
-      target.trackIndex >= 0 ? normalizeTrackBrowserPath(target.file)
-                             : target.file;
+      trackIndex ? normalizeTrackBrowserPath(file) : file;
   BrowserEntry entry{
       {}, path,
-      target.trackIndex >= 0
-          ? browser_entry::Action(browser_entry::PlayTrack{target.trackIndex})
+      trackIndex
+          ? browser_entry::Action(browser_entry::PlayTrack{*trackIndex})
           : browser_entry::Action(browser_entry::OpenFile{})};
   return browserEntryIdentity(entry);
 }
@@ -32,12 +33,14 @@ BrowserPlaybackRevealer::BrowserPlaybackRevealer(
       callbacks_(std::move(callbacks)) {}
 
 bool BrowserPlaybackRevealer::reveal(const PlaybackTarget& target) {
-  if (target.file.empty()) {
+  const std::filesystem::path& file = playbackTargetFile(target);
+  const std::optional<int> trackIndex = playbackTargetTrackIndex(target);
+  if (file.empty()) {
     return false;
   }
-  if (target.trackIndex >= 0) {
+  if (trackIndex) {
     const std::filesystem::path trackPath =
-        normalizeTrackBrowserPath(target.file);
+        normalizeTrackBrowserPath(file);
     const bool requiresRefresh =
         browser_.location != browserTrackLocation(trackPath);
     if (requiresRefresh) {
@@ -51,22 +54,22 @@ bool BrowserPlaybackRevealer::reveal(const PlaybackTarget& target) {
                                     playbackSelectionIdentity(target));
   }
 
-  const std::filesystem::path targetDir = target.file.has_parent_path()
-                                              ? target.file.parent_path()
+  const std::filesystem::path targetDir = file.has_parent_path()
+                                              ? file.parent_path()
                                               : std::filesystem::path(".");
   const bool requiresRefresh =
       browser_.location != browserDirectoryLocation(targetDir);
   if (requiresRefresh) {
     return browserNavigator_.reveal(
         browserDirectoryLocation(targetDir),
-        toUtf8String(target.file.filename()),
+        toUtf8String(file.filename()),
         playbackSelectionIdentity(target));
   }
   if (select(target)) {
     return true;
   }
   return browserNavigator_.reveal(
-      browser_.location, toUtf8String(target.file.filename()),
+      browser_.location, toUtf8String(file.filename()),
       playbackSelectionIdentity(target));
 }
 

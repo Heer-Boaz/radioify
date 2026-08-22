@@ -656,8 +656,13 @@ target_sources(browser_navigation_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_browser_navigation_tests>
   ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
   ${CMAKE_SOURCE_DIR}/tui/browser_grid_index.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/browser_input_state.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/browser_model.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/browser_navigation.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/optionsbrowser_target.cpp
   ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/playback_target_match.cpp
 )
 radioify_link_repo_target(browser_navigation_tests)

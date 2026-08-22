@@ -3,13 +3,14 @@
 #include "audio/media_formats.h"
 
 PlaybackTargetKind classifyPlaybackTarget(const PlaybackTarget& target) {
-  if (target.trackIndex >= 0) {
+  if (playbackTargetIsTrack(target)) {
     return PlaybackTargetKind::Audio;
   }
-  if (isSupportedImageExt(target.file)) {
+  const std::filesystem::path& file = playbackTargetFile(target);
+  if (isSupportedImageExt(file)) {
     return PlaybackTargetKind::Image;
   }
-  if (isSupportedVideoExt(target.file)) {
+  if (isSupportedVideoExt(file)) {
     return PlaybackTargetKind::Video;
   }
   return PlaybackTargetKind::Audio;

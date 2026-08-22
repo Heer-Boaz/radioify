@@ -237,30 +237,6 @@ int browserEntryIndexAt(const BrowserState& browser, const GridLayout& layout,
 }
 }  // namespace
 
-void browser_input::EntryClickTracker::recordPress(
-    const BrowserEntry& entry) {
-  anchor_ = browserEntryIdentity(entry);
-}
-
-std::optional<BrowserState::EntryIdentity>
-browser_input::EntryClickTracker::consumeDoubleClickAnchor() {
-  std::optional<BrowserState::EntryIdentity> anchor = std::move(anchor_);
-  anchor_.reset();
-  return anchor;
-}
-
-void browser_input::EntryClickTracker::reset() { anchor_.reset(); }
-
-std::optional<ActionStripItem> BrowserPointerState::releaseAction(
-    std::optional<ActionStripItem> releasedOver) {
-  const std::optional<ActionStripItem> pressed = pressedAction_;
-  pressedAction_.reset();
-  if (pressed && releasedOver && *pressed == *releasedOver) {
-    return pressed;
-  }
-  return std::nullopt;
-}
-
 void setBrowserSearchFocus(BrowserState& browser, BrowserSearchFocus focus,
                           bool& dirty) {
   if (focus == BrowserSearchFocus::None) {
@@ -731,8 +707,7 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
             ? browserEntryIndexAt(browser, layout, mouse.pos.X, mouse.pos.Y,
                                   listTop)
             : -1;
-    if (nextEntryHover != browser.hovered) {
-      browser.hovered = nextEntryHover;
+    if (setBrowserHoveredEntry(browser, nextEntryHover)) {
       dirty = true;
     }
     if (mouse.kind == MouseEventKind::VerticalWheel) {

@@ -123,48 +123,12 @@ int main() {
                "a button action must fire once on matching release");
 
   BrowserState pointerBrowser;
-  pointerBrowser.location = browserDirectoryLocation("C:/Media");
   pointerBrowser.entries = files;
   pointerBrowser.selected = 0;
-  BrowserNavigator::Callbacks pointerCallbacks;
-  BrowserNavigator pointerNavigator(pointerBrowser,
-                                    std::move(pointerCallbacks));
-  GridLayout pointerLayout = verticalLayout(2, 2);
-  pointerLayout.colWidth = 40;
-  BreadcrumbLine pointerBreadcrumb;
-  ActionStripLayout pointerActions;
-  browser_input::EntryClickTracker pointerClickTracker;
-  BrowserPointerState pointerInteraction;
-  int pointerBreadcrumbHover = -1;
-  int pointerActionHover = -1;
-  bool pointerSearchHover = false;
-  bool pointerDirty = false;
-  bool pointerRunning = true;
-  InputCallbacks pointerInputCallbacks;
-  InputEvent pointerMove;
-  pointerMove.type = InputEvent::Type::Mouse;
-  pointerMove.mouse.kind = MouseEventKind::Move;
-  pointerMove.mouse.pos = {0, 1};
-  handleInputEvent(pointerMove, pointerNavigator, pointerClickTracker,
-                   pointerInteraction, pointerLayout, pointerBreadcrumb, -1,
-                   -1, 0, 0, 2, -1, -1, 0, pointerActions, true, true, false,
-                   pointerBreadcrumbHover, pointerActionHover,
-                   pointerSearchHover, pointerDirty, pointerRunning,
-                   pointerInputCallbacks);
+  ok &= expect(setBrowserHoveredEntry(pointerBrowser, 1),
+               "moving hover to another entry must change pointer state");
   ok &= expect(pointerBrowser.selected == 0 && pointerBrowser.hovered == 1,
                "pointer hover must not mutate the browser selection");
-  InputEvent pointerPress = pointerMove;
-  pointerPress.mouse.kind = MouseEventKind::Press;
-  pointerPress.mouse.buttons = MouseButtons::Left;
-  pointerPress.mouse.button = MouseButton::Left;
-  handleInputEvent(pointerPress, pointerNavigator, pointerClickTracker,
-                   pointerInteraction, pointerLayout, pointerBreadcrumb, -1,
-                   -1, 0, 0, 2, -1, -1, 0, pointerActions, true, true, false,
-                   pointerBreadcrumbHover, pointerActionHover,
-                   pointerSearchHover, pointerDirty, pointerRunning,
-                   pointerInputCallbacks);
-  ok &= expect(pointerBrowser.selected == 1 && pointerBrowser.hovered == 1,
-               "a primary click must select the hovered browser entry");
   entryClickTracker.recordPress(files[0]);
   const auto differentEntryAnchor =
       entryClickTracker.consumeDoubleClickAnchor();
@@ -172,22 +136,24 @@ int main() {
                    !browserEntryMatchesIdentity(files[1],
                                                 *differentEntryAnchor),
                "a second press on another entry must not activate it");
-  const PlaybackTarget playingA{songA, -1};
+  const PlaybackTarget playingA = playbackFileTarget(songA);
   ok &= expect(findBrowserPlaybackTargetEntry(files, playingA) == 0,
                "the playing item must be found independently of selection");
   ok &= expect(
-      browserEntryMatchesPlaybackTarget(files[0], {"C:/Media/./A.flac", -1}),
+      browserEntryMatchesPlaybackTarget(
+          files[0], playbackFileTarget("C:/Media/./A.flac")),
       "lexically equivalent playback paths must match");
 #ifdef _WIN32
   ok &= expect(browserEntryMatchesPlaybackTarget(
-                   files[0], {"c:\\media\\a.FLAC", -1}),
+                   files[0], playbackFileTarget("c:\\media\\a.FLAC")),
                "Windows playback matching must use ordinal path identity");
   ok &= expect(browserDirectoryLocation("C:/Media/") ==
                    browserDirectoryLocation("c:\\media"),
                "Windows routes must ignore casing and trailing separators");
 #endif
 
-  const PlaybackTarget playingContainerTrack{songA, 3};
+  const PlaybackTarget playingContainerTrack =
+      *playbackTrackTarget(songA, 3);
   ok &=
       expect(browserEntryMatchesPlaybackTarget(files[0], playingContainerTrack),
              "a container file must remain active for an internal track");

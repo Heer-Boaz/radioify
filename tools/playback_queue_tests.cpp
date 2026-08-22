@@ -24,7 +24,12 @@ playback_route::Route routeFor(const PlaybackTarget& target) {
 
 bool isTarget(const PlaybackTarget& actual, const std::filesystem::path& file,
               int trackIndex) {
-  return samePath(actual.file, file) && actual.trackIndex == trackIndex;
+  return samePath(playbackTargetFile(actual), file) &&
+         playbackTargetTrackIndex(actual).value_or(-1) == trackIndex;
+}
+
+PlaybackTarget trackTarget(const std::filesystem::path& file, int trackIndex) {
+  return *playbackTrackTarget(file, trackIndex);
 }
 
 }  // namespace
@@ -45,7 +50,7 @@ int main() {
          if (samePath(file, skipped)) {
            return std::nullopt;
          }
-         return PlaybackTarget{file, 0};
+         return trackTarget(file, 0);
        },
        [](const PlaybackTarget& target) { return routeFor(target); }});
 
@@ -55,7 +60,7 @@ int main() {
       playback_queue::sourceFromFiles(requestedFiles);
   requestedFiles.clear();
   std::optional<playback_queue::Queue::PreparedActivation> initial =
-      queue.prepareStart(routeFor({songB, 0}), std::move(files));
+      queue.prepareStart(routeFor(trackTarget(songB, 0)), std::move(files));
   ok &= expect(initial && isTarget(initial->route().target, songB, 0),
                "a source containing its target must prepare");
   ok &= expect(resolveCalls == 0,
@@ -85,7 +90,7 @@ int main() {
   queue.commit(std::move(*next));
 
   ok &=
-      expect(!queue.prepareStart(routeFor({songB, 0}),
+      expect(!queue.prepareStart(routeFor(trackTarget(songB, 0)),
                                  playback_queue::sourceFromFiles({unrelated})),
              "a source missing its requested target must be rejected");
   std::optional<playback_queue::Queue::PreparedActivation>
@@ -97,8 +102,9 @@ int main() {
 
   std::optional<playback_queue::Queue::PreparedActivation>
       discardedReplacement =
-          queue.prepareStart(routeFor({unrelated, 0}),
-                             playback_queue::singleSource({unrelated, 0}));
+          queue.prepareStart(routeFor(trackTarget(unrelated, 0)),
+                             playback_queue::singleSource(
+                                 trackTarget(unrelated, 0)));
   ok &= expect(discardedReplacement &&
                    isTarget(discardedReplacement->route().target, unrelated, 0),
                "a valid replacement source must prepare independently");
@@ -127,7 +133,7 @@ int main() {
                "playback target rather than a browser-navigation request");
   const int resolvesBeforeExactTransport = resolveCalls;
   std::optional<playback_queue::Queue::PreparedActivation> exactTrack =
-      queue.prepareStart(routeFor({songA, 3}),
+      queue.prepareStart(routeFor(trackTarget(songA, 3)),
                          browser_playback_source::capture(trackEntries));
   ok &= expect(exactTrack.has_value(),
                "an exact track-browser source must prepare");
@@ -139,7 +145,8 @@ int main() {
              "track-browser previous must preserve exact track order");
 
   exactTrack = queue.prepareStart(
-      routeFor({songA, 3}), browser_playback_source::capture(trackEntries));
+      routeFor(trackTarget(songA, 3)),
+      browser_playback_source::capture(trackEntries));
   queue.commit(std::move(*exactTrack));
   std::optional<playback_queue::Queue::PreparedActivation> nextTrack =
       queue.prepareTransport(playback_queue::Direction::Next);
@@ -149,8 +156,9 @@ int main() {
                "exact track targets must not invoke the path resolver");
 
   std::optional<playback_queue::Queue::PreparedActivation> singleton =
-      queue.prepareStart(routeFor({songC, 2}),
-                         playback_queue::singleSource({songC, 2}));
+      queue.prepareStart(routeFor(trackTarget(songC, 2)),
+                         playback_queue::singleSource(
+                             trackTarget(songC, 2)));
   ok &= expect(singleton.has_value(),
                "a direct action must prepare an explicit singleton source");
   queue.commit(std::move(*singleton));
@@ -161,7 +169,8 @@ int main() {
 #ifdef _WIN32
   std::optional<playback_queue::Queue::PreparedActivation> windowsPath =
       queue.prepareStart(
-          routeFor({std::filesystem::path("c:\\media\\a.FLAC"), 0}),
+          routeFor(trackTarget(std::filesystem::path("c:\\media\\a.FLAC"),
+                               0)),
           playback_queue::sourceFromFiles(
               {std::filesystem::path("C:/Media/A.flac"), songB}));
   ok &= expect(windowsPath.has_value(),

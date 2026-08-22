@@ -114,6 +114,8 @@ class BrowserPointerState {
   std::optional<ActionStripItem> pressedAction_;
 };
 
+bool setBrowserHoveredEntry(BrowserState& browser, int entryIndex);
+
 PlaybackInputResult handlePlaybackInput(
     const InputEvent& ev, const InputCallbacks& callbacks,
     uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
