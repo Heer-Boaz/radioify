@@ -272,13 +272,6 @@ bool isAudioMode(AudioMode mode) {
   return currentAudioMode() == mode;
 }
 
-const VgmDeviceInfo* findVgmDeviceInfo(uint32_t deviceId) {
-  for (const auto& device : gAudio.vgmDevices) {
-    if (device.id == deviceId) return &device;
-  }
-  return nullptr;
-}
-
 const AudioBackendHandlers* selectAudioBackend(
     const std::filesystem::path& file) {
   for (const auto& entry : kBackends) {

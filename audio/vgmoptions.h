@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 enum class VgmPlaybackHz : uint8_t {
@@ -69,4 +70,9 @@ struct VgmDeviceOptions {
   uint8_t sampleRateMode = 0;
   uint32_t sampleRate = 0;
   bool muted = false;
+};
+
+struct VgmDeviceCatalog {
+  std::vector<VgmDeviceInfo> devices;
+  std::unordered_map<uint32_t, VgmDeviceOptions> defaults;
 };

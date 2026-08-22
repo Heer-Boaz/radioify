@@ -399,25 +399,27 @@ bool audioStopKssInstrumentAudition() {
 }
 
 bool audioScanKssInstruments(const std::filesystem::path& file, int trackIndex,
+                             uint32_t sampleRate,
+                             KssPlaybackOptions options,
+                             const std::function<bool()>& cancellationRequested,
                              std::vector<KssInstrumentProfile>* out,
                              std::string* error) {
   if (!out) return false;
   out->clear();
   if (!isKssExt(file)) return false;
 
-  KssPlaybackOptions options = gAudio.kssOptions;
   options.instrumentDevice = KssInstrumentDevice::None;
   options.instrumentChannel = -1;
 
   KssAudioDecoder decoder;
-  if (!decoder.init(file, 1, gAudio.sampleRate, error, trackIndex, options)) {
+  if (!decoder.init(file, 1, sampleRate, error, trackIndex, options)) {
     return false;
   }
 
   uint64_t totalFrames = 0;
   decoder.getTotalFrames(&totalFrames);
   if (totalFrames == 0) {
-    totalFrames = static_cast<uint64_t>(gAudio.sampleRate) * 150;
+    totalFrames = static_cast<uint64_t>(sampleRate) * 150;
   }
 
   std::unordered_map<std::string, size_t> seen;
@@ -559,6 +561,9 @@ bool audioScanKssInstruments(const std::filesystem::path& file, int trackIndex,
   std::vector<float> buffer(chunkFrames);
   uint64_t processed = 0;
   while (processed < totalFrames) {
+    if (cancellationRequested && cancellationRequested()) {
+      return false;
+    }
     uint32_t toRead = static_cast<uint32_t>(
         std::min<uint64_t>(chunkFrames, totalFrames - processed));
     uint64_t read = 0;
@@ -580,30 +585,33 @@ bool audioScanVgmMetadata(const std::filesystem::path& file,
   return vgmReadMetadata(file, out, error);
 }
 
-bool audioScanVgmDevices(const std::filesystem::path& file,
-                         std::vector<VgmDeviceInfo>* out,
+bool audioScanVgmDevices(const std::filesystem::path& file, uint32_t channels,
+                         uint32_t sampleRate, VgmDeviceCatalog* out,
                          std::string* error) {
   if (!out) return false;
-  out->clear();
+  out->devices.clear();
+  out->defaults.clear();
   if (!isVgmExt(file)) return false;
 
   VgmAudioDecoder decoder;
-  uint32_t channels = gAudio.channels == 0 ? 2 : gAudio.channels;
-  if (!decoder.init(file, channels, gAudio.sampleRate, error)) {
+  if (channels == 0) {
+    channels = 2;
+  }
+  if (sampleRate == 0) {
+    sampleRate = 48000;
+  }
+  if (!decoder.init(file, channels, sampleRate, error)) {
     return false;
   }
-  if (!decoder.getDevices(out)) {
+  if (!decoder.getDevices(&out->devices)) {
     if (error) *error = "Failed to scan VGM devices.";
     return false;
   }
 
-  gAudio.vgmDevicesFile = file;
-  gAudio.vgmDevices = *out;
-  gAudio.vgmDeviceDefaults.clear();
-  for (const auto& device : *out) {
+  for (const auto& device : out->devices) {
     VgmDeviceOptions options{};
     if (decoder.getDeviceOptions(device.id, &options)) {
-      gAudio.vgmDeviceDefaults[device.id] = options;
+      out->defaults[device.id] = options;
     }
   }
   return true;
@@ -756,13 +764,11 @@ bool audioGetVgmDeviceOptions(uint32_t deviceId, VgmDeviceOptions* out) {
       return true;
     }
   }
-  auto it = gAudio.vgmDeviceDefaults.find(deviceId);
-  if (it == gAudio.vgmDeviceDefaults.end()) return false;
-  *out = it->second;
   auto overrideIt = gAudio.vgmDeviceOverrides.find(deviceId);
-  if (overrideIt != gAudio.vgmDeviceOverrides.end()) {
-    *out = overrideIt->second;
+  if (overrideIt == gAudio.vgmDeviceOverrides.end()) {
+    return false;
   }
+  *out = overrideIt->second;
   return true;
 }
 
@@ -879,13 +885,23 @@ bool audioAdjustVgmOption(VgmOptionId id, int direction) {
   return changed;
 }
 
-bool audioAdjustVgmDeviceOption(uint32_t deviceId, VgmDeviceOptionId id,
+bool audioAdjustVgmDeviceOption(const VgmDeviceInfo& device,
+                                const VgmDeviceOptions& baseline,
+                                VgmDeviceOptionId id,
                                 int direction) {
   if (direction == 0) return false;
 
-  VgmDeviceOptions options{};
-  if (!audioGetVgmDeviceOptions(deviceId, &options)) {
-    return false;
+  VgmDeviceOptions options = baseline;
+  if (isAudioMode(AudioMode::Vgm)) {
+    VgmDeviceOptions activeOptions{};
+    if (gAudio.state.vgm.getDeviceOptions(device.id, &activeOptions)) {
+      options = activeOptions;
+    }
+  } else {
+    auto overrideIt = gAudio.vgmDeviceOverrides.find(device.id);
+    if (overrideIt != gAudio.vgmDeviceOverrides.end()) {
+      options = overrideIt->second;
+    }
   }
 
   bool changed = false;
@@ -895,12 +911,10 @@ bool audioAdjustVgmDeviceOption(uint32_t deviceId, VgmDeviceOptionId id,
       changed = true;
       break;
     case VgmDeviceOptionId::Core: {
-      const VgmDeviceInfo* info = findVgmDeviceInfo(deviceId);
-      if (!info) break;
       std::vector<uint32_t> cores;
-      cores.reserve(info->coreIds.size() + 1);
+      cores.reserve(device.coreIds.size() + 1);
       cores.push_back(0);
-      for (uint32_t coreId : info->coreIds) {
+      for (uint32_t coreId : device.coreIds) {
         if (coreId != 0) cores.push_back(coreId);
       }
       int idx = 0;
@@ -956,10 +970,10 @@ bool audioAdjustVgmDeviceOption(uint32_t deviceId, VgmDeviceOptionId id,
 
   if (!changed) return false;
 
-  gAudio.vgmDeviceOverrides[deviceId] = options;
+  gAudio.vgmDeviceOverrides[device.id] = options;
   if (isAudioMode(AudioMode::Vgm)) {
     if (id == VgmDeviceOptionId::Mute) {
-      gAudio.state.vgm.setDeviceOptions(deviceId, options);
+      gAudio.state.vgm.setDeviceOptions(device.id, options);
     } else {
       reloadVgmWithOptions();
     }

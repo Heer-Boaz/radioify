@@ -153,6 +153,9 @@ bool audioGetKssInstrumentAuditionState(KssInstrumentDevice* device,
 bool audioStartKssInstrumentAudition(const KssInstrumentProfile& profile);
 bool audioStopKssInstrumentAudition();
 bool audioScanKssInstruments(const std::filesystem::path& file, int trackIndex,
+                             uint32_t sampleRate,
+                             KssPlaybackOptions options,
+                             const std::function<bool()>& cancellationRequested,
                              std::vector<KssInstrumentProfile>* out,
                              std::string* error);
 NsfPlaybackOptions audioGetNsfOptionState();
@@ -162,9 +165,11 @@ bool audioAdjustVgmOption(VgmOptionId id, int direction = 1);
 bool audioScanVgmMetadata(const std::filesystem::path& file,
                           std::vector<VgmMetadataEntry>* out,
                           std::string* error);
-bool audioScanVgmDevices(const std::filesystem::path& file,
-                         std::vector<VgmDeviceInfo>* out,
+bool audioScanVgmDevices(const std::filesystem::path& file, uint32_t channels,
+                         uint32_t sampleRate, VgmDeviceCatalog* out,
                          std::string* error);
 bool audioGetVgmDeviceOptions(uint32_t deviceId, VgmDeviceOptions* out);
-bool audioAdjustVgmDeviceOption(uint32_t deviceId, VgmDeviceOptionId id,
+bool audioAdjustVgmDeviceOption(const VgmDeviceInfo& device,
+                                const VgmDeviceOptions& baseline,
+                                VgmDeviceOptionId id,
                                 int direction = 1);

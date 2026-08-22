@@ -135,9 +135,6 @@ struct AudioPlaybackState {
   KssPlaybackOptions kssOptions{};
   NsfPlaybackOptions nsfOptions{};
   VgmPlaybackOptions vgmOptions{};
-  std::filesystem::path vgmDevicesFile;
-  std::vector<VgmDeviceInfo> vgmDevices;
-  std::unordered_map<uint32_t, VgmDeviceOptions> vgmDeviceDefaults;
   std::unordered_map<uint32_t, VgmDeviceOptions> vgmDeviceOverrides;
   AuditionState audition{};
 };

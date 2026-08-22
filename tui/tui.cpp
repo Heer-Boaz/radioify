@@ -387,6 +387,7 @@ static std::optional<std::vector<BrowserEntry>> listEntries(
 
 static bool populateBrowser(BrowserState& state,
                             const std::string& initialName,
+                            const OptionsBrowserRuntimeSnapshot& optionsRuntime,
                             const BrowserContentWorker::Cancellation*
                                 cancellation) {
   if (cancellation && cancellation->requested()) {
@@ -395,7 +396,11 @@ static bool populateBrowser(BrowserState& state,
   const bool optionsActive =
       state.location.kind == BrowserLocationKind::OptionsBrowser;
   if (optionsActive) {
-    if (!prepareOptionsBrowserContent(state)) {
+    const auto cancellationRequested = [cancellation]() {
+      return cancellation && cancellation->requested();
+    };
+    if (!prepareOptionsBrowserContent(state, optionsRuntime,
+                                      cancellationRequested)) {
       return false;
     }
   } else if (isTrackBrowserActive(state)) {
@@ -501,7 +506,8 @@ static std::optional<PreparedBrowserContent> prepareBrowserContent(
   candidate.sortMode = request.sortMode;
   candidate.sortDescending = request.sortDescending;
   candidate.filter = request.filter;
-  if (!populateBrowser(candidate, request.initialName, cancellation)) {
+  if (!populateBrowser(candidate, request.initialName, request.optionsRuntime,
+                       cancellation)) {
     return std::nullopt;
   }
 
@@ -1381,17 +1387,17 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
          const BrowserContentWorker::Cancellation& cancellation) {
         return prepareBrowserContent(request, &cancellation);
       });
-  bool browserUiActive = false;
   BrowserNavigator::Callbacks browserNavigationCallbacks;
   browserNavigationCallbacks.prepare =
       [&](BrowserPreparationId preparationId,
           const BrowserContentRequest& request) {
-        if (!browserUiActive ||
-            request.location.kind == BrowserLocationKind::OptionsBrowser) {
-          return BrowserContentPreparation::complete(
-              prepareBrowserContent(request));
+        BrowserContentRequest workerRequest = request;
+        if (request.location.kind == BrowserLocationKind::OptionsBrowser) {
+          workerRequest.optionsRuntime = captureOptionsBrowserRuntimeSnapshot(
+              request.location, sampleRate, audioConfig.mono ? 1u : 2u);
         }
-        if (!browserContentWorker.submit(preparationId, request)) {
+        if (!browserContentWorker.submit(preparationId,
+                                         std::move(workerRequest))) {
           return BrowserContentPreparation::complete(std::nullopt);
         }
         return BrowserContentPreparation::pending();
@@ -1408,8 +1414,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     browser.location = browserDirectoryLocation({});
     browserNavigator.reload();
   }
-  browserUiActive = true;
-
   input.init();
 
   ConsoleScreen screen;

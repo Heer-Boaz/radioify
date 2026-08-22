@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "browser_model.h"
+#include "optionsbrowser.h"
 
 BrowserState::EntryIdentity browserEntryIdentity(const BrowserEntry& entry);
 bool browserEntryMatchesIdentity(
@@ -31,6 +32,7 @@ struct BrowserContentRequest {
   int selected = 0;
   BrowserState::SortMode sortMode = BrowserState::SortMode::Name;
   bool sortDescending = false;
+  OptionsBrowserRuntimeSnapshot optionsRuntime;
 };
 
 struct PreparedBrowserContent {

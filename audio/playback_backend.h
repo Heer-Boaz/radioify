@@ -4,8 +4,6 @@
 #include <filesystem>
 #include <string>
 
-struct VgmDeviceInfo;
-
 enum class AudioMode : int {
   None = 0,
   Stream,
@@ -45,7 +43,6 @@ struct AudioBackendHandlers {
 
 AudioMode currentAudioMode();
 bool isAudioMode(AudioMode mode);
-const VgmDeviceInfo* findVgmDeviceInfo(uint32_t deviceId);
 
 const AudioBackendHandlers* selectAudioBackend(
     const std::filesystem::path& file);
