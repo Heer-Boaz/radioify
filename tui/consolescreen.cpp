@@ -1025,36 +1025,38 @@ BreadcrumbLine buildBreadcrumbLine(const BrowserLocation& location, int width) {
     }
   };
 
-  if (location.kind == BrowserLocationKind::OptionsBrowser) {
-    appendPath(location.path.parent_path(),
-               browserDirectoryLocation(location.path.parent_path()));
+  if (location.kind() == BrowserLocationKind::OptionsBrowser) {
+    const std::filesystem::path& file = location.path();
+    const std::optional<uint32_t> trackIndex =
+        browserOptionsTrackIndex(location);
+    appendPath(file.parent_path(),
+               browserDirectoryLocation(file.parent_path()));
     const BrowserLocation root = browserOptionsLocation(
-        location.path, location.trackIndex, BrowserOptionsPage::Root);
+        file, trackIndex, BrowserOptionsRoot{});
     items.push_back(Item{"Options", root});
-    switch (location.optionsPage) {
-      case BrowserOptionsPage::Root:
+    switch (browserOptionsPageKind(location)) {
+      case BrowserOptionsPageKind::Root:
         break;
-      case BrowserOptionsPage::Instruments:
+      case BrowserOptionsPageKind::Instruments:
         items.push_back(Item{"Instruments", location});
         break;
-      case BrowserOptionsPage::VgmDevices: {
+      case BrowserOptionsPageKind::VgmDevices: {
         items.push_back(Item{"Devices", location});
         break;
       }
-      case BrowserOptionsPage::VgmDevice: {
+      case BrowserOptionsPageKind::VgmDevice: {
         items.push_back(Item{
-            "Devices", browserOptionsLocation(location.path,
-                                               location.trackIndex,
-                                               BrowserOptionsPage::VgmDevices)});
+            "Devices", browserOptionsLocation(
+                           file, trackIndex, BrowserOptionsVgmDevices{})});
         items.push_back(Item{"Device", location});
         break;
       }
-      case BrowserOptionsPage::VgmMetadata:
+      case BrowserOptionsPageKind::VgmMetadata:
         items.push_back(Item{"Metadata", location});
         break;
     }
   } else {
-    appendPath(location.path, location);
+    appendPath(location.path(), location);
   }
 
   const std::string sep = " > ";
@@ -1121,7 +1123,7 @@ BreadcrumbLine buildBreadcrumbLine(const BrowserLocation& location, int width) {
   line.text = text;
   if (line.text.empty()) {
     std::string fallback =
-        fitLine(toUtf8String(location.path), width - prefixLen);
+        fitLine(toUtf8String(location.path()), width - prefixLen);
     line.text = prefix + fallback;
   }
   if (line.crumbs.empty()) {

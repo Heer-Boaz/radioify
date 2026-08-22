@@ -19,12 +19,14 @@ std::optional<OptionsBrowserSubject> optionsBrowserSubjectForEntry(
   OptionsBrowserSubject subject;
   subject.file = entry.path;
   if (const auto* track = entry.actionAs<browser_entry::PlayTrack>()) {
-    subject.trackIndex = track->trackIndex;
+    if (track->trackIndex >= 0) {
+      subject.trackIndex = static_cast<uint32_t>(track->trackIndex);
+    }
   }
   return subject;
 }
 
 BrowserLocation optionsBrowserOpenLocation(
     const OptionsBrowserSubject& subject) {
-  return browserOptionsLocation(subject.file, subject.trackIndex.value_or(-1));
+  return browserOptionsLocation(subject.file, subject.trackIndex);
 }

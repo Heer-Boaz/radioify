@@ -127,7 +127,7 @@ void sortBrowserEntries(BrowserState& state) {
     return;
   }
 
-  const bool sortingRootLevel = state.location.path.empty();
+  const bool sortingRootLevel = state.location.path().empty();
   const bool hasSectionHeaders =
       std::any_of(state.entries.begin(), state.entries.end(),
                   [](const BrowserEntry& entry) {

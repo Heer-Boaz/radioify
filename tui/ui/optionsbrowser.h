@@ -18,7 +18,7 @@ enum class OptionsBrowserResult {
 
 struct OptionsBrowserSubject {
   std::filesystem::path file;
-  std::optional<int> trackIndex;
+  std::optional<uint32_t> trackIndex;
 };
 
 struct OptionsBrowserRuntimeSnapshot {

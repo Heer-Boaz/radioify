@@ -178,12 +178,13 @@ int main() {
   const BrowserEntry kssTrack = trackEntry("Track 5", kssFile, 4);
   const auto kssTrackSubject = optionsBrowserSubjectForEntry(kssTrack);
   ok &= expect(kssTrackSubject && kssTrackSubject->trackIndex == 4 &&
-                   optionsBrowserOpenLocation(*kssTrackSubject).trackIndex == 4,
+                   browserOptionsTrackIndex(
+                       optionsBrowserOpenLocation(*kssTrackSubject)) == 4,
                "a selected internal track must remain the options subject");
 
   BrowserState optionIdentityBrowser;
   optionIdentityBrowser.location =
-      browserOptionsLocation(songA, 0, BrowserOptionsPage::Root);
+      browserOptionsLocation(songA, uint32_t{0}, BrowserOptionsRoot{});
   optionIdentityBrowser.entries.emplace_back(
       "50Hz: auto", std::filesystem::path{},
       browser_entry::AdjustKssOption{KssOptionId::Force50Hz});
@@ -202,7 +203,7 @@ int main() {
     browser.entries.push_back(
         directoryEntry(
             "Folder " + std::to_string(i),
-            browser.location.path / ("Folder " + std::to_string(i))));
+            browser.location.path() / ("Folder " + std::to_string(i))));
   }
   browser.selected = 17;
   browser.scrollRow = 13;
@@ -274,15 +275,15 @@ int main() {
   BrowserNavigator::Callbacks historyCallbacks;
   historyCallbacks.prepare = [&](BrowserPreparationId,
                                  const BrowserContentRequest& request) {
-    if ((request.location.kind == BrowserLocationKind::Directory &&
+    if ((request.location.kind() == BrowserLocationKind::Directory &&
          rejectDirectory) ||
-        (request.location.kind == BrowserLocationKind::TrackBrowser &&
+        (request.location.kind() == BrowserLocationKind::TrackBrowser &&
          rejectTracks)) {
       return BrowserContentPreparation::complete(std::nullopt);
     }
     PreparedBrowserContent prepared;
     prepared.entries =
-        request.location.kind == BrowserLocationKind::TrackBrowser ? tracks
+        request.location.kind() == BrowserLocationKind::TrackBrowser ? tracks
                                                                    : files;
     prepared.selected = request.selected;
     return BrowserContentPreparation::complete(std::move(prepared));
@@ -364,7 +365,7 @@ int main() {
   navigatorCallbacks.prepare = [&](BrowserPreparationId,
                                    const BrowserContentRequest& request) {
     ++preparedCount;
-    if (request.location.kind == BrowserLocationKind::Directory &&
+    if (request.location.kind() == BrowserLocationKind::Directory &&
         rejectRoutedDirectory) {
       return BrowserContentPreparation::complete(std::nullopt);
     }
@@ -385,7 +386,7 @@ int main() {
   const size_t mainForwardSize = routedBrowser.forwardHistory.size();
 
   const BrowserLocation optionsRoot =
-      browserOptionsLocation(songA, 3, BrowserOptionsPage::Root);
+      browserOptionsLocation(songA, uint32_t{3}, BrowserOptionsRoot{});
   const int preparedBeforeContext = preparedCount;
   ok &= expect(navigator.navigate(optionsRoot),
                "a contextual route must activate successfully");
@@ -397,14 +398,14 @@ int main() {
                "opening a context must preserve the main history");
 
   const BrowserLocation optionsLocation = browserOptionsLocation(
-      songA, 3, BrowserOptionsPage::VgmDevices);
+      songA, uint32_t{3}, BrowserOptionsVgmDevices{});
   ok &= expect(navigator.navigate(optionsLocation) &&
                    routedBrowser.navigationContext &&
                    routedBrowser.navigationContext->backHistory.size() == 1 &&
                    routedBrowser.backHistory.size() == mainBackSize,
                "context navigation must use its own Back stack");
   const BrowserLocation deviceLocation = browserOptionsLocation(
-      songA, 3, BrowserOptionsPage::VgmDevice, 0x2612);
+      songA, uint32_t{3}, BrowserOptionsVgmDevice{0x2612});
   ok &= expect(optionsLocation != deviceLocation,
                "typed options pages must be distinct browser locations");
   ok &= expect(navigator.navigate(deviceLocation) && navigator.back() &&

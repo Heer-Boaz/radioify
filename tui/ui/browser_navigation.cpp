@@ -256,7 +256,7 @@ bool BrowserNavigator::beginContext(
   return activate(target, initialName, selection, true,
                   [this, target, origin]() {
                     BrowserState::NavigationContext context;
-                    context.kind = target.kind;
+                    context.kind = target.kind();
                     context.origin = origin;
                     browser_.navigationContext = std::move(context);
                   });
@@ -269,7 +269,7 @@ bool BrowserNavigator::navigateFromContext(
     return false;
   }
 
-  if (target.kind == browser_.navigationContext->kind) {
+  if (target.kind() == browser_.navigationContext->kind) {
     const BrowserState::Location from = captureBrowserLocation(browser_);
     return activate(target, initialName, selection, true, [this, from]() {
       BrowserState::NavigationContext& context = *browser_.navigationContext;
@@ -336,7 +336,7 @@ bool BrowserNavigator::restoreLocation(
 bool BrowserNavigator::restore(const BrowserState::Location& location) {
   return restoreLocation(location, [this, location]() {
     if (browser_.navigationContext &&
-        location.route.kind != browser_.navigationContext->kind) {
+        location.route.kind() != browser_.navigationContext->kind) {
       browser_.navigationContext.reset();
     }
   });

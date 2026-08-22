@@ -330,7 +330,7 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
     }
 
     const bool leavingTrackBrowser = isTrackBrowserActive(browser);
-    const std::filesystem::path departedPath = browser.location.path;
+    const std::filesystem::path departedPath = browser.location.path();
     const std::optional<std::filesystem::path> parent =
         browserParentDirectory(departedPath);
     if (!parent) return false;
@@ -420,9 +420,9 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
     }
     if (!target.is_absolute()) {
       const std::filesystem::path base =
-          browser.location.kind == BrowserLocationKind::Directory
-              ? browser.location.path
-              : browser.location.path.parent_path();
+          browser.location.kind() == BrowserLocationKind::Directory
+              ? browser.location.path()
+              : browser.location.path().parent_path();
       target = base / target;
     }
 

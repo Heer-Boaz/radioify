@@ -394,7 +394,7 @@ static bool populateBrowser(BrowserState& state,
     return false;
   }
   const bool optionsActive =
-      state.location.kind == BrowserLocationKind::OptionsBrowser;
+      state.location.kind() == BrowserLocationKind::OptionsBrowser;
   if (optionsActive) {
     const auto cancellationRequested = [cancellation]() {
       return cancellation && cancellation->requested();
@@ -405,7 +405,7 @@ static bool populateBrowser(BrowserState& state,
     }
   } else if (isTrackBrowserActive(state)) {
     std::shared_ptr<const TrackBrowserContent> content =
-        prepareTrackBrowserContent(state.location.path);
+        prepareTrackBrowserContent(state.location.path());
     if (!content || (cancellation && cancellation->requested())) {
       return false;
     }
@@ -424,7 +424,7 @@ static bool populateBrowser(BrowserState& state,
     }
   } else {
     std::optional<std::vector<BrowserEntry>> entries =
-        listEntries(state.location.path, cancellation);
+        listEntries(state.location.path(), cancellation);
     if (!entries) {
       return false;
     }
@@ -1399,7 +1399,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       [&](BrowserPreparationId preparationId,
           const BrowserContentRequest& request) {
         BrowserContentRequest workerRequest = request;
-        if (request.location.kind == BrowserLocationKind::OptionsBrowser) {
+        if (request.location.kind() == BrowserLocationKind::OptionsBrowser) {
           workerRequest.optionsRuntime = captureOptionsBrowserRuntimeSnapshot(
               request.location, sampleRate, audioConfig.mono ? 1u : 2u);
         }
@@ -3529,7 +3529,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       } else if (trackMode) {
         showingLabel =
             "  Showing: tracks in " +
-            toUtf8String(browser.location.path.filename());
+            toUtf8String(browser.location.path().filename());
       } else {
         showingLabel.clear();
       }

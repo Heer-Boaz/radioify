@@ -30,7 +30,7 @@ std::shared_ptr<const TrackBrowserContent> prepareTrackBrowserContent(
 }
 
 bool isTrackBrowserActive(const BrowserState& state) {
-  return state.location.kind == BrowserLocationKind::TrackBrowser;
+  return state.location.kind() == BrowserLocationKind::TrackBrowser;
 }
 
 const TrackBrowserContent* trackBrowserContent(const BrowserState& state) {
