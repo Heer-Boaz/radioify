@@ -2,10 +2,13 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "media_artwork_sidecar.h"
+#include "playback/target.h"
 
 struct PlaybackMediaArtwork {
   enum class Kind : uint8_t {
@@ -20,9 +23,20 @@ struct PlaybackMediaArtwork {
 };
 
 struct PlaybackMediaDisplayRequest {
+  explicit PlaybackMediaDisplayRequest(PlaybackTarget playbackTarget,
+                                       bool video = false)
+      : target(std::move(playbackTarget)), isVideo(video) {}
+
+  const std::filesystem::path& file() const {
+    return playbackTargetFile(target);
+  }
+
+  std::optional<int> trackIndex() const {
+    return playbackTargetTrackIndex(target);
+  }
+
+  PlaybackTarget target;
   bool isVideo = false;
-  std::filesystem::path file;
-  int trackIndex = -1;
 };
 
 struct PlaybackMediaDisplayResolveOptions {

@@ -213,11 +213,13 @@ struct PlaybackSystemControls::Impl {
 
   void updateDisplayMetadata(const State& state) {
     PlaybackMediaDisplayInfo metadata;
-    PlaybackMediaDisplayRequest request;
+    PlaybackTarget target = playbackFileTarget(state.file);
+    if (const std::optional<PlaybackTarget> trackTarget =
+            playbackTrackTarget(state.file, state.trackIndex)) {
+      target = *trackTarget;
+    }
+    PlaybackMediaDisplayRequest request(std::move(target), state.isVideo);
     PlaybackMediaDisplayResolveOptions options;
-    request.isVideo = state.isVideo;
-    request.file = state.file;
-    request.trackIndex = state.trackIndex;
     std::string unusedError;
     resolvePlaybackMediaDisplayInfo(request, options, &metadata, &unusedError);
     auto updater = controls.DisplayUpdater();

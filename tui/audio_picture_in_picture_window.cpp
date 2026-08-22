@@ -156,10 +156,12 @@ void AudioPictureInPictureWindow::refreshArtwork(const Context& context,
     return;
   }
 
-  PlaybackMediaDisplayRequest request;
-  request.file = context.nowPlayingPath;
-  request.trackIndex = context.trackIndex;
-  request.isVideo = false;
+  PlaybackTarget target = playbackFileTarget(context.nowPlayingPath);
+  if (const std::optional<PlaybackTarget> trackTarget =
+          playbackTrackTarget(context.nowPlayingPath, context.trackIndex)) {
+    target = *trackTarget;
+  }
+  PlaybackMediaDisplayRequest request(std::move(target), false);
 
   std::string ignoredError;
   if (resolvePlaybackMediaArtworkAscii(

@@ -224,10 +224,10 @@ struct ThumbEntry {
 struct ThumbJob {
   std::string key;
   std::filesystem::path path;
+  std::optional<PlaybackTarget> audioTarget;
   bool isImage = false;
   bool isVideo = false;
   bool isAudio = false;
-  int trackIndex = -1;
   int width = 0;
   int height = 0;
   uint64_t generation = 0;
@@ -390,13 +390,10 @@ static bool renderVideoThumbnail(const std::filesystem::path& file,
   return false;
 }
 
-static bool renderAudioThumbnail(const std::filesystem::path& file,
-                                 int trackIndex, int maxWidth, int maxHeight,
+static bool renderAudioThumbnail(const PlaybackTarget& target,
+                                 int maxWidth, int maxHeight,
                                  Thumbnail& out, std::string* error) {
-  PlaybackMediaDisplayRequest request;
-  request.file = file;
-  request.trackIndex = trackIndex;
-  request.isVideo = false;
+  PlaybackMediaDisplayRequest request(target, false);
 
   AsciiArt art;
   std::string artworkError;
@@ -423,8 +420,9 @@ static bool executeThumbnailJob(const ThumbJob& job, Thumbnail& thumb,
       return renderVideoThumbnail(job.path, job.width, job.height, thumb, error);
     }
     if (job.isAudio) {
-      return renderAudioThumbnail(job.path, job.trackIndex, job.width,
-                                  job.height, thumb, error);
+      return job.audioTarget &&
+             renderAudioThumbnail(*job.audioTarget, job.width, job.height,
+                                  thumb, error);
     }
   } catch (const std::exception& ex) {
     if (error) {
@@ -742,7 +740,11 @@ void drawBrowserEntries(ConsoleScreen& screen, const BrowserState& browser,
       job.isVideo = wantVideo;
       job.isAudio = wantAudio;
       const auto* track = entry.actionAs<browser_entry::PlayTrack>();
-      job.trackIndex = track ? track->trackIndex : -1;
+      if (track) {
+        job.audioTarget = playbackTrackTarget(entry.path, track->trackIndex);
+      } else {
+        job.audioTarget = playbackFileTarget(entry.path);
+      }
       job.width = width;
       job.height = height;
       job.generation = cache.generation;

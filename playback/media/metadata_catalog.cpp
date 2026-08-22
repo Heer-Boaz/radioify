@@ -247,15 +247,20 @@ void applyEmulatedMetadata(const PlaybackMediaDisplayRequest& request,
     return;
   }
 
-  if (isGmeExt(request.file)) {
-    applyGmeMetadata(request.file, request.trackIndex, out);
+  const std::filesystem::path& file = request.file();
+  const std::optional<int> trackIndex = request.trackIndex();
+  if (isGmeExt(file)) {
+    constexpr int kDefaultGmeTrackIndex = 0;
+    applyGmeMetadata(file, trackIndex.value_or(kDefaultGmeTrackIndex), out);
     return;
   }
-  if (isVgmExt(request.file)) {
-    applyVgmMetadata(request.file, out);
+  if (isVgmExt(file)) {
+    applyVgmMetadata(file, out);
     return;
   }
-  applyTrackCatalogFallback(request.file, request.trackIndex, out);
+  if (trackIndex) {
+    applyTrackCatalogFallback(file, *trackIndex, out);
+  }
 }
 
 bool tryResolveTaggedMetadata(const PlaybackMediaDisplayRequest& request,
@@ -266,7 +271,7 @@ bool tryResolveTaggedMetadata(const PlaybackMediaDisplayRequest& request,
   }
 
   AVFormatContext* fmt = nullptr;
-  const std::string pathUtf8 = toUtf8String(request.file);
+  const std::string pathUtf8 = toUtf8String(request.file());
   const int openErr =
       avformat_open_input(&fmt, pathUtf8.c_str(), nullptr, nullptr);
   if (openErr < 0) {
@@ -359,12 +364,14 @@ bool resolvePlaybackMediaDisplayInfo(const PlaybackMediaDisplayRequest& request,
   }
 
   *out = PlaybackMediaDisplayInfo{};
-  out->title = fallbackMediaTitle(request.file);
+  const std::filesystem::path& file = request.file();
+  const std::optional<int> trackIndex = request.trackIndex();
+  out->title = fallbackMediaTitle(file);
 
   std::string metadataError;
-  const bool isEmulated = isGmeExt(request.file) || isGsfExt(request.file) ||
-                          isVgmExt(request.file) || isKssExt(request.file) ||
-                          isPsfExt(request.file);
+  const bool isEmulated = isGmeExt(file) || isGsfExt(file) ||
+                          isVgmExt(file) || isKssExt(file) ||
+                          isPsfExt(file);
 
   if (isEmulated) {
     applyEmulatedMetadata(request, out);
@@ -373,10 +380,10 @@ bool resolvePlaybackMediaDisplayInfo(const PlaybackMediaDisplayRequest& request,
   }
 
   if (out->title.empty()) {
-    out->title = fallbackMediaTitle(request.file);
+    out->title = fallbackMediaTitle(file);
   }
-  if (request.trackIndex >= 0 && out->trackNumber == 0) {
-    out->trackNumber = static_cast<uint32_t>(request.trackIndex + 1);
+  if (trackIndex && out->trackNumber == 0) {
+    out->trackNumber = static_cast<uint32_t>(*trackIndex + 1);
   }
   if (out->subtitle.empty() && !out->albumTitle.empty() && request.isVideo) {
     out->subtitle = out->albumTitle;

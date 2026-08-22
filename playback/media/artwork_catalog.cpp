@@ -151,11 +151,11 @@ std::vector<std::string> wrapPosterLines(const std::string& text, int width,
 std::string posterFooterLabel(const PlaybackMediaDisplayRequest& request,
                               const PlaybackMediaDisplayInfo& info) {
   std::string mediaKind = request.isVideo ? "VIDEO" : "AUDIO";
-  if (request.trackIndex >= 0) {
+  if (const std::optional<int> trackIndex = request.trackIndex()) {
     return mediaKind + "  TRACK " +
            std::to_string(info.trackNumber != 0
                               ? info.trackNumber
-                              : static_cast<uint32_t>(request.trackIndex + 1));
+                              : static_cast<uint32_t>(*trackIndex + 1));
   }
   return mediaKind;
 }
@@ -208,7 +208,7 @@ bool buildAsciiPosterArtwork(const PlaybackMediaDisplayRequest& request,
   }
 
   const std::string title =
-      info.title.empty() ? fallbackMediaTitle(request.file) : info.title;
+      info.title.empty() ? fallbackMediaTitle(request.file()) : info.title;
   const int titleLines = rows >= 16 ? 4 : (rows >= 13 ? 3 : 2);
   for (const auto& line : wrapPosterLines(title, contentWidth, titleLines)) {
     if (row >= footerY) {
@@ -390,20 +390,20 @@ bool resolvePlaybackMediaArtworkAscii(const PlaybackMediaDisplayRequest& request
 
   std::string artworkError;
   if (!request.isVideo) {
-    if (tryResolveEmbeddedArtwork(request.file, maxWidth, maxHeight, out,
+    if (tryResolveEmbeddedArtwork(request.file(), maxWidth, maxHeight, out,
                                   &artworkError)) {
       return true;
     }
-    if (tryResolveSidecarArtwork(request.file, sidecarPolicy, maxWidth,
+    if (tryResolveSidecarArtwork(request.file(), sidecarPolicy, maxWidth,
                                  maxHeight, out)) {
       return true;
     }
   } else {
-    if (tryResolveEmbeddedArtwork(request.file, maxWidth, maxHeight, out,
+    if (tryResolveEmbeddedArtwork(request.file(), maxWidth, maxHeight, out,
                                   &artworkError)) {
       return true;
     }
-    if (tryResolveSidecarArtwork(request.file, sidecarPolicy, maxWidth,
+    if (tryResolveSidecarArtwork(request.file(), sidecarPolicy, maxWidth,
                                  maxHeight, out)) {
       return true;
     }
