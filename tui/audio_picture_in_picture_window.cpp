@@ -11,8 +11,6 @@
 #include "playback/framebuffer/window_presentation.h"
 #include "playback/media/artwork_catalog.h"
 #include "playback/input/shortcuts.h"
-#include "runtime_helpers.h"
-#include "tracklist.h"
 #include "ui_helpers.h"
 #include "ui_inputlogic.h"
 
@@ -22,25 +20,6 @@ constexpr int kDefaultWindowWidth = 560;
 constexpr int kDefaultWindowHeight = 260;
 constexpr int kMinCols = 28;
 constexpr int kMinRows = 8;
-
-std::string trackLabelForNowPlaying(int trackIndex) {
-  if (trackIndex < 0) return "";
-
-  TrackEntry fallback{};
-  fallback.index = trackIndex;
-  return formatTrackLabel(fallback, 3);
-}
-
-std::string buildDefaultNowPlayingLabel() {
-  const std::filesystem::path nowPlaying = audioGetNowPlaying();
-  if (nowPlaying.empty()) return "(none)";
-  std::string label = toUtf8String(nowPlaying.filename());
-  std::string track = trackLabelForNowPlaying(audioGetTrackIndex());
-  if (!track.empty()) {
-    label += "  |  " + track;
-  }
-  return label;
-}
 
 void writeFitted(ConsoleScreen& screen, int x, int y, int width,
                  const std::string& text, const Style& style) {
@@ -140,28 +119,25 @@ void AudioPictureInPictureWindow::refreshGridSize() {
 
 void AudioPictureInPictureWindow::refreshArtwork(const Context& context,
                                                  int width, int height) {
+  const bool sameTarget =
+      (!context.nowPlayingTarget && !artworkTarget_) ||
+      (context.nowPlayingTarget && artworkTarget_ &&
+       samePlaybackTarget(*context.nowPlayingTarget, *artworkTarget_));
   const bool cacheHit =
-      artworkValid_ && context.nowPlayingPath == artworkPath_ &&
-      context.trackIndex == artworkTrackIndex_ && width == artworkWidth_ &&
+      artworkValid_ && sameTarget && width == artworkWidth_ &&
       height == artworkHeight_;
   if (cacheHit) return;
 
   artwork_ = AsciiArt{};
-  artworkPath_ = context.nowPlayingPath;
-  artworkTrackIndex_ = context.trackIndex;
+  artworkTarget_ = context.nowPlayingTarget;
   artworkWidth_ = width;
   artworkHeight_ = height;
   artworkValid_ = false;
-  if (context.nowPlayingPath.empty() || width <= 0 || height <= 0) {
+  if (!context.nowPlayingTarget || width <= 0 || height <= 0) {
     return;
   }
 
-  PlaybackTarget target = playbackFileTarget(context.nowPlayingPath);
-  if (const std::optional<PlaybackTarget> trackTarget =
-          playbackTrackTarget(context.nowPlayingPath, context.trackIndex)) {
-    target = *trackTarget;
-  }
-  PlaybackMediaDisplayRequest request(std::move(target), false);
+  PlaybackMediaDisplayRequest request(*context.nowPlayingTarget, false);
 
   std::string ignoredError;
   if (resolvePlaybackMediaArtworkAscii(
@@ -234,9 +210,8 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
 
   const int width = cols_;
   const int height = rows_;
-  const std::string title = context.nowPlayingLabel.empty()
-                                ? buildDefaultNowPlayingLabel()
-                                : context.nowPlayingLabel;
+  const std::string title =
+      context.nowPlayingLabel.empty() ? "(none)" : context.nowPlayingLabel;
 
   const bool audioReady = audioIsReady();
   const bool audioSeeking = audioIsSeeking();

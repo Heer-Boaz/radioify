@@ -1027,10 +1027,12 @@ class TuiMediaCoordinator {
                         : audioGetNowPlaying();
   }
 
-  int currentPlaybackTrackIndex() const {
-    return videoTarget_
-               ? playbackTargetTrackIndex(*videoTarget_).value_or(-1)
-               : audioGetTrackIndex();
+  std::optional<int> currentPlaybackTrackIndex() const {
+    if (videoTarget_) {
+      return playbackTargetTrackIndex(*videoTarget_);
+    }
+    const int trackIndex = audioGetTrackIndex();
+    return trackIndex >= 0 ? std::optional<int>(trackIndex) : std::nullopt;
   }
 
   std::vector<NativeWaitHandle> activityWaitHandles() const {
@@ -1796,7 +1798,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   std::deque<float> melodyHistoryConfidence;
   constexpr size_t kMelodyHistoryMaxSamples = 4096;
   std::filesystem::path lastMelodyTrack;
-  int lastMelodyTrackIndex = -1;
+  std::optional<int> lastMelodyTrackIndex;
   bool lastMelodyAnalysisRunning = false;
   std::vector<ScreenCell> windowCells;
   AudioPictureInPictureWindow audioPictureInPicture;
@@ -1831,29 +1833,28 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   };
   std::function<std::filesystem::path()> currentPlaybackFile =
       []() { return audioGetNowPlaying(); };
-  std::function<int()> currentPlaybackTrackIndex =
-      []() { return audioGetTrackIndex(); };
+  std::function<std::optional<int>()> currentPlaybackTrackIndex = []() {
+    const int trackIndex = audioGetTrackIndex();
+    return trackIndex >= 0 ? std::optional<int>(trackIndex) : std::nullopt;
+  };
   auto buildNowPlayingLabel = [&]() {
     std::filesystem::path nowPlaying = currentPlaybackFile();
     std::string label =
         nowPlaying.empty() ? std::string("(none)")
                            : toUtf8String(nowPlaying.filename());
-    int trackIndex = currentPlaybackTrackIndex();
-    if (!nowPlaying.empty() && trackIndex >= 0) {
+    const std::optional<int> trackIndex = currentPlaybackTrackIndex();
+    if (!nowPlaying.empty() && trackIndex) {
       int digits = 3;
       const TrackEntry* track = nullptr;
-      TrackEntry fallback{};
       const TrackBrowserContent* content = trackBrowserContent(browser);
       if (content && samePath(nowPlaying, content->file) &&
           !content->tracks.empty()) {
         digits = trackLabelDigits(content->tracks.size());
-        track = findTrackEntry(browser, trackIndex);
+        track = findTrackEntry(browser, *trackIndex);
       }
-      if (!track) {
-        fallback.index = trackIndex;
-        track = &fallback;
-      }
-      label += "  |  " + formatTrackLabel(*track, digits);
+      label += "  |  " +
+               (track ? formatTrackLabel(*track, digits)
+                      : formatTrackIndexLabel(*trackIndex, digits));
     }
     return label;
   };
@@ -1918,9 +1919,11 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       [&]() { return mediaCoordinator.currentPlaybackTrackIndex(); };
   auto currentPlaybackTarget = [&]() {
     const std::filesystem::path file = currentPlaybackFile();
-    if (const auto track =
-            playbackTrackTarget(file, currentPlaybackTrackIndex())) {
-      return *track;
+    if (const std::optional<int> trackIndex = currentPlaybackTrackIndex()) {
+      if (const std::optional<PlaybackTarget> trackTarget =
+              playbackTrackTarget(file, *trackIndex)) {
+        return *trackTarget;
+      }
     }
     return playbackFileTarget(file);
   };
@@ -2464,8 +2467,14 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   auto buildAudioPictureInPictureContext = [&]() {
     AudioPictureInPictureWindow::Context context;
     context.nowPlayingLabel = buildNowPlayingLabel();
-    context.nowPlayingPath = audioGetNowPlaying();
-    context.trackIndex = audioGetTrackIndex();
+    const std::filesystem::path nowPlaying = audioGetNowPlaying();
+    if (!nowPlaying.empty()) {
+      context.nowPlayingTarget = playbackFileTarget(nowPlaying);
+      if (const std::optional<PlaybackTarget> trackTarget =
+              playbackTrackTarget(nowPlaying, audioGetTrackIndex())) {
+        context.nowPlayingTarget = *trackTarget;
+      }
+    }
     return context;
   };
   auto renderAudioPictureInPicture = [&]() {
@@ -3752,7 +3761,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         breadcrumbHover = -1;
       }
       std::filesystem::path nowPlaying = currentPlaybackFile();
-      int nowPlayingTrackIndex = currentPlaybackTrackIndex();
+      const std::optional<int> nowPlayingTrackIndex =
+          currentPlaybackTrackIndex();
       if (nowPlaying != lastMelodyTrack ||
           nowPlayingTrackIndex != lastMelodyTrackIndex) {
         clearMelodyHistory();

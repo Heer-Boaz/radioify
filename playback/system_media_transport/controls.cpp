@@ -292,10 +292,7 @@ struct PlaybackSystemControls::Impl {
     controls.IsEnabled(true);
 
     const bool metadataChanged =
-        !lastState ||
-        playbackTargetFile(lastState->target) != playbackTargetFile(state.target) ||
-        playbackTargetTrackIndex(lastState->target) !=
-            playbackTargetTrackIndex(state.target) ||
+        !lastState || !samePlaybackTarget(lastState->target, state.target) ||
         lastState->isVideo != state.isVideo;
     if (metadataChanged) {
       updateDisplayMetadata(state);

@@ -48,12 +48,19 @@ int trackLabelDigits(size_t count) {
   return std::max(3, digits);
 }
 
-std::string formatTrackLabel(const TrackEntry& track, int digits) {
-  std::string idx = std::to_string(track.index + 1);
+std::string formatTrackIndexLabel(int trackIndex, int digits) {
+  if (trackIndex < 0) {
+    return {};
+  }
+  std::string idx = std::to_string(trackIndex + 1);
   if (static_cast<int>(idx.size()) < digits) {
     idx.insert(0, static_cast<size_t>(digits - idx.size()), '0');
   }
-  std::string label = idx;
+  return idx;
+}
+
+std::string formatTrackLabel(const TrackEntry& track, int digits) {
+  std::string label = formatTrackIndexLabel(track.index, digits);
   std::string title = trimAscii(track.title);
   if (isMeaningfulTitle(title)) {
     label += " - " + title;

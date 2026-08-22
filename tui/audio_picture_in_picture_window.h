@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -11,6 +12,7 @@
 #include "gpu_text_grid.h"
 #include "playback/framebuffer/window_presentation.h"
 #include "playback/overlay/overlay.h"
+#include "playback/target.h"
 #include "playback/video/framebuffer/window/window.h"
 
 class AudioPictureInPictureWindow {
@@ -29,8 +31,7 @@ class AudioPictureInPictureWindow {
 
   struct Context {
     std::string nowPlayingLabel;
-    std::filesystem::path nowPlayingPath;
-    int trackIndex = -1;
+    std::optional<PlaybackTarget> nowPlayingTarget;
   };
 
   struct Callbacks {
@@ -76,8 +77,7 @@ class AudioPictureInPictureWindow {
   std::vector<playback_overlay::OverlayControlSpec> controls_;
   playback_overlay::OverlayCellLayout layout_;
   AsciiArt artwork_;
-  std::filesystem::path artworkPath_;
-  int artworkTrackIndex_ = -2;
+  std::optional<PlaybackTarget> artworkTarget_;
   int artworkWidth_ = 0;
   int artworkHeight_ = 0;
   bool artworkValid_ = false;

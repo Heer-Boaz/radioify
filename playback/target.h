@@ -50,3 +50,9 @@ inline std::optional<int> playbackTargetTrackIndex(
 inline bool playbackTargetIsTrack(const PlaybackTarget& target) {
   return std::holds_alternative<PlaybackTrackTarget>(target);
 }
+
+inline bool samePlaybackTarget(const PlaybackTarget& left,
+                               const PlaybackTarget& right) {
+  return playbackTargetFile(left) == playbackTargetFile(right) &&
+         playbackTargetTrackIndex(left) == playbackTargetTrackIndex(right);
+}
