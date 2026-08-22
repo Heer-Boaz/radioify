@@ -26,19 +26,12 @@ std::string filenameLabel(const std::filesystem::path& file) {
   return toUtf8String(file.filename());
 }
 
-bool playbackPresent(const PlaybackControlState& state) {
-  return state.active && !state.file.empty();
-}
-
 bool isPlaying(const PlaybackControlState& state) {
   return state.status == PlaybackControlStatus::Playing;
 }
 
 std::string tooltipForState(const PlaybackControlState& state) {
-  if (!playbackPresent(state)) {
-    return RADIOIFY_APP_NAME;
-  }
-  const std::string name = filenameLabel(state.file);
+  const std::string name = filenameLabel(playbackTargetFile(state.target));
   return name.empty() ? RADIOIFY_APP_NAME
                       : std::string(RADIOIFY_APP_NAME " - ") + name;
 }
@@ -56,32 +49,31 @@ WindowsNotificationAreaIcon::MenuItem menuItem(
 }
 
 WindowsNotificationAreaIcon::State iconStateForPlayback(
-    const PlaybackControlState& playbackState) {
-  const bool hasPlayback = playbackPresent(playbackState);
-
+    const std::optional<PlaybackControlState>& playbackState) {
   WindowsNotificationAreaIcon::State iconState;
-  iconState.tooltip = tooltipForState(playbackState);
+  iconState.tooltip = playbackState ? tooltipForState(*playbackState)
+                                    : RADIOIFY_APP_NAME;
   iconState.defaultCommandId = kActivateCommand;
 
-  if (isPlaying(playbackState)) {
-    if (hasPlayback && playbackState.canPause) {
+  if (playbackState && isPlaying(*playbackState)) {
+    if (playbackState->canPause) {
       iconState.menuItems.push_back(menuItem(kTogglePauseCommand, "Pause"));
     }
-  } else if (hasPlayback && playbackState.canPlay) {
+  } else if (playbackState && playbackState->canPlay) {
     iconState.menuItems.push_back(menuItem(kTogglePauseCommand, "Play"));
   }
 
-  if (hasPlayback && playbackState.canStop &&
-      (playbackState.status == PlaybackControlStatus::Playing ||
-       playbackState.status == PlaybackControlStatus::Paused)) {
+  if (playbackState && playbackState->canStop &&
+      (playbackState->status == PlaybackControlStatus::Playing ||
+       playbackState->status == PlaybackControlStatus::Paused)) {
     iconState.menuItems.push_back(menuItem(kStopCommand, "Stop"));
   }
 
-  if (hasPlayback && playbackState.canPrevious) {
+  if (playbackState && playbackState->canPrevious) {
     iconState.menuItems.push_back(menuItem(kPreviousCommand, "Previous"));
   }
 
-  if (hasPlayback && playbackState.canNext) {
+  if (playbackState && playbackState->canNext) {
     iconState.menuItems.push_back(menuItem(kNextCommand, "Next"));
   }
 
@@ -125,7 +117,7 @@ std::optional<PlaybackNotificationAreaCommand> mapCommand(uint32_t commandId) {
 
 struct PlaybackNotificationAreaControls::Impl {
   WindowsNotificationAreaIcon icon{IDI_RADIOIFY_APP_ICON};
-  PlaybackControlState state;
+  std::optional<PlaybackControlState> state;
   bool initialized = false;
 
   bool initialize() {
@@ -137,7 +129,7 @@ struct PlaybackNotificationAreaControls::Impl {
   }
 
   void clear() {
-    state = PlaybackControlState{};
+    state.reset();
     if (initialized) {
       icon.update(iconStateForPlayback(state));
     }

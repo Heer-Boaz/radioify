@@ -64,9 +64,8 @@ MediaPlaybackStatus toPlaybackStatus(PlaybackSystemControls::Status status) {
       return MediaPlaybackStatus::Paused;
     case PlaybackSystemControls::Status::Stopped:
       return MediaPlaybackStatus::Stopped;
-    case PlaybackSystemControls::Status::Closed:
     default:
-      return MediaPlaybackStatus::Closed;
+      return MediaPlaybackStatus::Stopped;
   }
 }
 
@@ -130,10 +129,9 @@ struct PlaybackSystemControls::Impl {
   SystemMediaTransportControls controls{nullptr};
   SystemMediaTransportControls::ButtonPressed_revoker buttonPressedRevoker;
 
-  State lastState;
-  bool haveLastState = false;
-  double lastTimelinePositionSec = -1.0;
-  double lastTimelineDurationSec = -1.0;
+  std::optional<State> lastState;
+  std::optional<double> lastTimelinePositionSec;
+  std::optional<double> lastTimelineDurationSec;
 
   std::mutex queueMutex;
   std::deque<PlaybackControlCommand> pendingCommands;
@@ -213,12 +211,7 @@ struct PlaybackSystemControls::Impl {
 
   void updateDisplayMetadata(const State& state) {
     PlaybackMediaDisplayInfo metadata;
-    PlaybackTarget target = playbackFileTarget(state.file);
-    if (const std::optional<PlaybackTarget> trackTarget =
-            playbackTrackTarget(state.file, state.trackIndex)) {
-      target = *trackTarget;
-    }
-    PlaybackMediaDisplayRequest request(std::move(target), state.isVideo);
+    PlaybackMediaDisplayRequest request(state.target, state.isVideo);
     PlaybackMediaDisplayResolveOptions options;
     std::string unusedError;
     resolvePlaybackMediaDisplayInfo(request, options, &metadata, &unusedError);
@@ -245,34 +238,34 @@ struct PlaybackSystemControls::Impl {
   }
 
   bool timelineChanged(const State& state) const {
-    if (state.durationSec <= 0.0) {
-      return lastTimelineDurationSec > 0.0;
+    if (!state.durationSec || *state.durationSec <= 0.0) {
+      return lastTimelineDurationSec.has_value();
     }
-    if (lastTimelineDurationSec < 0.0) {
+    if (!lastTimelineDurationSec || !lastTimelinePositionSec) {
       return true;
     }
-    if (std::fabs(lastTimelineDurationSec - state.durationSec) >= 0.25) {
+    if (std::fabs(*lastTimelineDurationSec - *state.durationSec) >= 0.25) {
       return true;
     }
-    return std::fabs(lastTimelinePositionSec - state.positionSec) >= 0.5;
+    return std::fabs(*lastTimelinePositionSec - state.positionSec) >= 0.5;
   }
 
   void updateTimeline(const State& state) {
-    if (state.durationSec <= 0.0) {
-      lastTimelineDurationSec = -1.0;
-      lastTimelinePositionSec = -1.0;
+    if (!state.durationSec || *state.durationSec <= 0.0) {
+      lastTimelineDurationSec.reset();
+      lastTimelinePositionSec.reset();
       return;
     }
     SystemMediaTransportControlsTimelineProperties timeline;
     const TimeSpan start = toTimeSpan(0.0);
-    const TimeSpan end = toTimeSpan(state.durationSec);
+    const TimeSpan end = toTimeSpan(*state.durationSec);
     timeline.StartTime(start);
     timeline.MinSeekTime(start);
     timeline.Position(toTimeSpan(state.positionSec));
     timeline.MaxSeekTime(end);
     timeline.EndTime(end);
     controls.UpdateTimelineProperties(timeline);
-    lastTimelineDurationSec = state.durationSec;
+    lastTimelineDurationSec = *state.durationSec;
     lastTimelinePositionSec = state.positionSec;
   }
 
@@ -282,16 +275,16 @@ struct PlaybackSystemControls::Impl {
     }
     controls.PlaybackStatus(MediaPlaybackStatus::Closed);
     controls.IsEnabled(false);
-    haveLastState = false;
-    lastTimelinePositionSec = -1.0;
-    lastTimelineDurationSec = -1.0;
+    lastState.reset();
+    lastTimelinePositionSec.reset();
+    lastTimelineDurationSec.reset();
   }
 
   void update(const State& state) {
     if (!available) {
       return;
     }
-    if (!state.active || state.file.empty()) {
+    if (playbackTargetFile(state.target).empty()) {
       clear();
       return;
     }
@@ -299,29 +292,31 @@ struct PlaybackSystemControls::Impl {
     controls.IsEnabled(true);
 
     const bool metadataChanged =
-        !haveLastState || lastState.file != state.file ||
-        lastState.trackIndex != state.trackIndex ||
-        lastState.isVideo != state.isVideo;
+        !lastState ||
+        playbackTargetFile(lastState->target) != playbackTargetFile(state.target) ||
+        playbackTargetTrackIndex(lastState->target) !=
+            playbackTargetTrackIndex(state.target) ||
+        lastState->isVideo != state.isVideo;
     if (metadataChanged) {
       updateDisplayMetadata(state);
     }
 
-    if (!haveLastState || lastState.canPlay != state.canPlay) {
+    if (!lastState || lastState->canPlay != state.canPlay) {
       controls.IsPlayEnabled(state.canPlay);
     }
-    if (!haveLastState || lastState.canPause != state.canPause) {
+    if (!lastState || lastState->canPause != state.canPause) {
       controls.IsPauseEnabled(state.canPause);
     }
-    if (!haveLastState || lastState.canStop != state.canStop) {
+    if (!lastState || lastState->canStop != state.canStop) {
       controls.IsStopEnabled(state.canStop);
     }
-    if (!haveLastState || lastState.canPrevious != state.canPrevious) {
+    if (!lastState || lastState->canPrevious != state.canPrevious) {
       controls.IsPreviousEnabled(state.canPrevious);
     }
-    if (!haveLastState || lastState.canNext != state.canNext) {
+    if (!lastState || lastState->canNext != state.canNext) {
       controls.IsNextEnabled(state.canNext);
     }
-    if (!haveLastState || lastState.status != state.status) {
+    if (!lastState || lastState->status != state.status) {
       controls.PlaybackStatus(toPlaybackStatus(state.status));
     }
     if (metadataChanged || timelineChanged(state)) {
@@ -329,7 +324,6 @@ struct PlaybackSystemControls::Impl {
     }
 
     lastState = state;
-    haveLastState = true;
   }
 
   bool pollCommand(PlaybackControlCommand* out) {

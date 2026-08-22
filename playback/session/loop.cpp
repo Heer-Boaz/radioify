@@ -1080,11 +1080,7 @@ struct PlaybackLoopRunner::Impl {
   }
 
   PlaybackControlState buildVideoControlState() const {
-    PlaybackControlState state;
-    state.active = true;
-    state.isVideo = true;
-    state.file = file;
-    state.trackIndex = -1;
+    PlaybackControlState state(playbackFileTarget(file), true);
     state.canPlay = true;
     state.canPause = true;
     state.canStop = true;

@@ -2566,19 +2566,24 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     activateWindowsConsoleWindow();
   };
 
-  auto buildAudioControlState = [&]() {
+  auto buildAudioControlState = [&]()
+      -> std::optional<PlaybackControlState> {
     std::filesystem::path nowPlaying = audioGetNowPlaying();
-    PlaybackControlState state;
     if (nowPlaying.empty()) {
-      return state;
+      return std::nullopt;
     }
 
-    state.active = true;
-    state.isVideo = false;
-    state.file = nowPlaying;
-    state.trackIndex = audioGetTrackIndex();
+    PlaybackTarget target = playbackFileTarget(nowPlaying);
+    if (const std::optional<PlaybackTarget> trackTarget =
+            playbackTrackTarget(nowPlaying, audioGetTrackIndex())) {
+      target = *trackTarget;
+    }
+    PlaybackControlState state(std::move(target), false);
     state.positionSec = audioGetTimeSec();
-    state.durationSec = audioGetTotalSec();
+    const double durationSec = audioGetTotalSec();
+    if (std::isfinite(durationSec) && durationSec > 0.0) {
+      state.durationSec = durationSec;
+    }
     state.canPlay = true;
     state.canPause = true;
     state.canStop = true;
@@ -2595,17 +2600,18 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   };
 
   auto syncShellControls = [&]() {
-    const std::optional<PlaybackControlState> videoState =
+    std::optional<PlaybackControlState> state =
         mediaCoordinator.videoControlState();
-    const PlaybackControlState state =
-        videoState ? *videoState : buildAudioControlState();
-    if (!state.active || state.file.empty()) {
+    if (!state) {
+      state = buildAudioControlState();
+    }
+    if (!state) {
       systemControls.clear();
       notificationAreaControls.clear();
       return;
     }
-    systemControls.update(state);
-    notificationAreaControls.update(state);
+    systemControls.update(*state);
+    notificationAreaControls.update(*state);
   };
 
   auto handleNotificationAreaCommand =
@@ -3939,7 +3945,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
                               ? videoControlState->positionSec
                               : (audioReady ? audioGetTimeSec() : 0.0);
       double totalSec = videoActive
-                            ? videoControlState->durationSec
+                            ? videoControlState->durationSec.value_or(-1.0)
                             : (audioReady ? audioGetTotalSec() : -1.0);
       double displaySec = currentSec;
       if (!videoActive && audioReady && audioIsSeeking()) {

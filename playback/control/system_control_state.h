@@ -1,23 +1,27 @@
 #pragma once
 
 #include <cstdint>
-#include <filesystem>
+#include <optional>
+#include <utility>
+
+#include "playback/target.h"
 
 enum class PlaybackControlStatus : uint8_t {
-  Closed,
   Stopped,
   Playing,
   Paused,
 };
 
 struct PlaybackControlState {
-  bool active = false;
+  explicit PlaybackControlState(PlaybackTarget playbackTarget,
+                                bool video = false)
+      : target(std::move(playbackTarget)), isVideo(video) {}
+
+  PlaybackTarget target;
   bool isVideo = false;
-  std::filesystem::path file;
-  int trackIndex = -1;
-  PlaybackControlStatus status = PlaybackControlStatus::Closed;
+  PlaybackControlStatus status = PlaybackControlStatus::Stopped;
   double positionSec = 0.0;
-  double durationSec = -1.0;
+  std::optional<double> durationSec;
   bool canPlay = true;
   bool canPause = true;
   bool canStop = true;
