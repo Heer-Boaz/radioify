@@ -180,8 +180,9 @@ int main() {
       optionsBrowserSubjectForEntry(kssContainer);
   ok &= expect(kssContainerSubject &&
                    kssContainerSubject->file == kssFile &&
-                   !kssContainerSubject->trackIndex,
-               "a container selection must be an explicit file subject");
+                   kssContainerSubject->trackIndex == 0,
+               "a KSS container subject must explicitly select its first "
+               "track");
   const BrowserEntry kssTrack = trackEntry("Track 5", kssFile, 4);
   const auto kssTrackSubject = optionsBrowserSubjectForEntry(kssTrack);
   ok &= expect(kssTrackSubject && kssTrackSubject->trackIndex == 4 &&
@@ -418,6 +419,13 @@ int main() {
       songA, uint32_t{3}, BrowserOptionsVgmDevice{0x2612});
   ok &= expect(optionsLocation != deviceLocation,
                "typed options pages must be distinct browser locations");
+  const BrowserLocation instrumentTrack3 = browserOptionsLocation(
+      songA, uint32_t{3}, BrowserOptionsInstruments{3});
+  const BrowserLocation instrumentTrack4 = browserOptionsLocation(
+      songA, uint32_t{3}, BrowserOptionsInstruments{4});
+  ok &= expect(instrumentTrack3 != instrumentTrack4 &&
+                   browserOptionsInstrumentTrackIndex(instrumentTrack3) == 3,
+               "an instrument route must own its required track context");
   ok &= expect(navigator.navigate(deviceLocation) && navigator.back() &&
                    routedBrowser.location == optionsLocation &&
                    routedBrowser.navigationContext &&

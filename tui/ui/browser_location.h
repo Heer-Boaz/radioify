@@ -23,7 +23,9 @@ enum class BrowserOptionsPageKind {
 };
 
 struct BrowserOptionsRoot {};
-struct BrowserOptionsInstruments {};
+struct BrowserOptionsInstruments {
+  uint32_t trackIndex;
+};
 struct BrowserOptionsVgmDevices {};
 struct BrowserOptionsVgmDevice {
   uint32_t deviceId;
@@ -162,6 +164,18 @@ inline std::optional<uint32_t> browserOptionsDeviceId(
   return device ? std::optional<uint32_t>(device->deviceId) : std::nullopt;
 }
 
+inline std::optional<uint32_t> browserOptionsInstrumentTrackIndex(
+    const BrowserLocation& location) {
+  const OptionsBrowserLocation* options = location.options();
+  if (!options) {
+    return std::nullopt;
+  }
+  const auto* instruments =
+      std::get_if<BrowserOptionsInstruments>(&options->page);
+  return instruments ? std::optional<uint32_t>(instruments->trackIndex)
+                     : std::nullopt;
+}
+
 inline bool browserLocationIsContextual(const BrowserLocation& location) {
   return location.kind() == BrowserLocationKind::OptionsBrowser;
 }
@@ -205,7 +219,9 @@ inline bool operator==(const BrowserLocation& left,
       leftOptions->page.index() != rightOptions->page.index()) {
     return false;
   }
-  return browserOptionsDeviceId(left) == browserOptionsDeviceId(right);
+  return browserOptionsDeviceId(left) == browserOptionsDeviceId(right) &&
+         browserOptionsInstrumentTrackIndex(left) ==
+             browserOptionsInstrumentTrackIndex(right);
 }
 
 inline bool operator!=(const BrowserLocation& left,

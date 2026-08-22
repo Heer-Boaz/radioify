@@ -20,7 +20,7 @@
 struct OptionsBrowserContent {
   bool instrumentsLoaded = false;
   std::filesystem::path instrumentFile;
-  int instrumentTrack = -1;
+  std::optional<uint32_t> instrumentTrack;
   std::string instrumentError;
   std::vector<KssInstrumentProfile> instruments;
 
@@ -276,9 +276,13 @@ void buildOptionsEntries(std::vector<BrowserEntry>& entries,
     addOption(KssOptionId::MuteOpll,
               "OPLL mute: " + onOffLabel(options.muteOpll));
 
-    entries.push_back(optionsDirectoryEntry(
-        "Instrument list",
-        optionsPageLocation(location, BrowserOptionsInstruments{})));
+    if (const std::optional<uint32_t> trackIndex =
+            browserOptionsTrackIndex(location)) {
+      entries.push_back(optionsDirectoryEntry(
+          "Instrument list",
+          optionsPageLocation(location,
+                              BrowserOptionsInstruments{*trackIndex})));
+    }
   } else if (target == OptionsTarget::Nsf) {
     const NsfPlaybackOptions& options = runtime.nsfOptions;
     auto addOption = [&](NsfOptionId id, const std::string& label) {
@@ -352,12 +356,18 @@ void buildInstrumentEntries(std::vector<BrowserEntry>& entries,
 
   if (targetForPath(location.path()) != OptionsTarget::Kss) return;
 
-  const int trackIndex = static_cast<int>(
-      browserOptionsTrackIndex(location).value_or(0));
+  const std::optional<uint32_t> routeTrackIndex =
+      browserOptionsInstrumentTrackIndex(location);
+  if (!routeTrackIndex) {
+    entries.emplace_back("Instrument scan unavailable: no track selected",
+                         std::filesystem::path{}, browser_entry::Status{});
+    return;
+  }
+  const int trackIndex = static_cast<int>(*routeTrackIndex);
 
   if (!content.instrumentsLoaded ||
       !samePath(content.instrumentFile, location.path()) ||
-      content.instrumentTrack != trackIndex) {
+      content.instrumentTrack != routeTrackIndex) {
     content.instruments.clear();
     content.instrumentError.clear();
     std::string error;
@@ -368,7 +378,7 @@ void buildInstrumentEntries(std::vector<BrowserEntry>& entries,
                                       &content.instruments, &error);
     content.instrumentsLoaded = true;
     content.instrumentFile = location.path();
-    content.instrumentTrack = trackIndex;
+    content.instrumentTrack = routeTrackIndex;
     if (!ok) {
       content.instrumentError =
           error.empty() ? "Unable to scan instruments" : std::move(error);

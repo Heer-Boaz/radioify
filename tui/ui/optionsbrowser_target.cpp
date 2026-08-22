@@ -22,6 +22,9 @@ std::optional<OptionsBrowserSubject> optionsBrowserSubjectForEntry(
     if (track->trackIndex >= 0) {
       subject.trackIndex = static_cast<uint32_t>(track->trackIndex);
     }
+  } else if (isKssExt(entry.path)) {
+    constexpr uint32_t kFirstTrackIndex = 0;
+    subject.trackIndex = kFirstTrackIndex;
   }
   return subject;
 }
