@@ -34,7 +34,8 @@ constexpr int64_t kAnalyzeDurationFallbackUs = 5000000;
 bool openInputWithProbe(const std::filesystem::path& path,
                         int64_t analyzeDurationUs,
                         AVFormatContext** outFmt,
-                        std::string* error) {
+                        std::string* error,
+                        FfmpegAudioProbeMode probeMode) {
   AVDictionary* options = nullptr;
   av_dict_set_int(&options, "probesize", kProbeSize, 0);
   av_dict_set_int(&options, "analyzeduration", analyzeDurationUs, 0);
@@ -49,10 +50,38 @@ bool openInputWithProbe(const std::filesystem::path& path,
     return false;
   }
 
+  if (probeMode == FfmpegAudioProbeMode::AudioOnly) {
+    for (unsigned int index = 0; index < (*outFmt)->nb_streams; ++index) {
+      AVStream* stream = (*outFmt)->streams[index];
+      if (stream && stream->codecpar &&
+          stream->codecpar->codec_type != AVMEDIA_TYPE_AUDIO &&
+          stream->codecpar->codec_type != AVMEDIA_TYPE_UNKNOWN) {
+        stream->discard = AVDISCARD_ALL;
+      }
+    }
+  }
+
   (*outFmt)->flags |= AVFMT_FLAG_NOBUFFER;
   (*outFmt)->max_analyze_duration = analyzeDurationUs;
   (*outFmt)->probesize = kProbeSize;
   return true;
+}
+
+int findUsableAudioStream(AVFormatContext* fmt, const AVCodec** codec) {
+  if (codec) *codec = nullptr;
+  if (!fmt) return AVERROR_STREAM_NOT_FOUND;
+  const int streamIndex =
+      av_find_best_stream(fmt, AVMEDIA_TYPE_AUDIO, -1, -1, codec, 0);
+  if (streamIndex < 0 || streamIndex >= static_cast<int>(fmt->nb_streams)) {
+    return streamIndex;
+  }
+  const AVCodecParameters* parameters = fmt->streams[streamIndex]->codecpar;
+  if (!parameters || parameters->sample_rate <= 0 ||
+      parameters->ch_layout.nb_channels <= 0) {
+    if (codec) *codec = nullptr;
+    return AVERROR_STREAM_NOT_FOUND;
+  }
+  return streamIndex;
 }
 
 int64_t rescaleToFrames(int64_t value, AVRational src, uint32_t sampleRate) {
@@ -80,16 +109,26 @@ int64_t rescaleUsToFrames(int64_t value, uint32_t sampleRate) {
 
 uint64_t scanPacketDurationFrames(const std::filesystem::path& path,
                                   int streamIndex,
-                                  uint32_t sampleRate) {
+                                  uint32_t sampleRate,
+                                  FfmpegAudioProbeMode probeMode) {
   if (streamIndex < 0 || sampleRate == 0) return 0;
 
   AVFormatContext* fmt = nullptr;
-  if (!openInputWithProbe(path, kAnalyzeDurationFastUs, &fmt, nullptr)) {
+  if (!openInputWithProbe(path, kAnalyzeDurationFastUs, &fmt, nullptr,
+                          probeMode)) {
     return 0;
   }
 
-  if (avformat_find_stream_info(fmt, nullptr) < 0 ||
-      streamIndex >= static_cast<int>(fmt->nb_streams)) {
+  const bool streamTableReady =
+      probeMode == FfmpegAudioProbeMode::AudioOnly
+          ? streamIndex < static_cast<int>(fmt->nb_streams) &&
+                fmt->streams[streamIndex]->codecpar &&
+                fmt->streams[streamIndex]->codecpar->codec_type ==
+                    AVMEDIA_TYPE_AUDIO &&
+                fmt->streams[streamIndex]->time_base.den > 0
+          : avformat_find_stream_info(fmt, nullptr) >= 0 &&
+                streamIndex < static_cast<int>(fmt->nb_streams);
+  if (!streamTableReady) {
     avformat_close_input(&fmt);
     return 0;
   }
@@ -151,33 +190,41 @@ FfmpegAudioDecoder::~FfmpegAudioDecoder() { uninit(); }
 
 bool FfmpegAudioDecoder::init(const std::filesystem::path& path,
                               uint32_t channels, uint32_t sampleRate,
-                              std::string* error) {
+                              std::string* error,
+                              FfmpegAudioProbeMode probeMode) {
   uninit();
 
   AVFormatContext* fmt = nullptr;
-  if (!openInputWithProbe(path, kAnalyzeDurationFastUs, &fmt, error)) {
+  if (!openInputWithProbe(path, kAnalyzeDurationFastUs, &fmt, error,
+                          probeMode)) {
     return false;
   }
 
-  int infoErr = avformat_find_stream_info(fmt, nullptr);
-  if (infoErr < 0) {
-    avformat_close_input(&fmt);
-    if (!openInputWithProbe(path, kAnalyzeDurationFallbackUs, &fmt, error)) {
-      return false;
-    }
-    infoErr = avformat_find_stream_info(fmt, nullptr);
+  const AVCodec* codec = nullptr;
+  int streamIndex = probeMode == FfmpegAudioProbeMode::AudioOnly
+                        ? findUsableAudioStream(fmt, &codec)
+                        : AVERROR_STREAM_NOT_FOUND;
+  if (streamIndex < 0 || !codec) {
+    int infoErr = avformat_find_stream_info(fmt, nullptr);
     if (infoErr < 0) {
-      std::string msg = "Failed to read audio stream info: " +
-                        ffmpegError(infoErr);
       avformat_close_input(&fmt);
-      setError(error, msg.c_str());
-      return false;
+      if (!openInputWithProbe(path, kAnalyzeDurationFallbackUs, &fmt, error,
+                              probeMode)) {
+        return false;
+      }
+      infoErr = avformat_find_stream_info(fmt, nullptr);
+      if (infoErr < 0) {
+        std::string msg = "Failed to read audio stream info: " +
+                          ffmpegError(infoErr);
+        avformat_close_input(&fmt);
+        setError(error, msg.c_str());
+        return false;
+      }
     }
+    streamIndex = av_find_best_stream(fmt, AVMEDIA_TYPE_AUDIO, -1, -1,
+                                      &codec, 0);
   }
 
-  const AVCodec* codec = nullptr;
-  int streamIndex =
-      av_find_best_stream(fmt, AVMEDIA_TYPE_AUDIO, -1, -1, &codec, 0);
   if (streamIndex < 0 || !codec) {
     avformat_close_input(&fmt);
     setError(error, "No audio stream found.");
@@ -307,7 +354,7 @@ bool FfmpegAudioDecoder::init(const std::filesystem::path& path,
   }
   if (impl->rawTotalFrames == 0) {
     impl->rawTotalFrames =
-        scanPacketDurationFrames(path, streamIndex, sampleRate);
+        scanPacketDurationFrames(path, streamIndex, sampleRate, probeMode);
   }
   if (impl->rawTotalFrames > 0) {
     uint64_t pad = impl->initialPaddingFrames + impl->trailingPaddingFrames;

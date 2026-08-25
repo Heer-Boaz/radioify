@@ -242,6 +242,16 @@ function Initialize-RadioifyMsixPackageLayout {
         -Destination (Join-Path $layoutDir "radioify.exe") `
         -Force
 
+    $whisperModelSource = Join-Path $distRoot "models\ggml-base-q5_1.bin"
+    if (-not (Test-Path -LiteralPath $whisperModelSource)) {
+        throw "Indexed-transcript model not found at '$whisperModelSource'."
+    }
+    $modelLayoutDir = Join-Path $layoutDir "models"
+    New-Item -ItemType Directory -Force -Path $modelLayoutDir | Out-Null
+    Copy-Item -LiteralPath $whisperModelSource `
+        -Destination (Join-Path $modelLayoutDir "ggml-base-q5_1.bin") `
+        -Force
+
     $icoSource = Join-Path $distRoot "radioify.ico"
     if (Test-Path -LiteralPath $icoSource) {
         Copy-Item -LiteralPath $icoSource `

@@ -7,6 +7,7 @@ Console media browser/player with selectable period-radio receiver models.
 - CMake 3.16+
 - MSVC (Visual Studio Build Tools)
 - vcpkg (for `-InstallDeps`)
+- A Vulkan-capable GPU and current graphics driver (indexed transcripts)
 
 ## Build
 For the repo-specific Windows build/run flow and common failure recovery, see
@@ -21,6 +22,13 @@ Quick start:
 ```
 
 The binary is written to `dist/radioify.exe`.
+
+The default build enables whisper.cpp's Vulkan backend and downloads the
+SHA-256-verified multilingual Whisper base model used for offline,
+GPU-accelerated indexed transcripts. Set
+`RADIOIFY_WHISPER_MODEL` to use another compatible whisper.cpp model at
+runtime. The normal static build keeps the static MSVC runtime; it does not
+require a Visual C++ redistributable install on another PC.
 
 ## Windows Package
 Build a distributable Windows x64 bundle and zip:
@@ -173,6 +181,10 @@ browser Back follows browser history. Escape stops the active video and returns
 to the browser.
 
 - Mouse: select; click to play/open
+- Right-click a video in the browser and choose `Create indexed transcript` to
+  generate a local `video.transcript.srt` sidecar. Its numbered, timestamped
+  cues are discovered as subtitles the next time the video is opened. Existing
+  sidecars are preserved; another run uses `video.transcript.2.srt`, and so on.
 - Enter: open folder / play file
 - Backspace: up
 - Arrows: move selection
@@ -226,7 +238,7 @@ to the browser.
 - GSF (GPL, enabled by default; disable with `-DRADIOIFY_DISABLE_GSF_GPL=ON`): .gsf, .minigsf
 - Audio (media containers): .m4a, .m4b, .m4r, .m4p, .webm, .mp4, .mov, .mkv, .ogg (audio stream only)
 - Video (ASCII preview): .mp4, .m4v, .webm, .mov, .qt, .mkv, .avi, .wmv, .asf, .flv, .mpg, .mpeg, .mpe, .mpv, .m2v, .ts, .m2ts, .mts, .3gp, .3g2, .ogv, .vob, .mxf, .f4v, .dv, .ogm, .ivf, .nut, .rm, .rmvb, .bik, .smk, .wtv, .nsv, .pmp, .divx, .mjpg, .mjpeg, .mj2, .y4m, .roq, .mod, .tod (audio + video)
-- Subtitles: .srt and .vtt sidecar files (same basename, e.g. `video.mkv` + `video.srt`)
+- Subtitles: .srt and .vtt sidecar files (same basename, e.g. `video.mkv` + `video.srt`, including generated `video.transcript.srt` files)
 - Images (ASCII art preview): .jpg, .jpeg, .jpe, .jfif, .png, .bmp, .gif, .tif, .tiff, .webp, .heic, .heif, .avif, .ico
 
 PSF2 playback needs `hebios.bin`. Set `RADIOIFY_PSF_BIOS` to the file path or

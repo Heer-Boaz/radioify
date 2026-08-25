@@ -108,6 +108,7 @@ third_party/nvidia/
 
 **.webm
 models/*.onnx
+models/*.bin
 models/*.download
 
 # Useless files

@@ -18,6 +18,12 @@
       ]
     },
     "libass",
+    {
+      "name": "whisper-cpp",
+      "features": [
+        "vulkan"
+      ]
+    },
     "zlib"
   ],
   "features": {

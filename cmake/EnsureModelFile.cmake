@@ -19,11 +19,11 @@ if (EXISTS "${OUTPUT_PATH}")
   file(SHA256 "${OUTPUT_PATH}" _existing_hash)
   string(TOLOWER "${_existing_hash}" _existing_hash)
   if (_existing_hash STREQUAL _expected_hash)
-    message(STATUS "Neural model already present: ${OUTPUT_PATH}")
+    message(STATUS "Model already present: ${OUTPUT_PATH}")
     return()
   endif()
   message(WARNING
-    "Neural model hash mismatch at ${OUTPUT_PATH} "
+    "Model hash mismatch at ${OUTPUT_PATH} "
     "(expected ${_expected_hash}, got ${_existing_hash}); re-downloading.")
   file(REMOVE "${OUTPUT_PATH}")
 endif()
@@ -43,7 +43,7 @@ list(GET _download_status 1 _download_message)
 if (NOT _download_code EQUAL 0)
   file(REMOVE "${_download_tmp}")
   message(FATAL_ERROR
-    "Failed to download neural model from ${URL} "
+    "Failed to download model from ${URL} "
     "(code ${_download_code}): ${_download_message}")
 endif()
 
@@ -52,9 +52,9 @@ string(TOLOWER "${_downloaded_hash}" _downloaded_hash)
 if (NOT _downloaded_hash STREQUAL _expected_hash)
   file(REMOVE "${_download_tmp}")
   message(FATAL_ERROR
-    "Downloaded neural model hash mismatch for ${URL}: "
+    "Downloaded model hash mismatch for ${URL}: "
     "expected ${_expected_hash}, got ${_downloaded_hash}")
 endif()
 
 file(RENAME "${_download_tmp}" "${OUTPUT_PATH}")
-message(STATUS "Downloaded neural model: ${OUTPUT_PATH}")
+message(STATUS "Downloaded model: ${OUTPUT_PATH}")

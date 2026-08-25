@@ -123,6 +123,10 @@ radioify_add_module_object_library(radioify_tool_image_viewer_sequence_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/image_viewer_sequence_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_indexed_transcript_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/indexed_transcript_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_windows_console_window_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/windows_console_window_tests.cpp
 )

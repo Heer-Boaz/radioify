@@ -123,6 +123,7 @@ option(RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_PROCESSOR "Enable NVIDIA D3D11 video pro
 option(RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK "Enable NVIDIA RTX Video SDK/NGX integration" OFF)
 option(RADIOIFY_BUILD_WIN11_EXPLORER_INTEGRATION "Build the Windows 11 Explorer integration scaffold" OFF)
 option(RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL "Download neural pitch model automatically when missing" ON)
+option(RADIOIFY_DOWNLOAD_WHISPER_MODEL "Download the indexed-transcript Whisper model automatically when missing" ON)
 set(RADIOIFY_NVIDIA_RTX_VIDEO_SDK_ROOT "" CACHE PATH
     "NVIDIA RTX Video SDK/NGX root containing include/ and lib/x64/")
 if (WIN32)
@@ -182,6 +183,15 @@ set(RADIOIFY_NEURAL_PITCH_MODEL_URL
 set(RADIOIFY_NEURAL_PITCH_MODEL_SHA256
     "cd119f6f5f608d9342a1c6f81e4653f21dbcde440a96d474ecbf6f27c6253466"
     CACHE STRING "Expected SHA256 hash for the downloaded neural pitch ONNX model")
+set(RADIOIFY_WHISPER_MODEL_PATH
+    "${CMAKE_SOURCE_DIR}/models/ggml-base-q5_1.bin" CACHE FILEPATH
+    "Path to the multilingual Whisper model used for indexed transcripts")
+set(RADIOIFY_WHISPER_MODEL_URL
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin"
+    CACHE STRING "URL used to download the indexed-transcript Whisper model")
+set(RADIOIFY_WHISPER_MODEL_SHA256
+    "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898"
+    CACHE STRING "Expected SHA256 hash for the indexed-transcript Whisper model")
 
 set(RADIOIFY_PROJECT_INCLUDE_DIRS
   ${CMAKE_SOURCE_DIR}/app
@@ -331,6 +341,7 @@ target_sources(radioify PRIVATE
   $<TARGET_OBJECTS:radioify_tui>
   $<TARGET_OBJECTS:radioify_video_playback>
   $<TARGET_OBJECTS:radioify_timeline_preview>
+  $<TARGET_OBJECTS:radioify_transcript>
   $<TARGET_OBJECTS:radioify_image_codec>
   $<TARGET_OBJECTS:radioify_video>
   $<TARGET_OBJECTS:radioify_audio>
@@ -721,6 +732,20 @@ radioify_link_repo_target(image_viewer_sequence_tests)
 add_test(NAME image_viewer_sequence_tests
          COMMAND $<TARGET_FILE:image_viewer_sequence_tests>)
 
+add_executable(indexed_transcript_tests)
+target_sources(indexed_transcript_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_indexed_transcript_tests>
+  $<TARGET_OBJECTS:radioify_transcript>
+  ${CMAKE_SOURCE_DIR}/tui/ui/file_context_menu_model.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/ui_footer_layout.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+  ${CMAKE_SOURCE_DIR}/audio/ffmpegaudio.cpp
+)
+radioify_link_repo_target(indexed_transcript_tests)
+add_test(NAME indexed_transcript_tests
+         COMMAND $<TARGET_FILE:indexed_transcript_tests>)
+
 add_executable(windows_console_window_tests)
 target_sources(windows_console_window_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_windows_console_window_tests>
@@ -743,6 +768,35 @@ if (RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE AND RADIOIFY_DOWNLOAD_NEURAL_PITCH
   )
   add_dependencies(radioify radioify_neural_pitch_model)
 endif()
+
+if (RADIOIFY_DOWNLOAD_WHISPER_MODEL)
+  add_custom_target(radioify_whisper_model ALL
+    COMMAND ${CMAKE_COMMAND}
+            -DOUTPUT_PATH=${RADIOIFY_WHISPER_MODEL_PATH}
+            -DURL=${RADIOIFY_WHISPER_MODEL_URL}
+            -DSHA256=${RADIOIFY_WHISPER_MODEL_SHA256}
+            -P "${CMAKE_SOURCE_DIR}/cmake/EnsureModelFile.cmake"
+    DEPENDS "${CMAKE_SOURCE_DIR}/cmake/EnsureModelFile.cmake"
+    COMMENT "Ensuring Whisper transcript model exists at ${RADIOIFY_WHISPER_MODEL_PATH}"
+    VERBATIM
+  )
+  add_dependencies(radioify radioify_whisper_model)
+endif()
+
+add_custom_target(radioify_whisper_runtime_model ALL
+  COMMAND ${CMAKE_COMMAND} -E make_directory
+          "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/models"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${RADIOIFY_WHISPER_MODEL_PATH}"
+          "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/models/ggml-base-q5_1.bin"
+  COMMENT "Publishing Whisper transcript model beside the Radioify build"
+  VERBATIM
+)
+if (TARGET radioify_whisper_model)
+  add_dependencies(radioify_whisper_runtime_model radioify_whisper_model)
+endif()
+add_dependencies(radioify radioify_whisper_runtime_model)
+add_dependencies(indexed_transcript_tests radioify_whisper_runtime_model)
 
 set(RADIOIFY_SHADER_DIR "${CMAKE_SOURCE_DIR}/playback/render/shaders")
 set(RADIOIFY_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -1315,7 +1369,9 @@ if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_edit_export_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_edit_timeline_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
+  target_link_directories(indexed_transcript_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
 endif()
+
 target_link_libraries(radioify PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(ffmpeg_audio_decoder_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARIES})
@@ -1323,6 +1379,7 @@ target_link_libraries(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_edit_export_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_edit_timeline_tests PRIVATE ${FFMPEG_LIBRARIES})
+target_link_libraries(indexed_transcript_tests PRIVATE ${FFMPEG_LIBRARIES})
 
 set(RADIOIFY_HAS_LIBASS OFF)
 set(_radioify_libass_include_dirs "")
@@ -1446,6 +1503,23 @@ endif()
 target_link_libraries(radioify PRIVATE ${_radioify_libass_libraries})
 target_link_libraries(video_frame_step_smoke PRIVATE ${_radioify_libass_libraries})
 message(STATUS "libass found: ASS advanced renderer enabled")
+
+find_package(whisper CONFIG REQUIRED)
+if (NOT TARGET whisper)
+  message(FATAL_ERROR "whisper-cpp was found without its whisper CMake target.")
+endif()
+if (NOT GGML_VULKAN)
+  message(FATAL_ERROR
+    "whisper-cpp must be built with its Vulkan feature; CPU-only indexed transcripts are disabled.")
+endif()
+set(RADIOIFY_WHISPER_HAS_VULKAN 1)
+target_compile_definitions(radioify_transcript PRIVATE
+  RADIOIFY_WHISPER_HAS_VULKAN=${RADIOIFY_WHISPER_HAS_VULKAN})
+target_link_libraries(radioify_transcript PRIVATE whisper)
+target_link_libraries(radioify PRIVATE whisper)
+target_link_libraries(indexed_transcript_tests PRIVATE whisper)
+message(STATUS
+  "whisper.cpp found: offline indexed transcripts enabled (Vulkan GPU)")
 
 target_compile_definitions(radioify_project_options INTERFACE
   RADIOIFY_HAS_LIBASS=$<IF:$<BOOL:${RADIOIFY_HAS_LIBASS}>,1,0>

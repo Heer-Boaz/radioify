@@ -5,13 +5,20 @@
 #include <filesystem>
 #include <string>
 
+enum class FfmpegAudioProbeMode {
+  AllStreams,
+  AudioOnly,
+};
+
 class FfmpegAudioDecoder {
  public:
   FfmpegAudioDecoder();
   ~FfmpegAudioDecoder();
 
   bool init(const std::filesystem::path& path, uint32_t channels,
-            uint32_t sampleRate, std::string* error);
+            uint32_t sampleRate, std::string* error,
+            FfmpegAudioProbeMode probeMode =
+                FfmpegAudioProbeMode::AllStreams);
   void uninit();
   bool readFrames(float* out, uint32_t frameCount, uint64_t* framesRead);
   bool seekToFrame(uint64_t frame);

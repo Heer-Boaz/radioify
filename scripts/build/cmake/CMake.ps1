@@ -372,6 +372,18 @@ function Publish-BuildArtifacts {
     Write-Host " - $publishedExe"
   }
 
+  $whisperModelSource = Join-Path $Context.Paths.Root "models\ggml-base-q5_1.bin"
+  if (-not (Test-Path -LiteralPath $whisperModelSource)) {
+    Fail-Build "Build completed without the indexed-transcript model at $whisperModelSource."
+  }
+  $whisperModelDistDir = Join-Path $Context.Paths.DistDir "models"
+  if (-not (Test-Path -LiteralPath $whisperModelDistDir)) {
+    New-Item -ItemType Directory -Force -Path $whisperModelDistDir | Out-Null
+  }
+  $whisperModelDestination = Join-Path $whisperModelDistDir "ggml-base-q5_1.bin"
+  Copy-Item -LiteralPath $whisperModelSource -Destination $whisperModelDestination -Force
+  Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $whisperModelDestination
+
   if ($Context.Options.Win11ExplorerIntegration) {
     $integrationDistDir = Join-Path $Context.Paths.DistDir "win11-explorer-integration"
     if (-not (Test-Path $integrationDistDir)) {

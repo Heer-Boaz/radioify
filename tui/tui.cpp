@@ -51,7 +51,9 @@
 #include "core/windows_message_pump.h"
 #include "core/windows_console_window.h"
 #include "core/windows_shell_open.h"
+#include "file_context_menu_model.h"
 #include "image_viewer_sequence.h"
+#include "indexed_transcript_task.h"
 #include "m4adecoder.h"
 #include "miniaudio.h"
 #include "optionsbrowser.h"
@@ -1971,19 +1973,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     std::function<void()> run;
   };
 
-  enum class FileContextAction : uint8_t {
-    Play,
-    BrowseTracks,
-    EditVideo,
-    Analyze,
-    SplitLoop,
-  };
-
-  struct FileContextMenuItem {
-    FileContextAction action = FileContextAction::Play;
-    std::string label;
-  };
-
   struct FileContextMenuState {
     bool active = false;
     std::optional<BrowserEntry> entry;
@@ -2031,6 +2020,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   FileContextMenuLayout fileContextLayout;
   MelodyExportTaskState melodyExportTask;
   LoopSplitTaskState loopSplitTask;
+  IndexedTranscriptTaskState indexedTranscriptTask;
 
   struct ActionRenderItem {
     ActionStripItem id;
@@ -2202,6 +2192,12 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       hasLoopSplitStatus =
           loopSplitTask.hasResult && !loopSplitTask.status.empty();
     }
+    bool hasTranscriptStatus = false;
+    {
+      std::lock_guard<std::mutex> lock(indexedTranscriptTask.mutex);
+      hasTranscriptStatus = indexedTranscriptTask.hasResult &&
+                            !indexedTranscriptTask.status.empty();
+    }
     const std::filesystem::path nowPlaying = currentPlaybackFile();
     const bool showNowPlaying =
         !nowPlaying.empty() || audioIsReady() || audioIsSeeking() ||
@@ -2209,7 +2205,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     BrowserFooterLayout layout = computeBrowserFooterLayout(
         !melodyVisualizationEnabled,
         !mediaCommandError.empty() || !audioGetWarning().empty(),
-        hasAnalyzeStatus, hasLoopSplitStatus, o.play, showNowPlaying,
+        hasAnalyzeStatus, hasLoopSplitStatus, hasTranscriptStatus, o.play,
+        showNowPlaying,
         o.play && audioIsReady());
     if (layout.showNowPlaying) {
       const int nowPlayingLines = std::max(
@@ -2276,6 +2273,10 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       std::lock_guard<std::mutex> lock(loopSplitTask.mutex);
       running = running || loopSplitTask.running;
     }
+    {
+      std::lock_guard<std::mutex> lock(indexedTranscriptTask.mutex);
+      running = running || indexedTranscriptTask.running;
+    }
     return running;
   };
 
@@ -2302,22 +2303,17 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     if (!o.play || !entry.isMedia()) {
       return;
     }
-    std::vector<FileContextMenuItem> items;
-    if (isVideoExt(entry.path)) {
-      items.push_back({FileContextAction::Play, "Play"});
-      items.push_back({FileContextAction::EditVideo, "Edit video"});
-    } else if (isSupportedAudioExt(entry.path)) {
-      items.push_back({FileContextAction::Play, "Play"});
-      if (supportsPlaybackTrackCatalog(entry.path)) {
-        items.push_back({FileContextAction::BrowseTracks, "Browse tracks"});
-      }
-      if (!isBackgroundTaskRunning()) {
-        if (audioCanAnalyzeFileToMelodyFile(entry.path)) {
-          items.push_back({FileContextAction::Analyze, "Analyze"});
-        }
-        items.push_back({FileContextAction::SplitLoop, "Split loop"});
-      }
-    }
+    FileContextMenuCapabilities capabilities;
+    capabilities.video = isVideoExt(entry.path);
+    capabilities.audio =
+        !capabilities.video && isSupportedAudioExt(entry.path);
+    capabilities.canBrowseTracks =
+        capabilities.audio && supportsPlaybackTrackCatalog(entry.path);
+    capabilities.canAnalyze =
+        capabilities.audio && audioCanAnalyzeFileToMelodyFile(entry.path);
+    capabilities.backgroundTaskRunning = isBackgroundTaskRunning();
+    std::vector<FileContextMenuItem> items =
+        buildFileContextMenuItems(capabilities);
     if (items.empty()) return;
     fileContextMenu.active = true;
     fileContextMenu.entry = entry;
@@ -2939,6 +2935,12 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
                         playback_queue::singleSource(target))) {
         markDirty(UiDirtyFlags::Async);
       }
+    } else if (action == FileContextAction::CreateIndexedTranscript) {
+      if (entry.isMedia() && isVideoExt(entry.path) &&
+          !isBackgroundTaskRunning()) {
+        startIndexedTranscript(entry.path, indexedTranscriptTask);
+        markDirty(UiDirtyFlags::Async);
+      }
     } else if (action == FileContextAction::Analyze) {
       startMelodyExport(entry);
     } else if (action == FileContextAction::SplitLoop) {
@@ -3137,6 +3139,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
     cleanupMelodyExportWorker();
     cleanupLoopSplitExportWorker(loopSplitTask);
+    cleanupIndexedTranscriptWorker(indexedTranscriptTask);
 
     if (windowTuiEnabled && tuiWindow.IsOpen()) {
       tuiWindow.PollEvents();
@@ -3516,6 +3519,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       }
       joinMelodyExportWorker();
       joinLoopSplitExportWorker(loopSplitTask);
+      cancelAndJoinIndexedTranscriptWorker(indexedTranscriptTask);
       audioShutdown();
     };
 
@@ -3875,6 +3879,23 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
                            fitLine(" Loop Split: " + loopSplitStatus, width),
                            statusStyle);
         }
+        bool transcriptHasResult = false;
+        bool transcriptSuccess = false;
+        std::string transcriptStatus;
+        {
+          std::lock_guard<std::mutex> lock(indexedTranscriptTask.mutex);
+          transcriptHasResult = indexedTranscriptTask.hasResult;
+          transcriptSuccess = indexedTranscriptTask.success;
+          transcriptStatus = indexedTranscriptTask.status;
+        }
+        if (footerLayout.showTranscriptStatus && transcriptHasResult &&
+            !transcriptStatus.empty()) {
+          const Style statusStyle =
+              transcriptSuccess ? kStyleDim : kStyleAlert;
+          screen.writeText(0, line++,
+                           fitLine(" Transcript: " + transcriptStatus, width),
+                           statusStyle);
+        }
       }
       std::string nowLabel = buildNowPlayingLabel();
       if (footerLayout.showNowPlaying) {
@@ -4128,6 +4149,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         float exportProgress = 0.0f;
         std::filesystem::path exportSource;
         std::string title = " Melody Analysis";
+        std::string detail;
         {
           std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
           if (melodyExportTask.running) {
@@ -4144,6 +4166,17 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
             exportProgress = std::clamp(loopSplitTask.progress, 0.0f, 1.0f);
             exportSource = loopSplitTask.sourceFile;
             title = " Loop Split";
+          }
+        }
+        if (!isRunning) {
+          std::lock_guard<std::mutex> lock(indexedTranscriptTask.mutex);
+          if (indexedTranscriptTask.running) {
+            isRunning = true;
+            exportProgress =
+                std::clamp(indexedTranscriptTask.progress, 0.0f, 1.0f);
+            exportSource = indexedTranscriptTask.sourceFile;
+            title = " Indexed Transcript";
+            detail = indexedTranscriptTask.phase;
           }
         }
         if (isRunning) {
@@ -4180,6 +4213,10 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           std::string fileLine = " " + sourceName;
           screen.writeText(x0 + 1, y0 + 2, fitLine(fileLine, popupWidth - 2),
                            kStyleDim);
+          if (!detail.empty()) {
+            screen.writeText(x0 + 2, y0 + 3,
+                             fitLine(detail, popupWidth - 4), kStyleDim);
+          }
 
           int barInner = std::max(8, popupWidth - 8);
           int filled = static_cast<int>(
@@ -4227,6 +4264,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   std::cout << "\n";
   joinMelodyExportWorker();
   joinLoopSplitExportWorker(loopSplitTask);
+  cancelAndJoinIndexedTranscriptWorker(indexedTranscriptTask);
   audioShutdown();
   return 0;
 }
