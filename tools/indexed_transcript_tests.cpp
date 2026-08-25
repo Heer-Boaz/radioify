@@ -1,4 +1,5 @@
 #include "playback/video/transcript/document.h"
+#include "playback/video/transcript/device_selection.h"
 #include "tui/ui/file_context_menu_model.h"
 #include "tui/ui/ui_footer_layout.h"
 
@@ -31,6 +32,32 @@ std::string readFile(const std::filesystem::path& path) {
 int main() {
   namespace transcript = playback_video_transcript;
   bool ok = true;
+
+  const std::vector<transcript::VulkanDeviceCandidate> gpuCandidates = {
+      {0, transcript::VulkanDeviceClass::Integrated, 12, 24, "Vulkan0",
+       "Integrated GPU"},
+      {1, transcript::VulkanDeviceClass::Discrete, 4, 8, "Vulkan1",
+       "Discrete GPU"},
+      {2, transcript::VulkanDeviceClass::Discrete, 10, 16, "Vulkan2",
+       "Larger discrete GPU"},
+  };
+  const auto selectedGpu =
+      transcript::selectPreferredVulkanDevice(gpuCandidates);
+  ok &= expect(selectedGpu && selectedGpu->whisperGpuIndex == 2,
+               "Vulkan policy must prefer a discrete GPU, then its total "
+               "memory");
+  const std::vector<transcript::VulkanDeviceCandidate> equalMemoryGpus = {
+      {4, transcript::VulkanDeviceClass::Discrete, 6, 16, "Vulkan4", {}},
+      {3, transcript::VulkanDeviceClass::Discrete, 8, 16, "Vulkan3", {}},
+  };
+  const auto gpuWithMoreFreeMemory =
+      transcript::selectPreferredVulkanDevice(equalMemoryGpus);
+  ok &= expect(gpuWithMoreFreeMemory &&
+                   gpuWithMoreFreeMemory->whisperGpuIndex == 3,
+               "equally sized Vulkan GPUs must prefer available memory");
+  ok &= expect(!transcript::selectPreferredVulkanDevice({}),
+               "an empty Vulkan device list must not select a GPU");
+
   ok &= expect(transcript::defaultTranscriptPath("film.mkv") ==
                    std::filesystem::path("film.transcript.srt"),
                "default sidecar must retain the video stem");

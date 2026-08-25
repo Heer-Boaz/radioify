@@ -1,49 +1,27 @@
 #include "playback/video/transcript/transcriber.h"
 
-#include <ggml-vulkan.h>
-#include <whisper.h>
-
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <memory>
-#include <mutex>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
 #include "ffmpegaudio.h"
 #include "playback/video/transcript/document.h"
+#include "playback/video/transcript/whisper_engine.h"
 #include "runtime_helpers.h"
 
 namespace playback_video_transcript {
 namespace {
 
-constexpr uint32_t kSampleRate = WHISPER_SAMPLE_RATE;
+constexpr uint32_t kSampleRate = WhisperEngine::kSampleRate;
 constexpr uint32_t kDecodeBlockFrames = 16 * 1024;
 constexpr uint64_t kChunkFrames = 60ull * kSampleRate;
 constexpr uint64_t kOverlapFrames = 4ull * kSampleRate;
 constexpr const char* kDefaultModelName = "ggml-base-q5_1.bin";
-
-struct WhisperContextDeleter {
-  void operator()(whisper_context* context) const {
-    if (context) whisper_free(context);
-  }
-};
-
-using WhisperContextPtr =
-    std::unique_ptr<whisper_context, WhisperContextDeleter>;
-
-void discardWhisperLog(enum ggml_log_level, const char*, void*) {}
-
-void configureWhisperLogging() {
-  static std::once_flag configured;
-  std::call_once(configured,
-                 []() { whisper_log_set(discardWhisperLog, nullptr); });
-}
 
 void setError(std::string* error, std::string message) {
   if (error) *error = std::move(message);
@@ -81,36 +59,6 @@ float estimatedTranscriptionFraction(uint64_t processedFrames,
     audioFraction = (completed + within) / (completed + 2.0);
   }
   return static_cast<float>(0.04 + 0.92 * std::clamp(audioFraction, 0.0, 1.0));
-}
-
-struct WhisperProgressBridge {
-  const ProgressCallback* callback = nullptr;
-  const std::atomic<bool>* cancelRequested = nullptr;
-  uint64_t processedFrames = 0;
-  uint64_t currentChunkFrames = 0;
-  uint64_t totalFrames = 0;
-};
-
-void whisperProgress(whisper_context*, whisper_state*, int progress,
-                     void* userData) {
-  auto* bridge = static_cast<WhisperProgressBridge*>(userData);
-  if (!bridge || !bridge->callback) return;
-  report(*bridge->callback,
-         estimatedTranscriptionFraction(
-             bridge->processedFrames, bridge->currentChunkFrames, progress,
-             bridge->totalFrames),
-         "Transcribing audio");
-}
-
-bool whisperAbort(void* userData) {
-  const auto* bridge = static_cast<const WhisperProgressBridge*>(userData);
-  return bridge && cancelled(bridge->cancelRequested);
-}
-
-int inferenceThreadCount() {
-  const unsigned int hardware = std::thread::hardware_concurrency();
-  const unsigned int available = hardware == 0 ? 4u : hardware;
-  return static_cast<int>(std::clamp(available, 1u, 8u));
 }
 
 int64_t framesToUs(uint64_t frames) {
@@ -195,51 +143,11 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
     return false;
   }
 
-  // whisper.cpp and ggml log backend discovery and model internals to stderr
-  // by default, which would corrupt Radioify's live terminal surface.
-  // User-visible backend selection and failures flow through task progress.
-  configureWhisperLogging();
-
-  int selectedGpuDevice = 0;
-  const int vulkanDeviceCount = ggml_backend_vk_get_device_count();
-  if (vulkanDeviceCount <= 0) {
-    setError(error,
-             "The Vulkan transcript backend is installed, but no Vulkan GPU "
-             "is available.");
-    return false;
-  }
-  size_t largestDeviceMemory = 0;
-  for (int device = 0; device < vulkanDeviceCount; ++device) {
-    size_t freeMemory = 0;
-    size_t totalMemory = 0;
-    ggml_backend_vk_get_device_memory(device, &freeMemory, &totalMemory);
-    if (totalMemory > largestDeviceMemory) {
-      largestDeviceMemory = totalMemory;
-      selectedGpuDevice = device;
-    }
-  }
-  std::array<char, 256> vulkanDeviceDescription{};
-  ggml_backend_vk_get_device_description(
-      selectedGpuDevice, vulkanDeviceDescription.data(),
-      vulkanDeviceDescription.size());
-  const std::string vulkanDevice = vulkanDeviceDescription.data();
-  const std::string loadPhase =
-      "Loading speech model on " +
-      (vulkanDevice.empty() ? std::string("Vulkan GPU") : vulkanDevice);
-  report(onProgress, 0.01f, loadPhase);
-  const std::string modelPathUtf8 = toUtf8String(modelPath);
-  whisper_context_params contextParams = whisper_context_default_params();
-  contextParams.use_gpu = true;
-  contextParams.gpu_device = selectedGpuDevice;
-  // ggml Flash Attention's padded-mask precondition is not met for every
-  // short decode window, so keep the stable GPU kernels for this workload.
-  contextParams.flash_attn = false;
-  WhisperContextPtr context(whisper_init_from_file_with_params(
-      modelPathUtf8.c_str(), contextParams));
-  if (!context) {
-    setError(error, "Could not load Whisper model: " + modelPathUtf8);
-    return false;
-  }
+  report(onProgress, 0.01f, "Loading Vulkan speech model");
+  WhisperEngine whisper;
+  std::string vulkanDevice;
+  if (!whisper.initialize(modelPath, &vulkanDevice, error)) return false;
+  report(onProgress, 0.02f, "Vulkan ready on " + vulkanDevice);
 
   report(onProgress, 0.03f, "Opening video audio");
   FfmpegAudioDecoder decoder;
@@ -326,78 +234,51 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
           segments.end());
     }
 
-    WhisperProgressBridge bridge;
-    bridge.callback = &onProgress;
-    bridge.cancelRequested = cancelRequested;
-    bridge.processedFrames = chunkStartFrame + leadingOverlapFrames;
-    bridge.currentChunkFrames =
+    const uint64_t processedFrames =
+        chunkStartFrame + leadingOverlapFrames;
+    const uint64_t currentChunkFrames =
         static_cast<uint64_t>(chunk.size()) - leadingOverlapFrames;
-    bridge.totalFrames = totalFrames;
 
     const int64_t chunkStartUs = framesToUs(chunkStartFrame);
     const int64_t promptCutoffUs =
         std::max<int64_t>(0, audioStartUs + chunkStartUs);
     std::string prompt = promptTail(segments, promptCutoffUs);
-    whisper_full_params parameters =
-        whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    parameters.n_threads = inferenceThreadCount();
-    parameters.translate = false;
-    parameters.language = "auto";
-    // "auto" detects a language and then transcribes it. In whisper.cpp,
-    // detect_language=true is a detection-only mode that returns no segments.
-    parameters.detect_language = false;
-    parameters.no_timestamps = false;
-    parameters.single_segment = false;
-    parameters.print_special = false;
-    parameters.print_progress = false;
-    parameters.print_realtime = false;
-    parameters.print_timestamps = false;
-    parameters.max_len = 80;
-    parameters.split_on_word = true;
-    parameters.initial_prompt = prompt.empty() ? nullptr : prompt.c_str();
-    parameters.progress_callback = whisperProgress;
-    parameters.progress_callback_user_data = &bridge;
-    parameters.abort_callback = whisperAbort;
-    parameters.abort_callback_user_data = &bridge;
-
     report(onProgress,
            estimatedTranscriptionFraction(
-               bridge.processedFrames, bridge.currentChunkFrames, 0,
-               totalFrames),
+               processedFrames, currentChunkFrames, 0, totalFrames),
            "Transcribing audio");
-    const int result = whisper_full(context.get(), parameters, chunk.data(),
-                                    static_cast<int>(chunk.size()));
-    if (result != 0) {
-      if (cancelled(cancelRequested)) {
-        setError(error, "Transcript cancelled.");
-      } else {
-        setError(error, "Whisper could not transcribe the video's audio.");
-      }
+    std::vector<RecognizedSegment> recognizedSegments;
+    std::string inferenceError;
+    if (!whisper.transcribe(
+            chunk.data(), chunk.size(), prompt,
+            [&](int progress) {
+              report(onProgress,
+                     estimatedTranscriptionFraction(
+                         processedFrames, currentChunkFrames, progress,
+                         totalFrames),
+                     "Transcribing audio");
+            },
+            [cancelRequested]() { return cancelled(cancelRequested); },
+            &recognizedSegments, &inferenceError)) {
+      setError(error, inferenceError.empty()
+                          ? "Whisper could not transcribe the video's audio."
+                          : std::move(inferenceError));
       return false;
     }
 
-    const int segmentCount = whisper_full_n_segments(context.get());
-    for (int index = 0; index < segmentCount; ++index) {
-      if (whisper_full_get_segment_no_speech_prob(context.get(), index) >=
-          parameters.no_speech_thold) {
-        continue;
-      }
-      const char* text = whisper_full_get_segment_text(context.get(), index);
-      if (!text || !isMeaningfulTranscriptText(text)) continue;
-      const int64_t localStartUs =
-          whisper_full_get_segment_t0(context.get(), index) * 10000;
-      const int64_t localEndUs =
-          whisper_full_get_segment_t1(context.get(), index) * 10000;
+    for (const RecognizedSegment& recognized : recognizedSegments) {
+      if (!isMeaningfulTranscriptText(recognized.text)) continue;
       Segment segment;
       segment.startUs =
-          std::max<int64_t>(0, audioStartUs + chunkStartUs + localStartUs);
+          std::max<int64_t>(0,
+                            audioStartUs + chunkStartUs + recognized.startUs);
       segment.endUs =
           std::max(segment.startUs + 1000,
-                   audioStartUs + chunkStartUs + localEndUs);
+                   audioStartUs + chunkStartUs + recognized.endUs);
       const int64_t midpoint =
           segment.startUs + (segment.endUs - segment.startUs) / 2;
       if (!firstChunk && midpoint < seamUs) continue;
-      segment.text = text;
+      segment.text = recognized.text;
       segments.push_back(std::move(segment));
     }
 

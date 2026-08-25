@@ -342,6 +342,7 @@ target_sources(radioify PRIVATE
   $<TARGET_OBJECTS:radioify_video_playback>
   $<TARGET_OBJECTS:radioify_timeline_preview>
   $<TARGET_OBJECTS:radioify_transcript_document>
+  $<TARGET_OBJECTS:radioify_transcript_device_policy>
   $<TARGET_OBJECTS:radioify_transcript_engine>
   $<TARGET_OBJECTS:radioify_image_codec>
   $<TARGET_OBJECTS:radioify_video>
@@ -737,6 +738,7 @@ add_executable(indexed_transcript_tests)
 target_sources(indexed_transcript_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_indexed_transcript_tests>
   $<TARGET_OBJECTS:radioify_transcript_document>
+  $<TARGET_OBJECTS:radioify_transcript_device_policy>
   ${CMAKE_SOURCE_DIR}/tui/ui/file_context_menu_model.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/ui_footer_layout.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
@@ -746,10 +748,20 @@ radioify_link_repo_target(indexed_transcript_tests)
 add_test(NAME indexed_transcript_tests
          COMMAND $<TARGET_FILE:indexed_transcript_tests>)
 
+add_executable(whisper_gpu_contract_tests)
+target_sources(whisper_gpu_contract_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_whisper_gpu_contract_tests>
+)
+radioify_link_repo_target(whisper_gpu_contract_tests)
+add_test(NAME whisper_gpu_contract_tests
+         COMMAND $<TARGET_FILE:whisper_gpu_contract_tests>
+                 "${RADIOIFY_WHISPER_MODEL_PATH}")
+
 add_executable(indexed_transcript_smoke)
 target_sources(indexed_transcript_smoke PRIVATE
   $<TARGET_OBJECTS:radioify_tool_indexed_transcript_smoke>
   $<TARGET_OBJECTS:radioify_transcript_document>
+  $<TARGET_OBJECTS:radioify_transcript_device_policy>
   $<TARGET_OBJECTS:radioify_transcript_engine>
   ${CMAKE_SOURCE_DIR}/audio/ffmpegaudio.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
@@ -807,6 +819,7 @@ if (TARGET radioify_whisper_model)
   add_dependencies(radioify_whisper_runtime_model radioify_whisper_model)
 endif()
 add_dependencies(radioify radioify_whisper_runtime_model)
+add_dependencies(whisper_gpu_contract_tests radioify_whisper_runtime_model)
 add_dependencies(indexed_transcript_smoke radioify_whisper_runtime_model)
 
 set(RADIOIFY_SHADER_DIR "${CMAKE_SOURCE_DIR}/playback/render/shaders")
@@ -1524,7 +1537,9 @@ if (NOT GGML_VULKAN)
     "whisper-cpp must be built with its Vulkan feature; CPU-only indexed transcripts are disabled.")
 endif()
 target_link_libraries(radioify_transcript_engine PRIVATE whisper)
+target_link_libraries(radioify_tool_whisper_gpu_contract_tests PRIVATE whisper)
 target_link_libraries(radioify PRIVATE whisper)
+target_link_libraries(whisper_gpu_contract_tests PRIVATE whisper)
 target_link_libraries(indexed_transcript_smoke PRIVATE whisper)
 message(STATUS
   "whisper.cpp found: offline indexed transcripts enabled (Vulkan GPU)")

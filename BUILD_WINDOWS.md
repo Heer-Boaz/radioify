@@ -40,6 +40,10 @@ Open a Windows PowerShell prompt in the repo root.
 .\uninstall_radioify.ps1
 ```
 
+`-InstallDeps` also applies the source-controlled ports in `vcpkg-overlays`.
+Run it again after an overlay changes; the transcript overlays provide GGML's
+static Vulkan initialization fix and Whisper's strict GPU contract.
+
 By default `.\install_radioify.ps1` repackages the current repo state before
 installing. Use `-SkipPackage` only when you intentionally want to reuse the
 existing bundle under `dist\packages\Radioify-Windows-x64`. The install now

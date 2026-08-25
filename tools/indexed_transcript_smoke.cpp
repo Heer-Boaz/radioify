@@ -21,6 +21,7 @@ int runSmoke(const std::filesystem::path& input,
   int lastPercent = -1;
   std::string lastPhase;
   bool monotonicProgress = true;
+  bool vulkanConfirmed = false;
   std::string error;
   const bool created = transcript::createIndexedTranscript(
       input, output,
@@ -30,6 +31,9 @@ int runSmoke(const std::filesystem::path& input,
           monotonicProgress = false;
         }
         lastFraction = std::max(lastFraction, progress.fraction);
+        if (progress.phase.rfind("Vulkan ready on ", 0) == 0) {
+          vulkanConfirmed = true;
+        }
         const int percent = static_cast<int>(progress.fraction * 100.0f);
         if (percent != lastPercent || progress.phase != lastPhase) {
           std::cout << percent << "% " << progress.phase << std::endl;
@@ -45,6 +49,10 @@ int runSmoke(const std::filesystem::path& input,
   if (!monotonicProgress) {
     std::cerr <<
         "indexed_transcript_smoke: progress moved backwards during the run\n";
+    return EXIT_FAILURE;
+  }
+  if (!vulkanConfirmed) {
+    std::cerr << "indexed_transcript_smoke: Vulkan backend was not confirmed\n";
     return EXIT_FAILURE;
   }
   std::cout << "indexed_transcript_smoke: PASS output="

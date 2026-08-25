@@ -27,8 +27,10 @@ The default build enables whisper.cpp's Vulkan backend and downloads the
 SHA-256-verified multilingual Whisper base model used for offline,
 GPU-accelerated indexed transcripts. Set
 `RADIOIFY_WHISPER_MODEL` to use another compatible whisper.cpp model at
-runtime. The normal static build keeps the static MSVC runtime; it does not
-require a Visual C++ redistributable install on another PC.
+runtime. Transcript creation fails with a clear error if the selected Vulkan
+device cannot initialize; it never silently falls back to CPU. The normal
+static build keeps the static MSVC runtime; it does not require a Visual C++
+redistributable install on another PC.
 
 ## Windows Package
 Build a distributable Windows x64 bundle and zip:

@@ -48,19 +48,9 @@ bool openAudioInput(const std::filesystem::path& path,
     return false;
   }
 
-  // This decoder owns only audio. Tell the demuxer that known non-audio
-  // streams are irrelevant before any fallback probing, so containers with
-  // video do not spend time analyzing streams this class will never decode.
-  for (unsigned int index = 0; index < (*outFmt)->nb_streams; ++index) {
-    AVStream* stream = (*outFmt)->streams[index];
-    if (stream && stream->codecpar &&
-        stream->codecpar->codec_type != AVMEDIA_TYPE_AUDIO &&
-        stream->codecpar->codec_type != AVMEDIA_TYPE_UNKNOWN) {
-      stream->discard = AVDISCARD_ALL;
-    }
-  }
-
-  (*outFmt)->flags |= AVFMT_FLAG_NOBUFFER;
+  // This is a file decoder, so keep FFmpeg's probe packet buffer. With
+  // AVFMT_FLAG_NOBUFFER, avformat_find_stream_info() can consume initial audio
+  // packets that readFrames() must still deliver to the caller.
   (*outFmt)->max_analyze_duration = analyzeDurationUs;
   (*outFmt)->probesize = kProbeSize;
   return true;
@@ -118,13 +108,11 @@ uint64_t scanPacketDurationFrames(const std::filesystem::path& path,
     return 0;
   }
 
+  const int infoError = avformat_find_stream_info(fmt, nullptr);
   const AVCodec* codec = nullptr;
-  int streamIndex = findUsableAudioStream(fmt, &codec);
-  if (streamIndex < 0 || !codec) {
-    if (avformat_find_stream_info(fmt, nullptr) >= 0) {
-      streamIndex = findUsableAudioStream(fmt, &codec);
-    }
-  }
+  const int streamIndex =
+      infoError >= 0 ? findUsableAudioStream(fmt, &codec)
+                     : AVERROR_STREAM_NOT_FOUND;
   if (streamIndex < 0 || !codec ||
       streamIndex != preferredStreamIndex) {
     avformat_close_input(&fmt);
@@ -196,29 +184,24 @@ bool FfmpegAudioDecoder::init(const std::filesystem::path& path,
     return false;
   }
 
-  const AVCodec* codec = nullptr;
-  // Most structured containers describe their audio stream completely in the
-  // header. Use it directly and reserve packet probing for formats that need
-  // it; callers should not have to know how their container is discovered.
-  int streamIndex = findUsableAudioStream(fmt, &codec);
-  if (streamIndex < 0 || !codec) {
-    int infoErr = avformat_find_stream_info(fmt, nullptr);
-    if (infoErr < 0) {
-      avformat_close_input(&fmt);
-      if (!openAudioInput(path, kAnalyzeDurationFallbackUs, &fmt, error)) {
-        return false;
-      }
-      infoErr = avformat_find_stream_info(fmt, nullptr);
-      if (infoErr < 0) {
-        std::string msg = "Failed to read audio stream info: " +
-                          ffmpegError(infoErr);
-        avformat_close_input(&fmt);
-        setError(error, msg.c_str());
-        return false;
-      }
+  int infoErr = avformat_find_stream_info(fmt, nullptr);
+  if (infoErr < 0) {
+    avformat_close_input(&fmt);
+    if (!openAudioInput(path, kAnalyzeDurationFallbackUs, &fmt, error)) {
+      return false;
     }
-    streamIndex = findUsableAudioStream(fmt, &codec);
+    infoErr = avformat_find_stream_info(fmt, nullptr);
+    if (infoErr < 0) {
+      std::string msg = "Failed to read audio stream info: " +
+                        ffmpegError(infoErr);
+      avformat_close_input(&fmt);
+      setError(error, msg.c_str());
+      return false;
+    }
   }
+
+  const AVCodec* codec = nullptr;
+  const int streamIndex = findUsableAudioStream(fmt, &codec);
 
   if (streamIndex < 0 || !codec) {
     avformat_close_input(&fmt);

@@ -49,8 +49,13 @@ radioify_add_module_object_library(radioify_transcript_document
   ${CMAKE_CURRENT_SOURCE_DIR}/transcript/document.cpp
 )
 
+radioify_add_module_object_library(radioify_transcript_device_policy
+  ${CMAKE_CURRENT_SOURCE_DIR}/transcript/device_selection.cpp
+)
+
 radioify_add_module_object_library(radioify_transcript_engine
   ${CMAKE_CURRENT_SOURCE_DIR}/transcript/transcriber.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/transcript/whisper_engine.cpp
 )
 
 radioify_add_module_object_library(radioify_video

@@ -1,0 +1,56 @@
+diff --git a/include/whisper.h b/include/whisper.h
+index 8e5b6ed..92f2fe3 100644
+--- a/include/whisper.h
++++ b/include/whisper.h
+@@ -108,6 +108,7 @@ extern "C" {
+ 
+     struct whisper_context_params {
+         bool  use_gpu;
++        bool  require_gpu; // fail initialization instead of silently falling back to CPU
+         bool  flash_attn;
+         int   gpu_device;  // CUDA device
+ 
+diff --git a/src/whisper.cpp b/src/whisper.cpp
+index 9d89d56..8437fb0 100644
+--- a/src/whisper.cpp
++++ b/src/whisper.cpp
+@@ -1332,8 +1332,11 @@ static std::vector<ggml_backend_t> whisper_backend_init(const whisper_context_pa
+     ggml_backend_t backend_gpu = whisper_backend_init_gpu(params);
+ 
+     if (backend_gpu) {
+         result.push_back(backend_gpu);
+-    }
++    } else if (params.require_gpu) {
++        WHISPER_LOG_ERROR("%s: a GPU backend is required but could not be initialized\n", __func__);
++        return result;
++    }
+ 
+     // ACCEL backends
+     for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+@@ -3374,5 +3377,5 @@
+ struct whisper_state * whisper_init_state(whisper_context * ctx) {
+-    whisper_state * state = new whisper_state;
++    whisper_state * state = new whisper_state{};
+ 
+     state->backends = whisper_backend_init(ctx->params);
+     if (state->backends.empty()) {
+@@ -3606,7 +3609,8 @@ int whisper_ctx_init_openvino_encoder(
+ struct whisper_context_params whisper_context_default_params() {
+     struct whisper_context_params result = {
+         /*.use_gpu              =*/ true,
++        /*.require_gpu          =*/ false,
+         /*.flash_attn           =*/ true,
+         /*.gpu_device           =*/ 0,
+ 
+         /*.dtw_token_timestamps =*/ false,
+@@ -3708,9 +3712,10 @@ struct whisper_context * whisper_init_with_params_no_state(struct whisper_model_
+     if (params.flash_attn && params.dtw_token_timestamps) {
+         WHISPER_LOG_WARN("%s: dtw_token_timestamps is not supported with flash_attn - disabling\n", __func__);
+         params.dtw_token_timestamps = false;
+     }
+ 
+     WHISPER_LOG_INFO("%s: use gpu    = %d\n", __func__, params.use_gpu);
++    WHISPER_LOG_INFO("%s: require gpu= %d\n", __func__, params.require_gpu);
+     WHISPER_LOG_INFO("%s: flash attn = %d\n", __func__, params.flash_attn);
+     WHISPER_LOG_INFO("%s: gpu_device = %d\n", __func__, params.gpu_device);
+     WHISPER_LOG_INFO("%s: dtw        = %d\n", __func__, params.dtw_token_timestamps);
