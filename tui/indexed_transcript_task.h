@@ -6,10 +6,7 @@
 #include <string>
 #include <thread>
 
-struct IndexedTranscriptTaskState {
-  std::mutex mutex;
-  std::thread worker;
-  std::atomic<bool> cancelRequested{false};
+struct IndexedTranscriptTaskSnapshot {
   bool running = false;
   bool hasResult = false;
   bool success = false;
@@ -20,7 +17,22 @@ struct IndexedTranscriptTaskState {
   std::filesystem::path outputFile;
 };
 
-void cleanupIndexedTranscriptWorker(IndexedTranscriptTaskState& state);
-void cancelAndJoinIndexedTranscriptWorker(IndexedTranscriptTaskState& state);
-void startIndexedTranscript(const std::filesystem::path& videoPath,
-                            IndexedTranscriptTaskState& state);
+class IndexedTranscriptTask {
+ public:
+  IndexedTranscriptTask() = default;
+  ~IndexedTranscriptTask();
+
+  IndexedTranscriptTask(const IndexedTranscriptTask&) = delete;
+  IndexedTranscriptTask& operator=(const IndexedTranscriptTask&) = delete;
+
+  bool tryStart(const std::filesystem::path& videoPath);
+  void reapFinished();
+  void cancelAndJoin();
+  IndexedTranscriptTaskSnapshot snapshot() const;
+
+ private:
+  mutable std::mutex mutex_;
+  std::thread worker_;
+  std::atomic<bool> cancelRequested_{false};
+  IndexedTranscriptTaskSnapshot state_;
+};

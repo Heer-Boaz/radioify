@@ -1,10 +1,8 @@
 #include "playback/video/transcript/document.h"
-#include "playback/video/transcript/transcriber.h"
 #include "tui/ui/file_context_menu_model.h"
 #include "tui/ui/ui_footer_layout.h"
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -30,29 +28,8 @@ std::string readFile(const std::filesystem::path& path) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int main() {
   namespace transcript = playback_video_transcript;
-  if (argc == 3) {
-    std::atomic<bool> cancelRequested{false};
-    std::string error;
-    const bool created = transcript::createIndexedTranscript(
-        std::filesystem::path(argv[1]), std::filesystem::path(argv[2]),
-        [](const transcript::Progress& progress) {
-          std::cout << static_cast<int>(progress.fraction * 100.0f) << "% "
-                    << progress.phase << '\n';
-        },
-        &cancelRequested, &error);
-    if (!created) {
-      std::cerr << "indexed_transcript_tests: " << error << '\n';
-      return EXIT_FAILURE;
-    }
-    return EXIT_SUCCESS;
-  }
-  if (argc != 1) {
-    std::cerr << "Usage: indexed_transcript_tests [input-media output.srt]\n";
-    return 2;
-  }
-
   bool ok = true;
   ok &= expect(transcript::defaultTranscriptPath("film.mkv") ==
                    std::filesystem::path("film.transcript.srt"),

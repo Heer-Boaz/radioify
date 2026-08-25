@@ -127,6 +127,10 @@ radioify_add_module_object_library(radioify_tool_indexed_transcript_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/indexed_transcript_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_indexed_transcript_smoke
+  ${CMAKE_CURRENT_SOURCE_DIR}/indexed_transcript_smoke.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_windows_console_window_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/windows_console_window_tests.cpp
 )

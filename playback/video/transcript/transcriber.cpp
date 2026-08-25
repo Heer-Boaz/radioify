@@ -1,12 +1,7 @@
 #include "playback/video/transcript/transcriber.h"
 
-#include <whisper.h>
-#ifndef RADIOIFY_WHISPER_HAS_VULKAN
-#define RADIOIFY_WHISPER_HAS_VULKAN 0
-#endif
-#if RADIOIFY_WHISPER_HAS_VULKAN
 #include <ggml-vulkan.h>
-#endif
+#include <whisper.h>
 
 #include <algorithm>
 #include <array>
@@ -14,6 +9,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -42,6 +38,12 @@ using WhisperContextPtr =
     std::unique_ptr<whisper_context, WhisperContextDeleter>;
 
 void discardWhisperLog(enum ggml_log_level, const char*, void*) {}
+
+void configureWhisperLogging() {
+  static std::once_flag configured;
+  std::call_once(configured,
+                 []() { whisper_log_set(discardWhisperLog, nullptr); });
+}
 
 void setError(std::string* error, std::string message) {
   if (error) *error = std::move(message);
@@ -196,11 +198,9 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
   // whisper.cpp and ggml log backend discovery and model internals to stderr
   // by default, which would corrupt Radioify's live terminal surface.
   // User-visible backend selection and failures flow through task progress.
-  whisper_log_set(discardWhisperLog, nullptr);
+  configureWhisperLogging();
 
-  std::string loadPhase = "Loading CPU speech model";
   int selectedGpuDevice = 0;
-#if RADIOIFY_WHISPER_HAS_VULKAN
   const int vulkanDeviceCount = ggml_backend_vk_get_device_count();
   if (vulkanDeviceCount <= 0) {
     setError(error,
@@ -223,19 +223,14 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
       selectedGpuDevice, vulkanDeviceDescription.data(),
       vulkanDeviceDescription.size());
   const std::string vulkanDevice = vulkanDeviceDescription.data();
-  loadPhase = "Loading speech model on " +
-              (vulkanDevice.empty() ? std::string("Vulkan GPU")
-                                      : vulkanDevice);
-#endif
+  const std::string loadPhase =
+      "Loading speech model on " +
+      (vulkanDevice.empty() ? std::string("Vulkan GPU") : vulkanDevice);
   report(onProgress, 0.01f, loadPhase);
   const std::string modelPathUtf8 = toUtf8String(modelPath);
   whisper_context_params contextParams = whisper_context_default_params();
-#if RADIOIFY_WHISPER_HAS_VULKAN
   contextParams.use_gpu = true;
   contextParams.gpu_device = selectedGpuDevice;
-#else
-  contextParams.use_gpu = false;
-#endif
   // ggml Flash Attention's padded-mask precondition is not met for every
   // short decode window, so keep the stable GPU kernels for this workload.
   contextParams.flash_attn = false;
@@ -249,8 +244,7 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
   report(onProgress, 0.03f, "Opening video audio");
   FfmpegAudioDecoder decoder;
   std::string decodeError;
-  if (!decoder.init(videoPath, 1, kSampleRate, &decodeError,
-                    FfmpegAudioProbeMode::AudioOnly)) {
+  if (!decoder.init(videoPath, 1, kSampleRate, &decodeError)) {
     setError(error, decodeError.empty() ? "Could not open the video's audio."
                                         : std::move(decodeError));
     return false;
@@ -288,7 +282,7 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
         static_cast<uint64_t>(overlap.size());
     uint64_t newFramesRead = 0;
     report(onProgress,
-           estimatedTranscriptionFraction(chunkStartFrame, 0, 0, totalFrames),
+           estimatedTranscriptionFraction(decodedFrames, 0, 0, totalFrames),
            "Decoding audio");
     while (chunk.size() < static_cast<size_t>(kChunkFrames)) {
       if (cancelled(cancelRequested)) {
@@ -335,8 +329,9 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
     WhisperProgressBridge bridge;
     bridge.callback = &onProgress;
     bridge.cancelRequested = cancelRequested;
-    bridge.processedFrames = chunkStartFrame;
-    bridge.currentChunkFrames = static_cast<uint64_t>(chunk.size());
+    bridge.processedFrames = chunkStartFrame + leadingOverlapFrames;
+    bridge.currentChunkFrames =
+        static_cast<uint64_t>(chunk.size()) - leadingOverlapFrames;
     bridge.totalFrames = totalFrames;
 
     const int64_t chunkStartUs = framesToUs(chunkStartFrame);
@@ -366,8 +361,9 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
     parameters.abort_callback_user_data = &bridge;
 
     report(onProgress,
-           estimatedTranscriptionFraction(chunkStartFrame, chunk.size(), 0,
-                                          totalFrames),
+           estimatedTranscriptionFraction(
+               bridge.processedFrames, bridge.currentChunkFrames, 0,
+               totalFrames),
            "Transcribing audio");
     const int result = whisper_full(context.get(), parameters, chunk.data(),
                                     static_cast<int>(chunk.size()));

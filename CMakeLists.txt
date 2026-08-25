@@ -341,7 +341,8 @@ target_sources(radioify PRIVATE
   $<TARGET_OBJECTS:radioify_tui>
   $<TARGET_OBJECTS:radioify_video_playback>
   $<TARGET_OBJECTS:radioify_timeline_preview>
-  $<TARGET_OBJECTS:radioify_transcript>
+  $<TARGET_OBJECTS:radioify_transcript_document>
+  $<TARGET_OBJECTS:radioify_transcript_engine>
   $<TARGET_OBJECTS:radioify_image_codec>
   $<TARGET_OBJECTS:radioify_video>
   $<TARGET_OBJECTS:radioify_audio>
@@ -735,16 +736,26 @@ add_test(NAME image_viewer_sequence_tests
 add_executable(indexed_transcript_tests)
 target_sources(indexed_transcript_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_indexed_transcript_tests>
-  $<TARGET_OBJECTS:radioify_transcript>
+  $<TARGET_OBJECTS:radioify_transcript_document>
   ${CMAKE_SOURCE_DIR}/tui/ui/file_context_menu_model.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/ui_footer_layout.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
-  ${CMAKE_SOURCE_DIR}/audio/ffmpegaudio.cpp
 )
 radioify_link_repo_target(indexed_transcript_tests)
 add_test(NAME indexed_transcript_tests
          COMMAND $<TARGET_FILE:indexed_transcript_tests>)
+
+add_executable(indexed_transcript_smoke)
+target_sources(indexed_transcript_smoke PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_indexed_transcript_smoke>
+  $<TARGET_OBJECTS:radioify_transcript_document>
+  $<TARGET_OBJECTS:radioify_transcript_engine>
+  ${CMAKE_SOURCE_DIR}/audio/ffmpegaudio.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+)
+radioify_link_repo_target(indexed_transcript_smoke)
 
 add_executable(windows_console_window_tests)
 target_sources(windows_console_window_tests PRIVATE
@@ -796,7 +807,7 @@ if (TARGET radioify_whisper_model)
   add_dependencies(radioify_whisper_runtime_model radioify_whisper_model)
 endif()
 add_dependencies(radioify radioify_whisper_runtime_model)
-add_dependencies(indexed_transcript_tests radioify_whisper_runtime_model)
+add_dependencies(indexed_transcript_smoke radioify_whisper_runtime_model)
 
 set(RADIOIFY_SHADER_DIR "${CMAKE_SOURCE_DIR}/playback/render/shaders")
 set(RADIOIFY_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -1369,7 +1380,7 @@ if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_edit_export_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_edit_timeline_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
-  target_link_directories(indexed_transcript_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
+  target_link_directories(indexed_transcript_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
 endif()
 
 target_link_libraries(radioify PRIVATE ${FFMPEG_LIBRARIES})
@@ -1379,7 +1390,7 @@ target_link_libraries(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_edit_export_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_edit_timeline_tests PRIVATE ${FFMPEG_LIBRARIES})
-target_link_libraries(indexed_transcript_tests PRIVATE ${FFMPEG_LIBRARIES})
+target_link_libraries(indexed_transcript_smoke PRIVATE ${FFMPEG_LIBRARIES})
 
 set(RADIOIFY_HAS_LIBASS OFF)
 set(_radioify_libass_include_dirs "")
@@ -1512,12 +1523,9 @@ if (NOT GGML_VULKAN)
   message(FATAL_ERROR
     "whisper-cpp must be built with its Vulkan feature; CPU-only indexed transcripts are disabled.")
 endif()
-set(RADIOIFY_WHISPER_HAS_VULKAN 1)
-target_compile_definitions(radioify_transcript PRIVATE
-  RADIOIFY_WHISPER_HAS_VULKAN=${RADIOIFY_WHISPER_HAS_VULKAN})
-target_link_libraries(radioify_transcript PRIVATE whisper)
+target_link_libraries(radioify_transcript_engine PRIVATE whisper)
 target_link_libraries(radioify PRIVATE whisper)
-target_link_libraries(indexed_transcript_tests PRIVATE whisper)
+target_link_libraries(indexed_transcript_smoke PRIVATE whisper)
 message(STATUS
   "whisper.cpp found: offline indexed transcripts enabled (Vulkan GPU)")
 

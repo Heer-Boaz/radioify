@@ -2020,7 +2020,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   FileContextMenuLayout fileContextLayout;
   MelodyExportTaskState melodyExportTask;
   LoopSplitTaskState loopSplitTask;
-  IndexedTranscriptTaskState indexedTranscriptTask;
+  IndexedTranscriptTask indexedTranscriptTask;
 
   struct ActionRenderItem {
     ActionStripItem id;
@@ -2192,12 +2192,10 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       hasLoopSplitStatus =
           loopSplitTask.hasResult && !loopSplitTask.status.empty();
     }
-    bool hasTranscriptStatus = false;
-    {
-      std::lock_guard<std::mutex> lock(indexedTranscriptTask.mutex);
-      hasTranscriptStatus = indexedTranscriptTask.hasResult &&
-                            !indexedTranscriptTask.status.empty();
-    }
+    const IndexedTranscriptTaskSnapshot transcriptSnapshot =
+        indexedTranscriptTask.snapshot();
+    const bool hasTranscriptStatus =
+        transcriptSnapshot.hasResult && !transcriptSnapshot.status.empty();
     const std::filesystem::path nowPlaying = currentPlaybackFile();
     const bool showNowPlaying =
         !nowPlaying.empty() || audioIsReady() || audioIsSeeking() ||
@@ -2273,10 +2271,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       std::lock_guard<std::mutex> lock(loopSplitTask.mutex);
       running = running || loopSplitTask.running;
     }
-    {
-      std::lock_guard<std::mutex> lock(indexedTranscriptTask.mutex);
-      running = running || indexedTranscriptTask.running;
-    }
+    running = running || indexedTranscriptTask.snapshot().running;
     return running;
   };
 
@@ -2938,8 +2933,9 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     } else if (action == FileContextAction::CreateIndexedTranscript) {
       if (entry.isMedia() && isVideoExt(entry.path) &&
           !isBackgroundTaskRunning()) {
-        startIndexedTranscript(entry.path, indexedTranscriptTask);
-        markDirty(UiDirtyFlags::Async);
+        if (indexedTranscriptTask.tryStart(entry.path)) {
+          markDirty(UiDirtyFlags::Async);
+        }
       }
     } else if (action == FileContextAction::Analyze) {
       startMelodyExport(entry);
@@ -3139,7 +3135,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
     cleanupMelodyExportWorker();
     cleanupLoopSplitExportWorker(loopSplitTask);
-    cleanupIndexedTranscriptWorker(indexedTranscriptTask);
+    indexedTranscriptTask.reapFinished();
 
     if (windowTuiEnabled && tuiWindow.IsOpen()) {
       tuiWindow.PollEvents();
@@ -3519,7 +3515,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       }
       joinMelodyExportWorker();
       joinLoopSplitExportWorker(loopSplitTask);
-      cancelAndJoinIndexedTranscriptWorker(indexedTranscriptTask);
+      indexedTranscriptTask.cancelAndJoin();
       audioShutdown();
     };
 
@@ -3879,21 +3875,16 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
                            fitLine(" Loop Split: " + loopSplitStatus, width),
                            statusStyle);
         }
-        bool transcriptHasResult = false;
-        bool transcriptSuccess = false;
-        std::string transcriptStatus;
-        {
-          std::lock_guard<std::mutex> lock(indexedTranscriptTask.mutex);
-          transcriptHasResult = indexedTranscriptTask.hasResult;
-          transcriptSuccess = indexedTranscriptTask.success;
-          transcriptStatus = indexedTranscriptTask.status;
-        }
-        if (footerLayout.showTranscriptStatus && transcriptHasResult &&
-            !transcriptStatus.empty()) {
+        const IndexedTranscriptTaskSnapshot transcriptSnapshot =
+            indexedTranscriptTask.snapshot();
+        if (footerLayout.showTranscriptStatus &&
+            transcriptSnapshot.hasResult &&
+            !transcriptSnapshot.status.empty()) {
           const Style statusStyle =
-              transcriptSuccess ? kStyleDim : kStyleAlert;
+              transcriptSnapshot.success ? kStyleDim : kStyleAlert;
           screen.writeText(0, line++,
-                           fitLine(" Transcript: " + transcriptStatus, width),
+                           fitLine(" Transcript: " + transcriptSnapshot.status,
+                                   width),
                            statusStyle);
         }
       }
@@ -4169,14 +4160,15 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           }
         }
         if (!isRunning) {
-          std::lock_guard<std::mutex> lock(indexedTranscriptTask.mutex);
-          if (indexedTranscriptTask.running) {
+          const IndexedTranscriptTaskSnapshot transcriptSnapshot =
+              indexedTranscriptTask.snapshot();
+          if (transcriptSnapshot.running) {
             isRunning = true;
             exportProgress =
-                std::clamp(indexedTranscriptTask.progress, 0.0f, 1.0f);
-            exportSource = indexedTranscriptTask.sourceFile;
+                std::clamp(transcriptSnapshot.progress, 0.0f, 1.0f);
+            exportSource = transcriptSnapshot.sourceFile;
             title = " Indexed Transcript";
-            detail = indexedTranscriptTask.phase;
+            detail = transcriptSnapshot.phase;
           }
         }
         if (isRunning) {
@@ -4264,7 +4256,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   std::cout << "\n";
   joinMelodyExportWorker();
   joinLoopSplitExportWorker(loopSplitTask);
-  cancelAndJoinIndexedTranscriptWorker(indexedTranscriptTask);
+  indexedTranscriptTask.cancelAndJoin();
   audioShutdown();
   return 0;
 }

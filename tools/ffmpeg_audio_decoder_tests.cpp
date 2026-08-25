@@ -23,20 +23,15 @@ bool expect(bool condition, const char* message) {
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    std::cerr <<
-        "Usage: ffmpeg_audio_decoder_tests <media-file> [--audio-only]\n";
+    std::cerr << "Usage: ffmpeg_audio_decoder_tests <media-file>\n";
     return 2;
   }
   const std::filesystem::path media = argv[1];
-  const FfmpegAudioProbeMode probeMode =
-      argc >= 3 && std::string(argv[2]) == "--audio-only"
-          ? FfmpegAudioProbeMode::AudioOnly
-          : FfmpegAudioProbeMode::AllStreams;
 
   std::string error;
   FfmpegAudioDecoder decoder;
   bool ok = true;
-  ok &= expect(decoder.init(media, 2, 48000, &error, probeMode),
+  ok &= expect(decoder.init(media, 2, 48000, &error),
                "FFmpeg decoder must open media fixture");
   if (!ok) {
     std::cerr << "init error: " << error << '\n';

@@ -45,8 +45,11 @@ radioify_add_module_object_library(radioify_timeline_preview
   ${CMAKE_CURRENT_SOURCE_DIR}/timeline_preview_policy.cpp
 )
 
-radioify_add_module_object_library(radioify_transcript
+radioify_add_module_object_library(radioify_transcript_document
   ${CMAKE_CURRENT_SOURCE_DIR}/transcript/document.cpp
+)
+
+radioify_add_module_object_library(radioify_transcript_engine
   ${CMAKE_CURRENT_SOURCE_DIR}/transcript/transcriber.cpp
 )
 
