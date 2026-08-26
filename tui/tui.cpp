@@ -38,7 +38,7 @@
 #include "audioplayback.h"
 #include "browser_playback_reveal.h"
 #include "browser_playback_source.h"
-#include "browser_directory_listing.h"
+#include "browser_content_preparation.h"
 #include "browser_navigation.h"
 #include "browser_model.h"
 #include "browsermeta.h"
@@ -210,185 +210,6 @@ static bool isVideoExt(const std::filesystem::path& p) {
 using BrowserContentWorker =
     LatestRequestWorker<BrowserContentRequest, BrowserPreparationResult>;
 
-struct BrowserPreparationCancelled {};
-
-using BrowserPopulationResult =
-    std::variant<std::monostate, BrowserPreparationCancelled,
-                 BrowserPreparationError>;
-
-static BrowserPreparationError browserPreparationError(
-    BrowserPreparationErrorKind kind, const BrowserLocation& location,
-    std::string message) {
-  return {kind, location, std::move(message)};
-}
-
-static BrowserPopulationResult populateBrowser(
-    BrowserState& state, const std::string& initialName,
-    const OptionsBrowserRuntimeSnapshot& optionsRuntime,
-    const BrowserContentWorker::Cancellation* cancellation) {
-  if (cancellation && cancellation->requested()) {
-    return BrowserPreparationCancelled{};
-  }
-  const bool optionsActive =
-      state.location.kind() == BrowserLocationKind::OptionsBrowser;
-  if (optionsActive) {
-    if (!optionsBrowserSupportsLocation(state.location)) {
-      return browserPreparationError(
-          BrowserPreparationErrorKind::Unsupported, state.location,
-          "Options are not available for this browser location.");
-    }
-    const auto cancellationRequested = [cancellation]() {
-      return cancellation && cancellation->requested();
-    };
-    if (!prepareOptionsBrowserContent(state, optionsRuntime,
-                                      cancellationRequested)) {
-      if (cancellation && cancellation->requested()) {
-        return BrowserPreparationCancelled{};
-      }
-      return browserPreparationError(
-          BrowserPreparationErrorKind::Unavailable, state.location,
-          "Unable to prepare media options.");
-    }
-  } else if (isTrackBrowserActive(state)) {
-    std::string trackError;
-    std::shared_ptr<const TrackBrowserContent> content =
-        prepareTrackBrowserContent(state.location.path(), &trackError);
-    if (cancellation && cancellation->requested()) {
-      return BrowserPreparationCancelled{};
-    }
-    if (!content) {
-      return browserPreparationError(
-          BrowserPreparationErrorKind::Unavailable, state.location,
-          trackError.empty() ? "Unable to prepare the track browser."
-                             : std::move(trackError));
-    }
-    state.content = content;
-    state.entries.clear();
-    if (content->file.has_parent_path()) {
-      state.entries.emplace_back("..", content->file.parent_path(),
-                                 browser_entry::NavigateUp{});
-    }
-    int digits = trackLabelDigits(content->tracks.size());
-    for (const auto& track : content->tracks) {
-      BrowserEntry entry{formatTrackLabel(track, digits), content->file,
-                         browser_entry::PlayTrack{track.index}};
-      entry.pathIdentity = content->fileIdentity;
-      state.entries.push_back(std::move(entry));
-    }
-  } else {
-    browser_directory_listing::Result listing =
-        browser_directory_listing::list(
-            state.location.path(), [cancellation]() {
-              return cancellation && cancellation->requested();
-            });
-    if (auto* error =
-            std::get_if<browser_directory_listing::Error>(&listing)) {
-      return browserPreparationError(BrowserPreparationErrorKind::Unavailable,
-                                     state.location,
-                                     std::move(error->message));
-    }
-    if (std::holds_alternative<browser_directory_listing::Cancelled>(listing)) {
-      return BrowserPreparationCancelled{};
-    }
-    state.content = std::monostate{};
-    state.entries =
-        std::move(std::get<std::vector<BrowserEntry>>(listing));
-  }
-
-  if (!state.filter.empty()) {
-    std::string lowFilter = toLower(state.filter);
-    state.entries.erase(
-        std::remove_if(state.entries.begin(), state.entries.end(),
-                       [&](const BrowserEntry& e) {
-                         if (e.isSectionHeader() || e.isStatus() ||
-                             e.actionAs<browser_entry::NavigateUp>()) {
-                           return false;
-                         }
-                         return toLower(e.name).find(lowFilter) ==
-                                std::string::npos;
-                       }),
-        state.entries.end());
-  }
-
-  if (cancellation && cancellation->requested()) {
-    return BrowserPreparationCancelled{};
-  }
-
-  if (!state.entries.empty() && !optionsActive) {
-    sortBrowserEntries(state);
-  }
-
-  if (cancellation && cancellation->requested()) {
-    return BrowserPreparationCancelled{};
-  }
-
-  if (state.entries.empty()) {
-    state.selected = 0;
-    state.scrollRow = 0;
-    return std::monostate{};
-  }
-
-  auto isSelectable = [](const BrowserEntry& entry) {
-    return entry.isSelectable();
-  };
-  if (state.selected < 0 || state.selected >= static_cast<int>(state.entries.size()) ||
-      !isSelectable(state.entries[static_cast<size_t>(state.selected)])) {
-    state.selected = -1;
-    for (size_t i = 0; i < state.entries.size(); ++i) {
-      if (isSelectable(state.entries[i])) {
-        state.selected = static_cast<int>(i);
-        break;
-      }
-    }
-    if (state.selected < 0) {
-      state.selected = 0;
-    }
-  }
-  state.scrollRow = 0;
-
-  if (!initialName.empty()) {
-    for (size_t i = 0; i < state.entries.size(); ++i) {
-      if (!state.entries[i].isSelectable()) continue;
-      if (toLower(state.entries[i].name) == toLower(initialName)) {
-        state.selected = static_cast<int>(i);
-        requestBrowserSelectionReveal(state);
-        break;
-      }
-    }
-  }
-  return std::monostate{};
-}
-
-static std::optional<BrowserPreparationResult> prepareBrowserContent(
-    const BrowserContentRequest& request,
-    const BrowserContentWorker::Cancellation* cancellation = nullptr) {
-  BrowserState candidate;
-  candidate.location = request.location;
-  candidate.content = request.previousContent;
-  candidate.selected = request.selected;
-  candidate.sortMode = request.sortMode;
-  candidate.sortDescending = request.sortDescending;
-  candidate.filter = request.filter;
-  BrowserPopulationResult population =
-      populateBrowser(candidate, request.initialName, request.optionsRuntime,
-                      cancellation);
-  if (std::holds_alternative<BrowserPreparationCancelled>(population)) {
-    return std::nullopt;
-  }
-  if (auto* error = std::get_if<BrowserPreparationError>(&population)) {
-    return BrowserPreparationResult(std::move(*error));
-  }
-
-  PreparedBrowserContent prepared;
-  prepared.entries = std::move(candidate.entries);
-  prepared.content = std::move(candidate.content);
-  prepared.selected = candidate.selected;
-  prepared.scrollRow = candidate.scrollRow;
-  prepared.viewportRestoreMode = candidate.viewportRestoreMode;
-  prepared.viewportRestoreScrollRow = candidate.viewportRestoreScrollRow;
-  return BrowserPreparationResult(std::move(prepared));
-}
-
 static std::string buildTrackSelectionMeta(const BrowserState& browser) {
   if (browser.entries.empty()) return "";
   int idx = std::clamp(browser.selected, 0,
@@ -553,19 +374,20 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   BrowserContentWorker browserContentWorker(
       [](BrowserContentRequest request,
          const BrowserContentWorker::Cancellation& cancellation) {
-        try {
-          return prepareBrowserContent(request, &cancellation);
-        } catch (const std::exception& error) {
-          return std::optional<BrowserPreparationResult>(
-              BrowserPreparationError{
-                  BrowserPreparationErrorKind::Internal, request.location,
-                  error.what()});
-        } catch (...) {
-          return std::optional<BrowserPreparationResult>(
-              BrowserPreparationError{
-                  BrowserPreparationErrorKind::Internal, request.location,
-                  "Unexpected browser preparation failure."});
+        browser_content_preparation::Result result =
+            browser_content_preparation::prepare(
+                request, [&cancellation]() {
+                  return cancellation.requested();
+                });
+        if (std::holds_alternative<
+                browser_content_preparation::Cancelled>(result)) {
+          return std::optional<BrowserPreparationResult>{};
         }
+        if (auto* error = std::get_if<BrowserPreparationError>(&result)) {
+          return std::optional<BrowserPreparationResult>(std::move(*error));
+        }
+        return std::optional<BrowserPreparationResult>(
+            std::move(std::get<PreparedBrowserContent>(result)));
       });
   BrowserNavigator::Callbacks browserNavigationCallbacks;
   browserNavigationCallbacks.prepare =
