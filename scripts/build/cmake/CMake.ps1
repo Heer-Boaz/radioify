@@ -384,6 +384,49 @@ function Publish-BuildArtifacts {
   Copy-Item -LiteralPath $whisperModelSource -Destination $whisperModelDestination -Force
   Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $whisperModelDestination
 
+  $cmakeCachePath = Join-Path $Context.Paths.BuildDir "CMakeCache.txt"
+  $audioSeparationSetting = Get-CMakeCacheValue `
+    -CachePath $cmakeCachePath `
+    -Variable "RADIOIFY_ENABLE_AUDIO_SEPARATION"
+  $audioSeparationEnabled = $audioSeparationSetting -match "^(1|ON|TRUE|YES)$"
+  if ($audioSeparationEnabled) {
+    $runtimeSourceDir = Split-Path -Parent $builtExe
+    foreach ($runtimeName in @("onnxruntime.dll", "DirectML.dll")) {
+      $runtimeSource = Join-Path $runtimeSourceDir $runtimeName
+      if (-not (Test-Path -LiteralPath $runtimeSource)) {
+        Fail-Build "Build completed without the required Windows ML runtime at $runtimeSource."
+      }
+      $runtimeDestination = Join-Path $Context.Paths.DistDir $runtimeName
+      Copy-Item -LiteralPath $runtimeSource -Destination $runtimeDestination -Force
+      Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $runtimeDestination
+    }
+
+    $separationModelSource = Get-CMakeCacheValue `
+      -CachePath $cmakeCachePath `
+      -Variable "RADIOIFY_AUDIO_SEPARATION_MODEL_PATH"
+    if (-not $separationModelSource -or
+        -not (Test-Path -LiteralPath $separationModelSource)) {
+      Fail-Build "Build completed without the configured BandIt v2 model at $separationModelSource."
+    }
+    $separationModelDistDir = Join-Path $Context.Paths.DistDir "models\audio_separation"
+    if (-not (Test-Path -LiteralPath $separationModelDistDir)) {
+      New-Item -ItemType Directory -Force -Path $separationModelDistDir | Out-Null
+    }
+    $separationModelDestination = Join-Path $separationModelDistDir "bandit-v2-multi-mask-core-fp16.onnx"
+    Copy-Item -LiteralPath $separationModelSource `
+      -Destination $separationModelDestination -Force
+    Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $separationModelDestination
+
+    $separationModelCardSource = Join-Path $Context.Paths.Root "models\audio_separation\BandIt-v2-MODEL-CARD"
+    if (-not (Test-Path -LiteralPath $separationModelCardSource)) {
+      Fail-Build "BandIt v2 attribution file was not found at $separationModelCardSource."
+    }
+    $separationModelCardDestination = Join-Path $separationModelDistDir "BandIt-v2-MODEL-CARD"
+    Copy-Item -LiteralPath $separationModelCardSource `
+      -Destination $separationModelCardDestination -Force
+    Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $separationModelCardDestination
+  }
+
   if ($Context.Options.Win11ExplorerIntegration) {
     $integrationDistDir = Join-Path $Context.Paths.DistDir "win11-explorer-integration"
     if (-not (Test-Path $integrationDistDir)) {

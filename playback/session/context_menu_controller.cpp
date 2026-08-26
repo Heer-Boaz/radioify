@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace playback_session {
 
@@ -41,22 +42,25 @@ playback_overlay::ContextMenuItemToken ContextMenuController::tokenFor(
 
 void ContextMenuController::refresh(
     const playback_video_edit::EditSnapshot& edit,
+    const playback_video_edit::ExportProgress& editExport) {
+  playback_media_actions::Context sourceContext;
+  sourceContext.mediaKind = playback_media_actions::MediaKind::Video;
+  sourceContext.currentPlayback = true;
+  refresh(edit, editExport, std::move(sourceContext));
+}
+
+void ContextMenuController::refresh(
+    const playback_video_edit::EditSnapshot& edit,
     const playback_video_edit::ExportProgress& editExport,
-    bool backgroundTaskRunning, bool subtitleGenerationRunningForSource,
-    bool hasGeneratedSubtitles) {
+    playback_media_actions::Context sourceContext) {
   std::optional<ContextMenuCommand> selectedCommand;
   if (selected_ < items_.size()) selectedCommand = items_[selected_].command;
 
   std::vector<Item> next;
-  playback_media_actions::Context sourceContext;
   sourceContext.mediaKind = playback_media_actions::MediaKind::Video;
   sourceContext.currentPlayback = true;
   sourceContext.editorActive = edit.active;
   sourceContext.hasEdits = edit.hasEdits;
-  sourceContext.backgroundTaskRunning = backgroundTaskRunning;
-  sourceContext.hasGeneratedSubtitles = hasGeneratedSubtitles;
-  sourceContext.subtitleGenerationRunningForSource =
-      subtitleGenerationRunningForSource;
   for (playback_media_actions::Item& item :
        playback_media_actions::build(sourceContext)) {
     next.push_back({item.action, std::move(item.label)});

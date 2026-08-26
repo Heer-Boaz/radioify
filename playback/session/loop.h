@@ -54,6 +54,15 @@ class PlaybackLoopRunner {
     std::function<bool(const std::filesystem::path&)>
         subtitleGenerationRunningFor;
     std::function<bool()> cancelSubtitleGeneration;
+    std::function<bool(const std::filesystem::path&)>
+        audioSeparationAvailableFor;
+    std::function<bool(const std::filesystem::path&)>
+        requestAudioSeparation;
+    std::function<bool(const std::filesystem::path&)>
+        audioSeparationRunningFor;
+    std::function<bool(const std::filesystem::path&)>
+        hasSeparatedAudioFor;
+    std::function<bool()> cancelAudioSeparation;
     std::function<void()> activateBrowserSurface;
     PlaybackSessionContinuationState continuityState;
     PlaybackSessionIntent sessionIntent = PlaybackSessionIntent::View;
@@ -86,6 +95,7 @@ class PlaybackLoopRunner {
   void subtitleGenerationFinished(
       const std::filesystem::path& preferredSubtitleTrack, bool success,
       std::string status);
+  void mediaTaskFinished(std::string status);
   void requestStop();
   void requestQuit();
   void shutdown();

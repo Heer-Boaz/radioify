@@ -19,6 +19,8 @@ using ArtifactPaths = std::array<std::filesystem::path, kStemCount>;
 const char* stemFileSuffix(Stem stem);
 const char* stemDisplayName(Stem stem);
 ArtifactPaths artifactPathsFor(const std::filesystem::path& mediaPath);
+bool artifactsExistFor(const std::filesystem::path& mediaPath);
+bool isManagedArtifactPath(const std::filesystem::path& path);
 ArtifactPaths temporaryArtifactPathsFor(
     const std::filesystem::path& mediaPath);
 std::filesystem::path temporaryRawAudioPathFor(

@@ -84,6 +84,11 @@ struct PlaybackSession::Impl {
         std::move(request.requestSubtitleGeneration),
         std::move(request.subtitleGenerationRunningFor),
         std::move(request.cancelSubtitleGeneration),
+        std::move(request.audioSeparationAvailableFor),
+        std::move(request.requestAudioSeparation),
+        std::move(request.audioSeparationRunningFor),
+        std::move(request.hasSeparatedAudioFor),
+        std::move(request.cancelAudioSeparation),
         std::move(request.activateBrowserSurface),
         std::move(request.continuityState),
         request.sessionIntent});
@@ -265,6 +270,12 @@ void PlaybackSession::subtitleGenerationFinished(
   if (impl_->canControl()) {
     impl_->loop->subtitleGenerationFinished(preferredSubtitleTrack, success,
                                             std::move(status));
+  }
+}
+
+void PlaybackSession::mediaTaskFinished(std::string status) {
+  if (impl_->canControl()) {
+    impl_->loop->mediaTaskFinished(std::move(status));
   }
 }
 

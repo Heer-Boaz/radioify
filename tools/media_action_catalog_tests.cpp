@@ -22,6 +22,16 @@ bool hasAction(const std::vector<playback_media_actions::Item>& items,
                      });
 }
 
+const playback_media_actions::Item* findAction(
+    const std::vector<playback_media_actions::Item>& items,
+    playback_media_actions::Action action) {
+  const auto found = std::find_if(items.begin(), items.end(),
+                                  [action](const auto& item) {
+                                    return item.action == action;
+                                  });
+  return found == items.end() ? nullptr : &*found;
+}
+
 }  // namespace
 
 int main() {
@@ -36,13 +46,17 @@ int main() {
 
   actions::Context video;
   video.mediaKind = actions::MediaKind::Video;
+  video.canSeparateAudio = true;
   const std::vector<actions::Item> browserVideo = actions::build(video);
-  ok &= expect(browserVideo.size() == 3 &&
+  ok &= expect(browserVideo.size() == 4 &&
                    browserVideo[0].action == actions::Action::Play &&
                    browserVideo[1].action == actions::Action::EditVideo &&
                    browserVideo[2].action ==
                        actions::Action::GenerateSubtitles &&
-                   browserVideo[2].label == "Generate subtitles...",
+                   browserVideo[2].label == "Generate subtitles..." &&
+                   browserVideo[3].action ==
+                       actions::Action::SeparateAudio &&
+                   browserVideo[3].label == "Separate audio...",
                "an idle browser video must expose the canonical source "
                "actions in stable order");
 
@@ -72,17 +86,19 @@ int main() {
   video.hasGeneratedSubtitles = true;
   const std::vector<actions::Item> generatedSubtitleVideo =
       actions::build(video);
-  ok &= expect(generatedSubtitleVideo.back().action ==
-                       actions::Action::GenerateSubtitles &&
-                   generatedSubtitleVideo.back().label ==
-                       "Regenerate subtitles...",
+  const actions::Item* regenerateSubtitles = findAction(
+      generatedSubtitleVideo, actions::Action::GenerateSubtitles);
+  ok &= expect(regenerateSubtitles &&
+                   regenerateSubtitles->label == "Regenerate subtitles...",
                "existing generated subtitles must be reflected in the shared "
                "action");
   video.backgroundTaskRunning = true;
   ok &= expect(!hasAction(actions::build(video),
-                          actions::Action::GenerateSubtitles),
-               "a running media task must suppress duplicate subtitle "
-               "generation");
+                          actions::Action::GenerateSubtitles) &&
+                   !hasAction(actions::build(video),
+                              actions::Action::SeparateAudio),
+               "a running media task must suppress duplicate generation "
+               "and separation");
   video.subtitleGenerationRunningForSource = true;
   const std::vector<actions::Item> generatingSubtitleVideo =
       actions::build(video);
@@ -91,15 +107,34 @@ int main() {
                    !hasAction(generatingSubtitleVideo,
                               actions::Action::GenerateSubtitles),
                "the source being processed must expose cancellation");
+  video.subtitleGenerationRunningForSource = false;
+  video.audioSeparationRunningForSource = true;
+  const std::vector<actions::Item> separatingVideo = actions::build(video);
+  ok &= expect(hasAction(separatingVideo,
+                         actions::Action::CancelAudioSeparation) &&
+                   !hasAction(separatingVideo,
+                              actions::Action::SeparateAudio),
+               "a video being separated must expose cancellation");
+  video.audioSeparationRunningForSource = false;
+  video.backgroundTaskRunning = false;
+  video.hasSeparatedAudio = true;
+  const std::vector<actions::Item> separatedVideo = actions::build(video);
+  const actions::Item* separateAgain =
+      findAction(separatedVideo, actions::Action::SeparateAudio);
+  ok &= expect(separateAgain &&
+                   separateAgain->label == "Separate audio again...",
+               "an existing managed stem set must expose explicit replacement");
 
   actions::Context audio;
   audio.mediaKind = actions::MediaKind::Audio;
   audio.canBrowseTracks = true;
   audio.canAnalyzeAudio = true;
+  audio.canSeparateAudio = true;
   const std::vector<actions::Item> browserAudio = actions::build(audio);
-  ok &= expect(browserAudio.size() == 4 &&
+  ok &= expect(browserAudio.size() == 5 &&
                    hasAction(browserAudio, actions::Action::Play) &&
                    hasAction(browserAudio, actions::Action::BrowseTracks) &&
+                   hasAction(browserAudio, actions::Action::SeparateAudio) &&
                    hasAction(browserAudio, actions::Action::AnalyzeAudio) &&
                    hasAction(browserAudio, actions::Action::SplitLoop) &&
                    !hasAction(browserAudio, actions::Action::GenerateSubtitles) &&
@@ -112,6 +147,14 @@ int main() {
   ok &= expect(busyAudio.size() == 1 &&
                    busyAudio.front().action == actions::Action::BrowseTracks,
                "playback and background-task state must project independently");
+  audio.audioSeparationRunningForSource = true;
+  const std::vector<actions::Item> separatingAudio = actions::build(audio);
+  ok &= expect(separatingAudio.size() == 2 &&
+                   hasAction(separatingAudio,
+                             actions::Action::BrowseTracks) &&
+                   hasAction(separatingAudio,
+                             actions::Action::CancelAudioSeparation),
+               "an audio source being separated must expose cancellation");
 
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

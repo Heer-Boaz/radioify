@@ -1,6 +1,8 @@
 #include "audio/separation/artifact.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <system_error>
 #include <utility>
@@ -76,6 +78,32 @@ ArtifactPaths artifactPathsFor(const std::filesystem::path& mediaPath) {
   return {stemPath(mediaPath, stemFileSuffix(Stem::Dialogue)),
           stemPath(mediaPath, stemFileSuffix(Stem::Music)),
           stemPath(mediaPath, stemFileSuffix(Stem::Effects))};
+}
+
+bool artifactsExistFor(const std::filesystem::path& mediaPath) {
+  const ArtifactPaths paths = artifactPathsFor(mediaPath);
+  return std::all_of(paths.begin(), paths.end(),
+                     [](const std::filesystem::path& path) {
+                       std::error_code ec;
+                       return std::filesystem::is_regular_file(path, ec) &&
+                              !ec;
+                     });
+}
+
+bool isManagedArtifactPath(const std::filesystem::path& path) {
+  auto lowerExtension = [](const std::filesystem::path& value) {
+    std::string extension = value.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char character) {
+                     return static_cast<char>(std::tolower(character));
+                   });
+    return extension;
+  };
+  if (lowerExtension(path) != ".flac") return false;
+  const std::string stemExtension = lowerExtension(path.stem());
+  return stemExtension == stemFileSuffix(Stem::Dialogue) ||
+         stemExtension == stemFileSuffix(Stem::Music) ||
+         stemExtension == stemFileSuffix(Stem::Effects);
 }
 
 ArtifactPaths temporaryArtifactPathsFor(

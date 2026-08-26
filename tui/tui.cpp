@@ -52,6 +52,8 @@
 #include "core/windows_console_window.h"
 #include "core/windows_shell_open.h"
 #include "image_viewer_sequence.h"
+#include "audio/separation/artifact.h"
+#include "audio/separation/job.h"
 #include "playback/video/transcript/generation_job.h"
 #include "m4adecoder.h"
 #include "miniaudio.h"
@@ -85,6 +87,7 @@
 #include "ui_input_pump.h"
 #include "ui_viewport.h"
 #include "subtitle_generation_status.h"
+#include "audio_separation_status.h"
 #include "playback/video/playback.h"
 #include "playback/video/transcript/artifact.h"
 #include "playback/video/framebuffer/window/window.h"
@@ -956,6 +959,15 @@ class TuiMediaCoordinator {
     std::function<bool(const std::filesystem::path&)>
         subtitleGenerationRunningFor;
     std::function<bool()> cancelSubtitleGeneration;
+    std::function<bool(const std::filesystem::path&)>
+        audioSeparationAvailableFor;
+    std::function<bool(const std::filesystem::path&)>
+        requestAudioSeparation;
+    std::function<bool(const std::filesystem::path&)>
+        audioSeparationRunningFor;
+    std::function<bool(const std::filesystem::path&)>
+        hasSeparatedAudioFor;
+    std::function<bool()> cancelAudioSeparation;
     std::function<void()> activateBrowserSurface;
   };
 
@@ -1110,6 +1122,15 @@ class TuiMediaCoordinator {
     }
     videoSession_->subtitleGenerationFinished(outputFile, success,
                                               std::move(status));
+  }
+
+  void mediaTaskFinishedFor(const std::filesystem::path& sourceFile,
+                            std::string status) {
+    if (!videoSession_ || !videoTarget_ ||
+        !samePath(playbackTargetFile(*videoTarget_), sourceFile)) {
+      return;
+    }
+    videoSession_->mediaTaskFinished(std::move(status));
   }
 
   void stopVideo() {
@@ -1362,6 +1383,11 @@ class TuiMediaCoordinator {
         services_.requestSubtitleGeneration,
         services_.subtitleGenerationRunningFor,
         services_.cancelSubtitleGeneration,
+        services_.audioSeparationAvailableFor,
+        services_.requestAudioSeparation,
+        services_.audioSeparationRunningFor,
+        services_.hasSeparatedAudioFor,
+        services_.cancelAudioSeparation,
         services_.activateBrowserSurface};
     PlaybackSession::Dependencies sessionDependencies{
         services_.input,
@@ -1928,6 +1954,13 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   MelodyExportTaskState melodyExportTask;
   LoopSplitTaskState loopSplitTask;
   playback_video_transcript::GenerationJob subtitleGenerationJob;
+  audio_separation::Job audioSeparationJob;
+  enum class CompletedMediaTask {
+    None,
+    SubtitleGeneration,
+    AudioSeparation,
+  };
+  CompletedMediaTask lastCompletedMediaTask = CompletedMediaTask::None;
 
   auto pollDrivenBackgroundTaskRunning = [&]() {
     bool running = false;
@@ -1943,11 +1976,14 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   };
   auto mediaBackgroundTaskRunning = [&]() {
     return pollDrivenBackgroundTaskRunning() ||
-           subtitleGenerationJob.snapshot().running();
+           subtitleGenerationJob.snapshot().running() ||
+           audioSeparationJob.snapshot().running();
   };
   auto requestSubtitleGeneration = [&](const std::filesystem::path& file) {
     if (!isVideoExt(file) || mediaBackgroundTaskRunning()) return false;
     if (!subtitleGenerationJob.tryStart(file)) return false;
+    lastCompletedMediaTask = CompletedMediaTask::None;
+    markLayoutDirty();
     markDirty(UiDirtyFlags::Async);
     return true;
   };
@@ -1961,6 +1997,47 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     const bool requested = subtitleGenerationJob.requestCancel();
     if (requested) markDirty(UiDirtyFlags::Async);
     return requested;
+  };
+  auto audioSeparationAvailableFor = [&](const std::filesystem::path& file) {
+#if RADIOIFY_HAS_AUDIO_SEPARATION
+    return (isVideoExt(file) || isSupportedAudioExt(file)) &&
+           !audio_separation::isManagedArtifactPath(file);
+#else
+    (void)file;
+    return false;
+#endif
+  };
+  auto requestAudioSeparation = [&](const std::filesystem::path& file) {
+    if (!audioSeparationAvailableFor(file) || mediaBackgroundTaskRunning()) {
+      return false;
+    }
+    if (!audioSeparationJob.tryStart(file)) return false;
+    lastCompletedMediaTask = CompletedMediaTask::None;
+    markLayoutDirty();
+    markDirty(UiDirtyFlags::Async);
+    return true;
+  };
+  auto audioSeparationRunningFor = [&](const std::filesystem::path& file) {
+    const audio_separation::JobSnapshot snapshot =
+        audioSeparationJob.snapshot();
+    return snapshot.running() && samePath(snapshot.sourceFile, file);
+  };
+  auto hasSeparatedAudioFor = [&](const std::filesystem::path& file) {
+    return audio_separation::artifactsExistFor(file);
+  };
+  auto cancelAudioSeparation = [&]() {
+    const bool requested = audioSeparationJob.requestCancel();
+    if (requested) markDirty(UiDirtyFlags::Async);
+    return requested;
+  };
+  auto cancelActiveMediaTask = [&]() {
+    if (subtitleGenerationJob.snapshot().running()) {
+      return cancelSubtitleGeneration();
+    }
+    if (audioSeparationJob.snapshot().running()) {
+      return cancelAudioSeparation();
+    }
+    return false;
   };
 
   std::string mediaCommandError;
@@ -1983,6 +2060,9 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
        [&]() { running = false; }, [&]() { markDirty(); },
        mediaBackgroundTaskRunning, requestSubtitleGeneration,
        subtitleGenerationRunningFor, cancelSubtitleGeneration,
+       audioSeparationAvailableFor, requestAudioSeparation,
+       audioSeparationRunningFor, hasSeparatedAudioFor,
+       cancelAudioSeparation,
        [&]() {
          if (windowTuiEnabled && tuiWindow.IsOpen()) {
            tuiWindow.Activate();
@@ -1998,6 +2078,10 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     if (const NativeWaitHandle subtitleGenerationHandle =
             subtitleGenerationJob.nativeWaitHandle()) {
       handles.push_back(subtitleGenerationHandle);
+    }
+    if (const NativeWaitHandle audioSeparationHandle =
+            audioSeparationJob.nativeWaitHandle()) {
+      handles.push_back(audioSeparationHandle);
     }
     return handles;
   };
@@ -2271,8 +2355,15 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     const playback_video_transcript::GenerationJobSnapshot
         subtitleGeneration = subtitleGenerationJob.snapshot();
     const bool hasSubtitleGenerationStatus =
+        lastCompletedMediaTask == CompletedMediaTask::SubtitleGeneration &&
         subtitleGeneration.finished() &&
         !subtitleGenerationStatus(subtitleGeneration).empty();
+    const audio_separation::JobSnapshot audioSeparation =
+        audioSeparationJob.snapshot();
+    const bool hasAudioSeparationStatus =
+        lastCompletedMediaTask == CompletedMediaTask::AudioSeparation &&
+        audioSeparation.finished() &&
+        !audioSeparationStatus(audioSeparation).empty();
     const std::filesystem::path nowPlaying = currentPlaybackFile();
     const bool showNowPlaying =
         !nowPlaying.empty() || audioIsReady() || audioIsSeeking() ||
@@ -2281,6 +2372,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         !melodyVisualizationEnabled,
         !mediaCommandError.empty() || !audioGetWarning().empty(),
         hasAnalyzeStatus, hasLoopSplitStatus, hasSubtitleGenerationStatus,
+        hasAudioSeparationStatus,
         o.play,
         showNowPlaying,
         o.play && audioIsReady());
@@ -2374,12 +2466,16 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         audio && supportsPlaybackTrackCatalog(entry.path);
     context.canAnalyzeAudio =
         audio && audioCanAnalyzeFileToMelodyFile(entry.path);
+    context.canSeparateAudio = audioSeparationAvailableFor(entry.path);
     context.backgroundTaskRunning = mediaBackgroundTaskRunning();
     context.hasGeneratedSubtitles =
         !playback_video_transcript::activeTranscriptPathForVideo(entry.path)
              .empty();
     context.subtitleGenerationRunningForSource =
         subtitleGenerationRunningFor(entry.path);
+    context.hasSeparatedAudio = hasSeparatedAudioFor(entry.path);
+    context.audioSeparationRunningForSource =
+        audioSeparationRunningFor(entry.path);
     std::vector<playback_media_actions::Item> items =
         playback_media_actions::build(context);
     if (items.empty()) return;
@@ -3009,6 +3105,11 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     } else if (action ==
                playback_media_actions::Action::CancelSubtitleGeneration) {
       cancelSubtitleGeneration();
+    } else if (action == playback_media_actions::Action::SeparateAudio) {
+      requestAudioSeparation(entry.path);
+    } else if (action ==
+               playback_media_actions::Action::CancelAudioSeparation) {
+      cancelAudioSeparation();
     } else if (action == playback_media_actions::Action::AnalyzeAudio) {
       startMelodyExport(entry);
     } else if (action == playback_media_actions::Action::SplitLoop) {
@@ -3212,11 +3313,24 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
     if (const auto completedSubtitleGeneration =
             subtitleGenerationJob.takeCompletion()) {
+      lastCompletedMediaTask = CompletedMediaTask::SubtitleGeneration;
       mediaCoordinator.subtitleGenerationFinishedFor(
           completedSubtitleGeneration->sourceFile,
           completedSubtitleGeneration->outputFile,
           completedSubtitleGeneration->succeeded(),
           subtitleGenerationStatus(*completedSubtitleGeneration));
+      markLayoutDirty();
+      markDirty(UiDirtyFlags::Async);
+    }
+    if (audioSeparationJob.consumeChanged()) {
+      markDirty(UiDirtyFlags::Async);
+    }
+    if (const auto completedAudioSeparation =
+            audioSeparationJob.takeCompletion()) {
+      lastCompletedMediaTask = CompletedMediaTask::AudioSeparation;
+      mediaCoordinator.mediaTaskFinishedFor(
+          completedAudioSeparation->sourceFile,
+          audioSeparationStatus(*completedAudioSeparation));
       markLayoutDirty();
       markDirty(UiDirtyFlags::Async);
     }
@@ -3251,7 +3365,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         }
         if (playbackEvent.type == InputEvent::Type::Key &&
             playbackEvent.key.vk == VK_F8 &&
-            cancelSubtitleGeneration()) {
+            cancelActiveMediaTask()) {
           continue;
         }
         mediaCoordinator.handleVideoInputEvent(playbackEvent);
@@ -3287,7 +3401,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         return;
       }
       if (ev.type == InputEvent::Type::Key && ev.key.vk == VK_F8 &&
-          cancelSubtitleGeneration()) {
+          cancelActiveMediaTask()) {
         return;
       }
       if (mediaCoordinator.capturesBrowserInput()) {
@@ -3609,6 +3723,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       joinMelodyExportWorker();
       joinLoopSplitExportWorker(loopSplitTask);
       subtitleGenerationJob.cancelAndJoin();
+      audioSeparationJob.cancelAndJoin();
       audioShutdown();
     };
 
@@ -3981,6 +4096,19 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
                              statusStyle);
           }
         }
+        const audio_separation::JobSnapshot audioSeparation =
+            audioSeparationJob.snapshot();
+        if (footerLayout.showAudioSeparationStatus &&
+            audioSeparation.finished()) {
+          const std::string status =
+              audioSeparationStatus(audioSeparation);
+          const Style statusStyle =
+              audioSeparation.succeeded() ? kStyleDim : kStyleAlert;
+          if (!status.empty()) {
+            screen.writeText(0, line++, fitLine(" " + status, width),
+                             statusStyle);
+          }
+        }
       }
       std::string nowLabel = buildNowPlayingLabel();
       if (footerLayout.showNowPlaying) {
@@ -4235,7 +4363,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         std::filesystem::path exportSource;
         std::string title = " Melody Analysis";
         std::string detail;
-        bool isSubtitleGeneration = false;
+        bool isCancellableTask = false;
         {
           std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
           if (melodyExportTask.running) {
@@ -4266,7 +4394,22 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
                         ? "Cancelling Subtitles"
                         : "Generating Subtitles";
             detail = subtitleGeneration.phase;
-            isSubtitleGeneration = true;
+            isCancellableTask = true;
+          }
+        }
+        if (!isRunning) {
+          const audio_separation::JobSnapshot audioSeparation =
+              audioSeparationJob.snapshot();
+          if (audioSeparation.running()) {
+            isRunning = true;
+            exportProgress =
+                std::clamp(audioSeparation.progress, 0.0f, 1.0f);
+            exportSource = audioSeparation.sourceFile;
+            title = audioSeparation.cancelling()
+                        ? "Cancelling Audio Separation"
+                        : "Separating Audio";
+            detail = audioSeparation.phase;
+            isCancellableTask = true;
           }
         }
         if (isRunning && width >= 4 && height - listTop >= 3) {
@@ -4277,7 +4420,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
               std::max(46, utf8DisplayWidth(sourceName) + 6);
           const int popupWidth = std::clamp(desiredWidth, 4, width);
           const int availableHeight = height - listTop;
-          const int desiredHeight = isSubtitleGeneration ? 7 : 6;
+          const int desiredHeight = isCancellableTask ? 7 : 6;
           const int popupHeight = std::min(desiredHeight, availableHeight);
           const int x0 = std::max(0, width - popupWidth - 1);
           const int y0 = listTop;
@@ -4323,7 +4466,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
             progressLine = percentText;
           }
           cardLines.push_back({std::move(progressLine), kStyleNormal});
-          if (isSubtitleGeneration) {
+          if (isCancellableTask) {
             cardLines.push_back({"F8: Cancel", kStyleDim});
           }
 
@@ -4368,6 +4511,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   joinMelodyExportWorker();
   joinLoopSplitExportWorker(loopSplitTask);
   subtitleGenerationJob.cancelAndJoin();
+  audioSeparationJob.cancelAndJoin();
   audioShutdown();
   return 0;
 }

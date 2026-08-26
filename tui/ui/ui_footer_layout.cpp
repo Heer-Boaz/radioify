@@ -7,6 +7,7 @@ bool operator==(const BrowserFooterLayout& a, const BrowserFooterLayout& b) {
          a.showLoopSplitStatus == b.showLoopSplitStatus &&
          a.showSubtitleGenerationStatus ==
              b.showSubtitleGenerationStatus &&
+         a.showAudioSeparationStatus == b.showAudioSeparationStatus &&
          a.showNowPlaying == b.showNowPlaying &&
          a.nowPlayingLines == b.nowPlayingLines &&
          a.showActionStrip == b.showActionStrip &&
@@ -24,6 +25,7 @@ BrowserFooterLayout computeBrowserFooterLayout(bool browserInteractionEnabled,
                                                bool showAnalyzeStatus,
                                                bool showLoopSplitStatus,
                                                bool showSubtitleGenerationStatus,
+                                               bool showAudioSeparationStatus,
                                                bool enableTransportUi,
                                                bool showNowPlaying,
                                                bool showPeakMeter) {
@@ -33,6 +35,7 @@ BrowserFooterLayout computeBrowserFooterLayout(bool browserInteractionEnabled,
   layout.showAnalyzeStatus = showAnalyzeStatus;
   layout.showLoopSplitStatus = showLoopSplitStatus;
   layout.showSubtitleGenerationStatus = showSubtitleGenerationStatus;
+  layout.showAudioSeparationStatus = showAudioSeparationStatus;
   layout.showNowPlaying = showNowPlaying;
   layout.nowPlayingLines = layout.showNowPlaying ? 1 : 0;
   layout.showActionStrip = enableTransportUi;
@@ -46,6 +49,7 @@ BrowserFooterLayout computeBrowserFooterLayout(bool browserInteractionEnabled,
   layout.reservedLines += layout.showAnalyzeStatus ? 1 : 0;
   layout.reservedLines += layout.showLoopSplitStatus ? 1 : 0;
   layout.reservedLines += layout.showSubtitleGenerationStatus ? 1 : 0;
+  layout.reservedLines += layout.showAudioSeparationStatus ? 1 : 0;
   layout.reservedLines += layout.nowPlayingLines;
   layout.reservedLines += layout.actionStripLines;
   layout.reservedLines += layout.showPeakMeter ? 1 : 0;

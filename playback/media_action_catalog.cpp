@@ -21,6 +21,15 @@ std::vector<Item> build(const Context& context) {
            context.hasGeneratedSubtitles ? "Regenerate subtitles..."
                                          : "Generate subtitles..."});
     }
+    if (context.audioSeparationRunningForSource) {
+      items.push_back(
+          {Action::CancelAudioSeparation, "Cancel audio separation"});
+    } else if (!context.backgroundTaskRunning && context.canSeparateAudio) {
+      items.push_back(
+          {Action::SeparateAudio,
+           context.hasSeparatedAudio ? "Separate audio again..."
+                                     : "Separate audio..."});
+    }
     return items;
   }
 
@@ -30,6 +39,15 @@ std::vector<Item> build(const Context& context) {
   }
   if (context.canBrowseTracks) {
     items.push_back({Action::BrowseTracks, "Browse tracks"});
+  }
+  if (context.audioSeparationRunningForSource) {
+    items.push_back(
+        {Action::CancelAudioSeparation, "Cancel audio separation"});
+  } else if (!context.backgroundTaskRunning && context.canSeparateAudio) {
+    items.push_back(
+        {Action::SeparateAudio,
+         context.hasSeparatedAudio ? "Separate audio again..."
+                                   : "Separate audio..."});
   }
   if (!context.backgroundTaskRunning) {
     if (context.canAnalyzeAudio) {

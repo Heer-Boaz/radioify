@@ -3,6 +3,7 @@
 #include "audio/separation/job.h"
 #include "audio/separation/spectral_transform.h"
 #include "audio/ffmpegaudio.h"
+#include "tui/ui/audio_separation_status.h"
 
 #include <algorithm>
 #include <chrono>
@@ -53,6 +54,11 @@ bool testArtifactContract(const std::filesystem::path& directory) {
                    finalPaths[1].filename() == L"film épisode.music.flac" &&
                    finalPaths[2].filename() == L"film épisode.effects.flac",
                "managed stems must retain the Unicode media identity");
+  ok &= expect(separation::isManagedArtifactPath(finalPaths[0]) &&
+                   separation::isManagedArtifactPath(finalPaths[1]) &&
+                   separation::isManagedArtifactPath(finalPaths[2]) &&
+                   !separation::isManagedArtifactPath(media),
+               "managed output recognition must prevent recursive separation");
 
   const separation::ArtifactPaths temporaryPaths =
       separation::temporaryArtifactPathsFor(media);
@@ -69,6 +75,8 @@ bool testArtifactContract(const std::filesystem::path& directory) {
     ok &= expect(readText(path) == "new",
                  "publishing must atomically replace the managed set");
   }
+  ok &= expect(separation::artifactsExistFor(media),
+               "only a complete published set must count as existing stems");
 
   const separation::ArtifactPaths incomplete =
       separation::temporaryArtifactPathsFor(media);
@@ -211,8 +219,49 @@ bool testJobLifecycle() {
                    completion->outputFiles[1] == "clip.music.flac" &&
                    completion->outputFiles[2] == "clip.effects.flac",
                "job completion must own and expose the managed stem set");
+  ok &= expect(completion &&
+                   audioSeparationStatus(*completion) ==
+                       "Audio stems ready: dialogue, music and effects.",
+               "typed completion state must produce the shared success text");
   ok &= expect(!job.takeCompletion(),
                "a separation completion must be delivered exactly once");
+
+  std::atomic<bool> operationStarted{false};
+  separation::Job cancellable(
+      [&](const std::filesystem::path&, const separation::ArtifactPaths&,
+          const separation::Job::ProgressReporter& progress,
+          const std::atomic<bool>* cancelRequested, std::string* error) {
+        progress(0.2f, "Separating test audio");
+        operationStarted.store(true, std::memory_order_release);
+        while (!cancelRequested->load(std::memory_order_relaxed)) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if (error) *error = "Controlled cancellation.";
+        return false;
+      });
+  ok &= expect(cancellable.tryStart("cancel.mp4"),
+               "a cancellable operation must start");
+  for (int attempt = 0;
+       attempt < 100 && !operationStarted.load(std::memory_order_acquire);
+       ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ok &= expect(operationStarted.load(std::memory_order_acquire) &&
+                   cancellable.requestCancel() &&
+                   !cancellable.requestCancel(),
+               "cancellation must be accepted exactly once");
+  std::optional<separation::JobSnapshot> cancelled;
+  for (int attempt = 0; attempt < 100 && !cancelled; ++attempt) {
+    cancelled = cancellable.takeCompletion();
+    if (!cancelled) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  ok &= expect(cancelled && cancelled->state == separation::JobState::Cancelled &&
+                   cancelled->error.empty() &&
+                   audioSeparationStatus(*cancelled) ==
+                       "Audio separation cancelled.",
+               "cancelled work must publish typed state without backend noise");
   return ok;
 }
 

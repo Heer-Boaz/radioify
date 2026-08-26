@@ -177,6 +177,34 @@ function New-RadioifyWindowsDistributionBundle {
         -Destination (Join-Path $modelStageDir "ggml-base-q5_1.bin") `
         -Force
 
+    foreach ($runtimeName in @("onnxruntime.dll", "DirectML.dll")) {
+        $runtimeSource = Join-Path $resolvedRepoRoot "dist\$runtimeName"
+        if (-not (Test-Path -LiteralPath $runtimeSource)) {
+            throw "Audio-separation runtime not found at '$runtimeSource'. Run .\build.ps1 -Static first."
+        }
+        Copy-Item -LiteralPath $runtimeSource `
+            -Destination (Join-Path $stageDir $runtimeName) `
+            -Force
+    }
+
+    $separationSourceDir = Join-Path $resolvedRepoRoot "dist\models\audio_separation"
+    foreach ($separationFile in @(
+        "bandit-v2-multi-mask-core-fp16.onnx",
+        "BandIt-v2-MODEL-CARD"
+    )) {
+        $sourcePath = Join-Path $separationSourceDir $separationFile
+        if (-not (Test-Path -LiteralPath $sourcePath)) {
+            throw "Audio-separation artifact not found at '$sourcePath'. Run .\build.ps1 -Static first."
+        }
+        $destinationDir = Join-Path $modelStageDir "audio_separation"
+        if (-not (Test-Path -LiteralPath $destinationDir)) {
+            New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
+        }
+        Copy-Item -LiteralPath $sourcePath `
+            -Destination (Join-Path $destinationDir $separationFile) `
+            -Force
+    }
+
     foreach ($file in $script:RadioifyWindowsBundleFiles) {
         Copy-RadioifyWindowsPackageFile `
             -RepoRoot $resolvedRepoRoot `

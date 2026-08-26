@@ -958,6 +958,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
     ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
     ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
     ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
+    ${CMAKE_SOURCE_DIR}/tui/ui/audio_separation_status.cpp
   )
   set_target_properties(audio_separation_tests PROPERTIES
     CXX_STANDARD 20
@@ -1045,6 +1046,9 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${RADIOIFY_AUDIO_SEPARATION_MODEL_PATH}"
             "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/models/audio_separation/bandit-v2-multi-mask-core-fp16.onnx"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/models/audio_separation/BandIt-v2-MODEL-CARD"
+            "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/models/audio_separation/BandIt-v2-MODEL-CARD"
     COMMENT "Publishing BandIt v2 model beside the Radioify build"
     VERBATIM
   )

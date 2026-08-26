@@ -112,6 +112,13 @@ struct PlaybackLoopRunner::Impl {
   std::function<bool(const std::filesystem::path&)>
       subtitleGenerationRunningFor;
   std::function<bool()> cancelSubtitleGeneration;
+  std::function<bool(const std::filesystem::path&)>
+      audioSeparationAvailableFor;
+  std::function<bool(const std::filesystem::path&)> requestAudioSeparation;
+  std::function<bool(const std::filesystem::path&)>
+      audioSeparationRunningFor;
+  std::function<bool(const std::filesystem::path&)> hasSeparatedAudioFor;
+  std::function<bool()> cancelAudioSeparation;
   std::function<void()> activateBrowserSurface;
   const PlaybackSessionIntent sessionIntent;
   PlaybackSessionContinuationState capturedContinuationState;
@@ -190,6 +197,13 @@ struct PlaybackLoopRunner::Impl {
             std::move(args.subtitleGenerationRunningFor)),
         cancelSubtitleGeneration(
             std::move(args.cancelSubtitleGeneration)),
+        audioSeparationAvailableFor(
+            std::move(args.audioSeparationAvailableFor)),
+        requestAudioSeparation(std::move(args.requestAudioSeparation)),
+        audioSeparationRunningFor(
+            std::move(args.audioSeparationRunningFor)),
+        hasSeparatedAudioFor(std::move(args.hasSeparatedAudioFor)),
+        cancelAudioSeparation(std::move(args.cancelAudioSeparation)),
         activateBrowserSurface(std::move(args.activateBrowserSurface)),
         sessionIntent(args.sessionIntent),
         enableAudio(args.enableAudio),
@@ -436,11 +450,22 @@ struct PlaybackLoopRunner::Impl {
         mediaBackgroundTaskRunning && mediaBackgroundTaskRunning();
     const bool subtitleGenerationRunningForSource =
         subtitleGenerationRunningFor && subtitleGenerationRunningFor(file);
+    playback_media_actions::Context sourceContext;
+    sourceContext.mediaKind = playback_media_actions::MediaKind::Video;
+    sourceContext.currentPlayback = true;
+    sourceContext.backgroundTaskRunning = backgroundTaskRunning;
+    sourceContext.hasGeneratedSubtitles = hasGeneratedSubtitles;
+    sourceContext.subtitleGenerationRunningForSource =
+        subtitleGenerationRunningForSource;
+    sourceContext.canSeparateAudio =
+        audioSeparationAvailableFor && audioSeparationAvailableFor(file);
+    sourceContext.audioSeparationRunningForSource =
+        audioSeparationRunningFor && audioSeparationRunningFor(file);
+    sourceContext.hasSeparatedAudio =
+        hasSeparatedAudioFor && hasSeparatedAudioFor(file);
     contextMenuController.refresh(videoEditWorkspace.edit(),
                                   videoEditWorkspace.exportProgress(),
-                                  backgroundTaskRunning,
-                                  subtitleGenerationRunningForSource,
-                                  hasGeneratedSubtitles);
+                                  std::move(sourceContext));
     if (videoEditPrompt() != playback_video_edit::Prompt::None) {
       contextMenuController.dismiss();
       timelinePreviewModel.hide(
@@ -559,6 +584,22 @@ struct PlaybackLoopRunner::Impl {
         syncVideoEditPresentation();
         showEditMessage(cancelled ? "Cancelling subtitle generation"
                                   : "Could not cancel subtitle generation");
+        return true;
+      }
+      case playback_media_actions::Action::SeparateAudio: {
+        const bool started =
+            requestAudioSeparation && requestAudioSeparation(file);
+        syncVideoEditPresentation();
+        showEditMessage(started ? "Separating audio (F8 to cancel)"
+                                : "Could not start audio separation");
+        return true;
+      }
+      case playback_media_actions::Action::CancelAudioSeparation: {
+        const bool cancelled =
+            cancelAudioSeparation && cancelAudioSeparation();
+        syncVideoEditPresentation();
+        showEditMessage(cancelled ? "Cancelling audio separation"
+                                  : "Could not cancel audio separation");
         return true;
       }
       case playback_media_actions::Action::Play:
@@ -1482,6 +1523,11 @@ struct PlaybackLoopRunner::Impl {
                                    : std::move(status));
   }
 
+  void mediaTaskFinished(std::string status) {
+    syncVideoEditPresentation();
+    if (!status.empty()) showEditMessage(status);
+  }
+
   bool requestHandoff(std::function<void(bool)> completion) {
     return requestExternalHandoff(std::move(completion));
   }
@@ -1571,6 +1617,10 @@ void PlaybackLoopRunner::subtitleGenerationFinished(
     std::string status) {
   impl_->subtitleGenerationFinished(preferredSubtitleTrack, success,
                                     std::move(status));
+}
+
+void PlaybackLoopRunner::mediaTaskFinished(std::string status) {
+  impl_->mediaTaskFinished(std::move(status));
 }
 
 void PlaybackLoopRunner::requestStop() { impl_->requestStop(); }

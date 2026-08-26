@@ -252,6 +252,32 @@ function Initialize-RadioifyMsixPackageLayout {
         -Destination (Join-Path $modelLayoutDir "ggml-base-q5_1.bin") `
         -Force
 
+    foreach ($runtimeName in @("onnxruntime.dll", "DirectML.dll")) {
+        $runtimeSource = Join-Path $distRoot $runtimeName
+        if (-not (Test-Path -LiteralPath $runtimeSource)) {
+            throw "Audio-separation runtime not found at '$runtimeSource'."
+        }
+        Copy-Item -LiteralPath $runtimeSource `
+            -Destination (Join-Path $layoutDir $runtimeName) `
+            -Force
+    }
+
+    $separationSourceDir = Join-Path $distRoot "models\audio_separation"
+    $separationLayoutDir = Join-Path $modelLayoutDir "audio_separation"
+    New-Item -ItemType Directory -Force -Path $separationLayoutDir | Out-Null
+    foreach ($separationFile in @(
+        "bandit-v2-multi-mask-core-fp16.onnx",
+        "BandIt-v2-MODEL-CARD"
+    )) {
+        $sourcePath = Join-Path $separationSourceDir $separationFile
+        if (-not (Test-Path -LiteralPath $sourcePath)) {
+            throw "Audio-separation artifact not found at '$sourcePath'."
+        }
+        Copy-Item -LiteralPath $sourcePath `
+            -Destination (Join-Path $separationLayoutDir $separationFile) `
+            -Force
+    }
+
     $icoSource = Join-Path $distRoot "radioify.ico"
     if (Test-Path -LiteralPath $icoSource) {
         Copy-Item -LiteralPath $icoSource `
