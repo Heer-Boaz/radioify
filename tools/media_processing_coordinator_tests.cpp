@@ -54,6 +54,8 @@ int main() {
   std::atomic<bool> subtitlesStarted{false};
   std::atomic<bool> releaseSubtitles{false};
   std::atomic<bool> separationStarted{false};
+  std::atomic<bool> separationCancellationObserved{false};
+  std::atomic<bool> releaseSeparation{false};
 
   processing::Coordinator coordinator({
       [&](const std::filesystem::path&, int,
@@ -91,6 +93,10 @@ int main() {
         progress(0.2f, "Separating dialogue, music and effects on GPU");
         separationStarted.store(true, std::memory_order_release);
         while (!cancelRequested->load(std::memory_order_relaxed)) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        separationCancellationObserved.store(true, std::memory_order_release);
+        while (!releaseSeparation.load(std::memory_order_acquire)) {
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         if (error) *error = "Controlled cancellation.";
@@ -180,7 +186,11 @@ int main() {
                    coordinator.audioSeparationRunningFor("movie.mp4") &&
                    playbackService.requestActiveCancellation() &&
                    playbackStateChanges == 3 &&
-                   !playbackService.requestActiveCancellation(),
+                   !playbackService.requestActiveCancellation() &&
+                   waitUntil([&]() {
+                     return separationCancellationObserved.load(
+                         std::memory_order_acquire);
+                   }),
                "F8 cancellation must dispatch through the active task owner");
   const std::optional<processing::TaskActivity> cancelling =
       coordinator.activity();
@@ -188,6 +198,7 @@ int main() {
                    mediaTaskCardModel(*cancelling).title ==
                        "Cancelling audio separation",
                "cancellation must remain an explicit generic activity state");
+  releaseSeparation.store(true, std::memory_order_release);
   const auto separationCompletion = waitForCompletion(coordinator);
   ok &= expect(separationCompletion &&
                    separationCompletion->outcome ==
