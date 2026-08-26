@@ -173,20 +173,30 @@ std::string retainedProgramBadge(const EditSnapshot& edit) {
   return edit.hasUnexportedChanges ? "[EDITED*]" : "[EDITED]";
 }
 
+bool needsOverlayPresentation(const EditSnapshot& edit,
+                              const ExportProgress& editExport,
+                              Prompt prompt) {
+  return edit.active || prompt != Prompt::None || editExport.visible() ||
+         edit.sceneAnalysisStatus == SceneAnalysisStatus::Running ||
+         edit.sceneAnalysisStatus == SceneAnalysisStatus::Failed;
+}
+
 OverlayModel buildOverlayModel(const EditSnapshot& edit,
                                const ExportProgress* editExport,
                                Prompt prompt, int width,
                                double timelineProgress) {
   OverlayModel model;
-  const bool exportRunning = editExport && editExport->running();
-  const bool exportFailed = editExport && editExport->failed();
+  const ExportProgress idleExport;
+  const ExportProgress& exportProgress =
+      editExport ? *editExport : idleExport;
+  const bool exportRunning = exportProgress.running();
+  const bool exportFailed = exportProgress.failed();
   const bool analysisRunning =
       edit.sceneAnalysisStatus == SceneAnalysisStatus::Running;
   const bool analysisFailed =
       edit.sceneAnalysisStatus == SceneAnalysisStatus::Failed;
   if (width <= 0 ||
-      (!edit.active && prompt == Prompt::None && !exportRunning &&
-       !exportFailed && !analysisRunning && !analysisFailed)) {
+      !needsOverlayPresentation(edit, exportProgress, prompt)) {
     return model;
   }
 

@@ -39,6 +39,12 @@ struct OverlayModel {
 // tools are closed. Keep that state visible without duplicating edit-mode UI.
 std::string retainedProgramBadge(const EditSnapshot& edit);
 
+// Single presentation policy shared by the event loop, ASCII layout, and
+// framebuffer layout. This is intentionally independent from renderer state.
+bool needsOverlayPresentation(const EditSnapshot& edit,
+                              const ExportProgress& editExport,
+                              Prompt prompt);
+
 // Converts immutable edit/export snapshots into renderer-independent cells.
 // ASCII and framebuffer targets consume exactly this same projection.
 OverlayModel buildOverlayModel(const EditSnapshot& edit,

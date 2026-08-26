@@ -697,6 +697,39 @@ int main() {
                        std::optional<int64_t>(2'000'000),
                "dragged boundaries must clamp instead of crossing");
 
+  playback_video_edit::EditSnapshot hiddenOverlay;
+  playback_video_edit::ExportProgress idleOverlayExport;
+  playback_video_edit::EditSnapshot activeOverlay = hiddenOverlay;
+  activeOverlay.active = true;
+  playback_video_edit::EditSnapshot runningAnalysisOverlay = hiddenOverlay;
+  runningAnalysisOverlay.sceneAnalysisStatus =
+      playback_video_edit::SceneAnalysisStatus::Running;
+  playback_video_edit::EditSnapshot failedAnalysisOverlay = hiddenOverlay;
+  failedAnalysisOverlay.sceneAnalysisStatus =
+      playback_video_edit::SceneAnalysisStatus::Failed;
+  playback_video_edit::EditSnapshot readyAnalysisOverlay = hiddenOverlay;
+  readyAnalysisOverlay.sceneAnalysisStatus =
+      playback_video_edit::SceneAnalysisStatus::Ready;
+  playback_video_edit::ExportProgress failedOverlayExport;
+  failedOverlayExport.status = playback_video_edit::ExportStatus::Failed;
+  ok &= expect(
+      !playback_video_edit::needsOverlayPresentation(
+          hiddenOverlay, idleOverlayExport, Prompt::None) &&
+          playback_video_edit::needsOverlayPresentation(
+              activeOverlay, idleOverlayExport, Prompt::None) &&
+          playback_video_edit::needsOverlayPresentation(
+              hiddenOverlay, idleOverlayExport, Prompt::LeavePlayback) &&
+          playback_video_edit::needsOverlayPresentation(
+              hiddenOverlay, failedOverlayExport, Prompt::None) &&
+          playback_video_edit::needsOverlayPresentation(
+              runningAnalysisOverlay, idleOverlayExport, Prompt::None) &&
+          playback_video_edit::needsOverlayPresentation(
+              failedAnalysisOverlay, idleOverlayExport, Prompt::None) &&
+          !playback_video_edit::needsOverlayPresentation(
+              readyAnalysisOverlay, idleOverlayExport, Prompt::None),
+      "one editor presentation policy must own active, modal, failed, and "
+      "background-analysis visibility");
+
   playback_video_edit::EditSnapshot overlayEdit;
   overlayEdit.active = true;
   overlayEdit.hasUnexportedChanges = true;

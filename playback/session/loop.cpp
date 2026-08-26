@@ -18,6 +18,7 @@
 #include "audioplayback.h"
 #include "playback/video/gpu/gpu_shared.h"
 #include "playback/video/player.h"
+#include "playback/video/edit/overlay_model.h"
 #include "playback/video/state/machine.h"
 #include "playback/video/timeline_preview.h"
 #include "playback/video/timeline_preview_model.h"
@@ -810,13 +811,11 @@ struct PlaybackLoopRunner::Impl {
   bool overlayVisible() const {
     const playback_video_edit::EditSnapshot edit =
         videoEditWorkspace.edit();
+    const playback_video_edit::ExportProgress editExport =
+        videoEditWorkspace.exportProgress();
     return config.debugOverlay || osd.controlsVisible() ||
-           videoEditWorkspace.active() || pendingExit.has_value() ||
-           edit.sceneAnalysisStatus ==
-               playback_video_edit::SceneAnalysisStatus::Running ||
-           edit.sceneAnalysisStatus ==
-               playback_video_edit::SceneAnalysisStatus::Failed ||
-           videoEditWorkspace.exportProgress().running() ||
+           playback_video_edit::needsOverlayPresentation(
+               edit, editExport, videoEditPrompt()) ||
            contextMenuController.visible();
   }
 

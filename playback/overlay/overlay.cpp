@@ -105,14 +105,9 @@ PlaybackOverlayState buildPlaybackOverlayState(
   state.videoEditExport = inputs.videoEditExport;
   state.videoEditPrompt = inputs.videoEditPrompt;
   state.chromeVisible = state.overlayVisible || !state.debugLines.empty() ||
-                        state.videoEdit.active ||
-                        state.videoEditPrompt !=
-                            playback_video_edit::Prompt::None ||
-                        state.videoEditExport.visible() ||
-                        state.videoEdit.sceneAnalysisStatus ==
-                            playback_video_edit::SceneAnalysisStatus::Running ||
-                        state.videoEdit.sceneAnalysisStatus ==
-                            playback_video_edit::SceneAnalysisStatus::Failed;
+                        playback_video_edit::needsOverlayPresentation(
+                            state.videoEdit, state.videoEditExport,
+                            state.videoEditPrompt);
 
   if (inputs.subtitleManager) {
     state.subtitleText = buildSubtitleText(*inputs.subtitleManager,
@@ -288,13 +283,8 @@ OverlayCellLayout layoutPlaybackOverlayCells(
                                  buildWindowOverlayTopLine(state));
   input.suffix = buildWindowOverlayProgressSuffix(state);
   input.reservedRowsAboveProgress =
-      (state.videoEdit.active ||
-       state.videoEditPrompt != playback_video_edit::Prompt::None ||
-       state.videoEditExport.visible() ||
-       state.videoEdit.sceneAnalysisStatus ==
-           playback_video_edit::SceneAnalysisStatus::Running ||
-       state.videoEdit.sceneAnalysisStatus ==
-           playback_video_edit::SceneAnalysisStatus::Failed)
+      playback_video_edit::needsOverlayPresentation(
+          state.videoEdit, state.videoEditExport, state.videoEditPrompt)
           ? 1
           : 0;
   input.controls = buildOverlayCellControlInputs(specs, hoverControlToken);
@@ -309,13 +299,8 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
   input.title = overlayTitleWithDebugLines(ui.debugLines, ui.title);
   input.suffix = ui.progressSuffix;
   input.reservedRowsAboveProgress =
-      (ui.videoEdit.active ||
-       ui.videoEditPrompt != playback_video_edit::Prompt::None ||
-       ui.videoEditExport.visible() ||
-       ui.videoEdit.sceneAnalysisStatus ==
-           playback_video_edit::SceneAnalysisStatus::Running ||
-       ui.videoEdit.sceneAnalysisStatus ==
-           playback_video_edit::SceneAnalysisStatus::Failed)
+      playback_video_edit::needsOverlayPresentation(
+          ui.videoEdit, ui.videoEditExport, ui.videoEditPrompt)
           ? 1
           : 0;
   input.controls.reserve(ui.controlButtons.size());
