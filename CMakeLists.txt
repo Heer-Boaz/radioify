@@ -829,6 +829,22 @@ radioify_link_repo_target(image_viewer_sequence_tests)
 add_test(NAME image_viewer_sequence_tests
          COMMAND $<TARGET_FILE:image_viewer_sequence_tests>)
 
+add_executable(media_activation_plan_tests)
+target_sources(media_activation_plan_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_media_activation_plan_tests>
+  ${CMAKE_SOURCE_DIR}/tui/media_activation_plan.cpp
+  ${CMAKE_SOURCE_DIR}/tui/image_viewer_sequence.cpp
+  ${CMAKE_SOURCE_DIR}/app/playback_route.cpp
+  ${CMAKE_SOURCE_DIR}/playback/target_kind.cpp
+  ${CMAKE_SOURCE_DIR}/playback/target_resolver.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+  ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+)
+radioify_link_repo_target(media_activation_plan_tests)
+add_test(NAME media_activation_plan_tests
+         COMMAND $<TARGET_FILE:media_activation_plan_tests>)
+
 add_executable(indexed_transcript_tests)
 target_sources(indexed_transcript_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_indexed_transcript_tests>

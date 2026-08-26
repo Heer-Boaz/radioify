@@ -9,53 +9,9 @@
 #include "core/path_identity.h"
 #include "playback/target.h"
 #include "tui/image_viewer.h"
-#include "tui/image_viewer_sequence.h"
+#include "tui/media_activation_plan.h"
 
 namespace {
-
-std::optional<PlaybackPresentationState> routeVideoPresentation(
-    OpenPresentationDirective directive, bool launchAsciiEnabled) {
-  switch (directive) {
-    case OpenPresentationDirective::TerminalAscii:
-      return PlaybackPresentationState::terminalAscii();
-    case OpenPresentationDirective::NativeWindowedFramebuffer:
-      return PlaybackPresentationState::nativeWindowed();
-    case OpenPresentationDirective::InheritActive:
-      return std::nullopt;
-    case OpenPresentationDirective::UseLaunchDefaults:
-      return launchAsciiEnabled
-                 ? PlaybackPresentationState::terminalAscii()
-                 : PlaybackPresentationState::nativeWindowed();
-  }
-  return std::nullopt;
-}
-
-std::optional<playback_route::Route> resolveOpenFilesPlaybackRoute(
-    const OpenFilesRequest& request, bool launchAsciiEnabled) {
-  return playback_route::resolveDroppedTarget(
-      request.files, nullptr,
-      routeVideoPresentation(request.presentation, launchAsciiEnabled));
-}
-
-std::optional<image_viewer_sequence::Sequence> imageSequenceFromFiles(
-    const std::vector<std::filesystem::path>& files,
-    const std::filesystem::path& current) {
-  std::vector<std::filesystem::path> images;
-  images.reserve(files.size());
-  for (const std::filesystem::path& file : files) {
-    if (isSupportedImageExt(file)) images.push_back(file);
-  }
-  return image_viewer_sequence::Sequence::create(std::move(images), current);
-}
-
-std::optional<std::filesystem::path> openDirectoryFromFiles(
-    const std::vector<std::filesystem::path>& files) {
-  for (const std::filesystem::path& file : files) {
-    std::error_code error;
-    if (std::filesystem::is_directory(file, error) && !error) return file;
-  }
-  return std::nullopt;
-}
 
 enum class MediaCommandFailureKind : std::uint8_t {
   Busy,
@@ -283,19 +239,11 @@ struct TuiMediaCoordinator::Impl {
     playback_queue::Queue::PreparedActivation activation;
   };
 
-  struct ImageActivation {
-    playback_route::Route route;
-    image_viewer_sequence::Sequence sequence;
-  };
-
-  struct OpenDirectory {
-    std::filesystem::path path;
-  };
-
   struct Quit {};
 
-  using Command =
-      std::variant<PreparedPlayback, ImageActivation, OpenDirectory, Quit>;
+  using Command = std::variant<PreparedPlayback,
+                               tui_media_activation::ShowImages,
+                               tui_media_activation::OpenDirectory, Quit>;
   using CommandBuildResult = std::variant<Command, MediaCommandFailure>;
 
   class DriveScope {
@@ -313,21 +261,16 @@ struct TuiMediaCoordinator::Impl {
   CommandBuildResult mediaCommandFromFiles(
       playback_route::Route route,
       const std::vector<std::filesystem::path>& files) const {
-    const std::filesystem::path& targetFile =
-        playbackTargetFile(route.target);
-    if (isSupportedImageExt(targetFile)) {
-      std::optional<image_viewer_sequence::Sequence> sequence =
-          imageSequenceFromFiles(files, targetFile);
-      if (!sequence) {
-        return MediaCommandFailure{
-            MediaCommandFailureKind::Unsupported,
-            "The selected images do not form a viewable sequence."};
-      }
-      return Command(ImageActivation{std::move(route), std::move(*sequence)});
-    }
+    return commandFromPlan(
+        tui_media_activation::planFiles(std::move(route), files));
+  }
+
+  CommandBuildResult commandFromPlan(
+      tui_media_activation::QueueFiles queuedFiles) const {
     std::optional<playback_queue::Queue::PreparedActivation> activation =
-        services_.queue.prepareStart(std::move(route),
-                                     playback_queue::sourceFromFiles(files));
+        services_.queue.prepareStart(
+            std::move(queuedFiles.route),
+            playback_queue::sourceFromFiles(queuedFiles.files));
     if (!activation) {
       return MediaCommandFailure{
           MediaCommandFailureKind::QueueUnavailable,
@@ -336,21 +279,40 @@ struct TuiMediaCoordinator::Impl {
     return Command(PreparedPlayback{std::move(*activation)});
   }
 
+  CommandBuildResult commandFromPlan(
+      tui_media_activation::ShowImages showImages) const {
+    return Command(std::move(showImages));
+  }
+
+  CommandBuildResult commandFromPlan(
+      tui_media_activation::OpenDirectory openDirectory) const {
+    return Command(std::move(openDirectory));
+  }
+
+  CommandBuildResult commandFromPlan(
+      tui_media_activation::Failure failure) const {
+    return MediaCommandFailure{MediaCommandFailureKind::Unsupported,
+                               std::move(failure.message)};
+  }
+
+  CommandBuildResult commandFromPlan(
+      tui_media_activation::Plan plan) const {
+    return std::visit(
+        [this](auto value) -> CommandBuildResult {
+          return commandFromPlan(std::move(value));
+        },
+        std::move(plan));
+  }
+
   CommandBuildResult commandFromOpenFiles(
       const OpenFilesRequest& request) const {
-    if (std::optional<std::filesystem::path> directory =
-            openDirectoryFromFiles(request.files)) {
-      return Command(OpenDirectory{std::move(*directory)});
-    }
-    std::optional<playback_route::Route> route =
-        resolveOpenFilesPlaybackRoute(request,
-                                      services_.videoConfig.enableAscii);
-    if (!route) {
-      return MediaCommandFailure{
-          MediaCommandFailureKind::Unsupported,
-          "No supported media item was found in the open request."};
-    }
-    return mediaCommandFromFiles(std::move(*route), request.files);
+    const auto defaultPresentation =
+        services_.videoConfig.enableAscii
+            ? tui_media_activation::DefaultVideoPresentation::TerminalAscii
+            : tui_media_activation::DefaultVideoPresentation::
+                  NativeWindowedFramebuffer;
+    return commandFromPlan(
+        tui_media_activation::planOpenFiles(request, defaultPresentation));
   }
 
   MediaCommandResult enqueueOpenFiles(const OpenFilesRequest& request) {
@@ -553,7 +515,7 @@ struct TuiMediaCoordinator::Impl {
     return presentPlayback(std::move(playback.activation));
   }
 
-  MediaCommandResult dispatch(ImageActivation image) {
+  MediaCommandResult dispatch(tui_media_activation::ShowImages image) {
     if (services_.callbacks.applyAudioPictureInPicturePlan) {
       services_.callbacks.applyAudioPictureInPicturePlan(
           image.route.audioPictureInPicture);
@@ -572,7 +534,8 @@ struct TuiMediaCoordinator::Impl {
     return MediaCommandResult::applied();
   }
 
-  MediaCommandResult dispatch(OpenDirectory directory) {
+  MediaCommandResult dispatch(
+      tui_media_activation::OpenDirectory directory) {
     if (!services_.callbacks.openBrowserDirectory ||
         !services_.callbacks.openBrowserDirectory(directory.path)) {
       return MediaCommandResult::rejected(
