@@ -14,6 +14,7 @@ enum class Action : uint8_t {
   BrowseTracks,
   EditVideo,
   CreateIndexedTranscript,
+  CancelIndexedTranscript,
   AnalyzeAudio,
   SplitLoop,
 };
@@ -32,6 +33,8 @@ struct Context {
   bool canBrowseTracks = false;
   bool canAnalyzeAudio = false;
   bool backgroundTaskRunning = false;
+  bool hasIndexedTranscript = false;
+  bool indexedTranscriptRunningForSource = false;
 };
 
 struct Item {

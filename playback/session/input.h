@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -37,6 +38,7 @@ struct PlaybackInputView {
   Player* player = nullptr;
   VideoWindow* videoWindow = nullptr;
   SubtitleManager* subtitleManager = nullptr;
+  std::mutex* subtitleMutex = nullptr;
 
   std::atomic<bool>* enableSubtitlesShared = nullptr;
   PlaybackSessionState* playbackState = nullptr;

@@ -51,7 +51,9 @@ class ContextMenuController {
   bool visible() const { return visible_; }
   void refresh(const playback_video_edit::EditSnapshot& edit,
                const playback_video_edit::ExportProgress& editExport,
-               bool backgroundTaskRunning = false);
+               bool backgroundTaskRunning = false,
+               bool indexedTranscriptRunningForSource = false,
+               bool hasIndexedTranscript = false);
   bool open(ContextMenuSurface surface, double xRatio, double yRatio);
   bool dismiss();
   bool moveSelection(int delta);

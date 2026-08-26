@@ -85,6 +85,7 @@
 #include "ui_input_pump.h"
 #include "ui_viewport.h"
 #include "playback/video/playback.h"
+#include "playback/video/transcript/artifact.h"
 #include "playback/video/framebuffer/window/window.h"
 #include "windows_file_drop_apartment.h"
 #include "media_formats.h"
@@ -951,6 +952,9 @@ class TuiMediaCoordinator {
     std::function<bool()> mediaBackgroundTaskRunning;
     std::function<bool(const std::filesystem::path&)>
         requestIndexedTranscript;
+    std::function<bool(const std::filesystem::path&)>
+        indexedTranscriptRunningFor;
+    std::function<bool()> cancelIndexedTranscript;
     std::function<void()> activateBrowserSurface;
   };
 
@@ -1093,6 +1097,17 @@ class TuiMediaCoordinator {
 
   bool activateVideoPresentation() {
     return videoSession_ && videoSession_->activatePresentation();
+  }
+
+  void transcriptTaskFinishedFor(const std::filesystem::path& sourceFile,
+                                 const std::filesystem::path& outputFile,
+                                 bool success, std::string status) {
+    if (!videoSession_ || !videoTarget_ ||
+        !samePath(playbackTargetFile(*videoTarget_), sourceFile)) {
+      return;
+    }
+    videoSession_->transcriptTaskFinished(outputFile, success,
+                                          std::move(status));
   }
 
   void stopVideo() {
@@ -1343,6 +1358,8 @@ class TuiMediaCoordinator {
         std::move(requestDroppedFiles),
         services_.mediaBackgroundTaskRunning,
         services_.requestIndexedTranscript,
+        services_.indexedTranscriptRunningFor,
+        services_.cancelIndexedTranscript,
         services_.activateBrowserSurface};
     PlaybackSession::Dependencies sessionDependencies{
         services_.input,
@@ -1909,6 +1926,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   MelodyExportTaskState melodyExportTask;
   LoopSplitTaskState loopSplitTask;
   IndexedTranscriptTask indexedTranscriptTask;
+  uint64_t observedTranscriptResultRevision = 0;
 
   auto mediaBackgroundTaskRunning = [&]() {
     bool running = false;
@@ -1928,6 +1946,17 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     if (!indexedTranscriptTask.tryStart(file)) return false;
     markDirty(UiDirtyFlags::Async);
     return true;
+  };
+  auto indexedTranscriptRunningFor =
+      [&](const std::filesystem::path& file) {
+        const IndexedTranscriptTaskSnapshot snapshot =
+            indexedTranscriptTask.snapshot();
+        return snapshot.running && samePath(snapshot.sourceFile, file);
+      };
+  auto cancelIndexedTranscript = [&]() {
+    const bool requested = indexedTranscriptTask.requestCancel();
+    if (requested) markDirty(UiDirtyFlags::Async);
+    return requested;
   };
 
   std::string mediaCommandError;
@@ -1949,6 +1978,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
        },
        [&]() { running = false; }, [&]() { markDirty(); },
        mediaBackgroundTaskRunning, requestIndexedTranscript,
+       indexedTranscriptRunningFor, cancelIndexedTranscript,
        [&]() {
          if (windowTuiEnabled && tuiWindow.IsOpen()) {
            tuiWindow.Activate();
@@ -2323,6 +2353,11 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     context.canAnalyzeAudio =
         audio && audioCanAnalyzeFileToMelodyFile(entry.path);
     context.backgroundTaskRunning = mediaBackgroundTaskRunning();
+    context.hasIndexedTranscript =
+        !playback_video_transcript::activeTranscriptPathForVideo(entry.path)
+             .empty();
+    context.indexedTranscriptRunningForSource =
+        indexedTranscriptRunningFor(entry.path);
     std::vector<playback_media_actions::Item> items =
         playback_media_actions::build(context);
     if (items.empty()) return;
@@ -2949,6 +2984,9 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     } else if (action ==
                playback_media_actions::Action::CreateIndexedTranscript) {
       requestIndexedTranscript(entry.path);
+    } else if (action ==
+               playback_media_actions::Action::CancelIndexedTranscript) {
+      cancelIndexedTranscript();
     } else if (action == playback_media_actions::Action::AnalyzeAudio) {
       startMelodyExport(entry);
     } else if (action == playback_media_actions::Action::SplitLoop) {
@@ -3148,6 +3186,18 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     cleanupMelodyExportWorker();
     cleanupLoopSplitExportWorker(loopSplitTask);
     indexedTranscriptTask.reapFinished();
+    const IndexedTranscriptTaskSnapshot completedTranscript =
+        indexedTranscriptTask.snapshot();
+    if (completedTranscript.hasResult &&
+        completedTranscript.resultRevision !=
+            observedTranscriptResultRevision) {
+      observedTranscriptResultRevision = completedTranscript.resultRevision;
+      mediaCoordinator.transcriptTaskFinishedFor(
+          completedTranscript.sourceFile, completedTranscript.outputFile,
+          completedTranscript.success, completedTranscript.status);
+      markLayoutDirty();
+      markDirty(UiDirtyFlags::Async);
+    }
 
     if (windowTuiEnabled && tuiWindow.IsOpen()) {
       tuiWindow.PollEvents();
@@ -3176,6 +3226,11 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       if (consoleInputPump.pollNext(input, playbackEvent)) {
         if (playbackEvent.type == InputEvent::Type::Resize) {
           screen.updateSize();
+        }
+        if (playbackEvent.type == InputEvent::Type::Key &&
+            playbackEvent.key.vk == VK_F8 &&
+            cancelIndexedTranscript()) {
+          continue;
         }
         mediaCoordinator.handleVideoInputEvent(playbackEvent);
         continue;
@@ -3207,6 +3262,10 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       if (ev.type == InputEvent::Type::Resize) {
         dirty = true;
         if (callbacks.onResize) callbacks.onResize();
+        return;
+      }
+      if (ev.type == InputEvent::Type::Key && ev.key.vk == VK_F8 &&
+          cancelIndexedTranscript()) {
         return;
       }
       if (mediaCoordinator.capturesBrowserInput()) {
@@ -4153,6 +4212,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         std::filesystem::path exportSource;
         std::string title = " Melody Analysis";
         std::string detail;
+        bool isTranscriptTask = false;
         {
           std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
           if (melodyExportTask.running) {
@@ -4179,22 +4239,25 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
             exportProgress =
                 std::clamp(transcriptSnapshot.progress, 0.0f, 1.0f);
             exportSource = transcriptSnapshot.sourceFile;
-            title = " Indexed Transcript";
+            title = transcriptSnapshot.cancelRequested
+                        ? "Cancelling Subtitles"
+                        : "Generating Subtitles";
             detail = transcriptSnapshot.phase;
+            isTranscriptTask = true;
           }
         }
-        if (isRunning) {
+        if (isRunning && width >= 4 && height - listTop >= 3) {
           std::string sourceName =
               exportSource.empty() ? std::string("(unknown)")
                                    : toUtf8String(exportSource.filename());
-          int popupWidth = std::max(46, utf8DisplayWidth(sourceName) + 8);
-          popupWidth = std::min(width - 2, popupWidth);
-          popupWidth = std::max(24, popupWidth);
-          int availableHeight = std::max(1, height - listTop);
-          int popupHeight = std::clamp(availableHeight, 5, 7);
-          int x0 = std::max(0, (width - popupWidth) / 2);
-          int y0 =
-              listTop + std::max(0, (availableHeight - popupHeight) / 2);
+          const int desiredWidth =
+              std::max(46, utf8DisplayWidth(sourceName) + 6);
+          const int popupWidth = std::clamp(desiredWidth, 4, width);
+          const int availableHeight = height - listTop;
+          const int desiredHeight = isTranscriptTask ? 7 : 6;
+          const int popupHeight = std::min(desiredHeight, availableHeight);
+          const int x0 = std::max(0, width - popupWidth - 1);
+          const int y0 = listTop;
 
           for (int y = 0; y < popupHeight; ++y) {
             screen.writeRun(x0, y0 + y, popupWidth, L' ', kStyleNormal);
@@ -4212,31 +4275,44 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
             screen.writeChar(x0 + popupWidth - 1, y0 + y, L'|', kStyleDim);
           }
 
-          screen.writeText(x0 + 1, y0 + 1, fitLine(title, popupWidth - 2),
-                           kStyleAccent);
-          std::string fileLine = " " + sourceName;
-          screen.writeText(x0 + 1, y0 + 2, fitLine(fileLine, popupWidth - 2),
-                           kStyleDim);
-          if (!detail.empty()) {
-            screen.writeText(x0 + 2, y0 + 3,
-                             fitLine(detail, popupWidth - 4), kStyleDim);
+          const int innerWidth = popupWidth - 2;
+          std::vector<std::pair<std::string, Style>> cardLines;
+          cardLines.push_back({title, kStyleAccent});
+          cardLines.push_back({sourceName, kStyleDim});
+          if (!detail.empty()) cardLines.push_back({detail, kStyleDim});
+
+          const int percent =
+              static_cast<int>(std::round(exportProgress * 100.0f));
+          const std::string percentText = std::to_string(percent) + "%";
+          const int barCells = std::max(0, innerWidth -
+                                              utf8DisplayWidth(percentText) -
+                                              4);
+          std::string progressLine;
+          if (barCells >= 4) {
+            const int filled = std::clamp(
+                static_cast<int>(std::round(barCells * exportProgress)), 0,
+                barCells);
+            progressLine = "[";
+            progressLine.append(static_cast<size_t>(filled), '#');
+            progressLine.append(static_cast<size_t>(barCells - filled), '.');
+            progressLine += "] " + percentText;
+          } else {
+            progressLine = percentText;
+          }
+          cardLines.push_back({std::move(progressLine), kStyleNormal});
+          if (isTranscriptTask) {
+            cardLines.push_back({"F8: Cancel", kStyleDim});
           }
 
-          int barInner = std::max(8, popupWidth - 8);
-          int filled = static_cast<int>(
-              std::round(static_cast<float>(barInner) * exportProgress));
-          filled = std::clamp(filled, 0, barInner);
-          std::string bar = "[";
-          bar.append(static_cast<size_t>(filled), '#');
-          bar.append(static_cast<size_t>(std::max(0, barInner - filled)), '.');
-          bar.push_back(']');
-          screen.writeText(x0 + 2, y0 + 4, fitLine(bar, popupWidth - 4),
-                           kStyleNormal);
-
-          int pct = static_cast<int>(std::round(exportProgress * 100.0f));
-          std::string pctLine = " " + std::to_string(pct) + "%";
-          screen.writeText(x0 + 2, y0 + 5, fitLine(pctLine, popupWidth - 4),
-                           kStyleDim);
+          const int visibleLines =
+              std::min(static_cast<int>(cardLines.size()), popupHeight - 2);
+          for (int lineIndex = 0; lineIndex < visibleLines; ++lineIndex) {
+            screen.writeText(
+                x0 + 1, y0 + 1 + lineIndex,
+                fitLine(cardLines[static_cast<size_t>(lineIndex)].first,
+                        innerWidth),
+                cardLines[static_cast<size_t>(lineIndex)].second);
+          }
         }
       }
 

@@ -108,6 +108,7 @@ struct SubtitleCue {
 
 struct SubtitleTrack {
   std::string label;
+  std::filesystem::path sourcePath;
   std::vector<SubtitleCue> cues;
   std::shared_ptr<const std::string> assScript;
   std::shared_ptr<const SubtitleFontAttachmentList> assFonts;
@@ -125,6 +126,7 @@ class SubtitleManager {
   size_t trackCount() const;
   size_t selectableTrackCount() const;
   bool selectFirstTrackWithCues();
+  bool selectTrackForFile(const std::filesystem::path& sourcePath);
   size_t activeTrackIndex() const;
   const SubtitleTrack* activeTrack() const;
   std::string activeTrackLabel() const;

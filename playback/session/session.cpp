@@ -82,6 +82,8 @@ struct PlaybackSession::Impl {
         std::move(request.requestOpenFiles),
         std::move(request.mediaBackgroundTaskRunning),
         std::move(request.requestIndexedTranscript),
+        std::move(request.indexedTranscriptRunningFor),
+        std::move(request.cancelIndexedTranscript),
         std::move(request.activateBrowserSurface),
         std::move(request.continuityState),
         request.sessionIntent});
@@ -255,6 +257,15 @@ bool PlaybackSession::requestHandoff(
     std::function<void(bool)> completion) {
   return impl_->canControl() &&
          impl_->loop->requestHandoff(std::move(completion));
+}
+
+void PlaybackSession::transcriptTaskFinished(
+    const std::filesystem::path& preferredTrack, bool success,
+    std::string status) {
+  if (impl_->canControl()) {
+    impl_->loop->transcriptTaskFinished(preferredTrack, success,
+                                        std::move(status));
+  }
 }
 
 void PlaybackSession::requestStop() {

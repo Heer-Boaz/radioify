@@ -38,6 +38,7 @@
 #include "state.h"
 #include "mouse_double_click_tracker.h"
 #include "playback/video/subtitle/manager.h"
+#include "playback/video/transcript/artifact.h"
 
 namespace {
 
@@ -108,12 +109,17 @@ struct PlaybackLoopRunner::Impl {
   std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
   std::function<bool()> mediaBackgroundTaskRunning;
   std::function<bool(const std::filesystem::path&)> requestIndexedTranscript;
+  std::function<bool(const std::filesystem::path&)>
+      indexedTranscriptRunningFor;
+  std::function<bool()> cancelIndexedTranscript;
   std::function<void()> activateBrowserSurface;
   const PlaybackSessionIntent sessionIntent;
   PlaybackSessionContinuationState capturedContinuationState;
   bool quitApplicationRequested = false;
   const bool enableAudio;
-  const bool hasSubtitles;
+  bool hasSubtitles;
+  bool hasIndexedTranscript = false;
+  mutable std::mutex subtitleMutex;
 
   PlaybackPresentationController presentationController;
   PlaybackSessionCore core;
@@ -179,6 +185,9 @@ struct PlaybackLoopRunner::Impl {
         requestOpenFiles(std::move(args.requestOpenFiles)),
         mediaBackgroundTaskRunning(std::move(args.mediaBackgroundTaskRunning)),
         requestIndexedTranscript(std::move(args.requestIndexedTranscript)),
+        indexedTranscriptRunningFor(
+            std::move(args.indexedTranscriptRunningFor)),
+        cancelIndexedTranscript(std::move(args.cancelIndexedTranscript)),
         activateBrowserSurface(std::move(args.activateBrowserSurface)),
         sessionIntent(args.sessionIntent),
         enableAudio(args.enableAudio),
@@ -207,6 +216,8 @@ struct PlaybackLoopRunner::Impl {
         gpuRenderer(sharedGpuRenderer()),
         videoEditWorkspace(file, core.player(), timelinePreviewModel,
                            timelinePreviewProvider) {
+    hasIndexedTranscript =
+        !playback_video_transcript::activeTranscriptPathForVideo(file).empty();
     core.initialize(screen);
     const playback_video_timeline_preview::Source previewSource{
         file, core.player().videoStreamIndex(), core.player().durationUs(),
@@ -421,9 +432,13 @@ struct PlaybackLoopRunner::Impl {
   void syncVideoEditPresentation(bool requestPresent = true) {
     const bool backgroundTaskRunning =
         mediaBackgroundTaskRunning && mediaBackgroundTaskRunning();
+    const bool transcriptRunningForSource =
+        indexedTranscriptRunningFor && indexedTranscriptRunningFor(file);
     contextMenuController.refresh(videoEditWorkspace.edit(),
                                   videoEditWorkspace.exportProgress(),
-                                  backgroundTaskRunning);
+                                  backgroundTaskRunning,
+                                  transcriptRunningForSource,
+                                  hasIndexedTranscript);
     if (videoEditPrompt() != playback_video_edit::Prompt::None) {
       contextMenuController.dismiss();
       timelinePreviewModel.hide(
@@ -532,8 +547,16 @@ struct PlaybackLoopRunner::Impl {
         const bool started =
             requestIndexedTranscript && requestIndexedTranscript(file);
         syncVideoEditPresentation();
-        showEditMessage(started ? "Indexed transcript started"
-                                : "Could not start indexed transcript");
+        showEditMessage(started ? "Generating subtitles (F8 to cancel)"
+                                : "Could not start subtitle generation");
+        return true;
+      }
+      case playback_media_actions::Action::CancelIndexedTranscript: {
+        const bool cancelled =
+            cancelIndexedTranscript && cancelIndexedTranscript();
+        syncVideoEditPresentation();
+        showEditMessage(cancelled ? "Cancelling subtitle generation"
+                                  : "Could not cancel subtitle generation");
         return true;
       }
       case playback_media_actions::Action::Play:
@@ -660,6 +683,7 @@ struct PlaybackLoopRunner::Impl {
   void bindInputState() {
     inputView.videoWindow = &output.window();
     inputView.subtitleManager = &subtitleManager;
+    inputView.subtitleMutex = &subtitleMutex;
     inputView.enableSubtitlesShared = &enableSubtitlesShared;
     inputView.hasSubtitles = hasSubtitles;
     inputView.frameOutputState = &frameOutputState;
@@ -826,6 +850,7 @@ struct PlaybackLoopRunner::Impl {
   }
 
   WindowUiState buildWindowUiState() {
+    std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
     const auto snapshot = windowUiStateSnapshot();
     return playback_framebuffer_presenter::buildPlaybackFramebufferUiState(
         windowTitle, output.window(), core.player(), subtitleManager,
@@ -844,6 +869,7 @@ struct PlaybackLoopRunner::Impl {
                                  int& outCols, int& outRows,
                                  playback_overlay::InteractionMap&
                                      outInteractions) {
+    std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
     const int cols = playback_overlay::overlayCellCountForPixels(
         pixelWidth, cellPixelWidth);
     const int rows = playback_overlay::overlayCellCountForPixels(
@@ -1027,7 +1053,10 @@ struct PlaybackLoopRunner::Impl {
     const bool renderCopiedFrame = copiedFrameNeedsRender;
     updateRenderInputs(forceRefreshArt || renderCopiedFrame,
                        presented || renderCopiedFrame);
-    output.renderTerminal(renderInputs);
+    {
+      std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
+      output.renderTerminal(renderInputs);
+    }
     auto t1 = std::chrono::steady_clock::now();
     lastDebugRefresh = t1;
     auto durMs =
@@ -1051,6 +1080,7 @@ struct PlaybackLoopRunner::Impl {
     lastDebugRefresh = now;
     if (!nativeWindowActive) {
       updateRenderInputs(true, true);
+      std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
       output.renderTerminal(renderInputs);
     } else {
       redraw = false;
@@ -1233,6 +1263,7 @@ struct PlaybackLoopRunner::Impl {
 
   void renderFailureScreen() {
     updateRenderInputs(true, true);
+    std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
     output.renderTerminal(renderInputs);
   }
 
@@ -1411,6 +1442,43 @@ struct PlaybackLoopRunner::Impl {
     return false;
   }
 
+  bool reloadSubtitles(const std::filesystem::path& preferredTrack) {
+    bool selectedPreferred = false;
+    {
+      std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
+      subtitleManager.loadForVideo(file);
+      hasSubtitles = subtitleManager.selectableTrackCount() > 0;
+      selectedPreferred =
+          hasSubtitles && subtitleManager.selectTrackForFile(preferredTrack);
+      inputView.hasSubtitles = hasSubtitles;
+      enableSubtitlesShared.store(selectedPreferred || hasSubtitles,
+                                  std::memory_order_relaxed);
+      hasIndexedTranscript =
+          !playback_video_transcript::activeTranscriptPathForVideo(file)
+               .empty();
+    }
+    redraw = true;
+    forceRefreshArt = true;
+    copiedFrameNeedsRender = true;
+    syncVideoEditPresentation();
+    showEditMessage(selectedPreferred ? "Subtitles ready and enabled"
+                                      : (hasSubtitles
+                                             ? "Subtitles reloaded"
+                                             : "Subtitle file could not be loaded"));
+    return hasSubtitles;
+  }
+
+  void transcriptTaskFinished(const std::filesystem::path& preferredTrack,
+                              bool success, std::string status) {
+    if (success) {
+      reloadSubtitles(preferredTrack);
+      return;
+    }
+    syncVideoEditPresentation();
+    showEditMessage(status.empty() ? "Subtitle generation failed"
+                                   : std::move(status));
+  }
+
   bool requestHandoff(std::function<void(bool)> completion) {
     return requestExternalHandoff(std::move(completion));
   }
@@ -1493,6 +1561,12 @@ bool PlaybackLoopRunner::activatePresentation() {
 bool PlaybackLoopRunner::requestHandoff(
     std::function<void(bool)> completion) {
   return impl_->requestHandoff(std::move(completion));
+}
+
+void PlaybackLoopRunner::transcriptTaskFinished(
+    const std::filesystem::path& preferredTrack, bool success,
+    std::string status) {
+  impl_->transcriptTaskFinished(preferredTrack, success, std::move(status));
 }
 
 void PlaybackLoopRunner::requestStop() { impl_->requestStop(); }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -10,7 +11,9 @@ struct IndexedTranscriptTaskSnapshot {
   bool running = false;
   bool hasResult = false;
   bool success = false;
+  bool cancelRequested = false;
   float progress = 0.0f;
+  uint64_t resultRevision = 0;
   std::string phase;
   std::string status;
   std::filesystem::path sourceFile;
@@ -26,6 +29,7 @@ class IndexedTranscriptTask {
   IndexedTranscriptTask& operator=(const IndexedTranscriptTask&) = delete;
 
   bool tryStart(const std::filesystem::path& videoPath);
+  bool requestCancel();
   void reapFinished();
   void cancelAndJoin();
   IndexedTranscriptTaskSnapshot snapshot() const;

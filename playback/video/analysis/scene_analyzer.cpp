@@ -293,7 +293,7 @@ bool analyzeVideoScenes(const std::filesystem::path& videoPath,
     return false;
   }
 
-  report(onProgress, 0.92, "Reading indexed transcript evidence");
+  report(onProgress, 0.92, "Reading transcript evidence");
   std::vector<playback_video_transcript::Segment> transcriptSegments;
   if (!transcriptPath.empty()) {
     std::string transcriptError;

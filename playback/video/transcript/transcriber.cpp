@@ -326,7 +326,7 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
   }
 
   finalizeSubtitleCueTimeline(&segments);
-  report(onProgress, 0.98f, "Writing indexed transcript");
+  report(onProgress, 0.98f, "Saving subtitles");
   if (!writeIndexedTranscript(outputPath, segments, publishMode, error)) {
     return false;
   }

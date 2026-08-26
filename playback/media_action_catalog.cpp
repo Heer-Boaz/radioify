@@ -12,9 +12,14 @@ std::vector<Item> build(const Context& context) {
       items.push_back({Action::EditVideo,
                        context.hasEdits ? "Resume editing" : "Edit video"});
     }
-    if (!context.backgroundTaskRunning) {
+    if (context.indexedTranscriptRunningForSource) {
       items.push_back(
-          {Action::CreateIndexedTranscript, "Create indexed transcript"});
+          {Action::CancelIndexedTranscript, "Cancel subtitle generation"});
+    } else if (!context.backgroundTaskRunning) {
+      items.push_back(
+          {Action::CreateIndexedTranscript,
+           context.hasIndexedTranscript ? "Regenerate subtitles..."
+                                        : "Generate subtitles..."});
     }
     return items;
   }

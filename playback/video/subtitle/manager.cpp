@@ -19,6 +19,7 @@ extern "C" {
 }
 
 #include "runtime_helpers.h"
+#include "core/path_identity.h"
 #include "ass/script.h"
 #include "ass/parser.h"
 #include "font_attachments.h"
@@ -2073,6 +2074,7 @@ void SubtitleManager::loadForVideo(const std::filesystem::path& videoPath) {
   for (const auto& subtitleFile : files) {
     SubtitleTrack track;
     track.label = subtitleLabelFromPath(subtitleFile, baseStem);
+    track.sourcePath = subtitleFile;
     if (!loadSubtitleTrackFile(subtitleFile, &track)) {
       continue;
     }
@@ -2104,6 +2106,21 @@ bool SubtitleManager::selectFirstTrackWithCues() {
   for (size_t i = 0; i < tracks_.size(); ++i) {
     if (tracks_[i].cues.empty()) continue;
     activeTrack_ = i;
+    tracks_[activeTrack_].resetLookup();
+    return true;
+  }
+  return false;
+}
+
+bool SubtitleManager::selectTrackForFile(
+    const std::filesystem::path& sourcePath) {
+  if (sourcePath.empty()) return false;
+  for (size_t index = 0; index < tracks_.size(); ++index) {
+    if (tracks_[index].cues.empty() || tracks_[index].sourcePath.empty() ||
+        !samePath(tracks_[index].sourcePath, sourcePath)) {
+      continue;
+    }
+    activeTrack_ = index;
     tracks_[activeTrack_].resetLookup();
     return true;
   }

@@ -214,6 +214,10 @@ bool toggleSubtitles(const PlaybackInputView& view) {
   if (!view.hasSubtitles) {
     return false;
   }
+  std::unique_lock<std::mutex> subtitleLock;
+  if (view.subtitleMutex) {
+    subtitleLock = std::unique_lock<std::mutex>(*view.subtitleMutex);
+  }
   const bool enabled =
       view.enableSubtitlesShared->load(std::memory_order_relaxed);
   if (!enabled) {
