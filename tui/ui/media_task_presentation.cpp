@@ -79,16 +79,21 @@ std::string completionText(
 
 MediaTaskCardModel mediaTaskCardModel(
     const media_processing::TaskActivity& activity) {
-  return {activityTitle(activity),
-          activity.sourceFile.empty()
-              ? std::string("(unknown)")
-              : toUtf8String(activity.sourceFile.filename()),
-          activity.phase,
-          std::clamp(activity.progress, 0.0f, 1.0f),
-          activity.cancellable};
+  MediaTaskCardModel model;
+  model.title = activityTitle(activity);
+  model.sourceName = activity.sourceFile.empty()
+                         ? std::string("(unknown)")
+                         : toUtf8String(activity.sourceFile.filename());
+  model.detail = activity.phase;
+  model.progress = std::clamp(activity.progress, 0.0f, 1.0f);
+  model.cancellable = activity.cancellable;
+  return model;
 }
 
 MediaTaskStatusModel mediaTaskStatusModel(
     const media_processing::TaskCompletion& completion) {
-  return {completionText(completion), completion.succeeded()};
+  MediaTaskStatusModel model;
+  model.text = completionText(completion);
+  model.succeeded = completion.succeeded();
+  return model;
 }

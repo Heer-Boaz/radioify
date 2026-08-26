@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 
 namespace {
 
@@ -57,9 +58,9 @@ int main() {
   std::atomic<bool> separationCancellationObserved{false};
   std::atomic<bool> releaseSeparation{false};
 
-  processing::Coordinator coordinator({
-      [&](const std::filesystem::path&, int,
-          const std::filesystem::path&,
+  processing::Coordinator::Operations operations;
+  operations.analyzeMelody =
+      [&](const std::filesystem::path&, int, const std::filesystem::path&,
           const processing::Coordinator::MelodyProgressReporter& progress,
           std::string*) {
         progress(0.4f);
@@ -68,13 +69,15 @@ int main() {
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         return true;
-      },
+      };
+  operations.splitLoop =
       [](const std::filesystem::path&, const std::filesystem::path&,
          const std::filesystem::path&, const LoopSplitConfig&,
          LoopSplitResult* result, std::string*) {
         if (result) result->hasStinger = true;
         return true;
-      },
+      };
+  operations.generateSubtitles =
       [&](const std::filesystem::path&, const std::filesystem::path&,
           const playback_video_transcript::GenerationJob::ProgressReporter&
               progress,
@@ -85,7 +88,8 @@ int main() {
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         return true;
-      },
+      };
+  operations.separateAudio =
       [&](const std::filesystem::path&,
           const audio_separation::ArtifactPaths&,
           const audio_separation::Job::ProgressReporter& progress,
@@ -101,8 +105,9 @@ int main() {
         }
         if (error) *error = "Controlled cancellation.";
         return false;
-      },
-      true});
+      };
+  operations.audioSeparationAvailable = true;
+  processing::Coordinator coordinator(std::move(operations));
 
   int playbackStateChanges = 0;
   processing::PlaybackService playbackService(

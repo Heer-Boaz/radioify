@@ -206,14 +206,19 @@ struct Coordinator::Impl {
 };
 
 Coordinator::Coordinator(Operations operations)
-    : Coordinator(Backends{
-          std::move(operations.analyzeMelody),
-          std::move(operations.splitLoop),
-          std::make_unique<playback_video_transcript::GenerationJob>(
-              std::move(operations.generateSubtitles)),
-          std::make_unique<audio_separation::Job>(
-              std::move(operations.separateAudio)),
-          operations.audioSeparationAvailable}) {}
+    : Coordinator([operations = std::move(operations)]() mutable {
+        Backends backends;
+        backends.analyzeMelody = std::move(operations.analyzeMelody);
+        backends.splitLoop = std::move(operations.splitLoop);
+        backends.subtitles =
+            std::make_unique<playback_video_transcript::GenerationJob>(
+                std::move(operations.generateSubtitles));
+        backends.audioSeparation = std::make_unique<audio_separation::Job>(
+            std::move(operations.separateAudio));
+        backends.audioSeparationAvailable =
+            operations.audioSeparationAvailable;
+        return backends;
+      }()) {}
 
 Coordinator::Coordinator(Backends backends)
     : impl_(std::make_unique<Impl>(std::move(backends))) {}
@@ -236,23 +241,27 @@ std::optional<TaskActivity> Coordinator::activity() const {
   if (impl_->subtitles) {
     const auto snapshot = impl_->subtitles->snapshot();
     if (snapshot.running()) {
-      return TaskActivity{TaskKind::SubtitleGeneration,
-                          snapshot.sourceFile,
-                          std::clamp(snapshot.progress, 0.0f, 1.0f),
-                          snapshot.phase,
-                          snapshot.cancelling(),
-                          true};
+      TaskActivity activity;
+      activity.kind = TaskKind::SubtitleGeneration;
+      activity.sourceFile = snapshot.sourceFile;
+      activity.progress = std::clamp(snapshot.progress, 0.0f, 1.0f);
+      activity.phase = snapshot.phase;
+      activity.cancelling = snapshot.cancelling();
+      activity.cancellable = true;
+      return activity;
     }
   }
   if (impl_->audioSeparation) {
     const auto snapshot = impl_->audioSeparation->snapshot();
     if (snapshot.running()) {
-      return TaskActivity{TaskKind::AudioSeparation,
-                          snapshot.sourceFile,
-                          std::clamp(snapshot.progress, 0.0f, 1.0f),
-                          snapshot.phase,
-                          snapshot.cancelling(),
-                          true};
+      TaskActivity activity;
+      activity.kind = TaskKind::AudioSeparation;
+      activity.sourceFile = snapshot.sourceFile;
+      activity.progress = std::clamp(snapshot.progress, 0.0f, 1.0f);
+      activity.phase = snapshot.phase;
+      activity.cancelling = snapshot.cancelling();
+      activity.cancellable = true;
+      return activity;
     }
   }
   return std::nullopt;
@@ -272,8 +281,9 @@ bool Coordinator::tryStartMelodyAnalysis(
   }
 
   const MelodyOperation operation = impl_->analyzeMelody;
-  TaskActivity activity{TaskKind::MelodyAnalysis, sourceFile, 0.0f, {}, false,
-                        false};
+  TaskActivity activity;
+  activity.kind = TaskKind::MelodyAnalysis;
+  activity.sourceFile = sourceFile;
   const bool started = impl_->workerTask.tryStart(
       std::move(activity),
       [operation, sourceFile, trackIndex,
@@ -315,8 +325,9 @@ bool Coordinator::tryStartLoopSplit(
   }
 
   const LoopSplitOperation operation = impl_->splitLoop;
-  TaskActivity activity{TaskKind::LoopSplit, sourceFile, 0.0f, {}, false,
-                        false};
+  TaskActivity activity;
+  activity.kind = TaskKind::LoopSplit;
+  activity.sourceFile = sourceFile;
   const bool started = impl_->workerTask.tryStart(
       std::move(activity),
       [operation, sourceFile, stingerOutput, loopOutput,
