@@ -53,6 +53,7 @@
 #include "core/windows_shell_open.h"
 #include "image_viewer_sequence.h"
 #include "media_processing_coordinator.h"
+#include "app/media_processing_playback_service.h"
 #include "m4adecoder.h"
 #include "miniaudio.h"
 #include "optionsbrowser.h"
@@ -1917,46 +1918,15 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       browserNavigator, std::move(browserPlaybackCallbacks));
 
   media_processing::Coordinator mediaTasks;
-  playback_media_processing::Actions mediaProcessingActions{
-      [&]() { return mediaTasks.running(); },
-      [&](const std::filesystem::path& file) {
-        if (!mediaTasks.tryStartSubtitleGeneration(file)) return false;
+  media_processing::PlaybackService mediaTaskPlaybackService(
+      mediaTasks, [&]() {
         markLayoutDirty();
         markDirty(UiDirtyFlags::Async);
-        return true;
-      },
-      [&](const std::filesystem::path& file) {
-        return mediaTasks.subtitleGenerationRunningFor(file);
-      },
-      [&]() {
-        const bool requested = mediaTasks.cancelSubtitleGeneration();
-        if (requested) markDirty(UiDirtyFlags::Async);
-        return requested;
-      },
-      [&](const std::filesystem::path& file) {
-        return mediaTasks.audioSeparationAvailableFor(file);
-      },
-      [&](const std::filesystem::path& file) {
-        if (!mediaTasks.tryStartAudioSeparation(file)) return false;
-        markLayoutDirty();
-        markDirty(UiDirtyFlags::Async);
-        return true;
-      },
-      [&](const std::filesystem::path& file) {
-        return mediaTasks.audioSeparationRunningFor(file);
-      },
-      [&](const std::filesystem::path& file) {
-        return mediaTasks.hasSeparatedAudioFor(file);
-      },
-      [&]() {
-        const bool requested = mediaTasks.cancelAudioSeparation();
-        if (requested) markDirty(UiDirtyFlags::Async);
-        return requested;
-      }};
+      });
+  playback_media_processing::Actions mediaProcessingActions(
+      mediaTaskPlaybackService);
   auto cancelActiveMediaTask = [&]() {
-    const bool requested = mediaTasks.cancelActive();
-    if (requested) markDirty(UiDirtyFlags::Async);
-    return requested;
+    return mediaTaskPlaybackService.requestActiveCancellation();
   };
 
   std::string mediaCommandError;

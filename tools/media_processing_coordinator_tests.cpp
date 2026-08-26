@@ -1,4 +1,6 @@
 #include "app/media_processing_coordinator.h"
+#include "app/media_processing_playback_service.h"
+#include "playback/media_processing_actions.h"
 #include "tui/ui/media_task_presentation.h"
 
 #include <atomic>
@@ -96,6 +98,11 @@ int main() {
       },
       true});
 
+  int playbackStateChanges = 0;
+  processing::PlaybackService playbackService(
+      coordinator, [&]() { ++playbackStateChanges; });
+  playback_media_processing::Actions playbackActions(playbackService);
+
   ok &= expect(coordinator.waitHandles().size() == 3,
                "all worker families must expose wake handles through one owner");
   ok &= expect(!coordinator.tryStartMelodyAnalysis({}, 0, "clip.melody") &&
@@ -141,7 +148,8 @@ int main() {
                        "Loop split: Saved loop_stinger.wav and loop_loop.wav",
                "loop splitting must project through the same completion model");
 
-  ok &= expect(coordinator.tryStartSubtitleGeneration("movie.mp4") &&
+  ok &= expect(playbackActions.requestSubtitles("movie.mp4") &&
+                   playbackStateChanges == 1 &&
                    waitUntil([&]() {
                      return subtitlesStarted.load(std::memory_order_acquire);
                    }) &&
@@ -164,12 +172,15 @@ int main() {
                        "Subtitles ready: movie.transcript.srt",
                "subtitle completion must retain its canonical sidecar");
 
-  ok &= expect(coordinator.tryStartAudioSeparation("movie.mp4") &&
+  ok &= expect(playbackActions.requestAudioSeparation("movie.mp4") &&
+                   playbackStateChanges == 2 &&
                    waitUntil([&]() {
                      return separationStarted.load(std::memory_order_acquire);
                    }) &&
                    coordinator.audioSeparationRunningFor("movie.mp4") &&
-                   coordinator.cancelActive() && !coordinator.cancelActive(),
+                   playbackService.requestActiveCancellation() &&
+                   playbackStateChanges == 3 &&
+                   !playbackService.requestActiveCancellation(),
                "F8 cancellation must dispatch through the active task owner");
   const std::optional<processing::TaskActivity> cancelling =
       coordinator.activity();

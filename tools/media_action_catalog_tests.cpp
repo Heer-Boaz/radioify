@@ -33,6 +33,47 @@ const playback_media_actions::Item* findAction(
   return found == items.end() ? nullptr : &*found;
 }
 
+class FakeMediaProcessingService final
+    : public playback_media_processing::Service {
+ public:
+  bool busy() const override { return state.backgroundTaskRunning; }
+
+  playback_media_processing::SourceState sourceStateFor(
+      const std::filesystem::path& sourceFile) const override {
+    return sourceFile == "source.mp4"
+               ? state
+               : playback_media_processing::SourceState{};
+  }
+
+  bool requestSubtitles(
+      const std::filesystem::path& sourceFile) override {
+    subtitleRequested = sourceFile == "source.mp4";
+    return subtitleRequested;
+  }
+
+  bool requestSubtitleCancellation() override {
+    subtitleCancelled = true;
+    return true;
+  }
+
+  bool requestAudioSeparation(
+      const std::filesystem::path& sourceFile) override {
+    separationRequested = sourceFile == "source.mp4";
+    return separationRequested;
+  }
+
+  bool requestAudioSeparationCancellation() override {
+    separationCancelled = true;
+    return true;
+  }
+
+  playback_media_processing::SourceState state;
+  bool subtitleRequested = false;
+  bool subtitleCancelled = false;
+  bool separationRequested = false;
+  bool separationCancelled = false;
+};
+
 }  // namespace
 
 int main() {
@@ -157,40 +198,13 @@ int main() {
                              actions::Action::CancelAudioSeparation),
                "an audio source being separated must expose cancellation");
 
-  bool subtitleRequested = false;
-  bool subtitleCancelled = false;
-  bool separationRequested = false;
-  bool separationCancelled = false;
-  playback_media_processing::Actions processingActions{
-      []() { return true; },
-      [&](const std::filesystem::path& path) {
-        subtitleRequested = path == "source.mp4";
-        return subtitleRequested;
-      },
-      [](const std::filesystem::path& path) {
-        return path == "source.mp4";
-      },
-      [&]() {
-        subtitleCancelled = true;
-        return true;
-      },
-      [](const std::filesystem::path& path) {
-        return path == "source.mp4";
-      },
-      [&](const std::filesystem::path& path) {
-        separationRequested = path == "source.mp4";
-        return separationRequested;
-      },
-      [](const std::filesystem::path& path) {
-        return path == "source.mp4";
-      },
-      [](const std::filesystem::path& path) {
-        return path == "source.mp4";
-      },
-      [&]() {
-        separationCancelled = true;
-        return true;
-      }};
+  FakeMediaProcessingService processingService;
+  processingService.state.backgroundTaskRunning = true;
+  processingService.state.subtitleGenerationRunning = true;
+  processingService.state.audioSeparationAvailable = true;
+  processingService.state.audioSeparationRunning = true;
+  processingService.state.separatedAudioExists = true;
+  playback_media_processing::Actions processingActions(processingService);
   actions::Context projected;
   processingActions.applySourceState("source.mp4", &projected);
   ok &= expect(projected.backgroundTaskRunning &&
@@ -203,8 +217,10 @@ int main() {
                    processingActions.requestSubtitleCancellation() &&
                    processingActions.requestAudioSeparation("source.mp4") &&
                    processingActions.requestAudioSeparationCancellation() &&
-                   subtitleRequested && subtitleCancelled &&
-                   separationRequested && separationCancelled,
+                   processingService.subtitleRequested &&
+                   processingService.subtitleCancelled &&
+                   processingService.separationRequested &&
+                   processingService.separationCancelled,
                "processing commands must cross one guarded actions boundary");
   playback_media_processing::Actions unavailable;
   ok &= expect(!unavailable.busy() &&
