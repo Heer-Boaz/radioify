@@ -1403,37 +1403,43 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         fileContextActions[static_cast<size_t>(actionIndex)].action;
     dismissFileContextMenu();
     dirty = true;
-    if (action == playback_media_actions::Action::Play) {
-      if (playBrowserEntry(entry)) {
-        markDirty(UiDirtyFlags::Async);
+    const playback_media_processing::ActionExecution processing =
+        mediaProcessingActions.execute(action, entry.path);
+    if (processing.recognized) {
+      mediaCommandError =
+          processing.accepted ? std::string() : processing.feedback;
+      markLayoutDirty();
+      return;
+    }
+
+    switch (action) {
+      case playback_media_actions::Action::Play:
+        if (playBrowserEntry(entry)) {
+          markDirty(UiDirtyFlags::Async);
+        }
+        return;
+      case playback_media_actions::Action::BrowseTracks:
+        browserNavigator.navigate(
+            browserTrackLocation(normalizeTrackBrowserPath(entry.path)));
+        return;
+      case playback_media_actions::Action::EditVideo: {
+        playback_route::Route route =
+            playback_route::resolveTarget(playbackFileTarget(entry.path));
+        route.sessionIntent = PlaybackSessionIntent::EditVideo;
+        const PlaybackTarget target = route.target;
+        if (startPlayback(std::move(route),
+                          playback_queue::singleSource(target))) {
+          markDirty(UiDirtyFlags::Async);
+        }
+        return;
       }
-    } else if (action == playback_media_actions::Action::BrowseTracks) {
-      browserNavigator.navigate(
-          browserTrackLocation(normalizeTrackBrowserPath(entry.path)));
-    } else if (action == playback_media_actions::Action::EditVideo) {
-      playback_route::Route route =
-          playback_route::resolveTarget(playbackFileTarget(entry.path));
-      route.sessionIntent = PlaybackSessionIntent::EditVideo;
-      const PlaybackTarget target = route.target;
-      if (startPlayback(std::move(route),
-                        playback_queue::singleSource(target))) {
-        markDirty(UiDirtyFlags::Async);
-      }
-    } else if (action ==
-               playback_media_actions::Action::GenerateSubtitles) {
-      mediaProcessingActions.requestSubtitles(entry.path);
-    } else if (action ==
-               playback_media_actions::Action::CancelSubtitleGeneration) {
-      mediaProcessingActions.requestSubtitleCancellation();
-    } else if (action == playback_media_actions::Action::SeparateAudio) {
-      mediaProcessingActions.requestAudioSeparation(entry.path);
-    } else if (action ==
-               playback_media_actions::Action::CancelAudioSeparation) {
-      mediaProcessingActions.requestAudioSeparationCancellation();
-    } else if (action == playback_media_actions::Action::AnalyzeAudio) {
-      startMelodyExport(entry);
-    } else if (action == playback_media_actions::Action::SplitLoop) {
-      if (entry.isMedia() && isSupportedAudioExt(entry.path)) {
+      case playback_media_actions::Action::AnalyzeAudio:
+        startMelodyExport(entry);
+        return;
+      case playback_media_actions::Action::SplitLoop: {
+        if (!entry.isMedia() || !isSupportedAudioExt(entry.path)) {
+          return;
+        }
         LoopSplitConfig splitConfig;
         splitConfig.channels = 2;
         splitConfig.sampleRate = 48000;
@@ -1450,7 +1456,13 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           markLayoutDirty();
           markDirty(UiDirtyFlags::Async);
         }
+        return;
       }
+      case playback_media_actions::Action::GenerateSubtitles:
+      case playback_media_actions::Action::CancelSubtitleGeneration:
+      case playback_media_actions::Action::SeparateAudio:
+      case playback_media_actions::Action::CancelAudioSeparation:
+        return;
     }
   };
 

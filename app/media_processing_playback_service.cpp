@@ -10,8 +10,6 @@ PlaybackService::PlaybackService(Coordinator& coordinator,
                                  StateChanged stateChanged)
     : coordinator_(coordinator), stateChanged_(std::move(stateChanged)) {}
 
-bool PlaybackService::busy() const { return coordinator_.running(); }
-
 playback_media_processing::SourceState PlaybackService::sourceStateFor(
     const std::filesystem::path& sourceFile) const {
   playback_media_processing::SourceState state;

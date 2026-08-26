@@ -17,7 +17,6 @@ class PlaybackService final : public playback_media_processing::Service {
 
   PlaybackService(Coordinator& coordinator, StateChanged stateChanged);
 
-  bool busy() const override;
   playback_media_processing::SourceState sourceStateFor(
       const std::filesystem::path& sourceFile) const override;
   bool requestSubtitles(

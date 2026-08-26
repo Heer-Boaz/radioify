@@ -531,46 +531,27 @@ struct PlaybackLoopRunner::Impl {
   }
 
   bool executeMediaAction(playback_media_actions::Action action) {
+    const playback_media_processing::ActionExecution processing =
+        mediaProcessingActions.execute(action, file);
+    if (processing.recognized) {
+      syncVideoEditPresentation();
+      showEditMessage(processing.feedback);
+      return true;
+    }
+
     switch (action) {
       case playback_media_actions::Action::EditVideo:
         return executeVideoEditCommand(playback_video_edit::Command::Open);
-      case playback_media_actions::Action::GenerateSubtitles: {
-        const bool started =
-            mediaProcessingActions.requestSubtitles(file);
-        syncVideoEditPresentation();
-        showEditMessage(started ? "Generating subtitles (F8 to cancel)"
-                                : "Could not start subtitle generation");
-        return true;
-      }
-      case playback_media_actions::Action::CancelSubtitleGeneration: {
-        const bool cancelled =
-            mediaProcessingActions.requestSubtitleCancellation();
-        syncVideoEditPresentation();
-        showEditMessage(cancelled ? "Cancelling subtitle generation"
-                                  : "Could not cancel subtitle generation");
-        return true;
-      }
-      case playback_media_actions::Action::SeparateAudio: {
-        const bool started =
-            mediaProcessingActions.requestAudioSeparation(file);
-        syncVideoEditPresentation();
-        showEditMessage(started ? "Separating audio (F8 to cancel)"
-                                : "Could not start audio separation");
-        return true;
-      }
-      case playback_media_actions::Action::CancelAudioSeparation: {
-        const bool cancelled =
-            mediaProcessingActions.requestAudioSeparationCancellation();
-        syncVideoEditPresentation();
-        showEditMessage(cancelled ? "Cancelling audio separation"
-                                  : "Could not cancel audio separation");
-        return true;
-      }
       case playback_media_actions::Action::Play:
       case playback_media_actions::Action::BrowseTracks:
       case playback_media_actions::Action::AnalyzeAudio:
       case playback_media_actions::Action::SplitLoop:
         return false;
+      case playback_media_actions::Action::GenerateSubtitles:
+      case playback_media_actions::Action::CancelSubtitleGeneration:
+      case playback_media_actions::Action::SeparateAudio:
+      case playback_media_actions::Action::CancelAudioSeparation:
+        return true;
     }
     return false;
   }

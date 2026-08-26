@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
 
 #include "playback/media_action_catalog.h"
 
@@ -14,6 +15,12 @@ struct SourceState {
   bool separatedAudioExists = false;
 };
 
+struct ActionExecution {
+  bool recognized = false;
+  bool accepted = false;
+  std::string feedback;
+};
+
 // Application-facing service contract consumed by both playback surfaces.
 // It projects one coherent source snapshot instead of exposing worker-specific
 // callbacks and synchronization details.
@@ -21,7 +28,6 @@ class Service {
  public:
   virtual ~Service() = default;
 
-  virtual bool busy() const = 0;
   virtual SourceState sourceStateFor(
       const std::filesystem::path& sourceFile) const = 0;
   virtual bool requestSubtitles(
@@ -39,15 +45,18 @@ class Actions {
   Actions() = default;
   explicit Actions(Service& service) : service_(&service) {}
 
-  bool busy() const;
-  bool requestSubtitles(const std::filesystem::path& sourceFile) const;
-  bool requestSubtitleCancellation() const;
-  bool requestAudioSeparation(const std::filesystem::path& sourceFile) const;
-  bool requestAudioSeparationCancellation() const;
+  ActionExecution execute(
+      playback_media_actions::Action action,
+      const std::filesystem::path& sourceFile) const;
   void applySourceState(const std::filesystem::path& sourceFile,
                         playback_media_actions::Context* context) const;
 
  private:
+  bool requestSubtitles(const std::filesystem::path& sourceFile) const;
+  bool requestSubtitleCancellation() const;
+  bool requestAudioSeparation(const std::filesystem::path& sourceFile) const;
+  bool requestAudioSeparationCancellation() const;
+
   Service* service_ = nullptr;
 };
 

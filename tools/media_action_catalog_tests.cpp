@@ -36,8 +36,6 @@ const playback_media_actions::Item* findAction(
 class FakeMediaProcessingService final
     : public playback_media_processing::Service {
  public:
-  bool busy() const override { return state.backgroundTaskRunning; }
-
   playback_media_processing::SourceState sourceStateFor(
       const std::filesystem::path& sourceFile) const override {
     return sourceFile == "source.mp4"
@@ -213,21 +211,50 @@ int main() {
                    projected.audioSeparationRunningForSource &&
                    projected.hasSeparatedAudio,
                "browser and player must share one processing-state projection");
-  ok &= expect(processingActions.requestSubtitles("source.mp4") &&
-                   processingActions.requestSubtitleCancellation() &&
-                   processingActions.requestAudioSeparation("source.mp4") &&
-                   processingActions.requestAudioSeparationCancellation() &&
-                   processingService.subtitleRequested &&
-                   processingService.subtitleCancelled &&
-                   processingService.separationRequested &&
-                   processingService.separationCancelled,
-               "processing commands must cross one guarded actions boundary");
+  const playback_media_processing::ActionExecution generateSubtitles =
+      processingActions.execute(actions::Action::GenerateSubtitles,
+                                "source.mp4");
+  const playback_media_processing::ActionExecution separateAudio =
+      processingActions.execute(actions::Action::SeparateAudio,
+                                "source.mp4");
+  const playback_media_processing::ActionExecution cancelSubtitles =
+      processingActions.execute(actions::Action::CancelSubtitleGeneration,
+                                "source.mp4");
+  const playback_media_processing::ActionExecution cancelSeparation =
+      processingActions.execute(actions::Action::CancelAudioSeparation,
+                                "source.mp4");
+  const playback_media_processing::ActionExecution surfaceAction =
+      processingActions.execute(actions::Action::EditVideo, "source.mp4");
+  ok &= expect(
+      generateSubtitles.recognized && generateSubtitles.accepted &&
+          generateSubtitles.feedback ==
+              "Generating subtitles (F8 to cancel)" &&
+          separateAudio.recognized && separateAudio.accepted &&
+          separateAudio.feedback == "Separating audio (F8 to cancel)" &&
+          cancelSubtitles.recognized && cancelSubtitles.accepted &&
+          cancelSubtitles.feedback == "Cancelling subtitle generation" &&
+          cancelSeparation.recognized && cancelSeparation.accepted &&
+          cancelSeparation.feedback == "Cancelling audio separation" &&
+          processingService.subtitleRequested &&
+          processingService.subtitleCancelled &&
+          processingService.separationRequested &&
+          processingService.separationCancelled &&
+          !surfaceAction.recognized && surfaceAction.feedback.empty(),
+      "browser and player must share processing dispatch and feedback");
   playback_media_processing::Actions unavailable;
-  ok &= expect(!unavailable.busy() &&
-                   !unavailable.requestSubtitles("source.mp4") &&
-                   !unavailable.requestSubtitleCancellation() &&
-                   !unavailable.requestAudioSeparation("source.mp4") &&
-                   !unavailable.requestAudioSeparationCancellation(),
+  const playback_media_processing::ActionExecution rejectedGeneration =
+      unavailable.execute(actions::Action::GenerateSubtitles, "source.mp4");
+  const playback_media_processing::ActionExecution rejectedCancellation =
+      unavailable.execute(actions::Action::CancelAudioSeparation,
+                          "source.mp4");
+  ok &= expect(rejectedGeneration.recognized &&
+                   !rejectedGeneration.accepted &&
+                   rejectedGeneration.feedback ==
+                       "Could not start subtitle generation" &&
+                   rejectedCancellation.recognized &&
+                   !rejectedCancellation.accepted &&
+                   rejectedCancellation.feedback ==
+                       "Could not cancel audio separation",
                "missing application services must fail closed");
 
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;

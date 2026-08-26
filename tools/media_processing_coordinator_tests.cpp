@@ -113,9 +113,15 @@ int main() {
   processing::PlaybackService playbackService(
       coordinator, [&]() { ++playbackStateChanges; });
   playback_media_processing::Actions playbackActions(playbackService);
+  const playback_media_processing::ActionExecution unsupportedAction =
+      playbackActions.execute(playback_media_actions::Action::EditVideo,
+                              "movie.mp4");
 
   ok &= expect(coordinator.waitHandles().size() == 3,
                "all worker families must expose wake handles through one owner");
+  ok &= expect(!unsupportedAction.recognized && !unsupportedAction.accepted &&
+                   unsupportedAction.feedback.empty(),
+               "surface-specific actions must remain outside processing");
   ok &= expect(!coordinator.tryStartMelodyAnalysis({}, 0, "clip.melody") &&
                    !coordinator.running(),
                "invalid work must not change coordinator state");
@@ -159,7 +165,12 @@ int main() {
                        "Loop split: Saved loop_stinger.wav and loop_loop.wav",
                "loop splitting must project through the same completion model");
 
-  ok &= expect(playbackActions.requestSubtitles("movie.mp4") &&
+  const playback_media_processing::ActionExecution subtitleStart =
+      playbackActions.execute(
+          playback_media_actions::Action::GenerateSubtitles, "movie.mp4");
+  ok &= expect(subtitleStart.recognized && subtitleStart.accepted &&
+                   subtitleStart.feedback ==
+                       "Generating subtitles (F8 to cancel)" &&
                    playbackStateChanges == 1 &&
                    waitUntil([&]() {
                      return subtitlesStarted.load(std::memory_order_acquire);
@@ -183,7 +194,12 @@ int main() {
                        "Subtitles ready: movie.transcript.srt",
                "subtitle completion must retain its canonical sidecar");
 
-  ok &= expect(playbackActions.requestAudioSeparation("movie.mp4") &&
+  const playback_media_processing::ActionExecution separationStart =
+      playbackActions.execute(playback_media_actions::Action::SeparateAudio,
+                              "movie.mp4");
+  ok &= expect(separationStart.recognized && separationStart.accepted &&
+                   separationStart.feedback ==
+                       "Separating audio (F8 to cancel)" &&
                    playbackStateChanges == 2 &&
                    waitUntil([&]() {
                      return separationStarted.load(std::memory_order_acquire);
