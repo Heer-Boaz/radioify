@@ -817,6 +817,18 @@ radioify_link_repo_target(scene_analysis_tests)
 add_test(NAME scene_analysis_tests
          COMMAND $<TARGET_FILE:scene_analysis_tests>)
 
+add_executable(scene_suggestion_review_tests)
+target_sources(scene_suggestion_review_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_scene_suggestion_review_tests>
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/scene_suggestion_review.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/scene_suggestions.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/timeline.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/sequence.cpp
+)
+radioify_link_repo_target(scene_suggestion_review_tests)
+add_test(NAME scene_suggestion_review_tests
+         COMMAND $<TARGET_FILE:scene_suggestion_review_tests>)
+
 add_executable(scene_analysis_smoke)
 target_sources(scene_analysis_smoke PRIVATE
   $<TARGET_OBJECTS:radioify_tool_scene_analysis_smoke>

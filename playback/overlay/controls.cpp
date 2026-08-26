@@ -254,23 +254,23 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     } else if (suggestionsReady) {
       suggestionsLabel = "Suggestions " +
                          std::to_string(
-                             state.videoEdit.sceneSuggestionTotalCount);
+                             state.videoEdit.suggestionReview.totalCount);
     } else {
       suggestionsLabel = "Suggestions";
     }
     add(OverlayControlId::EditSuggestions, suggestionsLabel,
-        detectingSegments || state.videoEdit.sceneSuggestionsPanelVisible);
+        detectingSegments || state.videoEdit.suggestionReview.visible);
 
     if (suggestionsReady &&
-        state.videoEdit.sceneSuggestionsPanelVisible) {
+        state.videoEdit.suggestionReview.visible) {
       add(OverlayControlId::EditSuggestionFilter,
           std::string("Filter: ") +
               playback_video_edit::sceneSuggestionFilterLabel(
-                  state.videoEdit.sceneSuggestionFilter),
-          state.videoEdit.sceneSuggestionFilter !=
+                  state.videoEdit.suggestionReview.filter),
+          state.videoEdit.suggestionReview.filter !=
               playback_video_edit::SceneSuggestionFilter::All);
       const bool hasSuggestion =
-          state.videoEdit.selectedSceneSuggestionId.has_value();
+          state.videoEdit.suggestionReview.selectedId.has_value();
       add(OverlayControlId::EditPreviousSuggestion, "Previous", false,
           hasSuggestion);
       add(OverlayControlId::EditNextSuggestion, "Next", false,
@@ -279,7 +279,7 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
           hasSuggestion);
       add(OverlayControlId::EditHideSuggestion, "Hide", false,
           hasSuggestion);
-      if (state.videoEdit.canUndoSceneSuggestionDismissal) {
+      if (state.videoEdit.suggestionReview.canUndoHide) {
         add(OverlayControlId::EditUndoHideSuggestion, "Undo hide", false);
       }
     }

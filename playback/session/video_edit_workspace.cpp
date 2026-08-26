@@ -5,13 +5,13 @@
 #include <limits>
 #include <optional>
 #include <sstream>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "core/runtime_helpers.h"
 #include "playback/video/analysis/scene_analysis_job.h"
 #include "playback/video/edit/export.h"
+#include "playback/video/edit/scene_suggestion_review.h"
 #include "playback/video/edit/scene_suggestions.h"
 #include "playback/video/edit/timeline.h"
 #include "playback/video/player.h"
@@ -63,12 +63,7 @@ struct VideoEditWorkspace::Impl {
   playback_video_analysis::JobState observedSceneAnalysisState =
       playback_video_analysis::JobState::Idle;
   uint64_t observedSceneAnalysisGeneration = 0;
-  std::optional<uint64_t> selectedSceneSuggestionId;
-  bool sceneSuggestionsPanelVisible = false;
-  playback_video_edit::SceneSuggestionFilter sceneSuggestionFilter =
-      playback_video_edit::SceneSuggestionFilter::All;
-  std::unordered_set<uint64_t> dismissedSceneSuggestionIds;
-  std::vector<uint64_t> dismissedSceneSuggestionHistory;
+  playback_video_edit::SceneSuggestionReview sceneSuggestionReview;
 
   CommandContext commandContext() const {
     CommandContext context;
@@ -139,11 +134,8 @@ struct VideoEditWorkspace::Impl {
     snapshot.sceneAnalysisPhase = analysis.phase;
     snapshot.sceneAnalysisError = analysis.error;
     snapshot.sceneAnalysisUsedTranscript = analysis.usedIndexedTranscript;
-    snapshot.sceneSuggestionsPanelVisible =
-        active && sceneSuggestionsPanelVisible;
-    snapshot.sceneSuggestionFilter = sceneSuggestionFilter;
-    snapshot.canUndoSceneSuggestionDismissal =
-        !dismissedSceneSuggestionHistory.empty();
+    snapshot.suggestionReview = sceneSuggestionReview.snapshot(
+        analysis.suggestions, document.timeline(), active);
     switch (analysis.state) {
       case playback_video_analysis::JobState::Idle:
         snapshot.sceneAnalysisStatus =
@@ -165,46 +157,6 @@ struct VideoEditWorkspace::Impl {
         snapshot.sceneAnalysisStatus =
             playback_video_edit::SceneAnalysisStatus::Cancelled;
         break;
-    }
-    if (analysis.state == playback_video_analysis::JobState::Succeeded) {
-      const auto allVisible = visibleSceneSuggestions(
-          analysis, playback_video_edit::SceneSuggestionFilter::All);
-      const auto filtered =
-          visibleSceneSuggestions(analysis, sceneSuggestionFilter);
-      snapshot.sceneSuggestionTotalCount = allVisible.size();
-      snapshot.sceneSuggestionFilteredCount = filtered.size();
-      if (snapshot.sceneSuggestionsPanelVisible) {
-        snapshot.sceneSuggestions.reserve(filtered.size());
-      }
-      for (const playback_video_analysis::SceneSuggestion* suggestion :
-           filtered) {
-        if (!snapshot.sceneSuggestionsPanelVisible) break;
-        playback_video_edit::SceneSuggestionSnapshot projected =
-            playback_video_edit::projectSceneSuggestion(
-                *suggestion, document.timeline(),
-                selectedSceneSuggestionId == suggestion->id);
-        if (projected.spans.empty()) continue;
-        snapshot.sceneSuggestions.push_back(std::move(projected));
-      }
-      const bool selectionVisible =
-          selectedSceneSuggestionId &&
-          std::any_of(snapshot.sceneSuggestions.begin(),
-                      snapshot.sceneSuggestions.end(),
-                      [&](const auto& suggestion) {
-                        return suggestion.id == *selectedSceneSuggestionId;
-                      });
-      if (selectionVisible) {
-        snapshot.selectedSceneSuggestionId = selectedSceneSuggestionId;
-        const auto selected = std::find_if(
-            filtered.begin(), filtered.end(), [&](const auto* suggestion) {
-              return suggestion->id == *selectedSceneSuggestionId;
-            });
-        if (selected != filtered.end()) {
-          snapshot.selectedSceneSuggestionOrdinal =
-              static_cast<size_t>(std::distance(filtered.begin(), selected)) +
-              1;
-        }
-      }
     }
     return snapshot;
   }
@@ -231,37 +183,7 @@ struct VideoEditWorkspace::Impl {
     active = false;
     selection.clear();
     selectedCut.reset();
-    selectedSceneSuggestionId.reset();
-    sceneSuggestionsPanelVisible = false;
-  }
-
-  const playback_video_analysis::SceneSuggestion* sceneSuggestion(
-      const playback_video_analysis::JobSnapshot& analysis,
-      uint64_t id) const {
-    const auto found = std::find_if(
-        analysis.suggestions.begin(), analysis.suggestions.end(),
-        [id](const auto& suggestion) { return suggestion.id == id; });
-    return found == analysis.suggestions.end() ? nullptr : &*found;
-  }
-
-  std::vector<const playback_video_analysis::SceneSuggestion*>
-  visibleSceneSuggestions(
-      const playback_video_analysis::JobSnapshot& analysis,
-      playback_video_edit::SceneSuggestionFilter filter) const {
-    std::vector<const playback_video_analysis::SceneSuggestion*> visible;
-    visible.reserve(analysis.suggestions.size());
-    for (const auto& suggestion : analysis.suggestions) {
-      if (dismissedSceneSuggestionIds.count(suggestion.id) == 0 &&
-          playback_video_edit::sceneSuggestionMatchesFilter(
-              playback_video_edit::projectSceneSuggestionKind(
-                  suggestion.kind),
-              filter) &&
-          playback_video_edit::sceneSuggestionVisibleOnTimeline(
-              suggestion, document.timeline())) {
-        visible.push_back(&suggestion);
-      }
-    }
-    return visible;
+    sceneSuggestionReview.leaveEditor();
   }
 
   std::string sceneSuggestionDescription(
@@ -278,24 +200,6 @@ struct VideoEditWorkspace::Impl {
     return description.str();
   }
 
-  void ensureSelectedSceneSuggestion(
-      const playback_video_analysis::JobSnapshot& analysis) {
-    const auto suggestions =
-        visibleSceneSuggestions(analysis, sceneSuggestionFilter);
-    if (suggestions.empty()) {
-      selectedSceneSuggestionId.reset();
-      return;
-    }
-    if (selectedSceneSuggestionId &&
-        std::any_of(suggestions.begin(), suggestions.end(),
-                    [&](const auto* suggestion) {
-                      return suggestion->id == *selectedSceneSuggestionId;
-                    })) {
-      return;
-    }
-    selectedSceneSuggestionId = suggestions.front()->id;
-  }
-
   VideoEditActionResult startSceneAnalysis(const CommandContext& context) {
     VideoEditActionResult result{true, false, {}};
     playback_video_analysis::JobRequest request;
@@ -305,10 +209,7 @@ struct VideoEditWorkspace::Impl {
     request.forceReanalysis =
         sceneAnalysis.snapshot().state ==
         playback_video_analysis::JobState::Succeeded;
-    selectedSceneSuggestionId.reset();
-    sceneSuggestionsPanelVisible = true;
-    dismissedSceneSuggestionIds.clear();
-    dismissedSceneSuggestionHistory.clear();
+    sceneSuggestionReview.beginAnalysis();
     if (sceneAnalysis.start(std::move(request))) {
       observedSceneAnalysisState =
           playback_video_analysis::JobState::Running;
@@ -331,8 +232,12 @@ struct VideoEditWorkspace::Impl {
   bool focusSceneSuggestion(
       const playback_video_analysis::SceneSuggestion& suggestion,
       const CommandContext& context, bool selectRange) {
-    if (dismissedSceneSuggestionIds.count(suggestion.id) != 0) return false;
-    selectedSceneSuggestionId = suggestion.id;
+    const playback_video_analysis::JobSnapshot analysis =
+        sceneAnalysis.snapshot();
+    if (!sceneSuggestionReview.select(
+            suggestion.id, analysis.suggestions, document.timeline())) {
+      return false;
+    }
     if (selectRange) {
       const int64_t startUs = std::clamp(
           suggestion.startUs, int64_t{0}, context.sourceDurationUs);
@@ -353,59 +258,23 @@ struct VideoEditWorkspace::Impl {
   }
 
   VideoEditActionResult navigateSceneSuggestion(
-      const CommandContext& context, int direction) {
+      const CommandContext& context,
+      playback_video_edit::SceneSuggestionNavigation direction) {
     VideoEditActionResult result{true, false, {}};
     const playback_video_analysis::JobSnapshot analysis =
         sceneAnalysis.snapshot();
-    const auto suggestions =
-        visibleSceneSuggestions(analysis, sceneSuggestionFilter);
-    if (suggestions.empty()) {
+    const auto* suggestion = sceneSuggestionReview.navigate(
+        analysis.suggestions, document.timeline(), context.sourcePositionUs,
+        direction);
+    if (!suggestion) {
       result.message = "No segment suggestions are available";
       return result;
     }
-
-    size_t target = 0;
-    bool selectedRelativeTarget = false;
-    if (selectedSceneSuggestionId) {
-      const auto current = std::find_if(
-          suggestions.begin(), suggestions.end(), [&](const auto* suggestion) {
-            return suggestion->id == *selectedSceneSuggestionId;
-          });
-      if (current != suggestions.end()) {
-        const size_t currentIndex = static_cast<size_t>(
-            std::distance(suggestions.begin(), current));
-        if (direction < 0) {
-          target = currentIndex == 0 ? suggestions.size() - 1
-                                     : currentIndex - 1;
-        } else {
-          target = (currentIndex + 1) % suggestions.size();
-        }
-        selectedRelativeTarget = true;
-      }
-    }
-    if (!selectedRelativeTarget && direction < 0) {
-      target = suggestions.size() - 1;
-      for (size_t index = suggestions.size(); index > 0; --index) {
-        if (suggestions[index - 1]->startUs < context.sourcePositionUs) {
-          target = index - 1;
-          break;
-        }
-      }
-    } else if (!selectedRelativeTarget) {
-      target = 0;
-      for (size_t index = 0; index < suggestions.size(); ++index) {
-        if (suggestions[index]->startUs > context.sourcePositionUs) {
-          target = index;
-          break;
-        }
-      }
-    }
-    const auto& suggestion = *suggestions[target];
-    if (!focusSceneSuggestion(suggestion, context, false)) {
+    if (!focusSceneSuggestion(*suggestion, context, false)) {
       result.message = "Could not preview the segment suggestion";
       return result;
     }
-    result.message = sceneSuggestionDescription(suggestion);
+    result.message = sceneSuggestionDescription(*suggestion);
     return result;
   }
 
@@ -734,12 +603,9 @@ VideoEditActionResult VideoEditWorkspace::execute(
         result.message = "Cancelling segment detection...";
       } else if (analysis.state ==
                  playback_video_analysis::JobState::Succeeded) {
-        impl_->sceneSuggestionsPanelVisible =
-            !impl_->sceneSuggestionsPanelVisible;
-        if (impl_->sceneSuggestionsPanelVisible) {
-          impl_->ensureSelectedSceneSuggestion(analysis);
-        }
-        result.message = impl_->sceneSuggestionsPanelVisible
+        const bool visible = impl_->sceneSuggestionReview.togglePanel(
+            analysis.suggestions, impl_->document.timeline());
+        result.message = visible
                              ? "Suggestions shown"
                              : "Suggestions hidden";
       } else {
@@ -748,102 +614,62 @@ VideoEditActionResult VideoEditWorkspace::execute(
       break;
     }
     case playback_video_edit::Command::CycleSceneSuggestionFilter: {
-      impl_->sceneSuggestionFilter =
-          playback_video_edit::nextSceneSuggestionFilter(
-              impl_->sceneSuggestionFilter);
       const playback_video_analysis::JobSnapshot analysis =
           impl_->sceneAnalysis.snapshot();
-      impl_->ensureSelectedSceneSuggestion(analysis);
-      const auto filtered = impl_->visibleSceneSuggestions(
-          analysis, impl_->sceneSuggestionFilter);
+      const playback_video_edit::SceneSuggestionFilter filter =
+          impl_->sceneSuggestionReview.cycleFilter(
+              analysis.suggestions, impl_->document.timeline());
+      const size_t filteredCount =
+          impl_->sceneSuggestionReview.filteredCount(
+              analysis.suggestions, impl_->document.timeline());
       result.message =
           std::string("Suggestion filter: ") +
-          playback_video_edit::sceneSuggestionFilterLabel(
-              impl_->sceneSuggestionFilter) +
-          " (" + std::to_string(filtered.size()) + ")";
+          playback_video_edit::sceneSuggestionFilterLabel(filter) + " (" +
+          std::to_string(filteredCount) + ")";
       break;
     }
     case playback_video_edit::Command::PreviousSceneSuggestion:
-      result = impl_->navigateSceneSuggestion(context, -1);
+      result = impl_->navigateSceneSuggestion(
+          context, playback_video_edit::SceneSuggestionNavigation::Previous);
       break;
     case playback_video_edit::Command::NextSceneSuggestion:
-      result = impl_->navigateSceneSuggestion(context, 1);
+      result = impl_->navigateSceneSuggestion(
+          context, playback_video_edit::SceneSuggestionNavigation::Next);
       break;
     case playback_video_edit::Command::SelectSceneSuggestion: {
       const playback_video_analysis::JobSnapshot analysis =
           impl_->sceneAnalysis.snapshot();
       const auto* suggestion =
-          impl_->selectedSceneSuggestionId
-              ? impl_->sceneSuggestion(analysis,
-                                       *impl_->selectedSceneSuggestionId)
-              : nullptr;
-      if (!suggestion ||
-          impl_->dismissedSceneSuggestionIds.count(suggestion->id) != 0) {
+          impl_->sceneSuggestionReview.selectedSuggestion(
+              analysis.suggestions, impl_->document.timeline());
+      if (!suggestion) {
         result.message = "Choose a segment suggestion first";
       } else if (!impl_->focusSceneSuggestion(*suggestion, context, true)) {
-        result.message = "Could not select that suggested scene";
+        result.message = "Could not select that suggested segment";
       } else {
         result.message = "Selected " +
                          impl_->sceneSuggestionDescription(*suggestion);
       }
       break;
     }
-    case playback_video_edit::Command::DismissSceneSuggestion:
-      if (impl_->selectedSceneSuggestionId) {
-        const playback_video_analysis::JobSnapshot analysis =
-            impl_->sceneAnalysis.snapshot();
-        const auto before = impl_->visibleSceneSuggestions(
-            analysis, impl_->sceneSuggestionFilter);
-        const auto selected = std::find_if(
-            before.begin(), before.end(), [&](const auto* suggestion) {
-              return suggestion->id == *impl_->selectedSceneSuggestionId;
-            });
-        if (selected == before.end()) {
-          impl_->selectedSceneSuggestionId.reset();
-          result.message = "Choose a segment suggestion first";
-          break;
-        }
-        const size_t selectedIndex =
-            static_cast<size_t>(std::distance(before.begin(), selected));
-        const uint64_t dismissedId = (*selected)->id;
-        if (impl_->dismissedSceneSuggestionIds.insert(dismissedId).second) {
-          impl_->dismissedSceneSuggestionHistory.push_back(dismissedId);
-        }
-        const auto after = impl_->visibleSceneSuggestions(
-            analysis, impl_->sceneSuggestionFilter);
-        impl_->selectedSceneSuggestionId =
-            after.empty()
-                ? std::optional<uint64_t>{}
-                : std::optional<uint64_t>{
-                      after[std::min(selectedIndex, after.size() - 1)]->id};
+    case playback_video_edit::Command::DismissSceneSuggestion: {
+      const playback_video_analysis::JobSnapshot analysis =
+          impl_->sceneAnalysis.snapshot();
+      if (impl_->sceneSuggestionReview.hideSelected(
+              analysis.suggestions, impl_->document.timeline())) {
         result.message = "Suggestion hidden (Undo hide is available)";
       } else {
         result.message = "Choose a segment suggestion first";
       }
       break;
+    }
     case playback_video_edit::Command::UndoDismissSceneSuggestion: {
-      bool restored = false;
-      while (!impl_->dismissedSceneSuggestionHistory.empty()) {
-        const uint64_t id = impl_->dismissedSceneSuggestionHistory.back();
-        impl_->dismissedSceneSuggestionHistory.pop_back();
-        if (impl_->dismissedSceneSuggestionIds.erase(id) == 0) continue;
-        const playback_video_analysis::JobSnapshot analysis =
-            impl_->sceneAnalysis.snapshot();
-        if (const auto* suggestion = impl_->sceneSuggestion(analysis, id)) {
-          const auto kind =
-              playback_video_edit::projectSceneSuggestionKind(
-                  suggestion->kind);
-          if (!playback_video_edit::sceneSuggestionMatchesFilter(
-                  kind, impl_->sceneSuggestionFilter)) {
-            impl_->sceneSuggestionFilter =
-                playback_video_edit::SceneSuggestionFilter::All;
-          }
-        }
-        impl_->selectedSceneSuggestionId = id;
-        impl_->sceneSuggestionsPanelVisible = true;
-        restored = true;
-        break;
-      }
+      const playback_video_analysis::JobSnapshot analysis =
+          impl_->sceneAnalysis.snapshot();
+      const bool restored = impl_->sceneSuggestionReview
+                                .undoHide(analysis.suggestions,
+                                          impl_->document.timeline())
+                                .has_value();
       result.message = restored ? "Hidden suggestion restored"
                                 : "No hidden suggestion to restore";
       break;
@@ -940,17 +766,10 @@ VideoEditActionResult VideoEditWorkspace::execute(
       projectionAccepted = impl_->player.updatePlaybackComposition(
           timeline.keptRanges(), timeline.cutTransitions());
     }
-    if (impl_->selectedSceneSuggestionId) {
-      const playback_video_analysis::JobSnapshot analysis =
-          impl_->sceneAnalysis.snapshot();
-      const auto* selected = impl_->sceneSuggestion(
-          analysis, *impl_->selectedSceneSuggestionId);
-      if (!selected ||
-          !playback_video_edit::sceneSuggestionVisibleOnTimeline(
-              *selected, impl_->document.timeline())) {
-        impl_->selectedSceneSuggestionId.reset();
-      }
-    }
+    const playback_video_analysis::JobSnapshot analysis =
+        impl_->sceneAnalysis.snapshot();
+    impl_->sceneSuggestionReview.reconcile(
+        analysis.suggestions, impl_->document.timeline());
   }
 
   if (!projectionAccepted) {
@@ -973,14 +792,9 @@ VideoEditActionResult VideoEditWorkspace::navigateBack() {
   if (impl_->selection.hasMarks()) {
     return execute(playback_video_edit::Command::ClearInAndOut);
   }
-  if (impl_->sceneSuggestionsPanelVisible) {
-    impl_->sceneSuggestionsPanelVisible = false;
-    impl_->selectedSceneSuggestionId.reset();
+  if (impl_->sceneSuggestionReview.panelVisible()) {
+    impl_->sceneSuggestionReview.closePanel();
     return {true, false, "Suggestions hidden"};
-  }
-  if (impl_->selectedSceneSuggestionId) {
-    impl_->selectedSceneSuggestionId.reset();
-    return {true, false, "Segment suggestion focus cleared"};
   }
   return execute(playback_video_edit::Command::RequestClose);
 }
@@ -1051,19 +865,10 @@ VideoEditPollResult VideoEditWorkspace::poll() {
         state.finished()) {
       switch (state.state) {
         case playback_video_analysis::JobState::Succeeded: {
-          impl_->sceneSuggestionsPanelVisible = true;
-          const auto visible = impl_->visibleSceneSuggestions(
-              state, impl_->sceneSuggestionFilter);
-          if (!visible.empty()) {
-            const CommandContext context = impl_->commandContext();
-            const auto current = std::find_if(
-                visible.begin(), visible.end(), [&](const auto* suggestion) {
-                  return suggestion->startUs <= context.sourcePositionUs &&
-                         suggestion->endUs > context.sourcePositionUs;
-                });
-            impl_->selectedSceneSuggestionId =
-                (current == visible.end() ? visible.front() : *current)->id;
-          }
+          const CommandContext context = impl_->commandContext();
+          impl_->sceneSuggestionReview.showCurrentOrFirst(
+              state.suggestions, impl_->document.timeline(),
+              context.sourcePositionUs);
           std::string message =
               "Segment detection complete: " +
               std::to_string(state.suggestions.size()) + " suggestions";
@@ -1108,10 +913,16 @@ bool VideoEditWorkspace::selectSceneSuggestionAt(int64_t timelineUs,
   const playback_video_edit::EditSnapshot snapshot = impl_->editSnapshot();
   const std::optional<uint64_t> suggestion =
       playback_video_edit::sceneSuggestionAtTimeline(
-          snapshot.sceneSuggestions, timelineUs,
+          snapshot.suggestionReview.suggestions, timelineUs,
           std::max<int64_t>(0, toleranceUs));
-  impl_->selectedSceneSuggestionId = suggestion;
-  return suggestion.has_value();
+  if (!suggestion) {
+    impl_->sceneSuggestionReview.clearSelection();
+    return false;
+  }
+  const playback_video_analysis::JobSnapshot analysis =
+      impl_->sceneAnalysis.snapshot();
+  return impl_->sceneSuggestionReview.select(
+      *suggestion, analysis.suggestions, impl_->document.timeline());
 }
 
 void VideoEditWorkspace::clearCutSelection() {

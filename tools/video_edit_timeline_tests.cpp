@@ -777,11 +777,11 @@ int main() {
   suggestedScene.spans.push_back({2'000'000, 4'000'000});
   suggestedOverlay.sceneAnalysisStatus =
       playback_video_edit::SceneAnalysisStatus::Ready;
-  suggestedOverlay.sceneSuggestionsPanelVisible = true;
-  suggestedOverlay.sceneSuggestionFilteredCount = 1;
-  suggestedOverlay.selectedSceneSuggestionOrdinal = 1;
-  suggestedOverlay.sceneSuggestions.push_back(suggestedScene);
-  suggestedOverlay.selectedSceneSuggestionId = suggestedScene.id;
+  suggestedOverlay.suggestionReview.visible = true;
+  suggestedOverlay.suggestionReview.filteredCount = 1;
+  suggestedOverlay.suggestionReview.selectedOrdinal = 1;
+  suggestedOverlay.suggestionReview.suggestions.push_back(suggestedScene);
+  suggestedOverlay.suggestionReview.selectedId = suggestedScene.id;
   const playback_video_edit::OverlayModel suggestedOverlayModel =
       playback_video_edit::buildOverlayModel(
           suggestedOverlay, nullptr, Prompt::None, 10, 0.5);
@@ -1140,13 +1140,13 @@ int main() {
   suggestionControlState.paused = true;
   suggestionControlState.videoEdit.sceneAnalysisStatus =
       playback_video_edit::SceneAnalysisStatus::Ready;
-  suggestionControlState.videoEdit.sceneSuggestionsPanelVisible = true;
-  suggestionControlState.videoEdit.sceneSuggestionFilter =
+  suggestionControlState.videoEdit.suggestionReview.visible = true;
+  suggestionControlState.videoEdit.suggestionReview.filter =
       playback_video_edit::SceneSuggestionFilter::Cutscenes;
-  suggestionControlState.videoEdit.sceneSuggestionTotalCount = 8;
-  suggestionControlState.videoEdit.sceneSuggestionFilteredCount = 3;
-  suggestionControlState.videoEdit.selectedSceneSuggestionId = 42;
-  suggestionControlState.videoEdit.canUndoSceneSuggestionDismissal = true;
+  suggestionControlState.videoEdit.suggestionReview.totalCount = 8;
+  suggestionControlState.videoEdit.suggestionReview.filteredCount = 3;
+  suggestionControlState.videoEdit.suggestionReview.selectedId = 42;
+  suggestionControlState.videoEdit.suggestionReview.canUndoHide = true;
   const auto suggestionControls = playback_overlay::buildOverlayControlSpecs(
       suggestionControlState, -1);
   const std::vector<playback_overlay::OverlayControlId>
@@ -1732,14 +1732,14 @@ int main() {
                "the context menu must own secondary edit commands");
   cleanEdit.sceneAnalysisStatus =
       playback_video_edit::SceneAnalysisStatus::Ready;
-  cleanEdit.sceneSuggestionsPanelVisible = true;
-  cleanEdit.canUndoSceneSuggestionDismissal = true;
+  cleanEdit.suggestionReview.visible = true;
+  cleanEdit.suggestionReview.canUndoHide = true;
   playback_video_edit::SceneSuggestionSnapshot menuSuggestion;
   menuSuggestion.id = 9;
   menuSuggestion.selected = true;
   menuSuggestion.spans.push_back({0, 1'000'000});
-  cleanEdit.sceneSuggestions = {menuSuggestion};
-  cleanEdit.selectedSceneSuggestionId = menuSuggestion.id;
+  cleanEdit.suggestionReview.suggestions = {menuSuggestion};
+  cleanEdit.suggestionReview.selectedId = menuSuggestion.id;
   playbackMenu.refresh(cleanEdit, idleExport);
   const auto analysedMenu = playbackMenu.snapshotFor(
       playback_session::ContextMenuSurface::Terminal);

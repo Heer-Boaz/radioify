@@ -70,7 +70,7 @@ void ContextMenuController::refresh(
     } else if (edit.sceneAnalysisStatus ==
                playback_video_edit::SceneAnalysisStatus::Ready) {
       next.push_back({playback_video_edit::Command::ToggleSceneSuggestions,
-                      edit.sceneSuggestionsPanelVisible
+                      edit.suggestionReview.visible
                           ? "Hide suggestions"
                           : "Show suggestions"});
       next.push_back({playback_video_edit::Command::StartSceneAnalysis,
@@ -83,14 +83,14 @@ void ContextMenuController::refresh(
                ? "Retry segment detection"
                : "Detect segments..."});
     }
-    if (edit.sceneSuggestionsPanelVisible) {
-      if (edit.selectedSceneSuggestionId) {
+    if (edit.suggestionReview.visible) {
+      if (edit.suggestionReview.selectedId) {
         next.push_back({playback_video_edit::Command::SelectSceneSuggestion,
                         "Select suggested segment"});
         next.push_back({playback_video_edit::Command::DismissSceneSuggestion,
                         "Hide suggestion"});
       }
-      if (edit.canUndoSceneSuggestionDismissal) {
+      if (edit.suggestionReview.canUndoHide) {
         next.push_back(
             {playback_video_edit::Command::UndoDismissSceneSuggestion,
              "Undo hidden suggestion"});

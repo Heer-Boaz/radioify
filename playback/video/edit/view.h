@@ -75,6 +75,18 @@ struct SceneSuggestionSnapshot {
   std::vector<SceneSuggestionSpanSnapshot> spans;
 };
 
+struct SceneSuggestionReviewSnapshot {
+  bool visible = false;
+  SceneSuggestionFilter filter = SceneSuggestionFilter::All;
+  size_t totalCount = 0;
+  size_t filteredCount = 0;
+  // One-based position inside the active filter, for presentation as N / M.
+  std::optional<size_t> selectedOrdinal;
+  bool canUndoHide = false;
+  std::vector<SceneSuggestionSnapshot> suggestions;
+  std::optional<uint64_t> selectedId;
+};
+
 // Immutable value state consumed by both ASCII and framebuffer renderers.
 // All fields carrying "timeline" time use the edited program timeline. Source
 // time is kept explicit and is never used as the seek-bar coordinate system.
@@ -105,15 +117,7 @@ struct EditSnapshot {
   std::string sceneAnalysisPhase;
   std::string sceneAnalysisError;
   bool sceneAnalysisUsedTranscript = false;
-  bool sceneSuggestionsPanelVisible = false;
-  SceneSuggestionFilter sceneSuggestionFilter = SceneSuggestionFilter::All;
-  size_t sceneSuggestionTotalCount = 0;
-  size_t sceneSuggestionFilteredCount = 0;
-  // One-based position inside the active filter, for presentation as N / M.
-  std::optional<size_t> selectedSceneSuggestionOrdinal;
-  bool canUndoSceneSuggestionDismissal = false;
-  std::vector<SceneSuggestionSnapshot> sceneSuggestions;
-  std::optional<uint64_t> selectedSceneSuggestionId;
+  SceneSuggestionReviewSnapshot suggestionReview;
   std::optional<CutTransition> selectedCutTransition;
   std::optional<int64_t> inSourceUs;
   std::optional<int64_t> outSourceUs;

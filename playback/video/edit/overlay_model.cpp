@@ -259,11 +259,11 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
       }
     }
 
-    if (!edit.sceneSuggestions.empty()) {
+    if (!edit.suggestionReview.suggestions.empty()) {
       model.sceneSuggestionCells.assign(
           static_cast<size_t>(width), SceneSuggestionCellKind::None);
       for (const SceneSuggestionSnapshot& suggestion :
-           edit.sceneSuggestions) {
+           edit.suggestionReview.suggestions) {
         const SceneSuggestionCellKind kind = suggestionCellKind(suggestion);
         for (const SceneSuggestionSpanSnapshot& span : suggestion.spans) {
           const int startCell = timelineCell(
@@ -358,18 +358,20 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
                            {"DETECTING", "SCANNING"}, width),
                        width);
     }
-  } else if (edit.active && edit.sceneSuggestionsPanelVisible &&
-             !edit.sceneSuggestions.empty()) {
+  } else if (edit.active && edit.suggestionReview.visible &&
+             !edit.suggestionReview.suggestions.empty()) {
     const auto selected = std::find_if(
-        edit.sceneSuggestions.begin(), edit.sceneSuggestions.end(),
+        edit.suggestionReview.suggestions.begin(),
+        edit.suggestionReview.suggestions.end(),
         [](const SceneSuggestionSnapshot& suggestion) {
           return suggestion.selected;
         });
-    if (selected != edit.sceneSuggestions.end()) {
+    if (selected != edit.suggestionReview.suggestions.end()) {
       const std::string ordinal =
-          edit.selectedSceneSuggestionOrdinal
-              ? std::to_string(*edit.selectedSceneSuggestionOrdinal) + "/" +
-                    std::to_string(edit.sceneSuggestionFilteredCount) + " "
+          edit.suggestionReview.selectedOrdinal
+              ? std::to_string(*edit.suggestionReview.selectedOrdinal) +
+                    "/" +
+                    std::to_string(edit.suggestionReview.filteredCount) + " "
               : std::string{};
       const std::string kind = shortSuggestionLabel(selected->kind);
       const std::string strength =
@@ -388,21 +390,22 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
       }
     } else {
       appendStatusPart(&model.status,
-                       std::to_string(edit.sceneSuggestions.size()) +
+                       std::to_string(
+                           edit.suggestionReview.suggestions.size()) +
                            " SUGGESTIONS",
                        width);
     }
-  } else if (edit.active && edit.sceneSuggestionsPanelVisible &&
+  } else if (edit.active && edit.suggestionReview.visible &&
              edit.sceneAnalysisStatus == SceneAnalysisStatus::Ready) {
     appendStatusPart(
         &model.status,
         std::string("NO ") +
-            sceneSuggestionFilterLabel(edit.sceneSuggestionFilter) +
+            sceneSuggestionFilterLabel(edit.suggestionReview.filter) +
             " SUGGESTIONS",
         width);
   }
 
-  if (edit.active && edit.sceneSuggestionsPanelVisible &&
+  if (edit.active && edit.suggestionReview.visible &&
       edit.sceneAnalysisStatus == SceneAnalysisStatus::Ready) {
     appendStatusPart(&model.status,
                      edit.sceneAnalysisUsedTranscript
