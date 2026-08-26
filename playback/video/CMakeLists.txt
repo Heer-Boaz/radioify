@@ -66,6 +66,7 @@ radioify_add_module_object_library(radioify_transcript_device_policy
 )
 
 radioify_add_module_object_library(radioify_transcript_engine
+  ${CMAKE_CURRENT_SOURCE_DIR}/transcript/generation_job.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/transcript/subtitle_cues.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/transcript/transcriber.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/transcript/whisper_engine.cpp

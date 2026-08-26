@@ -52,7 +52,7 @@
 #include "core/windows_console_window.h"
 #include "core/windows_shell_open.h"
 #include "image_viewer_sequence.h"
-#include "indexed_transcript_task.h"
+#include "playback/video/transcript/generation_job.h"
 #include "m4adecoder.h"
 #include "miniaudio.h"
 #include "optionsbrowser.h"
@@ -1925,7 +1925,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   };
   MelodyExportTaskState melodyExportTask;
   LoopSplitTaskState loopSplitTask;
-  IndexedTranscriptTask indexedTranscriptTask;
+  playback_video_transcript::GenerationJob indexedTranscriptTask;
   uint64_t observedTranscriptResultRevision = 0;
 
   auto mediaBackgroundTaskRunning = [&]() {
@@ -1949,7 +1949,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   };
   auto indexedTranscriptRunningFor =
       [&](const std::filesystem::path& file) {
-        const IndexedTranscriptTaskSnapshot snapshot =
+        const playback_video_transcript::GenerationJobSnapshot snapshot =
             indexedTranscriptTask.snapshot();
         return snapshot.running && samePath(snapshot.sourceFile, file);
       };
@@ -2255,7 +2255,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       hasLoopSplitStatus =
           loopSplitTask.hasResult && !loopSplitTask.status.empty();
     }
-    const IndexedTranscriptTaskSnapshot transcriptSnapshot =
+    const playback_video_transcript::GenerationJobSnapshot transcriptSnapshot =
         indexedTranscriptTask.snapshot();
     const bool hasTranscriptStatus =
         transcriptSnapshot.hasResult && !transcriptSnapshot.status.empty();
@@ -3193,7 +3193,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     cleanupMelodyExportWorker();
     cleanupLoopSplitExportWorker(loopSplitTask);
     indexedTranscriptTask.reapFinished();
-    const IndexedTranscriptTaskSnapshot completedTranscript =
+    const playback_video_transcript::GenerationJobSnapshot
+        completedTranscript =
         indexedTranscriptTask.snapshot();
     if (completedTranscript.hasResult &&
         completedTranscript.resultRevision !=
@@ -3953,7 +3954,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
                            fitLine(" Loop Split: " + loopSplitStatus, width),
                            statusStyle);
         }
-        const IndexedTranscriptTaskSnapshot transcriptSnapshot =
+        const playback_video_transcript::GenerationJobSnapshot
+            transcriptSnapshot =
             indexedTranscriptTask.snapshot();
         if (footerLayout.showTranscriptStatus &&
             transcriptSnapshot.hasResult &&
@@ -4239,7 +4241,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           }
         }
         if (!isRunning) {
-          const IndexedTranscriptTaskSnapshot transcriptSnapshot =
+          const playback_video_transcript::GenerationJobSnapshot
+              transcriptSnapshot =
               indexedTranscriptTask.snapshot();
           if (transcriptSnapshot.running) {
             isRunning = true;

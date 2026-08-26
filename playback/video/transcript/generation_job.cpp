@@ -1,16 +1,18 @@
-#include "indexed_transcript_task.h"
+#include "playback/video/transcript/generation_job.h"
 
 #include <algorithm>
 #include <exception>
 #include <utility>
 
+#include "core/runtime_helpers.h"
 #include "playback/video/transcript/artifact.h"
 #include "playback/video/transcript/transcriber.h"
-#include "runtime_helpers.h"
 
-IndexedTranscriptTask::~IndexedTranscriptTask() { cancelAndJoin(); }
+namespace playback_video_transcript {
 
-void IndexedTranscriptTask::reapFinished() {
+GenerationJob::~GenerationJob() { cancelAndJoin(); }
+
+void GenerationJob::reapFinished() {
   bool shouldJoin = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -19,12 +21,12 @@ void IndexedTranscriptTask::reapFinished() {
   if (shouldJoin) worker_.join();
 }
 
-void IndexedTranscriptTask::cancelAndJoin() {
+void GenerationJob::cancelAndJoin() {
   requestCancel();
   if (worker_.joinable()) worker_.join();
 }
 
-bool IndexedTranscriptTask::requestCancel() {
+bool GenerationJob::requestCancel() {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!state_.running || state_.cancelRequested) return false;
   cancelRequested_.store(true, std::memory_order_relaxed);
@@ -33,20 +35,17 @@ bool IndexedTranscriptTask::requestCancel() {
   return true;
 }
 
-IndexedTranscriptTaskSnapshot IndexedTranscriptTask::snapshot() const {
+GenerationJobSnapshot GenerationJob::snapshot() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return state_;
 }
 
-bool IndexedTranscriptTask::tryStart(const std::filesystem::path& videoPath) {
-  reapFinished();
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (state_.running) return false;
-  }
-
+bool GenerationJob::tryStart(const std::filesystem::path& videoPath) {
   const std::filesystem::path outputPath =
-      playback_video_transcript::transcriptPathForVideo(videoPath);
+      transcriptPathForVideo(videoPath);
+  if (videoPath.empty() || outputPath.empty()) return false;
+
+  reapFinished();
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (state_.running) return false;
@@ -56,7 +55,7 @@ bool IndexedTranscriptTask::tryStart(const std::filesystem::path& videoPath) {
     state_.success = false;
     state_.cancelRequested = false;
     state_.progress = 0.0f;
-    state_.phase = "Starting transcript";
+    state_.phase = "Starting subtitle generation";
     state_.status.clear();
     state_.sourceFile = videoPath;
     state_.outputFile = outputPath;
@@ -66,11 +65,9 @@ bool IndexedTranscriptTask::tryStart(const std::filesystem::path& videoPath) {
         std::string error;
         bool ok = false;
         try {
-          ok = playback_video_transcript::createIndexedTranscript(
-              videoPath, outputPath,
-              playback_video_transcript::TranscriptPublishMode::
-                  ReplaceExisting,
-              [this](const playback_video_transcript::Progress& progress) {
+          ok = createIndexedTranscript(
+              videoPath, outputPath, TranscriptPublishMode::ReplaceExisting,
+              [this](const Progress& progress) {
                 std::lock_guard<std::mutex> progressLock(mutex_);
                 state_.progress =
                     std::max(state_.progress,
@@ -79,9 +76,10 @@ bool IndexedTranscriptTask::tryStart(const std::filesystem::path& videoPath) {
               },
               &cancelRequested_, &error);
         } catch (const std::exception& exception) {
-          error = std::string("Transcript failed: ") + exception.what();
+          error = std::string("Subtitle generation failed: ") +
+                  exception.what();
         } catch (...) {
-          error = "Transcript failed unexpectedly.";
+          error = "Subtitle generation failed unexpectedly.";
         }
 
         std::lock_guard<std::mutex> resultLock(mutex_);
@@ -113,3 +111,5 @@ bool IndexedTranscriptTask::tryStart(const std::filesystem::path& videoPath) {
   }
   return true;
 }
+
+}  // namespace playback_video_transcript
