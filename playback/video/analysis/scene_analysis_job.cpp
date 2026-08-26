@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <exception>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -21,12 +22,16 @@
 namespace playback_video_analysis {
 
 struct SceneAnalysisJob::Impl {
+  explicit Impl(Operation analysisOperation)
+      : operation(std::move(analysisOperation)) {}
+
   mutable std::mutex mutex;
   std::atomic<bool> changed{false};
   std::thread worker;
   std::atomic<bool> cancelled{false};
+  Operation operation;
   JobSnapshot state;
-  uint64_t nextGeneration = 1;
+  std::optional<JobSnapshot> completion;
   std::chrono::steady_clock::time_point lastProgressNotification =
       std::chrono::steady_clock::time_point::min();
 
@@ -57,12 +62,19 @@ struct SceneAnalysisJob::Impl {
     const bool uninitializeCom = SUCCEEDED(comResult);
     AnalysisResult result;
     std::string error;
-    const bool succeeded = analyzeVideoScenes(
-        request.sourcePath, request.videoStreamIndex, request.durationUs,
-        [this](const AnalysisProgress& progress) {
-          updateProgress(progress.fraction, progress.phase);
-        },
-        &cancelled, !request.forceReanalysis, &result, &error);
+    bool succeeded = false;
+    try {
+      succeeded = operation(
+          request,
+          [this](const AnalysisProgress& progress) {
+            updateProgress(progress.fraction, progress.phase);
+          },
+          &cancelled, &result, &error);
+    } catch (const std::exception& exception) {
+      error = std::string("Segment detection failed: ") + exception.what();
+    } catch (...) {
+      error = "Segment detection failed unexpectedly.";
+    }
     if (uninitializeCom) CoUninitialize();
 
     {
@@ -84,12 +96,14 @@ struct SceneAnalysisJob::Impl {
         state.error = error.empty() ? "Segment detection failed unexpectedly."
                                     : std::move(error);
       }
+      completion = state;
     }
     changed.store(true, std::memory_order_release);
   }
 };
 
-SceneAnalysisJob::SceneAnalysisJob() : impl_(std::make_unique<Impl>()) {}
+SceneAnalysisJob::SceneAnalysisJob(Operation operation)
+    : impl_(std::make_unique<Impl>(std::move(operation))) {}
 
 SceneAnalysisJob::~SceneAnalysisJob() { stop(); }
 
@@ -100,7 +114,10 @@ bool SceneAnalysisJob::start(JobRequest request) {
   std::thread previous;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (impl_->state.state == JobState::Running) return false;
+    if (!impl_->operation || impl_->state.state == JobState::Running ||
+        impl_->completion) {
+      return false;
+    }
     if (impl_->worker.joinable()) previous = std::move(impl_->worker);
   }
   if (previous.joinable()) previous.join();
@@ -109,7 +126,6 @@ bool SceneAnalysisJob::start(JobRequest request) {
     impl_->cancelled.store(false, std::memory_order_relaxed);
     impl_->state = JobSnapshot{};
     impl_->state.state = JobState::Running;
-    impl_->state.generation = impl_->nextGeneration++;
     impl_->state.phase = "Starting segment detection";
     impl_->lastProgressNotification =
         std::chrono::steady_clock::time_point::min();
@@ -122,6 +138,7 @@ bool SceneAnalysisJob::start(JobRequest request) {
       impl_->state.state = JobState::Failed;
       impl_->state.phase = "Segment detection failed";
       impl_->state.error = "Could not start the segment-detection worker.";
+      impl_->completion = impl_->state;
       impl_->changed.store(true, std::memory_order_release);
       return false;
     }
@@ -130,8 +147,15 @@ bool SceneAnalysisJob::start(JobRequest request) {
   return true;
 }
 
-void SceneAnalysisJob::cancel() {
-  if (impl_) impl_->cancelled.store(true, std::memory_order_relaxed);
+bool SceneAnalysisJob::cancel() {
+  if (!impl_) return false;
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  if (impl_->state.state != JobState::Running ||
+      impl_->cancelled.exchange(true, std::memory_order_relaxed)) {
+    return false;
+  }
+  impl_->changed.store(true, std::memory_order_release);
+  return true;
 }
 
 void SceneAnalysisJob::stop() {
@@ -152,6 +176,23 @@ JobSnapshot SceneAnalysisJob::snapshot() const {
   if (!impl_) return {};
   std::lock_guard<std::mutex> lock(impl_->mutex);
   return impl_->state;
+}
+
+std::optional<JobSnapshot> SceneAnalysisJob::takeCompletion() {
+  if (!impl_) return std::nullopt;
+  std::optional<JobSnapshot> completion;
+  std::thread finishedWorker;
+  {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (!impl_->completion) return std::nullopt;
+    completion = std::move(impl_->completion);
+    impl_->completion.reset();
+    if (impl_->state.state != JobState::Running && impl_->worker.joinable()) {
+      finishedWorker = std::move(impl_->worker);
+    }
+  }
+  if (finishedWorker.joinable()) finishedWorker.join();
+  return completion;
 }
 
 bool SceneAnalysisJob::consumeChanged() {

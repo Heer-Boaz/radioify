@@ -60,9 +60,6 @@ struct VideoEditWorkspace::Impl {
   playback_video_edit::ExportState observedExportState =
       playback_video_edit::ExportState::Idle;
   playback_video_analysis::SceneAnalysisJob sceneAnalysis;
-  playback_video_analysis::JobState observedSceneAnalysisState =
-      playback_video_analysis::JobState::Idle;
-  uint64_t observedSceneAnalysisGeneration = 0;
   playback_video_edit::SceneSuggestionReview sceneSuggestionReview;
 
   CommandContext commandContext() const {
@@ -209,11 +206,8 @@ struct VideoEditWorkspace::Impl {
     request.forceReanalysis =
         sceneAnalysis.snapshot().state ==
         playback_video_analysis::JobState::Succeeded;
-    sceneSuggestionReview.beginAnalysis();
     if (sceneAnalysis.start(std::move(request))) {
-      observedSceneAnalysisState =
-          playback_video_analysis::JobState::Running;
-      observedSceneAnalysisGeneration = sceneAnalysis.snapshot().generation;
+      sceneSuggestionReview.beginAnalysis();
       const bool usesTranscript =
           !playback_video_transcript::activeTranscriptPathForVideo(sourcePath)
                .empty();
@@ -852,41 +846,35 @@ VideoEditPollResult VideoEditWorkspace::poll() {
 
   if (impl_->sceneAnalysis.consumeChanged()) {
     result.changed = true;
-    const playback_video_analysis::JobState previous =
-        impl_->observedSceneAnalysisState;
-    const playback_video_analysis::JobSnapshot state =
-        impl_->sceneAnalysis.snapshot();
-    const bool sameGeneration =
-        state.generation == impl_->observedSceneAnalysisGeneration;
-    impl_->observedSceneAnalysisState = state.state;
-    impl_->observedSceneAnalysisGeneration = state.generation;
-    if (sameGeneration &&
-        previous == playback_video_analysis::JobState::Running &&
-        state.finished()) {
-      switch (state.state) {
-        case playback_video_analysis::JobState::Succeeded: {
-          const CommandContext context = impl_->commandContext();
-          impl_->sceneSuggestionReview.showCurrentOrFirst(
-              state.suggestions, impl_->document.timeline(),
-              context.sourcePositionUs);
-          std::string message =
-              "Segment detection complete: " +
-              std::to_string(state.suggestions.size()) + " suggestions";
-          if (state.usedIndexedTranscript) {
-            message += " using generated subtitles";
-          }
-          appendMessage(message);
-          break;
+  }
+  if (const auto completedAnalysis =
+          impl_->sceneAnalysis.takeCompletion()) {
+    result.changed = true;
+    switch (completedAnalysis->state) {
+      case playback_video_analysis::JobState::Succeeded: {
+        const CommandContext context = impl_->commandContext();
+        impl_->sceneSuggestionReview.showCurrentOrFirst(
+            completedAnalysis->suggestions, impl_->document.timeline(),
+            context.sourcePositionUs);
+        std::string message =
+            "Segment detection complete: " +
+            std::to_string(completedAnalysis->suggestions.size()) +
+            " suggestions";
+        if (completedAnalysis->usedIndexedTranscript) {
+          message += " using generated subtitles";
         }
-        case playback_video_analysis::JobState::Failed:
-          appendMessage("Segment detection failed: " + state.error);
-          break;
-        case playback_video_analysis::JobState::Cancelled:
-          appendMessage("Segment detection cancelled");
-          break;
-        default:
-          break;
+        appendMessage(message);
+        break;
       }
+      case playback_video_analysis::JobState::Failed:
+        appendMessage("Segment detection failed: " +
+                      completedAnalysis->error);
+        break;
+      case playback_video_analysis::JobState::Cancelled:
+        appendMessage("Segment detection cancelled");
+        break;
+      default:
+        break;
     }
   }
   return result;
@@ -932,8 +920,6 @@ void VideoEditWorkspace::clearCutSelection() {
 void VideoEditWorkspace::stop() {
   if (!impl_) return;
   impl_->sceneAnalysis.stop();
-  impl_->observedSceneAnalysisState =
-      impl_->sceneAnalysis.snapshot().state;
   impl_->exporter.stop();
   impl_->observedExportState = impl_->exporter.snapshot().state;
 }
