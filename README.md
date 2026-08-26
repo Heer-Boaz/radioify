@@ -188,10 +188,11 @@ browser Back follows browser history. Escape stops the active video and returns
 to the browser.
 
 - Mouse: select; click to play/open
-- Right-click a video in the browser and choose `Create indexed transcript` to
-  generate a local `video.transcript.srt` sidecar. Its numbered, timestamped
-  cues are discovered as subtitles the next time the video is opened. Existing
-  sidecars are preserved; another run uses `video.transcript.2.srt`, and so on.
+- Right-click a video in the browser or the active video and choose
+  `Create indexed transcript` to generate a local `video.transcript.srt`
+  sidecar. Its numbered, timestamped cues are discovered as subtitles the next
+  time that exact video is opened. Existing sidecars are preserved; another run
+  uses `video.transcript.2.srt`, and so on.
 - Enter: open folder / play file
 - Backspace: up
 - Arrows: move selection

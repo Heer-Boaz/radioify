@@ -80,6 +80,8 @@ struct PlaybackSession::Impl {
         hasSubtitles,
         std::move(request.requestTransportCommand),
         std::move(request.requestOpenFiles),
+        std::move(request.mediaBackgroundTaskRunning),
+        std::move(request.requestIndexedTranscript),
         std::move(request.activateBrowserSurface),
         std::move(request.continuityState),
         request.sessionIntent});

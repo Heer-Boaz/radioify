@@ -1472,20 +1472,25 @@ int main() {
       playback_session::ContextMenuSurface::Terminal);
   const auto windowMenu = playbackMenu.snapshotFor(
       playback_session::ContextMenuSurface::VideoWindow);
-  ok &= expect(terminalMenu.visible && terminalMenu.items.size() == 1 &&
+  ok &= expect(terminalMenu.visible && terminalMenu.items.size() == 2 &&
                    terminalMenu.items[0].label == "Edit video" &&
+                   terminalMenu.items[1].label ==
+                       "Create indexed transcript" &&
                    !windowMenu.visible,
-               "a playback context menu must belong to exactly one presentation surface");
+               "a playback context menu must share source actions while "
+               "belonging to exactly one presentation surface");
   cleanEdit.hasEdits = true;
   playbackMenu.refresh(cleanEdit, idleExport);
   const auto retainedMenu = playbackMenu.snapshotFor(
       playback_session::ContextMenuSurface::Terminal);
-  ok &= expect(retainedMenu.items.size() == 3 &&
+  ok &= expect(retainedMenu.items.size() == 4 &&
                    retainedMenu.items[0].label == "Resume editing" &&
-                   retainedMenu.items[1].label == "Export edited copy" &&
-                   retainedMenu.items[2].label == "Discard changes",
+                   retainedMenu.items[1].label ==
+                       "Create indexed transcript" &&
+                   retainedMenu.items[2].label == "Export edited copy" &&
+                   retainedMenu.items[3].label == "Discard changes",
                "an exported edit revision must remain resumable, exportable, "
-               "and discardable");
+               "transcribable, and discardable");
   cleanEdit.active = true;
   cleanEdit.hasUnexportedChanges = true;
   cleanEdit.inTimelineUs = 1'000'000;
@@ -1567,10 +1572,19 @@ int main() {
           ? std::optional<playback_overlay::ContextMenuItemToken>(
                 exportItem->token)
           : std::nullopt;
+  const auto isEditCommand = [](const auto& command,
+                                playback_video_edit::Command expected) {
+    if (!command) return false;
+    const auto* edit =
+        std::get_if<playback_video_edit::Command>(&*command);
+    return edit && *edit == expected;
+  };
   if (doneItem != dirtyMenu.items.end()) {
-    ok &= expect(playbackMenu.select(doneItem->token) &&
-                     playbackMenu.activateSelection() ==
-                         playback_video_edit::Command::Finish &&
+    const bool selectedDone = playbackMenu.select(doneItem->token);
+    const auto activatedDone = playbackMenu.activateSelection();
+    ok &= expect(selectedDone &&
+                     isEditCommand(activatedDone,
+                                   playback_video_edit::Command::Finish) &&
                      !playbackMenu.visible(),
                  "the context Done action must finish without entering the "
                  "Escape confirmation path or starting an implicit export");
@@ -1580,9 +1594,12 @@ int main() {
                    0.75),
                "the context menu must reopen after executing a command");
   if (discardItem != dirtyMenu.items.end()) {
-    ok &= expect(playbackMenu.select(discardItem->token) &&
-                     playbackMenu.activateSelection() ==
-                         playback_video_edit::Command::RequestDiscard,
+    const bool selectedDiscard = playbackMenu.select(discardItem->token);
+    const auto activatedDiscard = playbackMenu.activateSelection();
+    ok &= expect(
+        selectedDiscard &&
+            isEditCommand(activatedDiscard,
+                          playback_video_edit::Command::RequestDiscard),
                  "context discard must still request confirmation");
   }
 

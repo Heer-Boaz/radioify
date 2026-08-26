@@ -7,14 +7,23 @@ namespace playback_session {
 namespace {
 
 constexpr playback_overlay::ContextMenuItemToken itemToken(
-    playback_video_edit::Command command) {
-  return static_cast<playback_overlay::ContextMenuItemToken>(command);
+    const ContextMenuCommand& command) {
+  constexpr playback_overlay::ContextMenuItemToken kMediaActionTag = 0x10000;
+  constexpr playback_overlay::ContextMenuItemToken kEditCommandTag = 0x20000;
+  if (const auto* media =
+          std::get_if<playback_media_actions::Action>(&command)) {
+    return kMediaActionTag |
+           static_cast<playback_overlay::ContextMenuItemToken>(*media);
+  }
+  return kEditCommandTag |
+         static_cast<playback_overlay::ContextMenuItemToken>(
+             std::get<playback_video_edit::Command>(command));
 }
 
 }  // namespace
 
 std::optional<size_t> ContextMenuController::itemIndex(
-    playback_video_edit::Command command) const {
+    const ContextMenuCommand& command) const {
   for (size_t index = 0; index < items_.size(); ++index) {
     if (items_[index].command == command) return index;
   }
@@ -31,15 +40,24 @@ std::optional<size_t> ContextMenuController::itemIndex(
 
 void ContextMenuController::refresh(
     const playback_video_edit::EditSnapshot& edit,
-    const playback_video_edit::ExportProgress& editExport) {
-  std::optional<playback_video_edit::Command> selectedCommand;
+    const playback_video_edit::ExportProgress& editExport,
+    bool backgroundTaskRunning) {
+  std::optional<ContextMenuCommand> selectedCommand;
   if (selected_ < items_.size()) selectedCommand = items_[selected_].command;
 
   std::vector<Item> next;
-  if (!edit.active) {
-    next.push_back({playback_video_edit::Command::Open,
-                    edit.hasEdits ? "Resume editing" : "Edit video"});
-  } else {
+  playback_media_actions::Context sourceContext;
+  sourceContext.mediaKind = playback_media_actions::MediaKind::Video;
+  sourceContext.currentPlayback = true;
+  sourceContext.editorActive = edit.active;
+  sourceContext.hasEdits = edit.hasEdits;
+  sourceContext.backgroundTaskRunning = backgroundTaskRunning;
+  for (playback_media_actions::Item& item :
+       playback_media_actions::build(sourceContext)) {
+    next.push_back({item.action, std::move(item.label)});
+  }
+
+  if (edit.active) {
     if (edit.inTimelineUs) {
       next.push_back(
           {playback_video_edit::Command::ClearIn, "Clear selection start"});
@@ -143,15 +161,14 @@ bool ContextMenuController::select(
   return true;
 }
 
-std::optional<playback_video_edit::Command>
-ContextMenuController::activateSelection() {
+std::optional<ContextMenuCommand> ContextMenuController::activateSelection() {
   if (!visible_ || selected_ >= items_.size()) return std::nullopt;
   const auto command = items_[selected_].command;
   visible_ = false;
   return command;
 }
 
-std::optional<playback_video_edit::Command> ContextMenuController::activate(
+std::optional<ContextMenuCommand> ContextMenuController::activate(
     playback_overlay::ContextMenuItemToken token) {
   const auto index = itemIndex(token);
   if (!visible_ || !index) return std::nullopt;

@@ -51,7 +51,6 @@
 #include "core/windows_message_pump.h"
 #include "core/windows_console_window.h"
 #include "core/windows_shell_open.h"
-#include "file_context_menu_model.h"
 #include "image_viewer_sequence.h"
 #include "indexed_transcript_task.h"
 #include "m4adecoder.h"
@@ -66,6 +65,7 @@
 #include "playback/control/command.h"
 #include "playback/control/transport.h"
 #include "playback/input/shortcuts.h"
+#include "playback/media_action_catalog.h"
 #include "playback/media/track_catalog.h"
 #include "playback/notification_area/controls.h"
 #include "playback/overlay/overlay.h"
@@ -948,6 +948,9 @@ class TuiMediaCoordinator {
     std::function<void(std::string)> setCommandError;
     std::function<void()> requestQuit;
     std::function<void()> presentationFinished;
+    std::function<bool()> mediaBackgroundTaskRunning;
+    std::function<bool(const std::filesystem::path&)>
+        requestIndexedTranscript;
     std::function<void()> activateBrowserSurface;
   };
 
@@ -1338,6 +1341,8 @@ class TuiMediaCoordinator {
         route.sessionIntent,
         std::move(requestTransport),
         std::move(requestDroppedFiles),
+        services_.mediaBackgroundTaskRunning,
+        services_.requestIndexedTranscript,
         services_.activateBrowserSurface};
     PlaybackSession::Dependencies sessionDependencies{
         services_.input,
@@ -1890,6 +1895,41 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   BrowserPlaybackRevealer browserPlaybackRevealer(
       browserNavigator, std::move(browserPlaybackCallbacks));
 
+  struct MelodyExportTaskState {
+    std::mutex mutex;
+    std::thread worker;
+    bool running = false;
+    bool hasResult = false;
+    bool success = false;
+    float progress = 0.0f;
+    std::string status;
+    std::filesystem::path sourceFile;
+    std::filesystem::path outputFile;
+  };
+  MelodyExportTaskState melodyExportTask;
+  LoopSplitTaskState loopSplitTask;
+  IndexedTranscriptTask indexedTranscriptTask;
+
+  auto mediaBackgroundTaskRunning = [&]() {
+    bool running = false;
+    {
+      std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
+      running = running || melodyExportTask.running;
+    }
+    {
+      std::lock_guard<std::mutex> lock(loopSplitTask.mutex);
+      running = running || loopSplitTask.running;
+    }
+    running = running || indexedTranscriptTask.snapshot().running;
+    return running;
+  };
+  auto requestIndexedTranscript = [&](const std::filesystem::path& file) {
+    if (!isVideoExt(file) || mediaBackgroundTaskRunning()) return false;
+    if (!indexedTranscriptTask.tryStart(file)) return false;
+    markDirty(UiDirtyFlags::Async);
+    return true;
+  };
+
   std::string mediaCommandError;
   auto openBrowserDirectory = [&](const std::filesystem::path& dir) {
     return browserNavigator.navigate(browserDirectoryLocation(dir));
@@ -1908,6 +1948,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
          markDirty(UiDirtyFlags::Async);
        },
        [&]() { running = false; }, [&]() { markDirty(); },
+       mediaBackgroundTaskRunning, requestIndexedTranscript,
        [&]() {
          if (windowTuiEnabled && tuiWindow.IsOpen()) {
            tuiWindow.Activate();
@@ -1976,7 +2017,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   struct FileContextMenuState {
     bool active = false;
     std::optional<BrowserEntry> entry;
-    std::vector<FileContextMenuItem> items;
+    std::vector<playback_media_actions::Item> items;
     int selected = 0;
     int anchorX = -1;
     int anchorY = -1;
@@ -1990,18 +2031,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     int listY = 0;
     int rows = 0;
     bool valid = false;
-  };
-
-  struct MelodyExportTaskState {
-    std::mutex mutex;
-    std::thread worker;
-    bool running = false;
-    bool hasResult = false;
-    bool success = false;
-    float progress = 0.0f;
-    std::string status;
-    std::filesystem::path sourceFile;
-    std::filesystem::path outputFile;
   };
 
   struct PaletteLayout {
@@ -2018,9 +2047,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
 
   FileContextMenuState fileContextMenu;
   FileContextMenuLayout fileContextLayout;
-  MelodyExportTaskState melodyExportTask;
-  LoopSplitTaskState loopSplitTask;
-  IndexedTranscriptTask indexedTranscriptTask;
 
   struct ActionRenderItem {
     ActionStripItem id;
@@ -2261,20 +2287,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     layoutDirty = false;
   };
 
-  auto isBackgroundTaskRunning = [&]() {
-    bool running = false;
-    {
-      std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
-      running = running || melodyExportTask.running;
-    }
-    {
-      std::lock_guard<std::mutex> lock(loopSplitTask.mutex);
-      running = running || loopSplitTask.running;
-    }
-    running = running || indexedTranscriptTask.snapshot().running;
-    return running;
-  };
-
   InputCallbacks callbacks;
   callbacks.onQuit = [&]() { mediaCoordinator.requestQuit(); };
   callbacks.onActivateEntry = [&](const BrowserEntry& entry) {
@@ -2298,17 +2310,21 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     if (!o.play || !entry.isMedia()) {
       return;
     }
-    FileContextMenuCapabilities capabilities;
-    capabilities.video = isVideoExt(entry.path);
-    capabilities.audio =
-        !capabilities.video && isSupportedAudioExt(entry.path);
-    capabilities.canBrowseTracks =
-        capabilities.audio && supportsPlaybackTrackCatalog(entry.path);
-    capabilities.canAnalyze =
-        capabilities.audio && audioCanAnalyzeFileToMelodyFile(entry.path);
-    capabilities.backgroundTaskRunning = isBackgroundTaskRunning();
-    std::vector<FileContextMenuItem> items =
-        buildFileContextMenuItems(capabilities);
+    playback_media_actions::Context context;
+    if (isVideoExt(entry.path)) {
+      context.mediaKind = playback_media_actions::MediaKind::Video;
+    } else if (isSupportedAudioExt(entry.path)) {
+      context.mediaKind = playback_media_actions::MediaKind::Audio;
+    }
+    const bool audio =
+        context.mediaKind == playback_media_actions::MediaKind::Audio;
+    context.canBrowseTracks =
+        audio && supportsPlaybackTrackCatalog(entry.path);
+    context.canAnalyzeAudio =
+        audio && audioCanAnalyzeFileToMelodyFile(entry.path);
+    context.backgroundTaskRunning = mediaBackgroundTaskRunning();
+    std::vector<playback_media_actions::Item> items =
+        playback_media_actions::build(context);
     if (items.empty()) return;
     fileContextMenu.active = true;
     fileContextMenu.entry = entry;
@@ -2823,7 +2839,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     if (!entry.isMedia() || !isSupportedAudioExt(entry.path)) {
       return;
     }
-    if (isBackgroundTaskRunning()) {
+    if (mediaBackgroundTaskRunning()) {
       return;
     }
 
@@ -2908,20 +2924,20 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       return;
     }
     const BrowserEntry entry = *fileContextMenu.entry;
-    const FileContextAction action =
+    const playback_media_actions::Action action =
         fileContextMenu.items[static_cast<size_t>(actionIndex)].action;
     fileContextMenu.active = false;
     fileContextMenu.entry.reset();
     fileContextMenu.items.clear();
     dirty = true;
-    if (action == FileContextAction::Play) {
+    if (action == playback_media_actions::Action::Play) {
       if (playBrowserEntry(entry)) {
         markDirty(UiDirtyFlags::Async);
       }
-    } else if (action == FileContextAction::BrowseTracks) {
+    } else if (action == playback_media_actions::Action::BrowseTracks) {
       browserNavigator.navigate(
           browserTrackLocation(normalizeTrackBrowserPath(entry.path)));
-    } else if (action == FileContextAction::EditVideo) {
+    } else if (action == playback_media_actions::Action::EditVideo) {
       playback_route::Route route =
           playback_route::resolveTarget(playbackFileTarget(entry.path));
       route.sessionIntent = PlaybackSessionIntent::EditVideo;
@@ -2930,18 +2946,14 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
                         playback_queue::singleSource(target))) {
         markDirty(UiDirtyFlags::Async);
       }
-    } else if (action == FileContextAction::CreateIndexedTranscript) {
-      if (entry.isMedia() && isVideoExt(entry.path) &&
-          !isBackgroundTaskRunning()) {
-        if (indexedTranscriptTask.tryStart(entry.path)) {
-          markDirty(UiDirtyFlags::Async);
-        }
-      }
-    } else if (action == FileContextAction::Analyze) {
+    } else if (action ==
+               playback_media_actions::Action::CreateIndexedTranscript) {
+      requestIndexedTranscript(entry.path);
+    } else if (action == playback_media_actions::Action::AnalyzeAudio) {
       startMelodyExport(entry);
-    } else if (action == FileContextAction::SplitLoop) {
+    } else if (action == playback_media_actions::Action::SplitLoop) {
       if (entry.isMedia() && isSupportedAudioExt(entry.path) &&
-          !isBackgroundTaskRunning()) {
+          !mediaBackgroundTaskRunning()) {
         LoopSplitConfig splitConfig;
         splitConfig.channels = 2;
         splitConfig.sampleRate = 48000;
@@ -3619,7 +3631,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       if (audioPictureInPicture.isOpen()) {
         reduceTimeout(std::chrono::milliseconds(100));
       }
-      if (isBackgroundTaskRunning()) {
+      if (mediaBackgroundTaskRunning()) {
         reduceTimeout(std::chrono::milliseconds(100));
       }
       if (mediaCoordinator.videoActive()) {

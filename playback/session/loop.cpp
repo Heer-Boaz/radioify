@@ -105,6 +105,8 @@ struct PlaybackLoopRunner::Impl {
   const std::filesystem::path file;
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
+  std::function<bool()> mediaBackgroundTaskRunning;
+  std::function<bool(const std::filesystem::path&)> requestIndexedTranscript;
   std::function<void()> activateBrowserSurface;
   const PlaybackSessionIntent sessionIntent;
   PlaybackSessionContinuationState capturedContinuationState;
@@ -174,6 +176,8 @@ struct PlaybackLoopRunner::Impl {
         file(std::move(args.file)),
         requestTransportCommand(std::move(args.requestTransportCommand)),
         requestOpenFiles(std::move(args.requestOpenFiles)),
+        mediaBackgroundTaskRunning(std::move(args.mediaBackgroundTaskRunning)),
+        requestIndexedTranscript(std::move(args.requestIndexedTranscript)),
         activateBrowserSurface(std::move(args.activateBrowserSurface)),
         sessionIntent(args.sessionIntent),
         enableAudio(args.enableAudio),
@@ -414,8 +418,11 @@ struct PlaybackLoopRunner::Impl {
   }
 
   void syncVideoEditPresentation(bool requestPresent = true) {
+    const bool backgroundTaskRunning =
+        mediaBackgroundTaskRunning && mediaBackgroundTaskRunning();
     contextMenuController.refresh(videoEditWorkspace.edit(),
-                                  videoEditWorkspace.exportProgress());
+                                  videoEditWorkspace.exportProgress(),
+                                  backgroundTaskRunning);
     if (videoEditPrompt() != playback_video_edit::Prompt::None) {
       contextMenuController.dismiss();
       timelinePreviewModel.hide(
@@ -516,6 +523,37 @@ struct PlaybackLoopRunner::Impl {
     return result.handled;
   }
 
+  bool executeMediaAction(playback_media_actions::Action action) {
+    switch (action) {
+      case playback_media_actions::Action::EditVideo:
+        return executeVideoEditCommand(playback_video_edit::Command::Open);
+      case playback_media_actions::Action::CreateIndexedTranscript: {
+        const bool started =
+            requestIndexedTranscript && requestIndexedTranscript(file);
+        syncVideoEditPresentation();
+        showEditMessage(started ? "Indexed transcript started"
+                                : "Could not start indexed transcript");
+        return true;
+      }
+      case playback_media_actions::Action::Play:
+      case playback_media_actions::Action::BrowseTracks:
+      case playback_media_actions::Action::AnalyzeAudio:
+      case playback_media_actions::Action::SplitLoop:
+        return false;
+    }
+    return false;
+  }
+
+  bool executeContextMenuCommand(
+      const playback_session::ContextMenuCommand& command) {
+    if (const auto* media =
+            std::get_if<playback_media_actions::Action>(&command)) {
+      return executeMediaAction(*media);
+    }
+    return executeVideoEditCommand(
+        std::get<playback_video_edit::Command>(command));
+  }
+
   bool waitForVideoEditExportAndExit() {
     if (!pendingExit) return false;
     const playback_video_edit::ExitExportAction action =
@@ -536,7 +574,7 @@ struct PlaybackLoopRunner::Impl {
   bool handleContextMenuInput(
       const playback_session::ContextMenuInput& request) {
     bool handled = false;
-    std::optional<playback_video_edit::Command> activatedCommand;
+    std::optional<playback_session::ContextMenuCommand> activatedCommand;
     using InputKind = playback_session::ContextMenuInputKind;
     switch (request.kind) {
       case InputKind::Open: {
@@ -550,8 +588,8 @@ struct PlaybackLoopRunner::Impl {
           } else {
             videoEditWorkspace.clearCutSelection();
           }
-          syncVideoEditPresentation(false);
         }
+        syncVideoEditPresentation(false);
         const int width =
             request.surface == playback_session::ContextMenuSurface::Terminal
                 ? screen.width()
@@ -606,7 +644,7 @@ struct PlaybackLoopRunner::Impl {
         break;
     }
     if (activatedCommand) {
-      executeVideoEditCommand(*activatedCommand);
+      executeContextMenuCommand(*activatedCommand);
     }
     if (handled) {
       redraw = true;

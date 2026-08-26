@@ -580,6 +580,7 @@ target_sources(video_edit_timeline_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/overlay/context_menu.cpp
   ${CMAKE_SOURCE_DIR}/playback/overlay/interaction.cpp
   ${CMAKE_SOURCE_DIR}/playback/session/context_menu_controller.cpp
+  ${CMAKE_SOURCE_DIR}/playback/media_action_catalog.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/composition/render_plan.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/frame_step_prefetch_mapping.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/sequence.cpp
@@ -763,6 +764,15 @@ target_sources(indexed_transcript_tests PRIVATE
 radioify_link_repo_target(indexed_transcript_tests)
 add_test(NAME indexed_transcript_tests
          COMMAND $<TARGET_FILE:indexed_transcript_tests>)
+
+add_executable(media_action_catalog_tests)
+target_sources(media_action_catalog_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_media_action_catalog_tests>
+  ${CMAKE_SOURCE_DIR}/playback/media_action_catalog.cpp
+)
+radioify_link_repo_target(media_action_catalog_tests)
+add_test(NAME media_action_catalog_tests
+         COMMAND $<TARGET_FILE:media_action_catalog_tests>)
 
 add_executable(whisper_gpu_contract_tests)
 target_sources(whisper_gpu_contract_tests PRIVATE

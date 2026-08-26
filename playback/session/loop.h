@@ -48,6 +48,9 @@ class PlaybackLoopRunner {
     std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
     std::function<bool(const std::vector<std::filesystem::path>&)>
         requestOpenFiles;
+    std::function<bool()> mediaBackgroundTaskRunning;
+    std::function<bool(const std::filesystem::path&)>
+        requestIndexedTranscript;
     std::function<void()> activateBrowserSurface;
     PlaybackSessionContinuationState continuityState;
     PlaybackSessionIntent sessionIntent = PlaybackSessionIntent::View;

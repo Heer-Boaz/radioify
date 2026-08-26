@@ -4,13 +4,18 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
+#include "playback/media_action_catalog.h"
 #include "playback/overlay/context_menu.h"
 #include "playback/video/edit/command.h"
 #include "playback/video/edit/view.h"
 
 namespace playback_session {
+
+using ContextMenuCommand =
+    std::variant<playback_media_actions::Action, playback_video_edit::Command>;
 
 enum class ContextMenuSurface : uint8_t {
   Terminal,
@@ -45,24 +50,25 @@ class ContextMenuController {
  public:
   bool visible() const { return visible_; }
   void refresh(const playback_video_edit::EditSnapshot& edit,
-               const playback_video_edit::ExportProgress& editExport);
+               const playback_video_edit::ExportProgress& editExport,
+               bool backgroundTaskRunning = false);
   bool open(ContextMenuSurface surface, double xRatio, double yRatio);
   bool dismiss();
   bool moveSelection(int delta);
   bool select(playback_overlay::ContextMenuItemToken token);
-  std::optional<playback_video_edit::Command> activateSelection();
-  std::optional<playback_video_edit::Command> activate(
+  std::optional<ContextMenuCommand> activateSelection();
+  std::optional<ContextMenuCommand> activate(
       playback_overlay::ContextMenuItemToken token);
   playback_overlay::ContextMenuSnapshot snapshotFor(
       ContextMenuSurface surface) const;
 
  private:
   struct Item {
-    playback_video_edit::Command command = playback_video_edit::Command::Open;
+    ContextMenuCommand command = playback_media_actions::Action::Play;
     std::string label;
   };
 
-  std::optional<size_t> itemIndex(playback_video_edit::Command command) const;
+  std::optional<size_t> itemIndex(const ContextMenuCommand& command) const;
   std::optional<size_t> itemIndex(
       playback_overlay::ContextMenuItemToken token) const;
 
