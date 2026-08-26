@@ -346,6 +346,7 @@ target_sources(radioify PRIVATE
   $<TARGET_OBJECTS:radioify_transcript_cue_semantics>
   $<TARGET_OBJECTS:radioify_transcript_device_policy>
   $<TARGET_OBJECTS:radioify_transcript_engine>
+  $<TARGET_OBJECTS:radioify_scene_analysis>
   $<TARGET_OBJECTS:radioify_image_codec>
   $<TARGET_OBJECTS:radioify_video>
   $<TARGET_OBJECTS:radioify_audio>
@@ -797,6 +798,30 @@ target_sources(indexed_transcript_smoke PRIVATE
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
 )
 radioify_link_repo_target(indexed_transcript_smoke)
+
+add_executable(scene_analysis_tests)
+target_sources(scene_analysis_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_scene_analysis_tests>
+  $<TARGET_OBJECTS:radioify_transcript_cue_semantics>
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/scene_analysis.cpp
+)
+radioify_link_repo_target(scene_analysis_tests)
+add_test(NAME scene_analysis_tests
+         COMMAND $<TARGET_FILE:scene_analysis_tests>)
+
+add_executable(scene_analysis_smoke)
+target_sources(scene_analysis_smoke PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_scene_analysis_smoke>
+  $<TARGET_OBJECTS:radioify_scene_analysis>
+  $<TARGET_OBJECTS:radioify_video_sidecar_identity>
+  $<TARGET_OBJECTS:radioify_transcript_document>
+  $<TARGET_OBJECTS:radioify_transcript_cue_semantics>
+  ${CMAKE_SOURCE_DIR}/playback/video/decoder.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/timing/timeline.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+)
+radioify_link_repo_target(scene_analysis_smoke)
 
 add_executable(windows_console_window_tests)
 target_sources(windows_console_window_tests PRIVATE
@@ -1423,6 +1448,7 @@ if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(video_edit_export_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_edit_timeline_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(indexed_transcript_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
+  target_link_directories(scene_analysis_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
 endif()
 
 target_link_libraries(radioify PRIVATE ${FFMPEG_LIBRARIES})
@@ -1433,6 +1459,7 @@ target_link_libraries(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_edit_export_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_edit_timeline_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(indexed_transcript_smoke PRIVATE ${FFMPEG_LIBRARIES})
+target_link_libraries(scene_analysis_smoke PRIVATE ${FFMPEG_LIBRARIES})
 
 set(RADIOIFY_HAS_LIBASS OFF)
 set(_radioify_libass_include_dirs "")
@@ -1897,6 +1924,7 @@ if (WIN32)
   target_link_libraries(radioify PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys comctl32)
   target_link_libraries(video_frame_step_smoke PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys)
   target_link_libraries(timeline_preview_tests PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
+  target_link_libraries(scene_analysis_smoke PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32)
   target_link_libraries(video_edit_export_smoke PRIVATE mfplat mfreadwrite mfuuid ole32 bcrypt ws2_32)
 endif()
 

@@ -68,6 +68,13 @@ radioify_add_module_object_library(radioify_transcript_engine
   ${CMAKE_CURRENT_SOURCE_DIR}/transcript/whisper_model_config.cpp
 )
 
+radioify_add_module_object_library(radioify_scene_analysis
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_analysis.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_analysis_cache.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_analyzer.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_analysis_job.cpp
+)
+
 radioify_add_module_object_library(radioify_video
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_layout.cpp
