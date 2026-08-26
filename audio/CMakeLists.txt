@@ -1,6 +1,7 @@
 add_subdirectory(analysis)
 add_subdirectory(audiofilter)
 add_subdirectory(loopsplit)
+add_subdirectory(separation)
 
 radioify_add_module_object_library(radioify_audio
   ${CMAKE_CURRENT_SOURCE_DIR}/audio_stream.cpp

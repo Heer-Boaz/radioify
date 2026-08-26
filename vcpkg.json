@@ -24,6 +24,10 @@
         "vulkan"
       ]
     },
+    {
+      "name": "radioify-windows-ml",
+      "platform": "windows & x64"
+    },
     "zlib"
   ],
   "features": {

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.21)
 if (POLICY CMP0091)
   cmake_policy(SET CMP0091 NEW)
 endif()
@@ -124,6 +124,21 @@ option(RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK "Enable NVIDIA RTX Video SDK/NGX int
 option(RADIOIFY_BUILD_WIN11_EXPLORER_INTEGRATION "Build the Windows 11 Explorer integration scaffold" OFF)
 option(RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL "Download neural pitch model automatically when missing" ON)
 option(RADIOIFY_DOWNLOAD_WHISPER_MODEL "Download the indexed-transcript Whisper model automatically when missing" ON)
+set(_radioify_audio_separation_default OFF)
+if (WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+  set(_radioify_audio_separation_default ON)
+endif()
+option(RADIOIFY_ENABLE_AUDIO_SEPARATION
+       "Enable DirectML dialogue/music/effects separation"
+       ${_radioify_audio_separation_default})
+set(RADIOIFY_HAS_AUDIO_SEPARATION OFF)
+if (RADIOIFY_ENABLE_AUDIO_SEPARATION)
+  if (NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR
+      "RADIOIFY_ENABLE_AUDIO_SEPARATION currently requires Windows x64.")
+  endif()
+  set(RADIOIFY_HAS_AUDIO_SEPARATION ON)
+endif()
 set(RADIOIFY_NVIDIA_RTX_VIDEO_SDK_ROOT "" CACHE PATH
     "NVIDIA RTX Video SDK/NGX root containing include/ and lib/x64/")
 if (WIN32)
@@ -192,6 +207,11 @@ set(RADIOIFY_WHISPER_MODEL_URL
 set(RADIOIFY_WHISPER_MODEL_SHA256
     "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898"
     CACHE STRING "Expected SHA256 hash for the indexed-transcript Whisper model")
+set(RADIOIFY_AUDIO_SEPARATION_MODEL_PATH
+    "${CMAKE_SOURCE_DIR}/models/audio_separation/bandit-v2-multi-mask-core-fp16.onnx"
+    CACHE FILEPATH "Path to Radioify's BandIt v2 mask model")
+set(RADIOIFY_AUDIO_SEPARATION_MODEL_SHA256
+    "4694632688ae0b9a3e4c46918c0f9bb4f2af18c393d8e7d55f3e1e276d6fa6c7")
 
 set(RADIOIFY_PROJECT_INCLUDE_DIRS
   ${CMAKE_SOURCE_DIR}/app
@@ -305,6 +325,7 @@ target_compile_definitions(radioify_project_options INTERFACE
   RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK=$<IF:$<BOOL:${RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK}>,1,0>
   RADIOIFY_HAS_NVIDIA_RTX_VIDEO_SDK=$<IF:$<BOOL:${RADIOIFY_HAS_NVIDIA_RTX_VIDEO_SDK}>,1,0>
   RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO=$<IF:$<BOOL:${RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_PROCESSOR}>,1,0>
+  RADIOIFY_HAS_AUDIO_SEPARATION=$<IF:$<BOOL:${RADIOIFY_HAS_AUDIO_SEPARATION}>,1,0>
 )
 if (MSVC)
   target_compile_options(radioify_project_options INTERFACE
@@ -327,6 +348,47 @@ add_subdirectory(core)
 add_subdirectory(playback)
 add_subdirectory(tools)
 add_subdirectory(tui)
+
+if (RADIOIFY_HAS_AUDIO_SEPARATION)
+  find_package(radioify-windows-ml CONFIG REQUIRED)
+  target_link_libraries(radioify_audio_separation PRIVATE
+    WindowsML::OnnxRuntime)
+
+  if (NOT EXISTS "${RADIOIFY_AUDIO_SEPARATION_MODEL_PATH}")
+    message(FATAL_ERROR
+      "BandIt v2 model not found at ${RADIOIFY_AUDIO_SEPARATION_MODEL_PATH}. "
+      "Ensure Git LFS objects were fetched.")
+  endif()
+  file(SIZE "${RADIOIFY_AUDIO_SEPARATION_MODEL_PATH}"
+       _radioify_audio_separation_model_size)
+  if (_radioify_audio_separation_model_size LESS 1000000)
+    message(FATAL_ERROR
+      "BandIt v2 model is too small and is probably a Git LFS pointer: "
+      "${RADIOIFY_AUDIO_SEPARATION_MODEL_PATH}")
+  endif()
+  file(SHA256 "${RADIOIFY_AUDIO_SEPARATION_MODEL_PATH}"
+       _radioify_audio_separation_model_hash)
+  if (NOT _radioify_audio_separation_model_hash STREQUAL
+      RADIOIFY_AUDIO_SEPARATION_MODEL_SHA256)
+    message(FATAL_ERROR
+      "BandIt v2 model hash mismatch. Expected "
+      "${RADIOIFY_AUDIO_SEPARATION_MODEL_SHA256}, got "
+      "${_radioify_audio_separation_model_hash}.")
+  endif()
+
+  function(radioify_deploy_windows_ml target_name)
+    add_custom_command(TARGET ${target_name} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "$<TARGET_FILE:WindowsML::OnnxRuntime>"
+              "$<TARGET_FILE_DIR:${target_name}>/onnxruntime.dll"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${WINML_DIRECTML_DLL}"
+              "$<TARGET_FILE_DIR:${target_name}>/DirectML.dll"
+      COMMENT "Publishing self-contained Windows ML runtime for ${target_name}"
+      VERBATIM
+    )
+  endfunction()
+endif()
 
 add_executable(radioify)
 if (WIN32)
@@ -352,6 +414,7 @@ target_sources(radioify PRIVATE
   $<TARGET_OBJECTS:radioify_image_codec>
   $<TARGET_OBJECTS:radioify_video>
   $<TARGET_OBJECTS:radioify_audio>
+  $<TARGET_OBJECTS:radioify_audio_separation>
   $<TARGET_OBJECTS:radioify_analysis>
   $<TARGET_OBJECTS:radioify_ui>
   $<TARGET_OBJECTS:radioify_core_runtime>
@@ -365,6 +428,10 @@ if (MSVC)
   target_link_options(radioify PRIVATE /MANIFEST:NO)
 endif()
 radioify_link_repo_target(radioify)
+if (RADIOIFY_HAS_AUDIO_SEPARATION)
+  target_link_libraries(radioify PRIVATE WindowsML::OnnxRuntime)
+  radioify_deploy_windows_ml(radioify)
+endif()
 
 add_executable(radio_measurements)
 target_sources(radio_measurements PRIVATE
@@ -882,6 +949,42 @@ target_sources(scene_analysis_smoke PRIVATE
 )
 radioify_link_repo_target(scene_analysis_smoke)
 
+if (RADIOIFY_HAS_AUDIO_SEPARATION)
+  add_executable(audio_separation_tests)
+  target_sources(audio_separation_tests PRIVATE
+    $<TARGET_OBJECTS:radioify_tool_audio_separation_tests>
+    $<TARGET_OBJECTS:radioify_audio_separation>
+    ${CMAKE_SOURCE_DIR}/audio/ffmpegaudio.cpp
+    ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+    ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+    ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
+  )
+  set_target_properties(audio_separation_tests PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+  )
+  radioify_link_repo_target(audio_separation_tests)
+  target_link_libraries(audio_separation_tests PRIVATE
+    WindowsML::OnnxRuntime)
+  radioify_deploy_windows_ml(audio_separation_tests)
+  add_test(NAME audio_separation_tests
+           COMMAND $<TARGET_FILE:audio_separation_tests>)
+
+  add_executable(audio_separation_smoke)
+  target_sources(audio_separation_smoke PRIVATE
+    $<TARGET_OBJECTS:radioify_tool_audio_separation_smoke>
+    $<TARGET_OBJECTS:radioify_audio_separation>
+    ${CMAKE_SOURCE_DIR}/audio/ffmpegaudio.cpp
+    ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+    ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+    ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
+  )
+  radioify_link_repo_target(audio_separation_smoke)
+  target_link_libraries(audio_separation_smoke PRIVATE
+    WindowsML::OnnxRuntime)
+  radioify_deploy_windows_ml(audio_separation_smoke)
+endif()
+
 add_executable(windows_console_window_tests)
 target_sources(windows_console_window_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_windows_console_window_tests>
@@ -934,6 +1037,21 @@ endif()
 add_dependencies(radioify radioify_whisper_runtime_model)
 add_dependencies(whisper_gpu_contract_tests radioify_whisper_runtime_model)
 add_dependencies(indexed_transcript_smoke radioify_whisper_runtime_model)
+
+if (RADIOIFY_HAS_AUDIO_SEPARATION)
+  add_custom_target(radioify_audio_separation_runtime_model ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/models/audio_separation"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${RADIOIFY_AUDIO_SEPARATION_MODEL_PATH}"
+            "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/models/audio_separation/bandit-v2-multi-mask-core-fp16.onnx"
+    COMMENT "Publishing BandIt v2 model beside the Radioify build"
+    VERBATIM
+  )
+  add_dependencies(radioify radioify_audio_separation_runtime_model)
+  add_dependencies(audio_separation_smoke
+                   radioify_audio_separation_runtime_model)
+endif()
 
 set(RADIOIFY_SHADER_DIR "${CMAKE_SOURCE_DIR}/playback/render/shaders")
 set(RADIOIFY_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -1508,6 +1626,12 @@ if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(video_edit_timeline_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(indexed_transcript_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(scene_analysis_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
+  if (RADIOIFY_HAS_AUDIO_SEPARATION)
+    target_link_directories(audio_separation_tests PRIVATE
+                            ${FFMPEG_LIBRARY_DIRS})
+    target_link_directories(audio_separation_smoke PRIVATE
+                            ${FFMPEG_LIBRARY_DIRS})
+  endif()
 endif()
 
 target_link_libraries(radioify PRIVATE ${FFMPEG_LIBRARIES})
@@ -1519,6 +1643,10 @@ target_link_libraries(video_edit_export_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_edit_timeline_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(indexed_transcript_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(scene_analysis_smoke PRIVATE ${FFMPEG_LIBRARIES})
+if (RADIOIFY_HAS_AUDIO_SEPARATION)
+  target_link_libraries(audio_separation_tests PRIVATE ${FFMPEG_LIBRARIES})
+  target_link_libraries(audio_separation_smoke PRIVATE ${FFMPEG_LIBRARIES})
+endif()
 
 set(RADIOIFY_HAS_LIBASS OFF)
 set(_radioify_libass_include_dirs "")

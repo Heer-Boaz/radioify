@@ -168,6 +168,20 @@ radioify_add_module_object_library(radioify_tool_scene_analysis_smoke
   ${CMAKE_CURRENT_SOURCE_DIR}/scene_analysis_smoke.cpp
 )
 
+if (RADIOIFY_HAS_AUDIO_SEPARATION)
+  radioify_add_module_object_library(radioify_tool_audio_separation_tests
+    ${CMAKE_CURRENT_SOURCE_DIR}/audio_separation_tests.cpp
+  )
+  set_target_properties(radioify_tool_audio_separation_tests PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+  )
+
+  radioify_add_module_object_library(radioify_tool_audio_separation_smoke
+    ${CMAKE_CURRENT_SOURCE_DIR}/audio_separation_smoke.cpp
+  )
+endif()
+
 radioify_add_module_object_library(radioify_tool_windows_console_window_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/windows_console_window_tests.cpp
 )

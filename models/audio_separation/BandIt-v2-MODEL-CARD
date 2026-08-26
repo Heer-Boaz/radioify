@@ -1,0 +1,46 @@
+BandIt v2 multilingual cinematic-audio separator
+
+Purpose
+-------
+This ONNX graph estimates speech, music, and sound-effects masks for a mono
+48 kHz complex spectrogram. Radioify performs the STFT, ISTFT, stereo-channel
+handling, and overlap-add outside the graph.
+
+Source and attribution
+----------------------
+The weights originate from checkpoint-multi.ckpt in:
+
+  Model Weights for "Remastering Divide and Remaster: A Cinematic Audio
+  Source Separation Dataset with Multilingual Support"
+  Karn Watcharasupat, Chih-Wei Wu, and Iroro Orife
+  DOI: 10.5281/zenodo.12701995
+  https://zenodo.org/records/12701995
+
+The BandIt v2 architecture is published at:
+
+  https://github.com/kwatcharasupat/bandit-v2
+
+License
+-------
+The source weights are licensed CC BY-SA 4.0:
+
+  https://creativecommons.org/licenses/by-sa/4.0/
+  https://creativecommons.org/licenses/by-sa/4.0/legalcode.en
+
+Changes made by Radioify
+------------------------
+Radioify exported the inference-only mask-estimation graph to ONNX opset 20,
+moved the trained STFT and ISTFT boundaries into native code, retained dynamic
+batch/time axes, converted the graph weights to IEEE float16, and retained
+float32 spectrogram input and mask output. The exported mask graph originally
+accumulated frequency weights in float64; Radioify added an explicit final
+float32 cast matching the upstream model's cast before applying masks. This
+adapted model is distributed under the same CC BY-SA 4.0 license.
+
+Artifact
+--------
+File: bandit-v2-multi-mask-core-fp16.onnx
+SHA-256: 4694632688ae0b9a3e4c46918c0f9bb4f2af18c393d8e7d55f3e1e276d6fa6c7
+Input: spectrogram_ri [batch, 1, 1025, time, 2], float32
+Output: masks_ri [batch, 3, 1, 1025, time, 2], float32
+Stem order: speech, music, sound effects
