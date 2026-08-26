@@ -1,4 +1,5 @@
 #include "playback/media_action_catalog.h"
+#include "playback/media_processing_actions.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -155,6 +156,63 @@ int main() {
                    hasAction(separatingAudio,
                              actions::Action::CancelAudioSeparation),
                "an audio source being separated must expose cancellation");
+
+  bool subtitleRequested = false;
+  bool subtitleCancelled = false;
+  bool separationRequested = false;
+  bool separationCancelled = false;
+  playback_media_processing::Actions processingActions{
+      []() { return true; },
+      [&](const std::filesystem::path& path) {
+        subtitleRequested = path == "source.mp4";
+        return subtitleRequested;
+      },
+      [](const std::filesystem::path& path) {
+        return path == "source.mp4";
+      },
+      [&]() {
+        subtitleCancelled = true;
+        return true;
+      },
+      [](const std::filesystem::path& path) {
+        return path == "source.mp4";
+      },
+      [&](const std::filesystem::path& path) {
+        separationRequested = path == "source.mp4";
+        return separationRequested;
+      },
+      [](const std::filesystem::path& path) {
+        return path == "source.mp4";
+      },
+      [](const std::filesystem::path& path) {
+        return path == "source.mp4";
+      },
+      [&]() {
+        separationCancelled = true;
+        return true;
+      }};
+  actions::Context projected;
+  processingActions.applySourceState("source.mp4", &projected);
+  ok &= expect(projected.backgroundTaskRunning &&
+                   projected.subtitleGenerationRunningForSource &&
+                   projected.canSeparateAudio &&
+                   projected.audioSeparationRunningForSource &&
+                   projected.hasSeparatedAudio,
+               "browser and player must share one processing-state projection");
+  ok &= expect(processingActions.requestSubtitles("source.mp4") &&
+                   processingActions.requestSubtitleCancellation() &&
+                   processingActions.requestAudioSeparation("source.mp4") &&
+                   processingActions.requestAudioSeparationCancellation() &&
+                   subtitleRequested && subtitleCancelled &&
+                   separationRequested && separationCancelled,
+               "processing commands must cross one guarded actions boundary");
+  playback_media_processing::Actions unavailable;
+  ok &= expect(!unavailable.busy() &&
+                   !unavailable.requestSubtitles("source.mp4") &&
+                   !unavailable.requestSubtitleCancellation() &&
+                   !unavailable.requestAudioSeparation("source.mp4") &&
+                   !unavailable.requestAudioSeparationCancellation(),
+               "missing application services must fail closed");
 
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

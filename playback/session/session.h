@@ -10,6 +10,7 @@
 #include "playback/control/command.h"
 #include "playback/control/system_control_state.h"
 #include "playback/control/transport.h"
+#include "playback/media_processing_actions.h"
 #include "playback/session/presentation_policy.h"
 #include "playback/session/state.h"
 #include "playback/video/playback.h"
@@ -48,21 +49,7 @@ class PlaybackSession {
     std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
     std::function<bool(const std::vector<std::filesystem::path>&)>
         requestOpenFiles;
-    std::function<bool()> mediaBackgroundTaskRunning;
-    std::function<bool(const std::filesystem::path&)>
-        requestSubtitleGeneration;
-    std::function<bool(const std::filesystem::path&)>
-        subtitleGenerationRunningFor;
-    std::function<bool()> cancelSubtitleGeneration;
-    std::function<bool(const std::filesystem::path&)>
-        audioSeparationAvailableFor;
-    std::function<bool(const std::filesystem::path&)>
-        requestAudioSeparation;
-    std::function<bool(const std::filesystem::path&)>
-        audioSeparationRunningFor;
-    std::function<bool(const std::filesystem::path&)>
-        hasSeparatedAudioFor;
-    std::function<bool()> cancelAudioSeparation;
+    playback_media_processing::Actions mediaProcessingActions;
     std::function<void()> activateBrowserSurface;
   };
 

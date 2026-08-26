@@ -852,6 +852,7 @@ add_executable(media_action_catalog_tests)
 target_sources(media_action_catalog_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_media_action_catalog_tests>
   ${CMAKE_SOURCE_DIR}/playback/media_action_catalog.cpp
+  ${CMAKE_SOURCE_DIR}/playback/media_processing_actions.cpp
 )
 radioify_link_repo_target(media_action_catalog_tests)
 add_test(NAME media_action_catalog_tests
