@@ -842,6 +842,15 @@ radioify_link_repo_target(popup_menu_tests)
 add_test(NAME popup_menu_tests
          COMMAND $<TARGET_FILE:popup_menu_tests>)
 
+add_executable(command_palette_tests)
+target_sources(command_palette_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_command_palette_tests>
+  ${CMAKE_SOURCE_DIR}/tui/ui/command_palette.cpp
+)
+radioify_link_repo_target(command_palette_tests)
+add_test(NAME command_palette_tests
+         COMMAND $<TARGET_FILE:command_palette_tests>)
+
 add_executable(playback_queue_tests)
 target_sources(playback_queue_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_playback_queue_tests>

@@ -8,6 +8,8 @@ radioify_add_module_object_library(radioify_ui
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_navigation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browsermeta.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_model.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/command_palette.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/command_palette_renderer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_task_card.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_task_presentation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/optionsbrowser.cpp

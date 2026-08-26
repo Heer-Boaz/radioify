@@ -42,6 +42,8 @@
 #include "browser_navigation.h"
 #include "browser_model.h"
 #include "browsermeta.h"
+#include "command_palette.h"
+#include "command_palette_renderer.h"
 #include "consoleinput.h"
 #include "consolescreen.h"
 #include "core/open_file_requests.h"
@@ -790,25 +792,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
   }
 
-  struct CommandEntry {
-    std::string label;
-    std::string hotkey;
-    bool enabled = true;
-    std::function<void()> run;
-  };
-
-  struct PaletteLayout {
-    int x = 0;
-    int y = 0;
-    int width = 0;
-    int height = 0;
-    int innerWidth = 0;
-    int inputY = 0;
-    int listY = 0;
-    int listRows = 0;
-    bool valid = false;
-  };
-
   tui_popup_menu::Model fileContextMenu;
   std::optional<BrowserEntry> fileContextEntry;
   std::vector<playback_media_actions::Item> fileContextActions;
@@ -1434,148 +1417,81 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     markLayoutDirty();
   };
 
-  bool paletteActive = false;
-  std::string paletteQuery;
-  int paletteSelected = 0;
-  int paletteScroll = 0;
-  std::vector<int> paletteFiltered;
-  PaletteLayout paletteLayout;
+  tui_command_palette::Model commandPalette;
+  tui_command_palette::Styles commandPaletteStyles;
+  commandPaletteStyles.normal = kStyleNormal;
+  commandPaletteStyles.border = kStyleDim;
+  commandPaletteStyles.dim = kStyleDim;
+  commandPaletteStyles.selected = kStyleHighlight;
 
   auto buildCommands = [&]() {
-    std::vector<CommandEntry> cmds;
-    cmds.push_back({"Play/Pause", "Space", true, [&]() {
-                      if (callbacks.onTogglePause) {
-                        callbacks.onTogglePause();
-                      }
-                    }});
+    std::vector<tui_command_palette::Command> commands;
+    commands.emplace_back("Play/Pause", "Space", [&]() {
+      if (callbacks.onTogglePause) {
+        callbacks.onTogglePause();
+      }
+    });
     if (mediaCoordinator.videoActive()) {
-      cmds.push_back({"Window mode (framebuffer)", "Ctrl+W", true, [&]() {
-                        if (callbacks.onToggleWindow) callbacks.onToggleWindow();
-                      }});
-      cmds.push_back({"Fullscreen", "Alt+Enter", true, [&]() {
-                        if (callbacks.onToggleFullscreen) {
-                          callbacks.onToggleFullscreen();
-                        }
-                      }});
+      commands.emplace_back("Window mode (framebuffer)", "Ctrl+W", [&]() {
+        if (callbacks.onToggleWindow) callbacks.onToggleWindow();
+      });
+      commands.emplace_back("Fullscreen", "Alt+Enter", [&]() {
+        if (callbacks.onToggleFullscreen) {
+          callbacks.onToggleFullscreen();
+        }
+      });
     }
     if (mediaCoordinator.videoActive() || audioPictureInPicture.isOpen() ||
         !audioGetNowPlaying().empty() || audioIsReady()) {
-      cmds.push_back({"Picture-in-Picture", "Ctrl+P", true, [&]() {
-                        if (callbacks.onTogglePictureInPicture) {
-                          callbacks.onTogglePictureInPicture();
-                        }
-                      }});
+      commands.emplace_back("Picture-in-Picture", "Ctrl+P", [&]() {
+        if (callbacks.onTogglePictureInPicture) {
+          callbacks.onTogglePictureInPicture();
+        }
+      });
     }
-    cmds.push_back({"Cycle Radio Filter",
-                    "R", true, [&]() {
-                      audioCycleRadioFilter();
-                      markDirty();
-                    }});
-    bool show50Hz = audioSupports50HzToggle();
+    commands.emplace_back("Cycle Radio Filter", "R", [&]() {
+      audioCycleRadioFilter();
+      markDirty();
+    });
+    const bool show50Hz = audioSupports50HzToggle();
     if (show50Hz) {
-      cmds.push_back({"50Hz",
-                      "H", true, [&]() {
-                        audioToggle50Hz();
-                        markDirty();
-                      }});
+      commands.emplace_back("50Hz", "H", [&]() {
+        audioToggle50Hz();
+        markDirty();
+      });
     }
     if (!melodyVisualizationEnabled) {
-      cmds.push_back({"View: Grid", "T", true, [&]() {
-                        browser.viewMode = BrowserState::ViewMode::Thumbnails;
-                        markLayoutDirty();
-                      }});
-      cmds.push_back({"View: List", "T", true, [&]() {
-                        browser.viewMode = BrowserState::ViewMode::ListOnly;
-                        markLayoutDirty();
-                      }});
-      cmds.push_back({"View: Preview", "T", true, [&]() {
-                        browser.viewMode = BrowserState::ViewMode::ListPreview;
-                        markLayoutDirty();
-                      }});
+      commands.emplace_back("View: Grid", "T", [&]() {
+        browser.viewMode = BrowserState::ViewMode::Thumbnails;
+        markLayoutDirty();
+      });
+      commands.emplace_back("View: List", "T", [&]() {
+        browser.viewMode = BrowserState::ViewMode::ListOnly;
+        markLayoutDirty();
+      });
+      commands.emplace_back("View: Preview", "T", [&]() {
+        browser.viewMode = BrowserState::ViewMode::ListPreview;
+        markLayoutDirty();
+      });
       const bool selectedEntryHasOptions =
           selectedOptionsSubject().has_value();
       if (optionsBrowserIsActive(browser) || selectedEntryHasOptions) {
-        cmds.push_back({"Options", "O", true, [&]() {
-                          if (callbacks.onToggleOptions) {
-                            callbacks.onToggleOptions();
-                          }
-                        }});
+        commands.emplace_back("Options", "O", [&]() {
+          if (callbacks.onToggleOptions) {
+            callbacks.onToggleOptions();
+          }
+        });
       }
       if (!currentPlaybackFile().empty()) {
-        cmds.push_back({"Show Playing File", "", true, [&]() {
-                          browserPlaybackRevealer.reveal(
-                              currentPlaybackTarget());
-                        }});
+        commands.emplace_back("Show Playing File", "", [&]() {
+          browserPlaybackRevealer.reveal(currentPlaybackTarget());
+        });
       }
     }
-    cmds.push_back({"Quit", "Q", true, [&]() {
-                      if (callbacks.onQuit) callbacks.onQuit();
-                    }});
-    return cmds;
-  };
-
-  auto filterCommands = [&](const std::vector<CommandEntry>& cmds,
-                            std::vector<int>* out) {
-    out->clear();
-    std::string q = toLower(paletteQuery);
-    auto fuzzyMatch = [](const std::string& text,
-                         const std::string& query) {
-      if (query.empty()) return true;
-      size_t ti = 0;
-      for (char qc : query) {
-        ti = text.find(qc, ti);
-        if (ti == std::string::npos) return false;
-        ++ti;
-      }
-      return true;
-    };
-    for (int i = 0; i < static_cast<int>(cmds.size()); ++i) {
-      if (!cmds[static_cast<size_t>(i)].enabled) continue;
-      if (q.empty()) {
-        out->push_back(i);
-        continue;
-      }
-      std::string labelLower = toLower(cmds[static_cast<size_t>(i)].label);
-      if (fuzzyMatch(labelLower, q)) {
-        out->push_back(i);
-      }
-    }
-  };
-
-  auto computePaletteLayout = [&](int w, int h, int topInset, int listRows) {
-    PaletteLayout layout{};
-    const int minTop = std::clamp(topInset, 1, std::max(1, h - 1));
-    const int availableHeight = std::max(1, h - minTop);
-    int maxWidth = std::max(30, w - 4);
-    layout.width = std::min(72, maxWidth);
-    layout.innerWidth = std::max(1, layout.width - 2);
-    layout.listRows = std::max(1, listRows);
-    layout.height = std::min(layout.listRows + 3, availableHeight);
-    layout.listRows = std::max(1, layout.height - 3);
-    layout.x = std::max(0, (w - layout.width) / 2);
-    layout.y =
-        minTop + std::max(0, (availableHeight - layout.height) / 2);
-    layout.inputY = layout.y + 1;
-    layout.listY = layout.y + 2;
-    layout.valid = true;
-    return layout;
-  };
-
-  auto ensurePaletteScroll = [&](int count, int visibleRows) {
-    if (count <= 0) {
-      paletteSelected = 0;
-      paletteScroll = 0;
-      return;
-    }
-    paletteSelected =
-        std::clamp(paletteSelected, 0, std::max(0, count - 1));
-    if (paletteSelected < paletteScroll) {
-      paletteScroll = paletteSelected;
-    } else if (paletteSelected >= paletteScroll + visibleRows) {
-      paletteScroll = paletteSelected - visibleRows + 1;
-    }
-    paletteScroll =
-        std::clamp(paletteScroll, 0, std::max(0, count - visibleRows));
+    commands.emplace_back("Quit", "Q", [&]() {
+      if (callbacks.onQuit) callbacks.onQuit();
+    });
+    return commands;
   };
 
   auto buildMelodyOutputPath = [&](const BrowserEntry& entry) {
@@ -2000,14 +1916,13 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         // conflicted with the playback Ctrl+P PiP binding.
         bool paletteToggle = (key.vk == VK_F1);
         if (paletteToggle) {
-          paletteActive = !paletteActive;
-          if (paletteActive) {
+          if (commandPalette.active()) {
+            commandPalette.dismiss();
+          } else {
+            commandPalette.open();
             dismissFileContextMenu();
           }
           setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
-          paletteQuery.clear();
-          paletteSelected = 0;
-          paletteScroll = 0;
           markDirty();
           return;
         }
@@ -2035,8 +1950,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           dirty = true;
           return;
         }
-        if (paletteActive) {
-          paletteActive = false;
+        if (commandPalette.active()) {
+          commandPalette.dismiss();
           dirty = true;
           return;
         }
@@ -2061,108 +1976,23 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           return;
         }
       }
-      if (paletteActive) {
-        auto cmds = buildCommands();
-        filterCommands(cmds, &paletteFiltered);
-        int maxRows = std::max(1, height - 8);
-        int visibleRows =
-            std::min(maxRows, std::max(1, static_cast<int>(paletteFiltered.size())));
-        ensurePaletteScroll(static_cast<int>(paletteFiltered.size()),
-                            visibleRows);
-        if (ev.type == InputEvent::Type::Key) {
-          const KeyEvent& key = ev.key;
-          const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
-          const DWORD altMask = LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED;
-          bool ctrl = (key.control & ctrlMask) != 0;
-          bool alt = (key.control & altMask) != 0;
-          if (key.vk == VK_ESCAPE) {
-            paletteActive = false;
-            dirty = true;
-            return;
-          }
-          if (key.vk == VK_RETURN) {
-            if (!paletteFiltered.empty()) {
-              int idx = paletteFiltered[static_cast<size_t>(
-                  std::clamp(paletteSelected, 0,
-                             static_cast<int>(paletteFiltered.size()) - 1))];
-              if (idx >= 0 && idx < static_cast<int>(cmds.size())) {
-                cmds[static_cast<size_t>(idx)].run();
-              }
-            }
-            paletteActive = false;
-            dirty = true;
-            return;
-          }
-          if (key.vk == VK_UP) {
-            paletteSelected--;
-            ensurePaletteScroll(static_cast<int>(paletteFiltered.size()),
-                                visibleRows);
-            dirty = true;
-            return;
-          }
-          if (key.vk == VK_DOWN) {
-            paletteSelected++;
-            ensurePaletteScroll(static_cast<int>(paletteFiltered.size()),
-                                visibleRows);
-            dirty = true;
-            return;
-          }
-          if (key.vk == VK_BACK) {
-            if (!paletteQuery.empty()) {
-              paletteQuery.pop_back();
-              paletteSelected = 0;
-              paletteScroll = 0;
-            }
-            dirty = true;
-            return;
-          }
-          if (!ctrl && !alt && key.ch >= 32) {
-            paletteQuery.push_back(key.ch);
-            paletteSelected = 0;
-            paletteScroll = 0;
-            dirty = true;
-            return;
-          }
-          return;
+      if (commandPalette.active()) {
+        const std::vector<tui_command_palette::Command> commands =
+            buildCommands();
+        tui_command_palette::Bounds paletteBounds;
+        paletteBounds.width = width;
+        paletteBounds.height = height;
+        paletteBounds.topInset = listTop;
+        const tui_command_palette::Interaction interaction =
+            commandPalette.handle(ev, commands, paletteBounds);
+        if (interaction.activatedCommand &&
+            *interaction.activatedCommand < commands.size()) {
+          commands[*interaction.activatedCommand].run();
         }
-        if (ev.type == InputEvent::Type::Mouse) {
-          const MouseEvent& mouse = ev.mouse;
-          bool leftPressed = isMouseButtonDown(mouse, MouseButton::Left);
-          if (mouse.kind == MouseEventKind::VerticalWheel) {
-            int delta = mouse.wheelDelta;
-            if (delta != 0) {
-              paletteSelected -= delta / WHEEL_DELTA;
-              ensurePaletteScroll(static_cast<int>(paletteFiltered.size()),
-                                  visibleRows);
-              dirty = true;
-            }
-            return;
-          }
-          if (leftPressed && mouse.kind == MouseEventKind::Press) {
-            paletteLayout =
-                computePaletteLayout(width, height, listTop, visibleRows);
-            if (paletteLayout.valid) {
-              if (mouse.pos.Y >= paletteLayout.listY &&
-                  mouse.pos.Y < paletteLayout.listY + paletteLayout.listRows &&
-                  mouse.pos.X >= paletteLayout.x + 1 &&
-                  mouse.pos.X < paletteLayout.x + paletteLayout.width - 1) {
-                int rel = mouse.pos.Y - paletteLayout.listY;
-                int idx = paletteScroll + rel;
-                if (idx >= 0 &&
-                    idx < static_cast<int>(paletteFiltered.size())) {
-                  int cmdIndex =
-                      paletteFiltered[static_cast<size_t>(idx)];
-                  if (cmdIndex >= 0 &&
-                      cmdIndex < static_cast<int>(cmds.size())) {
-                    cmds[static_cast<size_t>(cmdIndex)].run();
-                  }
-                  paletteActive = false;
-                  dirty = true;
-                  return;
-                }
-              }
-            }
-          }
+        if (interaction.changed) {
+          dirty = true;
+        }
+        if (interaction.consumed) {
           return;
         }
       }
@@ -2643,87 +2473,15 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       progressBarY = footerResult.progressBarY;
       progressBarWidth = footerResult.progressBarWidth;
 
-      if (paletteActive) {
-        auto cmds = buildCommands();
-        filterCommands(cmds, &paletteFiltered);
-        int maxRows = std::max(1, height - listTop - 3);
-        int visibleRows =
-            std::min(maxRows, std::max(1, static_cast<int>(paletteFiltered.size())));
-        ensurePaletteScroll(static_cast<int>(paletteFiltered.size()),
-                            visibleRows);
-        paletteLayout =
-            computePaletteLayout(width, height, listTop, visibleRows);
-        if (paletteLayout.valid) {
-          int x0 = paletteLayout.x;
-          int y0 = paletteLayout.y;
-          int w = paletteLayout.width;
-          int h = paletteLayout.height;
-          int inner = paletteLayout.innerWidth;
-
-          // Fill background
-          for (int y = 0; y < h; ++y) {
-            screen.writeRun(x0, y0 + y, w, L' ', kStyleNormal);
-          }
-
-          // Border
-          screen.writeChar(x0, y0, L'+', kStyleDim);
-          screen.writeRun(x0 + 1, y0, w - 2, L'-', kStyleDim);
-          screen.writeChar(x0 + w - 1, y0, L'+', kStyleDim);
-          screen.writeChar(x0, y0 + h - 1, L'+', kStyleDim);
-          screen.writeRun(x0 + 1, y0 + h - 1, w - 2, L'-', kStyleDim);
-          screen.writeChar(x0 + w - 1, y0 + h - 1, L'+', kStyleDim);
-          for (int y = 1; y < h - 1; ++y) {
-            screen.writeChar(x0, y0 + y, L'|', kStyleDim);
-            screen.writeChar(x0 + w - 1, y0 + y, L'|', kStyleDim);
-          }
-
-          std::string prompt = "> " + paletteQuery;
-          if (utf8DisplayWidth(prompt) > inner) {
-            prompt = utf8TakeDisplayWidth(prompt, inner);
-          }
-          screen.writeText(x0 + 1, paletteLayout.inputY, prompt, kStyleNormal);
-
-          if (paletteFiltered.empty()) {
-            std::string none = "(no matches)";
-            if (utf8DisplayWidth(none) > inner) {
-              none = utf8TakeDisplayWidth(none, inner);
-            }
-            screen.writeText(x0 + 1, paletteLayout.listY, none, kStyleDim);
-          } else {
-            for (int row = 0; row < paletteLayout.listRows; ++row) {
-              int idx = paletteScroll + row;
-              if (idx < 0 ||
-                  idx >= static_cast<int>(paletteFiltered.size())) {
-                break;
-              }
-              const auto& cmd =
-                  cmds[static_cast<size_t>(paletteFiltered[static_cast<size_t>(idx)])];
-              std::string left = cmd.label;
-              std::string right = cmd.hotkey;
-              int rightWidth = utf8DisplayWidth(right);
-              int gap = rightWidth > 0 ? 1 : 0;
-              int maxLeft = std::max(0, inner - rightWidth - gap);
-              if (utf8DisplayWidth(left) > maxLeft) {
-                left = utf8TakeDisplayWidth(left, maxLeft);
-              }
-              int leftWidth = utf8DisplayWidth(left);
-              std::string lineText = left;
-              if (leftWidth < maxLeft) {
-                lineText.append(static_cast<size_t>(maxLeft - leftWidth), ' ');
-              }
-              if (rightWidth > 0) {
-                lineText.push_back(' ');
-                lineText += right;
-              }
-              Style lineStyle =
-                  (idx == paletteSelected) ? kStyleHighlight : kStyleNormal;
-              screen.writeText(x0 + 1, paletteLayout.listY + row, lineText,
-                               lineStyle);
-            }
-          }
-        }
-      } else {
-        paletteLayout.valid = false;
+      if (commandPalette.active()) {
+        const std::vector<tui_command_palette::Command> commands =
+            buildCommands();
+        tui_command_palette::Bounds paletteBounds;
+        paletteBounds.width = width;
+        paletteBounds.height = height;
+        paletteBounds.topInset = listTop;
+        tui_command_palette::draw(screen, commandPalette, commands,
+                                  paletteBounds, commandPaletteStyles);
       }
 
       if (fileContextMenu.active()) {
