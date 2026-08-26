@@ -346,6 +346,7 @@ target_sources(radioify PRIVATE
   $<TARGET_OBJECTS:radioify_transcript_document>
   $<TARGET_OBJECTS:radioify_transcript_cue_semantics>
   $<TARGET_OBJECTS:radioify_transcript_device_policy>
+  $<TARGET_OBJECTS:radioify_transcript_job>
   $<TARGET_OBJECTS:radioify_transcript_engine>
   $<TARGET_OBJECTS:radioify_scene_analysis>
   $<TARGET_OBJECTS:radioify_image_codec>
@@ -779,6 +780,22 @@ radioify_link_repo_target(media_action_catalog_tests)
 add_test(NAME media_action_catalog_tests
          COMMAND $<TARGET_FILE:media_action_catalog_tests>)
 
+add_executable(subtitle_generation_job_tests)
+target_sources(subtitle_generation_job_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_subtitle_generation_job_tests>
+  $<TARGET_OBJECTS:radioify_video_sidecar_identity>
+  $<TARGET_OBJECTS:radioify_transcript_artifact>
+  ${CMAKE_SOURCE_DIR}/playback/video/transcript/generation_job.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/subtitle_generation_status.cpp
+  ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/core/utf8.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+)
+radioify_link_repo_target(subtitle_generation_job_tests)
+add_test(NAME subtitle_generation_job_tests
+         COMMAND $<TARGET_FILE:subtitle_generation_job_tests>)
+
 add_executable(whisper_gpu_contract_tests)
 target_sources(whisper_gpu_contract_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_whisper_gpu_contract_tests>
@@ -796,11 +813,13 @@ target_sources(indexed_transcript_smoke PRIVATE
   $<TARGET_OBJECTS:radioify_transcript_document>
   $<TARGET_OBJECTS:radioify_transcript_cue_semantics>
   $<TARGET_OBJECTS:radioify_transcript_device_policy>
+  $<TARGET_OBJECTS:radioify_transcript_job>
   $<TARGET_OBJECTS:radioify_transcript_engine>
   ${CMAKE_SOURCE_DIR}/audio/ffmpegaudio.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
+  ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
 )
 radioify_link_repo_target(indexed_transcript_smoke)
 

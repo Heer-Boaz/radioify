@@ -2,114 +2,191 @@
 
 #include <algorithm>
 #include <exception>
+#include <mutex>
+#include <thread>
 #include <utility>
 
-#include "core/runtime_helpers.h"
+#include "core/waitable_signal.h"
 #include "playback/video/transcript/artifact.h"
-#include "playback/video/transcript/transcriber.h"
 
 namespace playback_video_transcript {
 
+struct GenerationJob::Impl {
+  explicit Impl(Operation generationOperation)
+      : operation(std::move(generationOperation)) {}
+
+  mutable std::mutex mutex;
+  std::thread worker;
+  std::atomic<bool> cancelRequested{false};
+  WaitableSignal changed;
+  Operation operation;
+  GenerationJobSnapshot state;
+  std::optional<GenerationJobSnapshot> completion;
+
+  void notifyChanged() { changed.signal(); }
+
+  void updateProgress(float fraction, std::string phase) {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      if (!state.running()) return;
+      state.progress = std::max(
+          state.progress, std::clamp(fraction, 0.0f, 1.0f));
+      if (!state.cancelling()) state.phase = std::move(phase);
+    }
+    notifyChanged();
+  }
+
+  void finish(bool succeeded, std::string error) {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      if (succeeded) {
+        state.state = GenerationJobState::Succeeded;
+        state.progress = 1.0f;
+        state.error.clear();
+      } else if (cancelRequested.load(std::memory_order_relaxed)) {
+        state.state = GenerationJobState::Cancelled;
+        state.error.clear();
+      } else {
+        state.state = GenerationJobState::Failed;
+        state.error = error.empty() ? "Subtitle generation failed unexpectedly."
+                                    : std::move(error);
+      }
+      state.phase.clear();
+      completion = state;
+    }
+    notifyChanged();
+  }
+
+  void run(std::filesystem::path videoPath,
+           std::filesystem::path outputPath) {
+    std::string error;
+    bool succeeded = false;
+    try {
+      succeeded = operation(
+          videoPath, outputPath,
+          [this](float fraction, std::string phase) {
+            updateProgress(fraction, std::move(phase));
+          },
+          &cancelRequested, &error);
+    } catch (const std::exception& exception) {
+      error = std::string("Subtitle generation failed: ") + exception.what();
+    } catch (...) {
+      error = "Subtitle generation failed unexpectedly.";
+    }
+    finish(succeeded, std::move(error));
+  }
+
+  void joinFinishedWorker() {
+    std::thread finishedWorker;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      if (!state.running() && worker.joinable()) {
+        finishedWorker = std::move(worker);
+      }
+    }
+    if (finishedWorker.joinable()) finishedWorker.join();
+  }
+};
+
+GenerationJob::GenerationJob(Operation operation)
+    : impl_(std::make_unique<Impl>(std::move(operation))) {}
+
 GenerationJob::~GenerationJob() { cancelAndJoin(); }
 
-void GenerationJob::reapFinished() {
-  bool shouldJoin = false;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    shouldJoin = !state_.running && worker_.joinable();
-  }
-  if (shouldJoin) worker_.join();
-}
+bool GenerationJob::tryStart(const std::filesystem::path& videoPath) {
+  if (!impl_) return false;
+  const std::filesystem::path outputPath = transcriptPathForVideo(videoPath);
+  if (videoPath.empty() || outputPath.empty()) return false;
 
-void GenerationJob::cancelAndJoin() {
-  requestCancel();
-  if (worker_.joinable()) worker_.join();
+  impl_->joinFinishedWorker();
+  {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (!impl_->operation || impl_->state.running() || impl_->completion) {
+      return false;
+    }
+    impl_->cancelRequested.store(false, std::memory_order_relaxed);
+    impl_->state = GenerationJobSnapshot{};
+    impl_->state.state = GenerationJobState::Running;
+    impl_->state.phase = "Starting subtitle generation";
+    impl_->state.sourceFile = videoPath;
+    impl_->state.outputFile = outputPath;
+
+    try {
+      impl_->worker = std::thread(
+          [implementation = impl_.get(), videoPath, outputPath]() mutable {
+            implementation->run(std::move(videoPath), std::move(outputPath));
+          });
+    } catch (const std::exception& exception) {
+      impl_->state.state = GenerationJobState::Failed;
+      impl_->state.phase.clear();
+      impl_->state.error =
+          std::string("Could not start subtitle generation: ") +
+          exception.what();
+      impl_->completion = impl_->state;
+    } catch (...) {
+      impl_->state.state = GenerationJobState::Failed;
+      impl_->state.phase.clear();
+      impl_->state.error = "Could not start subtitle generation.";
+      impl_->completion = impl_->state;
+    }
+  }
+  impl_->notifyChanged();
+  return true;
 }
 
 bool GenerationJob::requestCancel() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!state_.running || state_.cancelRequested) return false;
-  cancelRequested_.store(true, std::memory_order_relaxed);
-  state_.cancelRequested = true;
-  state_.phase = "Cancelling subtitle generation";
+  if (!impl_) return false;
+  {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (impl_->state.state != GenerationJobState::Running) return false;
+    impl_->cancelRequested.store(true, std::memory_order_relaxed);
+    impl_->state.state = GenerationJobState::Cancelling;
+    impl_->state.phase = "Cancelling subtitle generation";
+  }
+  impl_->notifyChanged();
   return true;
+}
+
+void GenerationJob::cancelAndJoin() {
+  if (!impl_) return;
+  requestCancel();
+  std::thread worker;
+  {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (impl_->worker.joinable()) worker = std::move(impl_->worker);
+  }
+  if (worker.joinable()) worker.join();
 }
 
 GenerationJobSnapshot GenerationJob::snapshot() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return state_;
+  if (!impl_) return {};
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  return impl_->state;
 }
 
-bool GenerationJob::tryStart(const std::filesystem::path& videoPath) {
-  const std::filesystem::path outputPath =
-      transcriptPathForVideo(videoPath);
-  if (videoPath.empty() || outputPath.empty()) return false;
-
-  reapFinished();
+std::optional<GenerationJobSnapshot> GenerationJob::takeCompletion() {
+  if (!impl_) return std::nullopt;
+  std::optional<GenerationJobSnapshot> completion;
+  std::thread finishedWorker;
   {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (state_.running) return false;
-    cancelRequested_.store(false, std::memory_order_relaxed);
-    state_.running = true;
-    state_.hasResult = false;
-    state_.success = false;
-    state_.cancelRequested = false;
-    state_.progress = 0.0f;
-    state_.phase = "Starting subtitle generation";
-    state_.status.clear();
-    state_.sourceFile = videoPath;
-    state_.outputFile = outputPath;
-
-    try {
-      worker_ = std::thread([this, videoPath, outputPath]() {
-        std::string error;
-        bool ok = false;
-        try {
-          ok = createIndexedTranscript(
-              videoPath, outputPath, TranscriptPublishMode::ReplaceExisting,
-              [this](const Progress& progress) {
-                std::lock_guard<std::mutex> progressLock(mutex_);
-                state_.progress =
-                    std::max(state_.progress,
-                             std::clamp(progress.fraction, 0.0f, 1.0f));
-                if (!state_.cancelRequested) state_.phase = progress.phase;
-              },
-              &cancelRequested_, &error);
-        } catch (const std::exception& exception) {
-          error = std::string("Subtitle generation failed: ") +
-                  exception.what();
-        } catch (...) {
-          error = "Subtitle generation failed unexpectedly.";
-        }
-
-        std::lock_guard<std::mutex> resultLock(mutex_);
-        state_.running = false;
-        state_.hasResult = true;
-        state_.success = ok;
-        const bool wasCancelled = state_.cancelRequested;
-        state_.progress = ok ? 1.0f : state_.progress;
-        state_.phase.clear();
-        ++state_.resultRevision;
-        state_.status =
-            ok ? "Subtitles ready: " + toUtf8String(outputPath.filename())
-               : (wasCancelled ? "Subtitle generation cancelled."
-                               : (error.empty()
-                                      ? "Subtitle generation failed."
-                                      : error));
-      });
-    } catch (const std::exception& exception) {
-      state_.running = false;
-      state_.hasResult = true;
-      state_.success = false;
-      state_.phase.clear();
-      ++state_.resultRevision;
-      state_.status =
-          std::string("Could not start subtitle generation: ") +
-          exception.what();
-      return true;
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (!impl_->completion) return std::nullopt;
+    completion = std::move(impl_->completion);
+    impl_->completion.reset();
+    if (!impl_->state.running() && impl_->worker.joinable()) {
+      finishedWorker = std::move(impl_->worker);
     }
   }
-  return true;
+  if (finishedWorker.joinable()) finishedWorker.join();
+  return completion;
+}
+
+bool GenerationJob::consumeChanged() {
+  return impl_ && impl_->changed.consume();
+}
+
+NativeWaitHandle GenerationJob::nativeWaitHandle() const {
+  return impl_ ? impl_->changed.nativeWaitHandle() : NativeWaitHandle{};
 }
 
 }  // namespace playback_video_transcript
