@@ -15,4 +15,9 @@ bool isMeaningfulTranscriptText(const std::string& text);
 // so treating every parenthetical cue as non-speech loses real dialogue.
 bool isTranscriptSoundAnnotation(const std::string& text);
 
+// Generated indexed transcripts are speech-only. Keep this policy separate
+// from readability so existing or externally supplied SRT files can still be
+// parsed without silently changing their contents.
+bool isTranscriptSpeechCue(const std::string& text);
+
 }  // namespace playback_video_transcript

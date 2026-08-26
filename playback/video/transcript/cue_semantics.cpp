@@ -62,4 +62,9 @@ bool isTranscriptSoundAnnotation(const std::string& text) {
          normalized.back() == ']';
 }
 
+bool isTranscriptSpeechCue(const std::string& text) {
+  return isMeaningfulTranscriptText(text) &&
+         !isTranscriptSoundAnnotation(text);
+}
+
 }  // namespace playback_video_transcript

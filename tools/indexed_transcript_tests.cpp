@@ -50,6 +50,12 @@ int main() {
                        "(Welcome honored guests)") &&
                    !transcript::isTranscriptSoundAnnotation("spoken text"),
                "only square-bracketed SDH cues must be non-speech annotations");
+  ok &= expect(!transcript::isTranscriptSpeechCue(" [Music] ") &&
+                   transcript::isTranscriptSpeechCue(
+                       "(Welcome honored guests)") &&
+                   transcript::isTranscriptSpeechCue("spoken text"),
+               "speech-only policy must reject annotations without treating "
+               "all parenthetical text as sound");
 
   const std::vector<transcript::VulkanDeviceCandidate> gpuCandidates = {
       {0, transcript::VulkanDeviceClass::Integrated, 12, 24, "Vulkan0",
@@ -170,11 +176,8 @@ int main() {
   };
   const std::vector<transcript::Segment> annotationCues =
       transcript::buildSubtitleCues(annotationRecognition);
-  ok &= expect(annotationCues.size() == 1 &&
-                   annotationCues[0].text == " [thunder rumble]" &&
-                   annotationCues[0].startUs == 11'800'000 &&
-                   annotationCues[0].endUs == 13'500'000,
-               "sound annotations must remain whole and use token alignment");
+  ok &= expect(annotationCues.empty(),
+               "generated subtitle cues must omit sound annotations");
 
   std::vector<transcript::Segment> overlappingCues = {
       {0, 8'000'000, "First"},
@@ -225,6 +228,8 @@ int main() {
       {5'000'000, 5'000'000, "   "},
       {6'000'000, 7'000'000, " ... -- "},
       {8'000'000, 9'000'000, " [BLANK_AUDIO] "},
+      {10'000'000, 11'000'000, " [Music] "},
+      {12'000'000, 13'000'000, " (Welcome honored guests) "},
   };
   ok &= expect(transcript::writeIndexedTranscript(
                    output, segments,
@@ -233,14 +238,16 @@ int main() {
   if (!error.empty()) std::cerr << error << '\n';
   const std::string expected =
       "1\r\n00:00:00,000 --> 00:00:01,234\r\nEerste regel\r\n\r\n"
-      "2\r\n00:00:02,345 --> 00:00:04,000\r\ntweede regel\r\n\r\n";
+      "2\r\n00:00:02,345 --> 00:00:04,000\r\ntweede regel\r\n\r\n"
+      "3\r\n00:00:12,000 --> 00:00:13,000\r\n"
+      "(Welcome honored guests)\r\n\r\n";
   ok &= expect(readFile(output) == expected,
                 "SRT output must be sorted, indexed, whitespace-normalized, "
                 "and omit silence hallucinations");
   std::vector<transcript::Segment> parsedSegments;
   ok &= expect(transcript::readIndexedTranscript(
                    output, &parsedSegments, &error) &&
-                   parsedSegments.size() == 2 &&
+                   parsedSegments.size() == 3 &&
                    parsedSegments[0].startUs == 0 &&
                    parsedSegments[0].endUs == 1'234'000 &&
                    parsedSegments[1].text == "tweede regel",

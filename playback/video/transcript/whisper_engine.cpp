@@ -264,6 +264,10 @@ bool WhisperEngine::transcribe(
   parameters.print_progress = false;
   parameters.print_realtime = false;
   parameters.print_timestamps = false;
+  // Indexed transcripts are speech navigation, not SDH. Ask Whisper to
+  // suppress its native music/noise tokens before decoding; the transcript
+  // policy still rejects any complete [sound annotation] emitted lexically.
+  parameters.suppress_nst = true;
   // Recognition owns word alignment; subtitle_cues owns presentation
   // segmentation. Enabling token timestamps without Whisper's max_len split
   // keeps those responsibilities separate and prevents model-created orphan

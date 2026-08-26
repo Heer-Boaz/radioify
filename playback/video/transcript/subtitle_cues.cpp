@@ -136,7 +136,7 @@ std::vector<TimedPiece> timedPieces(const RecognizedSegment& segment) {
 
 void appendCue(std::vector<Segment>* cues, Segment* cue) {
   if (!cues || !cue || cue->endUs <= cue->startUs ||
-      !isMeaningfulTranscriptText(cue->text)) {
+      !isTranscriptSpeechCue(cue->text)) {
     if (cue) *cue = {};
     return;
   }
@@ -150,23 +150,10 @@ void appendCue(std::vector<Segment>* cues, Segment* cue) {
 void appendSegmentCues(const RecognizedSegment& segment,
                        std::vector<Segment>* cues) {
   if (!cues || segment.endUs <= segment.startUs ||
-      !isMeaningfulTranscriptText(segment.text)) {
+      !isTranscriptSpeechCue(segment.text)) {
     return;
   }
   const std::vector<TimedPiece> pieces = timedPieces(segment);
-  if (isTranscriptSoundAnnotation(segment.text)) {
-    // Sound annotations are one semantic cue, even when Whisper tokenizes the
-    // bytes or words separately. Their placement still comes from the same
-    // alignment points as spoken text so a broad decoder segment cannot make
-    // the annotation appear early.
-    const int64_t startUs =
-        pieces.empty() ? segment.startUs : pieces.front().startUs;
-    const int64_t endUs =
-        pieces.empty() ? segment.endUs : pieces.back().endUs;
-    Segment annotation{startUs, endUs, segment.text};
-    appendCue(cues, &annotation);
-    return;
-  }
   if (pieces.empty()) {
     Segment fallback{segment.startUs, segment.endUs, segment.text};
     appendCue(cues, &fallback);
@@ -224,7 +211,7 @@ void finalizeSubtitleCueTimeline(std::vector<Segment>* cues) {
                              [](const Segment& cue) {
                                return cue.startUs < 0 ||
                                       cue.endUs <= cue.startUs ||
-                                      !isMeaningfulTranscriptText(cue.text);
+                                      !isTranscriptSpeechCue(cue.text);
                              }),
               cues->end());
   std::stable_sort(cues->begin(), cues->end(),

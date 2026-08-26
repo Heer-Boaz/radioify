@@ -20,9 +20,10 @@ bool readIndexedTranscript(const std::filesystem::path& inputPath,
                            std::vector<Segment>* segments,
                            std::string* error);
 
-// Publishes a time-indexed SRT sidecar without exposing a partially written
-// destination. ReplaceExisting atomically swaps a complete new document into
-// place while preserving the old document if publication fails.
+// Publishes a speech-only, time-indexed SRT sidecar without exposing a
+// partially written destination. ReplaceExisting atomically swaps a complete
+// new document into place while preserving the old document if publication
+// fails.
 bool writeIndexedTranscript(const std::filesystem::path& outputPath,
                             const std::vector<Segment>& segments,
                             TranscriptPublishMode publishMode,

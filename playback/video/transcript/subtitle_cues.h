@@ -7,9 +7,10 @@
 
 namespace playback_video_transcript {
 
-// Converts word-aligned inference output into presentation cues. Recognition
-// owns token timing; this policy owns only readable grouping and a bounded
-// display tail. It never invents speech positions from text length.
+// Converts word-aligned inference output into speech-only presentation cues.
+// Recognition owns token timing; this policy owns readable grouping, sound-
+// annotation exclusion, and a bounded display tail. It never invents speech
+// positions from text length.
 std::vector<Segment> buildSubtitleCues(
     const std::vector<RecognizedSegment>& recognition);
 

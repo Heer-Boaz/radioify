@@ -278,7 +278,7 @@ bool writeIndexedTranscript(const std::filesystem::path& outputPath,
   for (const Segment& segment : segments) {
     Segment cue = segment;
     cue.text = normalizeTranscriptCueText(cue.text);
-    if (!isMeaningfulTranscriptText(cue.text)) continue;
+    if (!isTranscriptSpeechCue(cue.text)) continue;
     cue.startUs = std::max<int64_t>(0, cue.startUs);
     cue.endUs = std::max(cue.startUs + 1000, cue.endUs);
     cues.push_back(std::move(cue));
