@@ -45,8 +45,16 @@ radioify_add_module_object_library(radioify_timeline_preview
   ${CMAKE_CURRENT_SOURCE_DIR}/timeline_preview_policy.cpp
 )
 
+radioify_add_module_object_library(radioify_video_sidecar_identity
+  ${CMAKE_CURRENT_SOURCE_DIR}/sidecar_identity.cpp
+)
+
 radioify_add_module_object_library(radioify_transcript_document
   ${CMAKE_CURRENT_SOURCE_DIR}/transcript/document.cpp
+)
+
+radioify_add_module_object_library(radioify_transcript_cue_semantics
+  ${CMAKE_CURRENT_SOURCE_DIR}/transcript/cue_semantics.cpp
 )
 
 radioify_add_module_object_library(radioify_transcript_device_policy
@@ -54,8 +62,10 @@ radioify_add_module_object_library(radioify_transcript_device_policy
 )
 
 radioify_add_module_object_library(radioify_transcript_engine
+  ${CMAKE_CURRENT_SOURCE_DIR}/transcript/subtitle_cues.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/transcript/transcriber.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/transcript/whisper_engine.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/transcript/whisper_model_config.cpp
 )
 
 radioify_add_module_object_library(radioify_video
@@ -69,6 +79,7 @@ radioify_add_module_object_library(radioify_video
   ${CMAKE_CURRENT_SOURCE_DIR}/subtitle/ass/bitmap_renderer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/subtitle/font_attachments.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/subtitle/manager.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle/sidecar_discovery.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/enhancement/pipeline.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/enhancement/nvidia_d3d11.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/frame_cache/update.cpp

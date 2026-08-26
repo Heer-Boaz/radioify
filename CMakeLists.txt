@@ -341,7 +341,9 @@ target_sources(radioify PRIVATE
   $<TARGET_OBJECTS:radioify_tui>
   $<TARGET_OBJECTS:radioify_video_playback>
   $<TARGET_OBJECTS:radioify_timeline_preview>
+  $<TARGET_OBJECTS:radioify_video_sidecar_identity>
   $<TARGET_OBJECTS:radioify_transcript_document>
+  $<TARGET_OBJECTS:radioify_transcript_cue_semantics>
   $<TARGET_OBJECTS:radioify_transcript_device_policy>
   $<TARGET_OBJECTS:radioify_transcript_engine>
   $<TARGET_OBJECTS:radioify_image_codec>
@@ -693,6 +695,16 @@ radioify_link_repo_target(subtitle_pixel_compositor_tests)
 add_test(NAME subtitle_pixel_compositor_tests
          COMMAND $<TARGET_FILE:subtitle_pixel_compositor_tests>)
 
+add_executable(subtitle_sidecar_discovery_tests)
+target_sources(subtitle_sidecar_discovery_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_subtitle_sidecar_discovery_tests>
+  $<TARGET_OBJECTS:radioify_video_sidecar_identity>
+  ${CMAKE_SOURCE_DIR}/playback/video/subtitle/sidecar_discovery.cpp
+)
+radioify_link_repo_target(subtitle_sidecar_discovery_tests)
+add_test(NAME subtitle_sidecar_discovery_tests
+         COMMAND $<TARGET_FILE:subtitle_sidecar_discovery_tests>)
+
 add_executable(browser_navigation_tests)
 target_sources(browser_navigation_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_browser_navigation_tests>
@@ -737,11 +749,15 @@ add_test(NAME image_viewer_sequence_tests
 add_executable(indexed_transcript_tests)
 target_sources(indexed_transcript_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_indexed_transcript_tests>
+  $<TARGET_OBJECTS:radioify_video_sidecar_identity>
   $<TARGET_OBJECTS:radioify_transcript_document>
+  $<TARGET_OBJECTS:radioify_transcript_cue_semantics>
   $<TARGET_OBJECTS:radioify_transcript_device_policy>
-  ${CMAKE_SOURCE_DIR}/tui/ui/file_context_menu_model.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/transcript/subtitle_cues.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/transcript/whisper_model_config.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/ui_footer_layout.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/core/utf8.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
 radioify_link_repo_target(indexed_transcript_tests)
@@ -760,12 +776,15 @@ add_test(NAME whisper_gpu_contract_tests
 add_executable(indexed_transcript_smoke)
 target_sources(indexed_transcript_smoke PRIVATE
   $<TARGET_OBJECTS:radioify_tool_indexed_transcript_smoke>
+  $<TARGET_OBJECTS:radioify_video_sidecar_identity>
   $<TARGET_OBJECTS:radioify_transcript_document>
+  $<TARGET_OBJECTS:radioify_transcript_cue_semantics>
   $<TARGET_OBJECTS:radioify_transcript_device_policy>
   $<TARGET_OBJECTS:radioify_transcript_engine>
   ${CMAKE_SOURCE_DIR}/audio/ffmpegaudio.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/core/utf8.cpp
 )
 radioify_link_repo_target(indexed_transcript_smoke)
 

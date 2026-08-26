@@ -22,6 +22,7 @@ extern "C" {
 #include "ass/script.h"
 #include "ass/parser.h"
 #include "font_attachments.h"
+#include "sidecar_discovery.h"
 #include "ui_helpers.h"
 
 namespace {
@@ -1563,182 +1564,6 @@ bool loadSubtitleTrackFile(const std::filesystem::path& path,
   return true;
 }
 
-bool isSubtitleSidecarExtension(const std::string& extLower) {
-  return extLower == ".srt" || extLower == ".vtt" || extLower == ".ass" ||
-         extLower == ".ssa" || extLower == ".sbv" || extLower == ".sub" ||
-         extLower == ".txt" || extLower == ".smi" || extLower == ".sami";
-}
-
-bool isSubtitleDirectoryName(const std::string& nameLower) {
-  return nameLower == "subs" || nameLower == "sub" || nameLower == "subtitle" ||
-         nameLower == "subtitles";
-}
-
-std::vector<std::filesystem::path> discoverSubtitleFiles(
-    const std::filesystem::path& videoPath) {
-  std::vector<std::pair<int, std::filesystem::path>> ranked;
-  std::vector<std::filesystem::path> fallbackCandidates;
-  std::error_code ec;
-  std::filesystem::path dir = videoPath.parent_path();
-  if (dir.empty()) {
-    dir = radioifyLaunchDir();
-  }
-  std::string baseStem = toUtf8String(videoPath.stem());
-  std::string baseStemLower = toLowerAscii(baseStem);
-
-  auto rankForStem = [&](const std::string& stem) -> int {
-    if (baseStemLower.empty()) return -1;
-    const std::string stemLower = toLowerAscii(stem);
-    if (stemLower == baseStemLower) return 0;
-    if (startsWith(stemLower, baseStemLower + ".")) return 1;
-    if (startsWith(stemLower, baseStemLower + "_")) return 1;
-    if (startsWith(stemLower, baseStemLower + "-")) return 1;
-    if (startsWith(stemLower, baseStemLower + " ")) return 1;
-    if (startsWith(stemLower, baseStemLower + "(")) return 1;
-    if (stemLower.find(baseStemLower) != std::string::npos) return 3;
-    return -1;
-  };
-
-  struct SearchDir {
-    std::filesystem::path path;
-    int maxDepth = 0;
-  };
-  std::vector<SearchDir> searchDirs;
-  auto addSearchDir = [&](const std::filesystem::path& searchDir, int maxDepth) {
-    std::string key = toLowerAscii(toUtf8String(searchDir.lexically_normal()));
-    for (const auto& existing : searchDirs) {
-      if (toLowerAscii(toUtf8String(existing.path.lexically_normal())) == key) {
-        return;
-      }
-    }
-    searchDirs.push_back(SearchDir{searchDir, std::max(0, maxDepth)});
-  };
-
-  addSearchDir(dir, 0);
-  for (std::filesystem::directory_iterator it(dir, ec), end; it != end;
-       it.increment(ec)) {
-    if (ec) break;
-    const auto& entry = *it;
-    bool isDir = entry.is_directory(ec);
-    if (ec) {
-      ec.clear();
-      continue;
-    }
-    if (!isDir) continue;
-    std::string nameLower = toLowerAscii(toUtf8String(entry.path().filename()));
-    if (isSubtitleDirectoryName(nameLower)) {
-      addSearchDir(entry.path(), 2);
-    }
-  }
-  if (ec) ec.clear();
-
-  auto maybeAddCandidate = [&](const std::filesystem::path& candidate) {
-    std::string extLower = toLowerAscii(toUtf8String(candidate.extension()));
-    if (!isSubtitleSidecarExtension(extLower)) return;
-    int rank = rankForStem(toUtf8String(candidate.stem()));
-    if (rank >= 0) {
-      ranked.emplace_back(rank, candidate);
-    } else {
-      fallbackCandidates.push_back(candidate);
-    }
-  };
-
-  auto scanFlatDirectory = [&](const std::filesystem::path& searchDir) {
-    for (std::filesystem::directory_iterator it(searchDir, ec), end; it != end;
-         it.increment(ec)) {
-      if (ec) break;
-      const auto& entry = *it;
-      bool isRegular = entry.is_regular_file(ec);
-      if (ec) {
-        ec.clear();
-        continue;
-      }
-      if (!isRegular) continue;
-      maybeAddCandidate(entry.path());
-    }
-    if (ec) ec.clear();
-  };
-
-  auto scanRecursiveDirectory = [&](const std::filesystem::path& searchDir,
-                                    int maxDepth) {
-    std::filesystem::directory_options options =
-        std::filesystem::directory_options::skip_permission_denied;
-    for (std::filesystem::recursive_directory_iterator it(searchDir, options, ec),
-         end;
-         it != end; it.increment(ec)) {
-      if (ec) {
-        ec.clear();
-        continue;
-      }
-      const auto& entry = *it;
-      bool isDir = entry.is_directory(ec);
-      if (ec) {
-        ec.clear();
-        continue;
-      }
-      if (isDir) {
-        if (it.depth() >= maxDepth) {
-          it.disable_recursion_pending();
-        }
-        continue;
-      }
-      bool isRegular = entry.is_regular_file(ec);
-      if (ec) {
-        ec.clear();
-        continue;
-      }
-      if (!isRegular) continue;
-      maybeAddCandidate(entry.path());
-    }
-    if (ec) ec.clear();
-  };
-
-  for (const auto& searchDir : searchDirs) {
-    bool dirExists = std::filesystem::exists(searchDir.path, ec);
-    if (ec || !dirExists) {
-      ec.clear();
-      continue;
-    }
-    bool isDir = std::filesystem::is_directory(searchDir.path, ec);
-    if (ec || !isDir) {
-      ec.clear();
-      continue;
-    }
-    if (searchDir.maxDepth <= 0) {
-      scanFlatDirectory(searchDir.path);
-    } else {
-      scanRecursiveDirectory(searchDir.path, searchDir.maxDepth);
-    }
-  }
-
-  if (ranked.empty()) {
-    for (const auto& candidate : fallbackCandidates) {
-      ranked.emplace_back(100, candidate);
-    }
-  }
-
-  std::sort(ranked.begin(), ranked.end(),
-            [](const auto& a, const auto& b) {
-              if (a.first != b.first) return a.first < b.first;
-              return toLowerAscii(toUtf8String(a.second)) <
-                     toLowerAscii(toUtf8String(b.second));
-            });
-
-  ranked.erase(std::unique(ranked.begin(), ranked.end(),
-                           [](const auto& a, const auto& b) {
-                             return toLowerAscii(toUtf8String(a.second)) ==
-                                    toLowerAscii(toUtf8String(b.second));
-                           }),
-               ranked.end());
-
-  std::vector<std::filesystem::path> out;
-  out.reserve(ranked.size());
-  for (const auto& item : ranked) {
-    out.push_back(item.second);
-  }
-  return out;
-}
-
 std::string subtitleLabelFromPath(const std::filesystem::path& path,
                                   const std::string& baseStem) {
   std::string stem = toUtf8String(path.stem());
@@ -2243,7 +2068,8 @@ void SubtitleManager::loadForVideo(const std::filesystem::path& videoPath) {
   activeTrack_ = 0;
 
   const std::string baseStem = toUtf8String(videoPath.stem());
-  std::vector<std::filesystem::path> files = discoverSubtitleFiles(videoPath);
+  const std::vector<std::filesystem::path> files =
+      playback_video_subtitle::discoverAutomaticSubtitleSidecars(videoPath);
   for (const auto& subtitleFile : files) {
     SubtitleTrack track;
     track.label = subtitleLabelFromPath(subtitleFile, baseStem);

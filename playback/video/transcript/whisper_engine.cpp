@@ -97,6 +97,39 @@ int inferenceThreadCount() {
   return static_cast<int>(std::clamp(available, 1u, 8u));
 }
 
+whisper_alignment_heads_preset whisperAlignmentPreset(
+    WhisperAlignmentPreset preset) {
+  switch (preset) {
+    case WhisperAlignmentPreset::None:
+      return WHISPER_AHEADS_NONE;
+    case WhisperAlignmentPreset::TinyEn:
+      return WHISPER_AHEADS_TINY_EN;
+    case WhisperAlignmentPreset::Tiny:
+      return WHISPER_AHEADS_TINY;
+    case WhisperAlignmentPreset::BaseEn:
+      return WHISPER_AHEADS_BASE_EN;
+    case WhisperAlignmentPreset::Base:
+      return WHISPER_AHEADS_BASE;
+    case WhisperAlignmentPreset::SmallEn:
+      return WHISPER_AHEADS_SMALL_EN;
+    case WhisperAlignmentPreset::Small:
+      return WHISPER_AHEADS_SMALL;
+    case WhisperAlignmentPreset::MediumEn:
+      return WHISPER_AHEADS_MEDIUM_EN;
+    case WhisperAlignmentPreset::Medium:
+      return WHISPER_AHEADS_MEDIUM;
+    case WhisperAlignmentPreset::LargeV1:
+      return WHISPER_AHEADS_LARGE_V1;
+    case WhisperAlignmentPreset::LargeV2:
+      return WHISPER_AHEADS_LARGE_V2;
+    case WhisperAlignmentPreset::LargeV3:
+      return WHISPER_AHEADS_LARGE_V3;
+    case WhisperAlignmentPreset::LargeV3Turbo:
+      return WHISPER_AHEADS_LARGE_V3_TURBO;
+  }
+  return WHISPER_AHEADS_NONE;
+}
+
 struct WhisperCallbackBridge {
   const WhisperEngine::ProgressCallback* progress = nullptr;
   const WhisperEngine::AbortCheck* abort = nullptr;
@@ -113,6 +146,16 @@ void whisperProgress(whisper_context*, whisper_state*, int progress,
 bool whisperAbort(void* userData) {
   const auto* bridge = static_cast<const WhisperCallbackBridge*>(userData);
   return bridge && bridge->abort && *bridge->abort && (*bridge->abort)();
+}
+
+int64_t whisperTimestampUs(int64_t centiseconds) {
+  if (centiseconds < 0) return -1;
+  constexpr int64_t kUsPerCentisecond = 10'000;
+  if (centiseconds >
+      (std::numeric_limits<int64_t>::max)() / kUsPerCentisecond) {
+    return (std::numeric_limits<int64_t>::max)();
+  }
+  return centiseconds * kUsPerCentisecond;
 }
 
 struct WhisperContextDeleter {
@@ -134,6 +177,7 @@ WhisperEngine::WhisperEngine() = default;
 WhisperEngine::~WhisperEngine() = default;
 
 bool WhisperEngine::initialize(const std::filesystem::path& modelPath,
+                               WhisperAlignmentPreset alignmentPreset,
                                std::string* deviceDescription,
                                std::string* error) {
   impl_.reset();
@@ -156,6 +200,10 @@ bool WhisperEngine::initialize(const std::filesystem::path& modelPath,
   // GGML Flash Attention's padded-mask precondition is not met for every
   // short decode window, so keep the stable Vulkan kernels for this workload.
   parameters.flash_attn = false;
+  if (alignmentPreset != WhisperAlignmentPreset::None) {
+    parameters.dtw_token_timestamps = true;
+    parameters.dtw_aheads_preset = whisperAlignmentPreset(alignmentPreset);
+  }
 
   const std::string modelPathUtf8 = toUtf8String(modelPath);
   WhisperContextPtr context(whisper_init_from_file_with_params(
@@ -180,7 +228,7 @@ bool WhisperEngine::initialize(const std::filesystem::path& modelPath,
 }
 
 bool WhisperEngine::transcribe(
-    const float* samples, size_t sampleCount, const std::string& prompt,
+    const float* samples, size_t sampleCount,
     const ProgressCallback& onProgress, const AbortCheck& shouldAbort,
     std::vector<RecognizedSegment>* segments, std::string* error) {
   if (error) error->clear();
@@ -216,9 +264,12 @@ bool WhisperEngine::transcribe(
   parameters.print_progress = false;
   parameters.print_realtime = false;
   parameters.print_timestamps = false;
-  parameters.max_len = 80;
-  parameters.split_on_word = true;
-  parameters.initial_prompt = prompt.empty() ? nullptr : prompt.c_str();
+  // Recognition owns word alignment; subtitle_cues owns presentation
+  // segmentation. Enabling token timestamps without Whisper's max_len split
+  // keeps those responsibilities separate and prevents model-created orphan
+  // words at an arbitrary character boundary.
+  parameters.token_timestamps = true;
+  parameters.thold_pt = 0.01f;
   parameters.progress_callback = whisperProgress;
   parameters.progress_callback_user_data = &bridge;
   parameters.abort_callback = whisperAbort;
@@ -245,11 +296,34 @@ bool WhisperEngine::transcribe(
     if (!text) continue;
 
     RecognizedSegment segment;
-    segment.startUs =
-        whisper_full_get_segment_t0(impl_->context.get(), index) * 10000;
-    segment.endUs =
-        whisper_full_get_segment_t1(impl_->context.get(), index) * 10000;
+    segment.startUs = whisperTimestampUs(
+        whisper_full_get_segment_t0(impl_->context.get(), index));
+    segment.endUs = whisperTimestampUs(
+        whisper_full_get_segment_t1(impl_->context.get(), index));
+    if (segment.startUs < 0 || segment.endUs <= segment.startUs) continue;
     segment.text = text;
+
+    const int tokenCount =
+        whisper_full_n_tokens(impl_->context.get(), index);
+    segment.tokens.reserve(static_cast<size_t>(std::max(0, tokenCount)));
+    const whisper_token firstSpecialToken =
+        whisper_token_eot(impl_->context.get());
+    for (int tokenIndex = 0; tokenIndex < tokenCount; ++tokenIndex) {
+      const whisper_token tokenId = whisper_full_get_token_id(
+          impl_->context.get(), index, tokenIndex);
+      if (tokenId >= firstSpecialToken) continue;
+      const char* tokenText = whisper_full_get_token_text(
+          impl_->context.get(), index, tokenIndex);
+      if (!tokenText || *tokenText == '\0') continue;
+      const whisper_token_data tokenData = whisper_full_get_token_data(
+          impl_->context.get(), index, tokenIndex);
+      RecognizedToken token;
+      token.startUs = whisperTimestampUs(tokenData.t0);
+      token.endUs = whisperTimestampUs(tokenData.t1);
+      token.alignmentUs = whisperTimestampUs(tokenData.t_dtw);
+      token.text = tokenText;
+      segment.tokens.push_back(std::move(token));
+    }
     segments->push_back(std::move(segment));
   }
   return true;

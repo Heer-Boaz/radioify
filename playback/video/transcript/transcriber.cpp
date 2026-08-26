@@ -11,6 +11,7 @@
 
 #include "ffmpegaudio.h"
 #include "playback/video/transcript/document.h"
+#include "playback/video/transcript/subtitle_cues.h"
 #include "playback/video/transcript/whisper_engine.h"
 #include "runtime_helpers.h"
 
@@ -20,8 +21,17 @@ namespace {
 constexpr uint32_t kSampleRate = WhisperEngine::kSampleRate;
 constexpr uint32_t kDecodeBlockFrames = 16 * 1024;
 constexpr uint64_t kChunkFrames = 60ull * kSampleRate;
-constexpr uint64_t kOverlapFrames = 4ull * kSampleRate;
+// The midpoint seam retains eight seconds of model context on either side.
+// DTW word alignment is unreliable in the first few seconds of an isolated
+// chunk, especially when speech follows silence; a short overlap allowed that
+// boundary artifact to leak into otherwise valid SRT timing.
+constexpr uint64_t kOverlapFrames = 16ull * kSampleRate;
 constexpr const char* kDefaultModelName = "ggml-base-q5_1.bin";
+
+struct WhisperModelSelection {
+  std::filesystem::path path;
+  WhisperAlignmentPreset alignmentPreset = WhisperAlignmentPreset::None;
+};
 
 void setError(std::string* error, std::string message) {
   if (error) *error = std::move(message);
@@ -81,44 +91,62 @@ int64_t framesToUs(uint64_t frames) {
   return static_cast<int64_t>(timestampUs);
 }
 
-std::string promptTail(const std::vector<Segment>& segments,
-                       int64_t beforeUs) {
-  constexpr size_t kMaxPromptBytes = 512;
-  std::string prompt;
-  for (auto it = segments.rbegin(); it != segments.rend(); ++it) {
-    if (it->endUs > beforeUs) continue;
-    if (it->text.empty()) continue;
-    const size_t separator = prompt.empty() ? 0 : 1;
-    if (it->text.size() + separator + prompt.size() > kMaxPromptBytes) break;
-    if (!prompt.empty()) prompt.insert(prompt.begin(), ' ');
-    prompt.insert(0, it->text);
+bool resolveWhisperModel(WhisperModelSelection* selection,
+                         std::string* error) {
+  if (!selection) {
+    setError(error, "No destination was provided for Whisper model selection.");
+    return false;
   }
-  return prompt;
+  *selection = {};
+  if (const auto configured = getEnvString("RADIOIFY_WHISPER_MODEL")) {
+    selection->path = pathFromUtf8String(*configured);
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(selection->path, ec) || ec) {
+      setError(error, "RADIOIFY_WHISPER_MODEL is not a readable model file: " +
+                          *configured);
+      return false;
+    }
+  } else {
+    for (const std::filesystem::path& root : radioifyResourceSearchRoots()) {
+      const std::array<std::filesystem::path, 2> candidates = {
+          root / "models" / kDefaultModelName,
+          root / kDefaultModelName,
+      };
+      for (const std::filesystem::path& candidate : candidates) {
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(candidate, ec) && !ec) {
+          selection->path = candidate;
+          selection->alignmentPreset = WhisperAlignmentPreset::Base;
+          break;
+        }
+      }
+      if (!selection->path.empty()) break;
+    }
+    if (selection->path.empty()) {
+      setError(error,
+               "Whisper model not found. Rebuild Radioify so "
+               "models/ggml-base-q5_1.bin is installed, or set "
+               "RADIOIFY_WHISPER_MODEL.");
+      return false;
+    }
+  }
+
+  if (const auto configuredPreset =
+          getEnvString("RADIOIFY_WHISPER_DTW_PRESET")) {
+    const auto preset = parseWhisperAlignmentPreset(*configuredPreset);
+    if (!preset) {
+      setError(error,
+               "RADIOIFY_WHISPER_DTW_PRESET is invalid. Use none, tiny, "
+               "tiny.en, base, base.en, small, small.en, medium, medium.en, "
+               "large.v1, large.v2, large.v3, or large.v3.turbo.");
+      return false;
+    }
+    selection->alignmentPreset = *preset;
+  }
+  return true;
 }
 
 }  // namespace
-
-std::filesystem::path resolveWhisperModelPath() {
-  if (const auto configured = getEnvString("RADIOIFY_WHISPER_MODEL")) {
-    const std::filesystem::path path = pathFromUtf8String(*configured);
-    std::error_code ec;
-    if (std::filesystem::is_regular_file(path, ec) && !ec) return path;
-  }
-
-  for (const std::filesystem::path& root : radioifyResourceSearchRoots()) {
-    const std::array<std::filesystem::path, 2> candidates = {
-        root / "models" / kDefaultModelName,
-        root / kDefaultModelName,
-    };
-    for (const std::filesystem::path& candidate : candidates) {
-      std::error_code ec;
-      if (std::filesystem::is_regular_file(candidate, ec) && !ec) {
-        return candidate;
-      }
-    }
-  }
-  return {};
-}
 
 bool createIndexedTranscript(const std::filesystem::path& videoPath,
                              const std::filesystem::path& outputPath,
@@ -135,18 +163,16 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
     return false;
   }
 
-  const std::filesystem::path modelPath = resolveWhisperModelPath();
-  if (modelPath.empty()) {
-    setError(error,
-             "Whisper model not found. Set RADIOIFY_WHISPER_MODEL or rebuild "
-             "Radioify so models/ggml-base-q5_1.bin is installed.");
-    return false;
-  }
+  WhisperModelSelection model;
+  if (!resolveWhisperModel(&model, error)) return false;
 
   report(onProgress, 0.01f, "Loading Vulkan speech model");
   WhisperEngine whisper;
   std::string vulkanDevice;
-  if (!whisper.initialize(modelPath, &vulkanDevice, error)) return false;
+  if (!whisper.initialize(model.path, model.alignmentPreset, &vulkanDevice,
+                          error)) {
+    return false;
+  }
   report(onProgress, 0.02f, "Vulkan ready on " + vulkanDevice);
 
   report(onProgress, 0.03f, "Opening video audio");
@@ -240,9 +266,6 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
         static_cast<uint64_t>(chunk.size()) - leadingOverlapFrames;
 
     const int64_t chunkStartUs = framesToUs(chunkStartFrame);
-    const int64_t promptCutoffUs =
-        std::max<int64_t>(0, audioStartUs + chunkStartUs);
-    std::string prompt = promptTail(segments, promptCutoffUs);
     report(onProgress,
            estimatedTranscriptionFraction(
                processedFrames, currentChunkFrames, 0, totalFrames),
@@ -250,7 +273,7 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
     std::vector<RecognizedSegment> recognizedSegments;
     std::string inferenceError;
     if (!whisper.transcribe(
-            chunk.data(), chunk.size(), prompt,
+            chunk.data(), chunk.size(),
             [&](int progress) {
               report(onProgress,
                      estimatedTranscriptionFraction(
@@ -266,8 +289,9 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
       return false;
     }
 
-    for (const RecognizedSegment& recognized : recognizedSegments) {
-      if (!isMeaningfulTranscriptText(recognized.text)) continue;
+    const std::vector<Segment> recognizedCues =
+        buildSubtitleCues(recognizedSegments);
+    for (const Segment& recognized : recognizedCues) {
       Segment segment;
       segment.startUs =
           std::max<int64_t>(0,
@@ -300,6 +324,7 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
     return false;
   }
 
+  finalizeSubtitleCueTimeline(&segments);
   report(onProgress, 0.98f, "Writing indexed transcript");
   if (!writeIndexedTranscript(outputPath, segments, error)) return false;
   report(onProgress, 1.0f, "Transcript complete");

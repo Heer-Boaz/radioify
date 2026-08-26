@@ -27,10 +27,15 @@ The default build enables whisper.cpp's Vulkan backend and downloads the
 SHA-256-verified multilingual Whisper base model used for offline,
 GPU-accelerated indexed transcripts. Set
 `RADIOIFY_WHISPER_MODEL` to use another compatible whisper.cpp model at
-runtime. Transcript creation fails with a clear error if the selected Vulkan
-device cannot initialize; it never silently falls back to CPU. The normal
-static build keeps the static MSVC runtime; it does not require a Visual C++
-redistributable install on another PC.
+runtime. Custom models use ordinary token timestamps unless the matching
+official alignment-head preset is explicitly selected with
+`RADIOIFY_WHISPER_DTW_PRESET` (for example `base.en`, `small`, or
+`large.v3.turbo`; use `none` to disable DTW). Invalid explicit configuration
+is reported instead of silently falling back. Transcript creation fails with
+a clear error if the selected Vulkan device cannot initialize; it never
+silently falls back to CPU. The normal static build keeps the static MSVC
+runtime; it does not require a Visual C++ redistributable install on another
+PC.
 
 ## Windows Package
 Build a distributable Windows x64 bundle and zip:
@@ -240,7 +245,7 @@ to the browser.
 - GSF (GPL, enabled by default; disable with `-DRADIOIFY_DISABLE_GSF_GPL=ON`): .gsf, .minigsf
 - Audio (media containers): .m4a, .m4b, .m4r, .m4p, .webm, .mp4, .mov, .mkv, .ogg (audio stream only)
 - Video (ASCII preview): .mp4, .m4v, .webm, .mov, .qt, .mkv, .avi, .wmv, .asf, .flv, .mpg, .mpeg, .mpe, .mpv, .m2v, .ts, .m2ts, .mts, .3gp, .3g2, .ogv, .vob, .mxf, .f4v, .dv, .ogm, .ivf, .nut, .rm, .rmvb, .bik, .smk, .wtv, .nsv, .pmp, .divx, .mjpg, .mjpeg, .mj2, .y4m, .roq, .mod, .tod (audio + video)
-- Subtitles: .srt and .vtt sidecar files (same basename, e.g. `video.mkv` + `video.srt`, including generated `video.transcript.srt` files)
+- Subtitles: .srt, .vtt, .ass, .ssa, .sbv, .sub, .txt, .smi, and .sami sidecars with the exact video basename or a recognized language/role qualifier (including generated `video.transcript.srt` files); unrelated subtitle files in the same directory are never loaded automatically
 - Images (ASCII art preview): .jpg, .jpeg, .jpe, .jfif, .png, .bmp, .gif, .tif, .tiff, .webp, .heic, .heif, .avif, .ico
 
 PSF2 playback needs `hebios.bin`. Set `RADIOIFY_PSF_BIOS` to the file path or

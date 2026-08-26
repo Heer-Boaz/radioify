@@ -8,12 +8,27 @@
 #include <string>
 #include <vector>
 
+#include "playback/video/transcript/whisper_model_config.h"
+
 namespace playback_video_transcript {
+
+struct RecognizedToken {
+  int64_t startUs = 0;
+  int64_t endUs = 0;
+  // DTW alignment point inside the spoken token, or -1 when the selected
+  // model has no known whisper.cpp alignment-head preset.
+  int64_t alignmentUs = -1;
+  std::string text;
+};
 
 struct RecognizedSegment {
   int64_t startUs = 0;
   int64_t endUs = 0;
   std::string text;
+  // Lexical tokens only. Whisper special/timestamp tokens never cross this
+  // boundary. Valid token timing lets the subtitle policy form readable cues
+  // without guessing from a decoder-sized segment.
+  std::vector<RecognizedToken> tokens;
 };
 
 class WhisperEngine {
@@ -30,9 +45,9 @@ class WhisperEngine {
   WhisperEngine& operator=(const WhisperEngine&) = delete;
 
   bool initialize(const std::filesystem::path& modelPath,
+                  WhisperAlignmentPreset alignmentPreset,
                   std::string* deviceDescription, std::string* error);
   bool transcribe(const float* samples, size_t sampleCount,
-                  const std::string& prompt,
                   const ProgressCallback& onProgress,
                   const AbortCheck& shouldAbort,
                   std::vector<RecognizedSegment>* segments,

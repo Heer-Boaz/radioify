@@ -1,6 +1,8 @@
 #include "playback/video/transcript/document.h"
+#include "playback/video/transcript/cue_semantics.h"
 #include "playback/video/transcript/device_selection.h"
-#include "tui/ui/file_context_menu_model.h"
+#include "playback/video/transcript/subtitle_cues.h"
+#include "playback/video/transcript/whisper_model_config.h"
 #include "tui/ui/ui_footer_layout.h"
 
 #include <algorithm>
@@ -33,6 +35,21 @@ int main() {
   namespace transcript = playback_video_transcript;
   bool ok = true;
 
+  ok &= expect(transcript::parseWhisperAlignmentPreset(" base.en ") ==
+                   transcript::WhisperAlignmentPreset::BaseEn &&
+                   transcript::parseWhisperAlignmentPreset(
+                       "LARGE-V3-TURBO") ==
+                       transcript::WhisperAlignmentPreset::LargeV3Turbo &&
+                   transcript::parseWhisperAlignmentPreset("off") ==
+                       transcript::WhisperAlignmentPreset::None &&
+                   !transcript::parseWhisperAlignmentPreset("my-base-model"),
+               "DTW presets must be explicit values, never filename guesses");
+  ok &= expect(transcript::isTranscriptSoundAnnotation(" [thunder] ") &&
+                   !transcript::isTranscriptSoundAnnotation(
+                       "(Welcome honored guests)") &&
+                   !transcript::isTranscriptSoundAnnotation("spoken text"),
+               "only square-bracketed SDH cues must be non-speech annotations");
+
   const std::vector<transcript::VulkanDeviceCandidate> gpuCandidates = {
       {0, transcript::VulkanDeviceClass::Integrated, 12, 24, "Vulkan0",
        "Integrated GPU"},
@@ -58,6 +75,115 @@ int main() {
   ok &= expect(!transcript::selectPreferredVulkanDevice({}),
                "an empty Vulkan device list must not select a GPU");
 
+  const std::vector<transcript::RecognizedSegment> timedRecognition = {
+      {0,
+       20'000'000,
+       " Hello world. Much later.",
+       {{0, 1'000'000, -1, " Hello"},
+        {1'000'000, 2'000'000, -1, " world."},
+        {10'000'000, 11'000'000, -1, " Much"},
+        {11'000'000, 12'000'000, -1, " later."}}},
+  };
+  const std::vector<transcript::Segment> timedCues =
+      transcript::buildSubtitleCues(timedRecognition);
+  ok &= expect(timedCues.size() == 2 &&
+                   timedCues[0].startUs == 0 &&
+                   timedCues[0].endUs == 2'150'000 &&
+                   timedCues[1].startUs == 10'000'000 &&
+                   timedCues[1].endUs == 12'150'000,
+               "word timing and real silence must own subtitle boundaries");
+
+  const std::vector<transcript::RecognizedSegment> alignedRecognition = {
+      {0,
+       20'000'000,
+       " Precisely aligned.",
+       {{0, 10'000'000, 5'000'000, " Precisely"},
+        {10'000'000, 20'000'000, 6'000'000, " aligned."}}},
+  };
+  const std::vector<transcript::Segment> alignedCues =
+      transcript::buildSubtitleCues(alignedRecognition);
+  ok &= expect(alignedCues.size() == 1 &&
+                   alignedCues[0].startUs == 4'800'000 &&
+                   alignedCues[0].endUs == 6'500'000,
+               "DTW alignment must override coarse decoder token spans");
+
+  const std::vector<transcript::RecognizedSegment> untimedRecognition = {
+      {0,
+       10'000'000,
+       " Hello, world.",
+       {{0, 1'000'000, 500'000, " Hello"},
+        {-1, -1, 9'000'000, ","},
+        {1'000'000, 2'000'000, 1'000'000, " world."}}},
+  };
+  const std::vector<transcript::Segment> untimedCues =
+      transcript::buildSubtitleCues(untimedRecognition);
+  ok &= expect(untimedCues.size() == 1 &&
+                   untimedCues[0].text == " Hello, world." &&
+                   untimedCues[0].startUs == 300'000 &&
+                   untimedCues[0].endUs == 1'500'000,
+               "an untimed lexical token must not leak alignment into the "
+               "next word");
+
+  const std::vector<transcript::RecognizedSegment> sentenceRecognition = {
+      {0,
+       10'000'000,
+       " Welcome, honored guests! I hope everyone attended you well. Honored guests?",
+       {{0, 500'000, -1, " Welcome,"},
+        {500'000, 1'000'000, -1, " honored"},
+        {1'000'000, 1'500'000, -1, " guests!"},
+        {1'500'000, 2'000'000, -1, " I"},
+        {2'000'000, 2'500'000, -1, " hope"},
+        {2'500'000, 3'000'000, -1, " everyone"},
+        {3'000'000, 3'500'000, -1, " attended"},
+        {3'500'000, 4'000'000, -1, " you"},
+        {4'000'000, 4'500'000, -1, " well."},
+        {4'500'000, 5'000'000, -1, " Honored"},
+        {5'000'000, 5'500'000, -1, " guests?"}}},
+  };
+  const std::vector<transcript::Segment> sentenceCues =
+      transcript::buildSubtitleCues(sentenceRecognition);
+  ok &= expect(sentenceCues.size() == 2 &&
+                   sentenceCues[0].text.back() == '.' &&
+                   sentenceCues[1].text == " Honored guests?",
+               "natural sentence boundaries must prevent orphan words");
+
+  const std::vector<transcript::RecognizedSegment> utf8Recognition = {
+      {0,
+       2'000'000,
+       " €",
+       {{0, 500'000, -1, " \xE2"},
+        {500'000, 1'000'000, -1, "\x82\xAC"}}},
+  };
+  const std::vector<transcript::Segment> utf8Cues =
+      transcript::buildSubtitleCues(utf8Recognition);
+  ok &= expect(utf8Cues.size() == 1 && utf8Cues[0].text == " €",
+               "token byte fragments must not create invalid UTF-8 cues");
+
+  const std::vector<transcript::RecognizedSegment> annotationRecognition = {
+      {0,
+       30'000'000,
+       " [thunder rumble]",
+       {{0, 10'000'000, 12'000'000, " [th"},
+        {10'000'000, 20'000'000, 12'100'000, "under"},
+        {20'000'000, 30'000'000, 13'000'000, " rumble]"}}},
+  };
+  const std::vector<transcript::Segment> annotationCues =
+      transcript::buildSubtitleCues(annotationRecognition);
+  ok &= expect(annotationCues.size() == 1 &&
+                   annotationCues[0].text == " [thunder rumble]" &&
+                   annotationCues[0].startUs == 11'800'000 &&
+                   annotationCues[0].endUs == 13'500'000,
+               "sound annotations must remain whole and use token alignment");
+
+  std::vector<transcript::Segment> overlappingCues = {
+      {0, 8'000'000, "First"},
+      {5'000'000, 6'000'000, "Second"},
+  };
+  transcript::finalizeSubtitleCueTimeline(&overlappingCues);
+  ok &= expect(overlappingCues.size() == 2 &&
+                   overlappingCues[0].endUs == 5'000'000,
+               "a successor cue must end an older overlapping cue");
+
   ok &= expect(transcript::defaultTranscriptPath("film.mkv") ==
                    std::filesystem::path("film.transcript.srt"),
                "default sidecar must retain the video stem");
@@ -65,27 +191,6 @@ int main() {
                    std::filesystem::path("archive.name.transcript.srt"),
                "default sidecar must retain multi-dot stems");
 
-  FileContextMenuCapabilities videoCapabilities;
-  videoCapabilities.video = true;
-  const std::vector<FileContextMenuItem> videoItems =
-      buildFileContextMenuItems(videoCapabilities);
-  ok &= expect(videoItems.size() == 3 &&
-                   videoItems[2].action ==
-                       FileContextAction::CreateIndexedTranscript,
-               "idle video menus must expose indexed transcripts");
-  FileContextMenuCapabilities audioCapabilities;
-  audioCapabilities.audio = true;
-  const std::vector<FileContextMenuItem> audioItems =
-      buildFileContextMenuItems(audioCapabilities);
-  ok &= expect(std::none_of(audioItems.begin(), audioItems.end(),
-                            [](const FileContextMenuItem& item) {
-                              return item.action ==
-                                     FileContextAction::CreateIndexedTranscript;
-                            }),
-               "audio-only menus must not expose video transcription");
-  videoCapabilities.backgroundTaskRunning = true;
-  ok &= expect(buildFileContextMenuItems(videoCapabilities).size() == 2,
-               "a running background task must suppress duplicate work");
   const BrowserFooterLayout transcriptFooter = computeBrowserFooterLayout(
       true, false, false, false, true, false, false, false);
   ok &= expect(transcriptFooter.showTranscriptStatus &&
@@ -125,6 +230,48 @@ int main() {
   ok &= expect(readFile(output) == expected,
                 "SRT output must be sorted, indexed, whitespace-normalized, "
                 "and omit silence hallucinations");
+  std::vector<transcript::Segment> parsedSegments;
+  ok &= expect(transcript::readIndexedTranscript(
+                   output, &parsedSegments, &error) &&
+                   parsedSegments.size() == 2 &&
+                   parsedSegments[0].startUs == 0 &&
+                   parsedSegments[0].endUs == 1'234'000 &&
+                   parsedSegments[1].text == "tweede regel",
+               "indexed transcript readers must recover normalized SRT timing "
+               "and text");
+  ok &= expect(transcript::latestIndexedTranscriptPath(testDir / "film.mkv") ==
+                   output,
+               "analysis readers must select the newest owned transcript "
+               "without reserving a writer destination");
+  const std::filesystem::path unrelatedTranscript =
+      testDir / "other.transcript.srt";
+  {
+    std::ofstream unrelated(unrelatedTranscript, std::ios::binary);
+    unrelated << "1\r\n00:00:00,000 --> 00:00:01,000\r\nOther\r\n";
+  }
+  ec.clear();
+  const auto outputTime = std::filesystem::last_write_time(output, ec);
+  if (!ec) {
+    std::filesystem::last_write_time(
+        unrelatedTranscript, outputTime + std::chrono::hours(1), ec);
+  }
+  ok &= expect(!ec &&
+                   transcript::latestIndexedTranscriptPath(
+                       testDir / "film.mkv") == output,
+               "newer transcripts owned by another video must be ignored");
+  const std::filesystem::path longOutput =
+      testDir / "long.transcript.srt";
+  const int64_t hundredHoursUs = 100LL * 60 * 60 * 1'000'000;
+  ok &= expect(transcript::writeIndexedTranscript(
+                   longOutput,
+                   {{hundredHoursUs, hundredHoursUs + 1'000'000,
+                     "Long recording"}},
+                   &error) &&
+                   transcript::readIndexedTranscript(
+                       longOutput, &parsedSegments, &error) &&
+                   parsedSegments.size() == 1 &&
+                   parsedSegments[0].startUs == hundredHoursUs,
+               "the SRT reader must round-trip writer timestamps beyond 99 hours");
 
   ok &= expect(transcript::availableTranscriptPath(testDir / "film.mkv") ==
                    testDir / "film.transcript.2.srt",

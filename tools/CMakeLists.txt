@@ -111,6 +111,11 @@ radioify_add_module_object_library(
   ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_pixel_compositor_tests.cpp
 )
 
+radioify_add_module_object_library(
+  radioify_tool_subtitle_sidecar_discovery_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_sidecar_discovery_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_browser_navigation_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_navigation_tests.cpp
 )

@@ -11,13 +11,17 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <system_error>
 #include <utility>
 
+#include "playback/video/sidecar_identity.h"
+#include "playback/video/transcript/cue_semantics.h"
 #include "runtime_helpers.h"
 
 namespace playback_video_transcript {
@@ -27,47 +31,84 @@ void setError(std::string* error, std::string message) {
   if (error) *error = std::move(message);
 }
 
-std::string normalizedCueText(const std::string& text) {
-  std::string normalized;
-  normalized.reserve(text.size());
-  bool pendingSpace = false;
-  for (unsigned char byte : text) {
-    const bool asciiWhitespace =
-        byte == ' ' || byte == '\t' || byte == '\r' || byte == '\n' ||
-        byte == '\f' || byte == '\v';
-    if (asciiWhitespace) {
-      pendingSpace = !normalized.empty();
-      continue;
-    }
-    if (pendingSpace) {
-      normalized.push_back(' ');
-      pendingSpace = false;
-    }
-    normalized.push_back(static_cast<char>(byte));
+bool parseSrtTimestamp(const std::string& value, int64_t* timestampUs) {
+  if (!timestampUs || value.size() < 12) return false;
+  const size_t firstColon = value.find(':');
+  const size_t secondColon =
+      firstColon == std::string::npos ? std::string::npos
+                                      : value.find(':', firstColon + 1);
+  const size_t fraction =
+      secondColon == std::string::npos
+          ? std::string::npos
+          : value.find_first_of(",.", secondColon + 1);
+  if (firstColon < 2 || secondColon == std::string::npos ||
+      secondColon != firstColon + 3 || fraction != secondColon + 3 ||
+      fraction + 4 != value.size()) {
+    return false;
   }
-  return normalized;
+  const auto parsePart = [&](size_t begin, size_t end,
+                             int64_t* part) -> bool {
+    if (!part || begin >= end) return false;
+    int64_t parsed = 0;
+    for (size_t index = begin; index < end; ++index) {
+      if (value[index] < '0' || value[index] > '9' ||
+          parsed > ((std::numeric_limits<int64_t>::max)() - 9) / 10) {
+        return false;
+      }
+      parsed = parsed * 10 + (value[index] - '0');
+    }
+    *part = parsed;
+    return true;
+  };
+  int64_t hours = 0;
+  int64_t minutes = 0;
+  int64_t seconds = 0;
+  int64_t milliseconds = 0;
+  if (!parsePart(0, firstColon, &hours) ||
+      !parsePart(firstColon + 1, secondColon, &minutes) ||
+      !parsePart(secondColon + 1, fraction, &seconds) ||
+      !parsePart(fraction + 1, value.size(), &milliseconds) || minutes >= 60 ||
+      seconds >= 60) {
+    return false;
+  }
+  const int64_t maximumMilliseconds =
+      (std::numeric_limits<int64_t>::max)() / 1000;
+  constexpr int64_t kMillisecondsPerHour = 3'600'000;
+  if (hours > maximumMilliseconds / kMillisecondsPerHour) return false;
+  const int64_t hourMilliseconds = hours * kMillisecondsPerHour;
+  const int64_t remainingMilliseconds =
+      (minutes * 60 + seconds) * 1000 + milliseconds;
+  if (hourMilliseconds > maximumMilliseconds - remainingMilliseconds) {
+    return false;
+  }
+  const int64_t totalMilliseconds =
+      hourMilliseconds + remainingMilliseconds;
+  *timestampUs = totalMilliseconds * 1000;
+  return true;
 }
 
-bool hasTranscriptContent(const std::string& text) {
-  for (unsigned char byte : text) {
-    if (byte >= 0x80 || (byte >= '0' && byte <= '9') ||
-        (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z')) {
-      return true;
+bool parseSrtTimingLine(const std::string& line, int64_t* startUs,
+                        int64_t* endUs) {
+  constexpr const char* kArrow = "-->";
+  const size_t arrow = line.find(kArrow);
+  if (arrow == std::string::npos) return false;
+  const auto trim = [](std::string value) {
+    while (!value.empty() &&
+           std::isspace(static_cast<unsigned char>(value.front()))) {
+      value.erase(value.begin());
     }
-  }
-  return false;
-}
-
-bool isSilencePlaceholder(const std::string& text) {
-  std::string lowercase;
-  lowercase.reserve(text.size());
-  for (unsigned char byte : text) {
-    lowercase.push_back(static_cast<char>(
-        byte >= 'A' && byte <= 'Z' ? byte + ('a' - 'A') : byte));
-  }
-  return lowercase == "[blank_audio]" || lowercase == "[blank audio]" ||
-         lowercase == "(blank audio)" || lowercase == "[silence]" ||
-         lowercase == "(silence)";
+    while (!value.empty() &&
+           std::isspace(static_cast<unsigned char>(value.back()))) {
+      value.pop_back();
+    }
+    return value;
+  };
+  const std::string start = trim(line.substr(0, arrow));
+  std::string end = trim(line.substr(arrow + 3));
+  const size_t endOfTimestamp = end.find_first_of(" \t");
+  if (endOfTimestamp != std::string::npos) end.resize(endOfTimestamp);
+  return parseSrtTimestamp(start, startUs) &&
+         parseSrtTimestamp(end, endUs) && *endUs > *startUs;
 }
 
 std::string srtTimestamp(int64_t timestampUs) {
@@ -126,12 +167,6 @@ bool publishFile(const std::filesystem::path& source,
 
 }  // namespace
 
-bool isMeaningfulTranscriptText(const std::string& text) {
-  const std::string normalized = normalizedCueText(text);
-  return !normalized.empty() && hasTranscriptContent(normalized) &&
-         !isSilencePlaceholder(normalized);
-}
-
 std::filesystem::path defaultTranscriptPath(
     const std::filesystem::path& videoPath) {
   if (videoPath.filename().empty()) return {};
@@ -156,6 +191,113 @@ std::filesystem::path availableTranscriptPath(
     if (!std::filesystem::exists(candidate, ec) && !ec) return candidate;
   }
   return {};
+}
+
+std::filesystem::path latestIndexedTranscriptPath(
+    const std::filesystem::path& videoPath) {
+  if (videoPath.filename().empty()) return {};
+  std::filesystem::path directory = videoPath.parent_path();
+  if (directory.empty()) directory = std::filesystem::path(L".");
+  std::error_code ec;
+  std::filesystem::directory_iterator entries(directory, ec);
+  if (ec) return {};
+
+  std::filesystem::path newest;
+  std::filesystem::file_time_type newestTime{};
+  bool haveNewest = false;
+  for (const auto& entry : entries) {
+    ec.clear();
+    if (!entry.is_regular_file(ec) || ec ||
+        !playback_video_sidecars::isIndexedTranscriptSidecar(
+            videoPath, entry.path())) {
+      continue;
+    }
+    ec.clear();
+    const auto modified = entry.last_write_time(ec);
+    if (ec) continue;
+    if (!haveNewest || modified > newestTime) {
+      newest = entry.path();
+      newestTime = modified;
+      haveNewest = true;
+    }
+  }
+  return newest;
+}
+
+bool readIndexedTranscript(const std::filesystem::path& inputPath,
+                           std::vector<Segment>* segments,
+                           std::string* error) {
+  if (error) error->clear();
+  if (segments) segments->clear();
+  if (inputPath.empty() || !segments) {
+    setError(error, "Transcript input or destination is empty.");
+    return false;
+  }
+  std::ifstream input(inputPath, std::ios::binary);
+  if (!input) {
+    setError(error, "Could not open transcript: " +
+                        toUtf8String(inputPath.filename()));
+    return false;
+  }
+
+  std::vector<std::string> block;
+  const auto consumeBlock = [&]() {
+    if (block.empty()) return;
+    size_t timingIndex = block.size();
+    int64_t startUs = 0;
+    int64_t endUs = 0;
+    for (size_t index = 0; index < block.size(); ++index) {
+      if (parseSrtTimingLine(block[index], &startUs, &endUs)) {
+        timingIndex = index;
+        break;
+      }
+    }
+    if (timingIndex == block.size()) {
+      block.clear();
+      return;
+    }
+    std::string text;
+    for (size_t index = timingIndex + 1; index < block.size(); ++index) {
+      const std::string normalized =
+          normalizeTranscriptCueText(block[index]);
+      if (normalized.empty()) continue;
+      if (!text.empty()) text.push_back(' ');
+      text += normalized;
+    }
+    if (isMeaningfulTranscriptText(text)) {
+      segments->push_back({startUs, endUs, std::move(text)});
+    }
+    block.clear();
+  };
+
+  std::string line;
+  while (std::getline(input, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line.empty()) {
+      consumeBlock();
+    } else {
+      block.push_back(std::move(line));
+    }
+  }
+  consumeBlock();
+  if (!input.eof() && input.fail()) {
+    segments->clear();
+    setError(error, "Could not finish reading transcript: " +
+                        toUtf8String(inputPath.filename()));
+    return false;
+  }
+  if (segments->empty()) {
+    setError(error, "Transcript contains no readable speech cues.");
+    return false;
+  }
+  std::stable_sort(segments->begin(), segments->end(),
+                   [](const Segment& lhs, const Segment& rhs) {
+                     if (lhs.startUs != rhs.startUs) {
+                       return lhs.startUs < rhs.startUs;
+                     }
+                     return lhs.endUs < rhs.endUs;
+                   });
+  return true;
 }
 
 bool writeIndexedTranscript(const std::filesystem::path& outputPath,
@@ -184,7 +326,7 @@ bool writeIndexedTranscript(const std::filesystem::path& outputPath,
   cues.reserve(segments.size());
   for (const Segment& segment : segments) {
     Segment cue = segment;
-    cue.text = normalizedCueText(cue.text);
+    cue.text = normalizeTranscriptCueText(cue.text);
     if (!isMeaningfulTranscriptText(cue.text)) continue;
     cue.startUs = std::max<int64_t>(0, cue.startUs);
     cue.endUs = std::max(cue.startUs + 1000, cue.endUs);

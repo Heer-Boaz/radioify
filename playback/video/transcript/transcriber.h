@@ -14,8 +14,6 @@ struct Progress {
 
 using ProgressCallback = std::function<void(const Progress&)>;
 
-std::filesystem::path resolveWhisperModelPath();
-
 // Decodes the video's primary audio stream to Whisper's native mono 16 kHz
 // format and writes a timestamp-indexed SRT sidecar. The destination is not
 // changed unless the complete transcript succeeds.
