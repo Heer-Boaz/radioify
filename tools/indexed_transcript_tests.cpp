@@ -192,11 +192,13 @@ int main() {
                    std::filesystem::path("archive.name.transcript.srt"),
                "canonical sidecar must retain multi-dot stems");
 
-  const BrowserFooterLayout transcriptFooter = computeBrowserFooterLayout(
-      true, false, false, false, true, false, false, false);
-  ok &= expect(transcriptFooter.showTranscriptStatus &&
-                   transcriptFooter.reservedLines == 2,
-               "a completed transcript must reserve a visible status row");
+  const BrowserFooterLayout subtitleGenerationFooter =
+      computeBrowserFooterLayout(true, false, false, false, true, false, false,
+                                 false);
+  ok &= expect(subtitleGenerationFooter.showSubtitleGenerationStatus &&
+                   subtitleGenerationFooter.reservedLines == 2,
+               "completed subtitle generation must reserve a visible status "
+               "row");
 
   const auto stamp =
       std::chrono::steady_clock::now().time_since_epoch().count();

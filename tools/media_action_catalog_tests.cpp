@@ -41,7 +41,7 @@ int main() {
                    browserVideo[0].action == actions::Action::Play &&
                    browserVideo[1].action == actions::Action::EditVideo &&
                    browserVideo[2].action ==
-                       actions::Action::CreateIndexedTranscript &&
+                       actions::Action::GenerateSubtitles &&
                    browserVideo[2].label == "Generate subtitles...",
                "an idle browser video must expose the canonical source "
                "actions in stable order");
@@ -69,23 +69,28 @@ int main() {
   ok &= expect(resumableVideo.size() >= 2 &&
                    resumableVideo[1].label == "Resume editing",
                "retained edits must change the shared edit label");
-  video.hasIndexedTranscript = true;
-  const std::vector<actions::Item> transcriptVideo = actions::build(video);
-  ok &= expect(transcriptVideo.back().action ==
-                       actions::Action::CreateIndexedTranscript &&
-                   transcriptVideo.back().label == "Regenerate subtitles...",
-               "an existing transcript must be reflected in the shared action");
+  video.hasGeneratedSubtitles = true;
+  const std::vector<actions::Item> generatedSubtitleVideo =
+      actions::build(video);
+  ok &= expect(generatedSubtitleVideo.back().action ==
+                       actions::Action::GenerateSubtitles &&
+                   generatedSubtitleVideo.back().label ==
+                       "Regenerate subtitles...",
+               "existing generated subtitles must be reflected in the shared "
+               "action");
   video.backgroundTaskRunning = true;
   ok &= expect(!hasAction(actions::build(video),
-                          actions::Action::CreateIndexedTranscript),
-               "a running media task must suppress duplicate transcription");
-  video.indexedTranscriptRunningForSource = true;
-  const std::vector<actions::Item> transcribingVideo = actions::build(video);
-  ok &= expect(hasAction(transcribingVideo,
-                         actions::Action::CancelIndexedTranscript) &&
-                   !hasAction(transcribingVideo,
-                              actions::Action::CreateIndexedTranscript),
-               "the source being transcribed must expose cancellation");
+                          actions::Action::GenerateSubtitles),
+               "a running media task must suppress duplicate subtitle "
+               "generation");
+  video.subtitleGenerationRunningForSource = true;
+  const std::vector<actions::Item> generatingSubtitleVideo =
+      actions::build(video);
+  ok &= expect(hasAction(generatingSubtitleVideo,
+                         actions::Action::CancelSubtitleGeneration) &&
+                   !hasAction(generatingSubtitleVideo,
+                              actions::Action::GenerateSubtitles),
+               "the source being processed must expose cancellation");
 
   actions::Context audio;
   audio.mediaKind = actions::MediaKind::Audio;
@@ -97,10 +102,9 @@ int main() {
                    hasAction(browserAudio, actions::Action::BrowseTracks) &&
                    hasAction(browserAudio, actions::Action::AnalyzeAudio) &&
                    hasAction(browserAudio, actions::Action::SplitLoop) &&
+                   !hasAction(browserAudio, actions::Action::GenerateSubtitles) &&
                    !hasAction(browserAudio,
-                              actions::Action::CreateIndexedTranscript) &&
-                   !hasAction(browserAudio,
-                              actions::Action::CancelIndexedTranscript),
+                              actions::Action::CancelSubtitleGeneration),
                "audio menus must expose only canonical audio actions");
   audio.currentPlayback = true;
   audio.backgroundTaskRunning = true;

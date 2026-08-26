@@ -108,17 +108,17 @@ struct PlaybackLoopRunner::Impl {
   std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
   std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
   std::function<bool()> mediaBackgroundTaskRunning;
-  std::function<bool(const std::filesystem::path&)> requestIndexedTranscript;
+  std::function<bool(const std::filesystem::path&)> requestSubtitleGeneration;
   std::function<bool(const std::filesystem::path&)>
-      indexedTranscriptRunningFor;
-  std::function<bool()> cancelIndexedTranscript;
+      subtitleGenerationRunningFor;
+  std::function<bool()> cancelSubtitleGeneration;
   std::function<void()> activateBrowserSurface;
   const PlaybackSessionIntent sessionIntent;
   PlaybackSessionContinuationState capturedContinuationState;
   bool quitApplicationRequested = false;
   const bool enableAudio;
   bool hasSubtitles;
-  bool hasIndexedTranscript = false;
+  bool hasGeneratedSubtitles = false;
   mutable std::mutex subtitleMutex;
 
   PlaybackPresentationController presentationController;
@@ -184,10 +184,12 @@ struct PlaybackLoopRunner::Impl {
         requestTransportCommand(std::move(args.requestTransportCommand)),
         requestOpenFiles(std::move(args.requestOpenFiles)),
         mediaBackgroundTaskRunning(std::move(args.mediaBackgroundTaskRunning)),
-        requestIndexedTranscript(std::move(args.requestIndexedTranscript)),
-        indexedTranscriptRunningFor(
-            std::move(args.indexedTranscriptRunningFor)),
-        cancelIndexedTranscript(std::move(args.cancelIndexedTranscript)),
+        requestSubtitleGeneration(
+            std::move(args.requestSubtitleGeneration)),
+        subtitleGenerationRunningFor(
+            std::move(args.subtitleGenerationRunningFor)),
+        cancelSubtitleGeneration(
+            std::move(args.cancelSubtitleGeneration)),
         activateBrowserSurface(std::move(args.activateBrowserSurface)),
         sessionIntent(args.sessionIntent),
         enableAudio(args.enableAudio),
@@ -216,7 +218,7 @@ struct PlaybackLoopRunner::Impl {
         gpuRenderer(sharedGpuRenderer()),
         videoEditWorkspace(file, core.player(), timelinePreviewModel,
                            timelinePreviewProvider) {
-    hasIndexedTranscript =
+    hasGeneratedSubtitles =
         !playback_video_transcript::activeTranscriptPathForVideo(file).empty();
     core.initialize(screen);
     const playback_video_timeline_preview::Source previewSource{
@@ -432,13 +434,13 @@ struct PlaybackLoopRunner::Impl {
   void syncVideoEditPresentation(bool requestPresent = true) {
     const bool backgroundTaskRunning =
         mediaBackgroundTaskRunning && mediaBackgroundTaskRunning();
-    const bool transcriptRunningForSource =
-        indexedTranscriptRunningFor && indexedTranscriptRunningFor(file);
+    const bool subtitleGenerationRunningForSource =
+        subtitleGenerationRunningFor && subtitleGenerationRunningFor(file);
     contextMenuController.refresh(videoEditWorkspace.edit(),
                                   videoEditWorkspace.exportProgress(),
                                   backgroundTaskRunning,
-                                  transcriptRunningForSource,
-                                  hasIndexedTranscript);
+                                  subtitleGenerationRunningForSource,
+                                  hasGeneratedSubtitles);
     if (videoEditPrompt() != playback_video_edit::Prompt::None) {
       contextMenuController.dismiss();
       timelinePreviewModel.hide(
@@ -543,17 +545,17 @@ struct PlaybackLoopRunner::Impl {
     switch (action) {
       case playback_media_actions::Action::EditVideo:
         return executeVideoEditCommand(playback_video_edit::Command::Open);
-      case playback_media_actions::Action::CreateIndexedTranscript: {
+      case playback_media_actions::Action::GenerateSubtitles: {
         const bool started =
-            requestIndexedTranscript && requestIndexedTranscript(file);
+            requestSubtitleGeneration && requestSubtitleGeneration(file);
         syncVideoEditPresentation();
         showEditMessage(started ? "Generating subtitles (F8 to cancel)"
                                 : "Could not start subtitle generation");
         return true;
       }
-      case playback_media_actions::Action::CancelIndexedTranscript: {
+      case playback_media_actions::Action::CancelSubtitleGeneration: {
         const bool cancelled =
-            cancelIndexedTranscript && cancelIndexedTranscript();
+            cancelSubtitleGeneration && cancelSubtitleGeneration();
         syncVideoEditPresentation();
         showEditMessage(cancelled ? "Cancelling subtitle generation"
                                   : "Could not cancel subtitle generation");
@@ -1453,7 +1455,7 @@ struct PlaybackLoopRunner::Impl {
       inputView.hasSubtitles = hasSubtitles;
       enableSubtitlesShared.store(selectedPreferred || hasSubtitles,
                                   std::memory_order_relaxed);
-      hasIndexedTranscript =
+      hasGeneratedSubtitles =
           !playback_video_transcript::activeTranscriptPathForVideo(file)
                .empty();
     }
@@ -1468,10 +1470,11 @@ struct PlaybackLoopRunner::Impl {
     return hasSubtitles;
   }
 
-  void transcriptTaskFinished(const std::filesystem::path& preferredTrack,
-                              bool success, std::string status) {
+  void subtitleGenerationFinished(
+      const std::filesystem::path& preferredSubtitleTrack, bool success,
+      std::string status) {
     if (success) {
-      reloadSubtitles(preferredTrack);
+      reloadSubtitles(preferredSubtitleTrack);
       return;
     }
     syncVideoEditPresentation();
@@ -1563,10 +1566,11 @@ bool PlaybackLoopRunner::requestHandoff(
   return impl_->requestHandoff(std::move(completion));
 }
 
-void PlaybackLoopRunner::transcriptTaskFinished(
-    const std::filesystem::path& preferredTrack, bool success,
+void PlaybackLoopRunner::subtitleGenerationFinished(
+    const std::filesystem::path& preferredSubtitleTrack, bool success,
     std::string status) {
-  impl_->transcriptTaskFinished(preferredTrack, success, std::move(status));
+  impl_->subtitleGenerationFinished(preferredSubtitleTrack, success,
+                                    std::move(status));
 }
 
 void PlaybackLoopRunner::requestStop() { impl_->requestStop(); }

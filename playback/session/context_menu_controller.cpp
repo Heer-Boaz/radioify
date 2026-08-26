@@ -42,8 +42,8 @@ playback_overlay::ContextMenuItemToken ContextMenuController::tokenFor(
 void ContextMenuController::refresh(
     const playback_video_edit::EditSnapshot& edit,
     const playback_video_edit::ExportProgress& editExport,
-    bool backgroundTaskRunning, bool indexedTranscriptRunningForSource,
-    bool hasIndexedTranscript) {
+    bool backgroundTaskRunning, bool subtitleGenerationRunningForSource,
+    bool hasGeneratedSubtitles) {
   std::optional<ContextMenuCommand> selectedCommand;
   if (selected_ < items_.size()) selectedCommand = items_[selected_].command;
 
@@ -54,9 +54,9 @@ void ContextMenuController::refresh(
   sourceContext.editorActive = edit.active;
   sourceContext.hasEdits = edit.hasEdits;
   sourceContext.backgroundTaskRunning = backgroundTaskRunning;
-  sourceContext.hasIndexedTranscript = hasIndexedTranscript;
-  sourceContext.indexedTranscriptRunningForSource =
-      indexedTranscriptRunningForSource;
+  sourceContext.hasGeneratedSubtitles = hasGeneratedSubtitles;
+  sourceContext.subtitleGenerationRunningForSource =
+      subtitleGenerationRunningForSource;
   for (playback_media_actions::Item& item :
        playback_media_actions::build(sourceContext)) {
     next.push_back({item.action, std::move(item.label)});

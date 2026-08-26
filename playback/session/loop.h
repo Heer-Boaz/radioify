@@ -50,10 +50,10 @@ class PlaybackLoopRunner {
         requestOpenFiles;
     std::function<bool()> mediaBackgroundTaskRunning;
     std::function<bool(const std::filesystem::path&)>
-        requestIndexedTranscript;
+        requestSubtitleGeneration;
     std::function<bool(const std::filesystem::path&)>
-        indexedTranscriptRunningFor;
-    std::function<bool()> cancelIndexedTranscript;
+        subtitleGenerationRunningFor;
+    std::function<bool()> cancelSubtitleGeneration;
     std::function<void()> activateBrowserSurface;
     PlaybackSessionContinuationState continuityState;
     PlaybackSessionIntent sessionIntent = PlaybackSessionIntent::View;
@@ -83,8 +83,9 @@ class PlaybackLoopRunner {
   bool toggleFullscreen();
   bool activatePresentation();
   bool requestHandoff(std::function<void(bool)> completion);
-  void transcriptTaskFinished(const std::filesystem::path& preferredTrack,
-                              bool success, std::string status);
+  void subtitleGenerationFinished(
+      const std::filesystem::path& preferredSubtitleTrack, bool success,
+      std::string status);
   void requestStop();
   void requestQuit();
   void shutdown();

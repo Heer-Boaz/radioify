@@ -951,10 +951,10 @@ class TuiMediaCoordinator {
     std::function<void()> presentationFinished;
     std::function<bool()> mediaBackgroundTaskRunning;
     std::function<bool(const std::filesystem::path&)>
-        requestIndexedTranscript;
+        requestSubtitleGeneration;
     std::function<bool(const std::filesystem::path&)>
-        indexedTranscriptRunningFor;
-    std::function<bool()> cancelIndexedTranscript;
+        subtitleGenerationRunningFor;
+    std::function<bool()> cancelSubtitleGeneration;
     std::function<void()> activateBrowserSurface;
   };
 
@@ -1099,15 +1099,16 @@ class TuiMediaCoordinator {
     return videoSession_ && videoSession_->activatePresentation();
   }
 
-  void transcriptTaskFinishedFor(const std::filesystem::path& sourceFile,
-                                 const std::filesystem::path& outputFile,
-                                 bool success, std::string status) {
+  void subtitleGenerationFinishedFor(
+      const std::filesystem::path& sourceFile,
+      const std::filesystem::path& outputFile, bool success,
+      std::string status) {
     if (!videoSession_ || !videoTarget_ ||
         !samePath(playbackTargetFile(*videoTarget_), sourceFile)) {
       return;
     }
-    videoSession_->transcriptTaskFinished(outputFile, success,
-                                          std::move(status));
+    videoSession_->subtitleGenerationFinished(outputFile, success,
+                                              std::move(status));
   }
 
   void stopVideo() {
@@ -1357,9 +1358,9 @@ class TuiMediaCoordinator {
         std::move(requestTransport),
         std::move(requestDroppedFiles),
         services_.mediaBackgroundTaskRunning,
-        services_.requestIndexedTranscript,
-        services_.indexedTranscriptRunningFor,
-        services_.cancelIndexedTranscript,
+        services_.requestSubtitleGeneration,
+        services_.subtitleGenerationRunningFor,
+        services_.cancelSubtitleGeneration,
         services_.activateBrowserSurface};
     PlaybackSession::Dependencies sessionDependencies{
         services_.input,
@@ -1925,8 +1926,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   };
   MelodyExportTaskState melodyExportTask;
   LoopSplitTaskState loopSplitTask;
-  playback_video_transcript::GenerationJob indexedTranscriptTask;
-  uint64_t observedTranscriptResultRevision = 0;
+  playback_video_transcript::GenerationJob subtitleGenerationJob;
+  uint64_t observedSubtitleGenerationRevision = 0;
 
   auto mediaBackgroundTaskRunning = [&]() {
     bool running = false;
@@ -1938,23 +1939,23 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       std::lock_guard<std::mutex> lock(loopSplitTask.mutex);
       running = running || loopSplitTask.running;
     }
-    running = running || indexedTranscriptTask.snapshot().running;
+    running = running || subtitleGenerationJob.snapshot().running;
     return running;
   };
-  auto requestIndexedTranscript = [&](const std::filesystem::path& file) {
+  auto requestSubtitleGeneration = [&](const std::filesystem::path& file) {
     if (!isVideoExt(file) || mediaBackgroundTaskRunning()) return false;
-    if (!indexedTranscriptTask.tryStart(file)) return false;
+    if (!subtitleGenerationJob.tryStart(file)) return false;
     markDirty(UiDirtyFlags::Async);
     return true;
   };
-  auto indexedTranscriptRunningFor =
+  auto subtitleGenerationRunningFor =
       [&](const std::filesystem::path& file) {
         const playback_video_transcript::GenerationJobSnapshot snapshot =
-            indexedTranscriptTask.snapshot();
+            subtitleGenerationJob.snapshot();
         return snapshot.running && samePath(snapshot.sourceFile, file);
       };
-  auto cancelIndexedTranscript = [&]() {
-    const bool requested = indexedTranscriptTask.requestCancel();
+  auto cancelSubtitleGeneration = [&]() {
+    const bool requested = subtitleGenerationJob.requestCancel();
     if (requested) markDirty(UiDirtyFlags::Async);
     return requested;
   };
@@ -1977,8 +1978,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
          markDirty(UiDirtyFlags::Async);
        },
        [&]() { running = false; }, [&]() { markDirty(); },
-       mediaBackgroundTaskRunning, requestIndexedTranscript,
-       indexedTranscriptRunningFor, cancelIndexedTranscript,
+       mediaBackgroundTaskRunning, requestSubtitleGeneration,
+       subtitleGenerationRunningFor, cancelSubtitleGeneration,
        [&]() {
          if (windowTuiEnabled && tuiWindow.IsOpen()) {
            tuiWindow.Activate();
@@ -2255,10 +2256,10 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       hasLoopSplitStatus =
           loopSplitTask.hasResult && !loopSplitTask.status.empty();
     }
-    const playback_video_transcript::GenerationJobSnapshot transcriptSnapshot =
-        indexedTranscriptTask.snapshot();
-    const bool hasTranscriptStatus =
-        transcriptSnapshot.hasResult && !transcriptSnapshot.status.empty();
+    const playback_video_transcript::GenerationJobSnapshot
+        subtitleGeneration = subtitleGenerationJob.snapshot();
+    const bool hasSubtitleGenerationStatus =
+        subtitleGeneration.hasResult && !subtitleGeneration.status.empty();
     const std::filesystem::path nowPlaying = currentPlaybackFile();
     const bool showNowPlaying =
         !nowPlaying.empty() || audioIsReady() || audioIsSeeking() ||
@@ -2266,7 +2267,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     BrowserFooterLayout layout = computeBrowserFooterLayout(
         !melodyVisualizationEnabled,
         !mediaCommandError.empty() || !audioGetWarning().empty(),
-        hasAnalyzeStatus, hasLoopSplitStatus, hasTranscriptStatus, o.play,
+        hasAnalyzeStatus, hasLoopSplitStatus, hasSubtitleGenerationStatus,
+        o.play,
         showNowPlaying,
         o.play && audioIsReady());
     if (layout.showNowPlaying) {
@@ -2360,11 +2362,11 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     context.canAnalyzeAudio =
         audio && audioCanAnalyzeFileToMelodyFile(entry.path);
     context.backgroundTaskRunning = mediaBackgroundTaskRunning();
-    context.hasIndexedTranscript =
+    context.hasGeneratedSubtitles =
         !playback_video_transcript::activeTranscriptPathForVideo(entry.path)
              .empty();
-    context.indexedTranscriptRunningForSource =
-        indexedTranscriptRunningFor(entry.path);
+    context.subtitleGenerationRunningForSource =
+        subtitleGenerationRunningFor(entry.path);
     std::vector<playback_media_actions::Item> items =
         playback_media_actions::build(context);
     if (items.empty()) return;
@@ -2989,11 +2991,11 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         markDirty(UiDirtyFlags::Async);
       }
     } else if (action ==
-               playback_media_actions::Action::CreateIndexedTranscript) {
-      requestIndexedTranscript(entry.path);
+               playback_media_actions::Action::GenerateSubtitles) {
+      requestSubtitleGeneration(entry.path);
     } else if (action ==
-               playback_media_actions::Action::CancelIndexedTranscript) {
-      cancelIndexedTranscript();
+               playback_media_actions::Action::CancelSubtitleGeneration) {
+      cancelSubtitleGeneration();
     } else if (action == playback_media_actions::Action::AnalyzeAudio) {
       startMelodyExport(entry);
     } else if (action == playback_media_actions::Action::SplitLoop) {
@@ -3192,17 +3194,19 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
     cleanupMelodyExportWorker();
     cleanupLoopSplitExportWorker(loopSplitTask);
-    indexedTranscriptTask.reapFinished();
+    subtitleGenerationJob.reapFinished();
     const playback_video_transcript::GenerationJobSnapshot
-        completedTranscript =
-        indexedTranscriptTask.snapshot();
-    if (completedTranscript.hasResult &&
-        completedTranscript.resultRevision !=
-            observedTranscriptResultRevision) {
-      observedTranscriptResultRevision = completedTranscript.resultRevision;
-      mediaCoordinator.transcriptTaskFinishedFor(
-          completedTranscript.sourceFile, completedTranscript.outputFile,
-          completedTranscript.success, completedTranscript.status);
+        completedSubtitleGeneration = subtitleGenerationJob.snapshot();
+    if (completedSubtitleGeneration.hasResult &&
+        completedSubtitleGeneration.resultRevision !=
+            observedSubtitleGenerationRevision) {
+      observedSubtitleGenerationRevision =
+          completedSubtitleGeneration.resultRevision;
+      mediaCoordinator.subtitleGenerationFinishedFor(
+          completedSubtitleGeneration.sourceFile,
+          completedSubtitleGeneration.outputFile,
+          completedSubtitleGeneration.success,
+          completedSubtitleGeneration.status);
       markLayoutDirty();
       markDirty(UiDirtyFlags::Async);
     }
@@ -3237,7 +3241,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         }
         if (playbackEvent.type == InputEvent::Type::Key &&
             playbackEvent.key.vk == VK_F8 &&
-            cancelIndexedTranscript()) {
+            cancelSubtitleGeneration()) {
           continue;
         }
         mediaCoordinator.handleVideoInputEvent(playbackEvent);
@@ -3273,7 +3277,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         return;
       }
       if (ev.type == InputEvent::Type::Key && ev.key.vk == VK_F8 &&
-          cancelIndexedTranscript()) {
+          cancelSubtitleGeneration()) {
         return;
       }
       if (mediaCoordinator.capturesBrowserInput()) {
@@ -3594,7 +3598,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       }
       joinMelodyExportWorker();
       joinLoopSplitExportWorker(loopSplitTask);
-      indexedTranscriptTask.cancelAndJoin();
+      subtitleGenerationJob.cancelAndJoin();
       audioShutdown();
     };
 
@@ -3955,16 +3959,14 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
                            statusStyle);
         }
         const playback_video_transcript::GenerationJobSnapshot
-            transcriptSnapshot =
-            indexedTranscriptTask.snapshot();
-        if (footerLayout.showTranscriptStatus &&
-            transcriptSnapshot.hasResult &&
-            !transcriptSnapshot.status.empty()) {
+            subtitleGeneration = subtitleGenerationJob.snapshot();
+        if (footerLayout.showSubtitleGenerationStatus &&
+            subtitleGeneration.hasResult &&
+            !subtitleGeneration.status.empty()) {
           const Style statusStyle =
-              transcriptSnapshot.success ? kStyleDim : kStyleAlert;
+              subtitleGeneration.success ? kStyleDim : kStyleAlert;
           screen.writeText(0, line++,
-                           fitLine(" Transcript: " + transcriptSnapshot.status,
-                                   width),
+                           fitLine(" " + subtitleGeneration.status, width),
                            statusStyle);
         }
       }
@@ -4221,7 +4223,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         std::filesystem::path exportSource;
         std::string title = " Melody Analysis";
         std::string detail;
-        bool isTranscriptTask = false;
+        bool isSubtitleGeneration = false;
         {
           std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
           if (melodyExportTask.running) {
@@ -4242,18 +4244,17 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         }
         if (!isRunning) {
           const playback_video_transcript::GenerationJobSnapshot
-              transcriptSnapshot =
-              indexedTranscriptTask.snapshot();
-          if (transcriptSnapshot.running) {
+              subtitleGeneration = subtitleGenerationJob.snapshot();
+          if (subtitleGeneration.running) {
             isRunning = true;
             exportProgress =
-                std::clamp(transcriptSnapshot.progress, 0.0f, 1.0f);
-            exportSource = transcriptSnapshot.sourceFile;
-            title = transcriptSnapshot.cancelRequested
+                std::clamp(subtitleGeneration.progress, 0.0f, 1.0f);
+            exportSource = subtitleGeneration.sourceFile;
+            title = subtitleGeneration.cancelRequested
                         ? "Cancelling Subtitles"
                         : "Generating Subtitles";
-            detail = transcriptSnapshot.phase;
-            isTranscriptTask = true;
+            detail = subtitleGeneration.phase;
+            isSubtitleGeneration = true;
           }
         }
         if (isRunning && width >= 4 && height - listTop >= 3) {
@@ -4264,7 +4265,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
               std::max(46, utf8DisplayWidth(sourceName) + 6);
           const int popupWidth = std::clamp(desiredWidth, 4, width);
           const int availableHeight = height - listTop;
-          const int desiredHeight = isTranscriptTask ? 7 : 6;
+          const int desiredHeight = isSubtitleGeneration ? 7 : 6;
           const int popupHeight = std::min(desiredHeight, availableHeight);
           const int x0 = std::max(0, width - popupWidth - 1);
           const int y0 = listTop;
@@ -4310,7 +4311,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
             progressLine = percentText;
           }
           cardLines.push_back({std::move(progressLine), kStyleNormal});
-          if (isTranscriptTask) {
+          if (isSubtitleGeneration) {
             cardLines.push_back({"F8: Cancel", kStyleDim});
           }
 
@@ -4354,7 +4355,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   std::cout << "\n";
   joinMelodyExportWorker();
   joinLoopSplitExportWorker(loopSplitTask);
-  indexedTranscriptTask.cancelAndJoin();
+  subtitleGenerationJob.cancelAndJoin();
   audioShutdown();
   return 0;
 }

@@ -81,9 +81,9 @@ struct PlaybackSession::Impl {
         std::move(request.requestTransportCommand),
         std::move(request.requestOpenFiles),
         std::move(request.mediaBackgroundTaskRunning),
-        std::move(request.requestIndexedTranscript),
-        std::move(request.indexedTranscriptRunningFor),
-        std::move(request.cancelIndexedTranscript),
+        std::move(request.requestSubtitleGeneration),
+        std::move(request.subtitleGenerationRunningFor),
+        std::move(request.cancelSubtitleGeneration),
         std::move(request.activateBrowserSurface),
         std::move(request.continuityState),
         request.sessionIntent});
@@ -259,12 +259,12 @@ bool PlaybackSession::requestHandoff(
          impl_->loop->requestHandoff(std::move(completion));
 }
 
-void PlaybackSession::transcriptTaskFinished(
-    const std::filesystem::path& preferredTrack, bool success,
+void PlaybackSession::subtitleGenerationFinished(
+    const std::filesystem::path& preferredSubtitleTrack, bool success,
     std::string status) {
   if (impl_->canControl()) {
-    impl_->loop->transcriptTaskFinished(preferredTrack, success,
-                                        std::move(status));
+    impl_->loop->subtitleGenerationFinished(preferredSubtitleTrack, success,
+                                            std::move(status));
   }
 }
 
