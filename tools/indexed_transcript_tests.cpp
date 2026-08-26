@@ -195,20 +195,11 @@ int main() {
                    std::filesystem::path("archive.name.transcript.srt"),
                "canonical sidecar must retain multi-dot stems");
 
-  const BrowserFooterLayout subtitleGenerationFooter =
-      computeBrowserFooterLayout(true, false, false, false, true, false,
-                                 false, false, false);
-  ok &= expect(subtitleGenerationFooter.showSubtitleGenerationStatus &&
-                   subtitleGenerationFooter.reservedLines == 2,
-               "completed subtitle generation must reserve a visible status "
-               "row");
-
-  const BrowserFooterLayout audioSeparationFooter =
-      computeBrowserFooterLayout(true, false, false, false, false, true,
-                                 false, false, false);
-  ok &= expect(audioSeparationFooter.showAudioSeparationStatus &&
-                   audioSeparationFooter.reservedLines == 2,
-               "completed audio separation must reserve a visible status row");
+  const BrowserFooterLayout mediaTaskFooter =
+      computeBrowserFooterLayout(true, false, true, false, false, false);
+  ok &= expect(mediaTaskFooter.showMediaTaskStatus &&
+                   mediaTaskFooter.reservedLines == 2,
+               "the latest media task must reserve one shared status row");
 
   const auto stamp =
       std::chrono::steady_clock::now().time_since_epoch().count();

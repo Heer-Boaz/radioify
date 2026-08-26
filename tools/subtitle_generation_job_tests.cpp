@@ -1,5 +1,4 @@
 #include "playback/video/transcript/generation_job.h"
-#include "tui/ui/subtitle_generation_status.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -152,10 +151,6 @@ int main() {
   ok &= expect(succeeded && succeeded->succeeded() && succeeded->finished() &&
                    succeeded->progress == 1.0f,
                "successful completion must be terminal and complete");
-  ok &= expect(succeeded &&
-                   subtitleGenerationStatus(*succeeded) ==
-                       "Subtitles ready: clip.transcript.srt",
-               "presentation must derive success text from typed state");
   ok &= expect(!job.takeCompletion(),
                "each completion must be consumed exactly once");
 
@@ -173,9 +168,7 @@ int main() {
   ok &= expect(cancelled &&
                    cancelled->state ==
                        transcript::GenerationJobState::Cancelled &&
-                   cancelled->error.empty() &&
-                   subtitleGenerationStatus(*cancelled) ==
-                       "Subtitle generation cancelled.",
+                   cancelled->error.empty(),
                "cancelled work must not surface a backend failure");
 
   ok &= expect(job.tryStart("failure.mp4") &&
@@ -185,8 +178,7 @@ int main() {
   const auto failed = waitForCompletion(job);
   ok &= expect(failed &&
                    failed->state == transcript::GenerationJobState::Failed &&
-                   failed->error == "Controlled generation failure." &&
-                   subtitleGenerationStatus(*failed) == failed->error,
+                   failed->error == "Controlled generation failure.",
                "backend failures must remain typed and retain their detail");
 
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;

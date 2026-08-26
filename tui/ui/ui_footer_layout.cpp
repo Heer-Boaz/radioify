@@ -3,11 +3,7 @@
 bool operator==(const BrowserFooterLayout& a, const BrowserFooterLayout& b) {
   return a.reservedLines == b.reservedLines && a.showMeta == b.showMeta &&
          a.showWarning == b.showWarning &&
-         a.showAnalyzeStatus == b.showAnalyzeStatus &&
-         a.showLoopSplitStatus == b.showLoopSplitStatus &&
-         a.showSubtitleGenerationStatus ==
-             b.showSubtitleGenerationStatus &&
-         a.showAudioSeparationStatus == b.showAudioSeparationStatus &&
+         a.showMediaTaskStatus == b.showMediaTaskStatus &&
          a.showNowPlaying == b.showNowPlaying &&
          a.nowPlayingLines == b.nowPlayingLines &&
          a.showActionStrip == b.showActionStrip &&
@@ -22,20 +18,14 @@ bool operator!=(const BrowserFooterLayout& a, const BrowserFooterLayout& b) {
 
 BrowserFooterLayout computeBrowserFooterLayout(bool browserInteractionEnabled,
                                                bool showWarning,
-                                               bool showAnalyzeStatus,
-                                               bool showLoopSplitStatus,
-                                               bool showSubtitleGenerationStatus,
-                                               bool showAudioSeparationStatus,
+                                               bool showMediaTaskStatus,
                                                bool enableTransportUi,
                                                bool showNowPlaying,
                                                bool showPeakMeter) {
   BrowserFooterLayout layout;
   layout.showMeta = browserInteractionEnabled;
   layout.showWarning = showWarning;
-  layout.showAnalyzeStatus = showAnalyzeStatus;
-  layout.showLoopSplitStatus = showLoopSplitStatus;
-  layout.showSubtitleGenerationStatus = showSubtitleGenerationStatus;
-  layout.showAudioSeparationStatus = showAudioSeparationStatus;
+  layout.showMediaTaskStatus = showMediaTaskStatus;
   layout.showNowPlaying = showNowPlaying;
   layout.nowPlayingLines = layout.showNowPlaying ? 1 : 0;
   layout.showActionStrip = enableTransportUi;
@@ -46,10 +36,7 @@ BrowserFooterLayout computeBrowserFooterLayout(bool browserInteractionEnabled,
   layout.reservedLines = 0;
   layout.reservedLines += layout.showMeta ? 1 : 0;
   layout.reservedLines += layout.showWarning ? 1 : 0;
-  layout.reservedLines += layout.showAnalyzeStatus ? 1 : 0;
-  layout.reservedLines += layout.showLoopSplitStatus ? 1 : 0;
-  layout.reservedLines += layout.showSubtitleGenerationStatus ? 1 : 0;
-  layout.reservedLines += layout.showAudioSeparationStatus ? 1 : 0;
+  layout.reservedLines += layout.showMediaTaskStatus ? 1 : 0;
   layout.reservedLines += layout.nowPlayingLines;
   layout.reservedLines += layout.actionStripLines;
   layout.reservedLines += layout.showPeakMeter ? 1 : 0;

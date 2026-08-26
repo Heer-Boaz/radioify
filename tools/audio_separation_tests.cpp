@@ -3,7 +3,6 @@
 #include "audio/separation/job.h"
 #include "audio/separation/spectral_transform.h"
 #include "audio/ffmpegaudio.h"
-#include "tui/ui/audio_separation_status.h"
 
 #include <algorithm>
 #include <chrono>
@@ -219,10 +218,6 @@ bool testJobLifecycle() {
                    completion->outputFiles[1] == "clip.music.flac" &&
                    completion->outputFiles[2] == "clip.effects.flac",
                "job completion must own and expose the managed stem set");
-  ok &= expect(completion &&
-                   audioSeparationStatus(*completion) ==
-                       "Audio stems ready: dialogue, music and effects.",
-               "typed completion state must produce the shared success text");
   ok &= expect(!job.takeCompletion(),
                "a separation completion must be delivered exactly once");
 
@@ -258,9 +253,7 @@ bool testJobLifecycle() {
     }
   }
   ok &= expect(cancelled && cancelled->state == separation::JobState::Cancelled &&
-                   cancelled->error.empty() &&
-                   audioSeparationStatus(*cancelled) ==
-                       "Audio separation cancelled.",
+                   cancelled->error.empty(),
                "cancelled work must publish typed state without backend noise");
   return ok;
 }

@@ -52,9 +52,7 @@
 #include "core/windows_console_window.h"
 #include "core/windows_shell_open.h"
 #include "image_viewer_sequence.h"
-#include "audio/separation/artifact.h"
-#include "audio/separation/job.h"
-#include "playback/video/transcript/generation_job.h"
+#include "media_processing_coordinator.h"
 #include "m4adecoder.h"
 #include "miniaudio.h"
 #include "optionsbrowser.h"
@@ -79,15 +77,14 @@
 #include "tracklist.h"
 #include "track_browser_state.h"
 #include "loopsplit_cli.h"
-#include "loopsplit_ui.h"
 #include "tui_export.h"
 #include "ui_footer_layout.h"
 #include "ui_helpers.h"
 #include "ui_inputlogic.h"
 #include "ui_input_pump.h"
 #include "ui_viewport.h"
-#include "subtitle_generation_status.h"
-#include "audio_separation_status.h"
+#include "media_task_card.h"
+#include "media_task_presentation.h"
 #include "playback/video/playback.h"
 #include "playback/video/transcript/artifact.h"
 #include "playback/video/framebuffer/window/window.h"
@@ -1940,104 +1937,47 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   BrowserPlaybackRevealer browserPlaybackRevealer(
       browserNavigator, std::move(browserPlaybackCallbacks));
 
-  struct MelodyExportTaskState {
-    std::mutex mutex;
-    std::thread worker;
-    bool running = false;
-    bool hasResult = false;
-    bool success = false;
-    float progress = 0.0f;
-    std::string status;
-    std::filesystem::path sourceFile;
-    std::filesystem::path outputFile;
-  };
-  MelodyExportTaskState melodyExportTask;
-  LoopSplitTaskState loopSplitTask;
-  playback_video_transcript::GenerationJob subtitleGenerationJob;
-  audio_separation::Job audioSeparationJob;
-  enum class CompletedMediaTask {
-    None,
-    SubtitleGeneration,
-    AudioSeparation,
-  };
-  CompletedMediaTask lastCompletedMediaTask = CompletedMediaTask::None;
-
-  auto pollDrivenBackgroundTaskRunning = [&]() {
-    bool running = false;
-    {
-      std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
-      running = running || melodyExportTask.running;
-    }
-    {
-      std::lock_guard<std::mutex> lock(loopSplitTask.mutex);
-      running = running || loopSplitTask.running;
-    }
-    return running;
-  };
-  auto mediaBackgroundTaskRunning = [&]() {
-    return pollDrivenBackgroundTaskRunning() ||
-           subtitleGenerationJob.snapshot().running() ||
-           audioSeparationJob.snapshot().running();
-  };
+  media_processing::Coordinator mediaTasks;
+  auto mediaBackgroundTaskRunning = [&]() { return mediaTasks.running(); };
   auto requestSubtitleGeneration = [&](const std::filesystem::path& file) {
-    if (!isVideoExt(file) || mediaBackgroundTaskRunning()) return false;
-    if (!subtitleGenerationJob.tryStart(file)) return false;
-    lastCompletedMediaTask = CompletedMediaTask::None;
+    if (!mediaTasks.tryStartSubtitleGeneration(file)) return false;
     markLayoutDirty();
     markDirty(UiDirtyFlags::Async);
     return true;
   };
   auto subtitleGenerationRunningFor =
       [&](const std::filesystem::path& file) {
-        const playback_video_transcript::GenerationJobSnapshot snapshot =
-            subtitleGenerationJob.snapshot();
-        return snapshot.running() && samePath(snapshot.sourceFile, file);
+        return mediaTasks.subtitleGenerationRunningFor(file);
       };
   auto cancelSubtitleGeneration = [&]() {
-    const bool requested = subtitleGenerationJob.requestCancel();
+    const bool requested = mediaTasks.cancelSubtitleGeneration();
     if (requested) markDirty(UiDirtyFlags::Async);
     return requested;
   };
   auto audioSeparationAvailableFor = [&](const std::filesystem::path& file) {
-#if RADIOIFY_HAS_AUDIO_SEPARATION
-    return (isVideoExt(file) || isSupportedAudioExt(file)) &&
-           !audio_separation::isManagedArtifactPath(file);
-#else
-    (void)file;
-    return false;
-#endif
+    return mediaTasks.audioSeparationAvailableFor(file);
   };
   auto requestAudioSeparation = [&](const std::filesystem::path& file) {
-    if (!audioSeparationAvailableFor(file) || mediaBackgroundTaskRunning()) {
-      return false;
-    }
-    if (!audioSeparationJob.tryStart(file)) return false;
-    lastCompletedMediaTask = CompletedMediaTask::None;
+    if (!mediaTasks.tryStartAudioSeparation(file)) return false;
     markLayoutDirty();
     markDirty(UiDirtyFlags::Async);
     return true;
   };
   auto audioSeparationRunningFor = [&](const std::filesystem::path& file) {
-    const audio_separation::JobSnapshot snapshot =
-        audioSeparationJob.snapshot();
-    return snapshot.running() && samePath(snapshot.sourceFile, file);
+    return mediaTasks.audioSeparationRunningFor(file);
   };
   auto hasSeparatedAudioFor = [&](const std::filesystem::path& file) {
-    return audio_separation::artifactsExistFor(file);
+    return mediaTasks.hasSeparatedAudioFor(file);
   };
   auto cancelAudioSeparation = [&]() {
-    const bool requested = audioSeparationJob.requestCancel();
+    const bool requested = mediaTasks.cancelAudioSeparation();
     if (requested) markDirty(UiDirtyFlags::Async);
     return requested;
   };
   auto cancelActiveMediaTask = [&]() {
-    if (subtitleGenerationJob.snapshot().running()) {
-      return cancelSubtitleGeneration();
-    }
-    if (audioSeparationJob.snapshot().running()) {
-      return cancelAudioSeparation();
-    }
-    return false;
+    const bool requested = mediaTasks.cancelActive();
+    if (requested) markDirty(UiDirtyFlags::Async);
+    return requested;
   };
 
   std::string mediaCommandError;
@@ -2075,14 +2015,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   auto mediaActivityWaitHandles = [&]() {
     std::vector<NativeWaitHandle> handles =
         mediaCoordinator.activityWaitHandles();
-    if (const NativeWaitHandle subtitleGenerationHandle =
-            subtitleGenerationJob.nativeWaitHandle()) {
-      handles.push_back(subtitleGenerationHandle);
-    }
-    if (const NativeWaitHandle audioSeparationHandle =
-            audioSeparationJob.nativeWaitHandle()) {
-      handles.push_back(audioSeparationHandle);
-    }
+    std::vector<NativeWaitHandle> taskHandles = mediaTasks.waitHandles();
+    handles.insert(handles.end(), taskHandles.begin(), taskHandles.end());
     return handles;
   };
   currentPlaybackTrackIndex =
@@ -2340,30 +2274,10 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       };
 
   auto buildFooterLayout = [&]() {
-    bool hasAnalyzeStatus = false;
-    {
-      std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
-      hasAnalyzeStatus =
-          melodyExportTask.hasResult && !melodyExportTask.status.empty();
-    }
-    bool hasLoopSplitStatus = false;
-    {
-      std::lock_guard<std::mutex> lock(loopSplitTask.mutex);
-      hasLoopSplitStatus =
-          loopSplitTask.hasResult && !loopSplitTask.status.empty();
-    }
-    const playback_video_transcript::GenerationJobSnapshot
-        subtitleGeneration = subtitleGenerationJob.snapshot();
-    const bool hasSubtitleGenerationStatus =
-        lastCompletedMediaTask == CompletedMediaTask::SubtitleGeneration &&
-        subtitleGeneration.finished() &&
-        !subtitleGenerationStatus(subtitleGeneration).empty();
-    const audio_separation::JobSnapshot audioSeparation =
-        audioSeparationJob.snapshot();
-    const bool hasAudioSeparationStatus =
-        lastCompletedMediaTask == CompletedMediaTask::AudioSeparation &&
-        audioSeparation.finished() &&
-        !audioSeparationStatus(audioSeparation).empty();
+    const std::optional<media_processing::TaskCompletion> completion =
+        mediaTasks.latestCompletion();
+    const bool hasMediaTaskStatus =
+        completion && !mediaTaskStatusModel(*completion).text.empty();
     const std::filesystem::path nowPlaying = currentPlaybackFile();
     const bool showNowPlaying =
         !nowPlaying.empty() || audioIsReady() || audioIsSeeking() ||
@@ -2371,8 +2285,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     BrowserFooterLayout layout = computeBrowserFooterLayout(
         !melodyVisualizationEnabled,
         !mediaCommandError.empty() || !audioGetWarning().empty(),
-        hasAnalyzeStatus, hasLoopSplitStatus, hasSubtitleGenerationStatus,
-        hasAudioSeparationStatus,
+        hasMediaTaskStatus,
         o.play,
         showNowPlaying,
         o.play && audioIsReady());
@@ -2970,78 +2883,18 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     return output;
   };
 
-  auto cleanupMelodyExportWorker = [&]() {
-    bool shouldJoin = false;
-    {
-      std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
-      shouldJoin =
-          !melodyExportTask.running && melodyExportTask.worker.joinable();
-    }
-    if (shouldJoin) {
-      melodyExportTask.worker.join();
-    }
-  };
-
-  auto joinMelodyExportWorker = [&]() {
-    if (melodyExportTask.worker.joinable()) {
-      melodyExportTask.worker.join();
-    }
-  };
-
   auto startMelodyExport = [&](const BrowserEntry& entry) {
     if (!entry.isMedia() || !isSupportedAudioExt(entry.path)) {
       return;
     }
-    if (mediaBackgroundTaskRunning()) {
-      return;
-    }
-
-    cleanupMelodyExportWorker();
 
     const auto* track = entry.actionAs<browser_entry::PlayTrack>();
-    int trackIndex = track ? track->trackIndex : 0;
-    std::filesystem::path outputFile = buildMelodyOutputPath(entry);
-
-    {
-      std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
-      if (melodyExportTask.running) {
-        return;
-      }
-      melodyExportTask.running = true;
-      melodyExportTask.hasResult = false;
-      melodyExportTask.success = false;
-      melodyExportTask.progress = 0.0f;
-      melodyExportTask.status.clear();
-      melodyExportTask.sourceFile = entry.path;
-      melodyExportTask.outputFile = outputFile;
+    const int trackIndex = track ? track->trackIndex : 0;
+    if (mediaTasks.tryStartMelodyAnalysis(
+            entry.path, trackIndex, buildMelodyOutputPath(entry))) {
+      markLayoutDirty();
+      markDirty(UiDirtyFlags::Async);
     }
-
-    melodyExportTask.worker =
-        std::thread([entryPath = entry.path, trackIndex, outputFile,
-                     &melodyExportTask]() {
-          auto onProgress = [&melodyExportTask](float progress) {
-            std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
-            melodyExportTask.progress = std::clamp(progress, 0.0f, 1.0f);
-          };
-          std::string error;
-          bool ok = audioAnalyzeFileToMelodyFile(entryPath, trackIndex,
-                                                 outputFile, onProgress, &error);
-          std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
-          melodyExportTask.running = false;
-          melodyExportTask.hasResult = true;
-          melodyExportTask.success = ok;
-          melodyExportTask.progress = ok ? 1.0f : melodyExportTask.progress;
-          if (ok) {
-            std::filesystem::path midiOutput = outputFile;
-            midiOutput.replace_extension(".mid");
-            melodyExportTask.status =
-                "Saved " + toUtf8String(outputFile.filename()) + " and " +
-                toUtf8String(midiOutput.filename());
-          } else {
-            melodyExportTask.status =
-                error.empty() ? "Analysis failed." : error;
-          }
-        });
   };
 
   auto computeFileContextLayout = [&](int w, int h, int topInset) {
@@ -3113,8 +2966,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     } else if (action == playback_media_actions::Action::AnalyzeAudio) {
       startMelodyExport(entry);
     } else if (action == playback_media_actions::Action::SplitLoop) {
-      if (entry.isMedia() && isSupportedAudioExt(entry.path) &&
-          !mediaBackgroundTaskRunning()) {
+      if (entry.isMedia() && isSupportedAudioExt(entry.path)) {
         LoopSplitConfig splitConfig;
         splitConfig.channels = 2;
         splitConfig.sampleRate = 48000;
@@ -3123,7 +2975,14 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         splitConfig.kssOptions = audioGetKssOptionState();
         splitConfig.nsfOptions = audioGetNsfOptionState();
         splitConfig.vgmOptions = audioGetVgmOptionState();
-        startLoopSplitExport(entry.path, o.output, splitConfig, loopSplitTask);
+        const auto outputPaths =
+            resolveSplitOutputPaths(entry.path, o.output);
+        if (mediaTasks.tryStartLoopSplit(
+                entry.path, outputPaths.first, outputPaths.second,
+                splitConfig)) {
+          markLayoutDirty();
+          markDirty(UiDirtyFlags::Async);
+        }
       }
     }
   };
@@ -3306,34 +3165,23 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     if (layoutDirty) {
       rebuildLayout();
     }
-    cleanupMelodyExportWorker();
-    cleanupLoopSplitExportWorker(loopSplitTask);
-    if (subtitleGenerationJob.consumeChanged()) {
-      markDirty(UiDirtyFlags::Async);
-    }
-    if (const auto completedSubtitleGeneration =
-            subtitleGenerationJob.takeCompletion()) {
-      lastCompletedMediaTask = CompletedMediaTask::SubtitleGeneration;
-      mediaCoordinator.subtitleGenerationFinishedFor(
-          completedSubtitleGeneration->sourceFile,
-          completedSubtitleGeneration->outputFile,
-          completedSubtitleGeneration->succeeded(),
-          subtitleGenerationStatus(*completedSubtitleGeneration));
+    const media_processing::PollResult mediaTaskUpdate = mediaTasks.poll();
+    for (const media_processing::TaskCompletion& completion :
+         mediaTaskUpdate.completions) {
+      const MediaTaskStatusModel status = mediaTaskStatusModel(completion);
+      if (completion.kind ==
+          media_processing::TaskKind::SubtitleGeneration) {
+        mediaCoordinator.subtitleGenerationFinishedFor(
+            completion.sourceFile, completion.outputFile,
+            completion.succeeded(), status.text);
+      } else if (completion.kind ==
+                 media_processing::TaskKind::AudioSeparation) {
+        mediaCoordinator.mediaTaskFinishedFor(completion.sourceFile,
+                                              status.text);
+      }
       markLayoutDirty();
-      markDirty(UiDirtyFlags::Async);
     }
-    if (audioSeparationJob.consumeChanged()) {
-      markDirty(UiDirtyFlags::Async);
-    }
-    if (const auto completedAudioSeparation =
-            audioSeparationJob.takeCompletion()) {
-      lastCompletedMediaTask = CompletedMediaTask::AudioSeparation;
-      mediaCoordinator.mediaTaskFinishedFor(
-          completedAudioSeparation->sourceFile,
-          audioSeparationStatus(*completedAudioSeparation));
-      markLayoutDirty();
-      markDirty(UiDirtyFlags::Async);
-    }
+    if (mediaTaskUpdate.changed) markDirty(UiDirtyFlags::Async);
 
     if (windowTuiEnabled && tuiWindow.IsOpen()) {
       tuiWindow.PollEvents();
@@ -3720,10 +3568,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       if (windowTuiEnabled && tuiWindow.IsOpen()) {
         tuiWindow.Close();
       }
-      joinMelodyExportWorker();
-      joinLoopSplitExportWorker(loopSplitTask);
-      subtitleGenerationJob.cancelAndJoin();
-      audioSeparationJob.cancelAndJoin();
+      mediaTasks.shutdown();
       audioShutdown();
     };
 
@@ -3825,9 +3670,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         reduceTimeout(std::chrono::milliseconds(100));
       }
       if (audioPictureInPicture.isOpen()) {
-        reduceTimeout(std::chrono::milliseconds(100));
-      }
-      if (pollDrivenBackgroundTaskRunning()) {
         reduceTimeout(std::chrono::milliseconds(100));
       }
       if (mediaCoordinator.videoActive()) {
@@ -4050,63 +3892,16 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           }
         }
       }
-      if (line < height) {
-        bool exportHasResult = false;
-        bool exportSuccess = false;
-        std::string exportStatus;
-        {
-          std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
-          exportHasResult = melodyExportTask.hasResult;
-          exportSuccess = melodyExportTask.success;
-          exportStatus = melodyExportTask.status;
-        }
-        if (footerLayout.showAnalyzeStatus && exportHasResult &&
-            !exportStatus.empty()) {
-          Style statusStyle = exportSuccess ? kStyleDim : kStyleAlert;
-          screen.writeText(0, line++,
-                           fitLine(" Analyze: " + exportStatus, width),
-                           statusStyle);
-        }
-        bool loopSplitHasResult = false;
-        bool loopSplitSuccess = false;
-        std::string loopSplitStatus;
-        {
-          std::lock_guard<std::mutex> lock(loopSplitTask.mutex);
-          loopSplitHasResult = loopSplitTask.hasResult;
-          loopSplitSuccess = loopSplitTask.success;
-          loopSplitStatus = loopSplitTask.status;
-        }
-        if (footerLayout.showLoopSplitStatus && loopSplitHasResult &&
-            !loopSplitStatus.empty()) {
-          Style statusStyle = loopSplitSuccess ? kStyleDim : kStyleAlert;
-          screen.writeText(0, line++,
-                           fitLine(" Loop Split: " + loopSplitStatus, width),
-                           statusStyle);
-        }
-        const playback_video_transcript::GenerationJobSnapshot
-            subtitleGeneration = subtitleGenerationJob.snapshot();
-        if (footerLayout.showSubtitleGenerationStatus &&
-            subtitleGeneration.finished()) {
-          const std::string status =
-              subtitleGenerationStatus(subtitleGeneration);
-          const Style statusStyle =
-              subtitleGeneration.succeeded() ? kStyleDim : kStyleAlert;
-          if (!status.empty()) {
-            screen.writeText(0, line++, fitLine(" " + status, width),
-                             statusStyle);
-          }
-        }
-        const audio_separation::JobSnapshot audioSeparation =
-            audioSeparationJob.snapshot();
-        if (footerLayout.showAudioSeparationStatus &&
-            audioSeparation.finished()) {
-          const std::string status =
-              audioSeparationStatus(audioSeparation);
-          const Style statusStyle =
-              audioSeparation.succeeded() ? kStyleDim : kStyleAlert;
-          if (!status.empty()) {
-            screen.writeText(0, line++, fitLine(" " + status, width),
-                             statusStyle);
+      if (line < height && footerLayout.showMediaTaskStatus) {
+        const std::optional<media_processing::TaskCompletion> completion =
+            mediaTasks.latestCompletion();
+        if (completion) {
+          const MediaTaskStatusModel status =
+              mediaTaskStatusModel(*completion);
+          if (!status.text.empty()) {
+            screen.writeText(
+                0, line++, fitLine(" " + status.text, width),
+                status.succeeded ? kStyleDim : kStyleAlert);
           }
         }
       }
@@ -4357,129 +4152,11 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         fileContextLayout.valid = false;
       }
 
-      {
-        bool isRunning = false;
-        float exportProgress = 0.0f;
-        std::filesystem::path exportSource;
-        std::string title = " Melody Analysis";
-        std::string detail;
-        bool isCancellableTask = false;
-        {
-          std::lock_guard<std::mutex> lock(melodyExportTask.mutex);
-          if (melodyExportTask.running) {
-            isRunning = true;
-            exportProgress = std::clamp(melodyExportTask.progress, 0.0f, 1.0f);
-            exportSource = melodyExportTask.sourceFile;
-            title = " Melody Analysis";
-          }
-        }
-        if (!isRunning) {
-          std::lock_guard<std::mutex> lock(loopSplitTask.mutex);
-          if (loopSplitTask.running) {
-            isRunning = true;
-            exportProgress = std::clamp(loopSplitTask.progress, 0.0f, 1.0f);
-            exportSource = loopSplitTask.sourceFile;
-            title = " Loop Split";
-          }
-        }
-        if (!isRunning) {
-          const playback_video_transcript::GenerationJobSnapshot
-              subtitleGeneration = subtitleGenerationJob.snapshot();
-          if (subtitleGeneration.running()) {
-            isRunning = true;
-            exportProgress =
-                std::clamp(subtitleGeneration.progress, 0.0f, 1.0f);
-            exportSource = subtitleGeneration.sourceFile;
-            title = subtitleGeneration.cancelling()
-                        ? "Cancelling Subtitles"
-                        : "Generating Subtitles";
-            detail = subtitleGeneration.phase;
-            isCancellableTask = true;
-          }
-        }
-        if (!isRunning) {
-          const audio_separation::JobSnapshot audioSeparation =
-              audioSeparationJob.snapshot();
-          if (audioSeparation.running()) {
-            isRunning = true;
-            exportProgress =
-                std::clamp(audioSeparation.progress, 0.0f, 1.0f);
-            exportSource = audioSeparation.sourceFile;
-            title = audioSeparation.cancelling()
-                        ? "Cancelling Audio Separation"
-                        : "Separating Audio";
-            detail = audioSeparation.phase;
-            isCancellableTask = true;
-          }
-        }
-        if (isRunning && width >= 4 && height - listTop >= 3) {
-          std::string sourceName =
-              exportSource.empty() ? std::string("(unknown)")
-                                   : toUtf8String(exportSource.filename());
-          const int desiredWidth =
-              std::max(46, utf8DisplayWidth(sourceName) + 6);
-          const int popupWidth = std::clamp(desiredWidth, 4, width);
-          const int availableHeight = height - listTop;
-          const int desiredHeight = isCancellableTask ? 7 : 6;
-          const int popupHeight = std::min(desiredHeight, availableHeight);
-          const int x0 = std::max(0, width - popupWidth - 1);
-          const int y0 = listTop;
-
-          for (int y = 0; y < popupHeight; ++y) {
-            screen.writeRun(x0, y0 + y, popupWidth, L' ', kStyleNormal);
-          }
-          screen.writeChar(x0, y0, L'+', kStyleDim);
-          screen.writeRun(x0 + 1, y0, popupWidth - 2, L'-', kStyleDim);
-          screen.writeChar(x0 + popupWidth - 1, y0, L'+', kStyleDim);
-          screen.writeChar(x0, y0 + popupHeight - 1, L'+', kStyleDim);
-          screen.writeRun(x0 + 1, y0 + popupHeight - 1, popupWidth - 2, L'-',
-                          kStyleDim);
-          screen.writeChar(x0 + popupWidth - 1, y0 + popupHeight - 1, L'+',
-                           kStyleDim);
-          for (int y = 1; y < popupHeight - 1; ++y) {
-            screen.writeChar(x0, y0 + y, L'|', kStyleDim);
-            screen.writeChar(x0 + popupWidth - 1, y0 + y, L'|', kStyleDim);
-          }
-
-          const int innerWidth = popupWidth - 2;
-          std::vector<std::pair<std::string, Style>> cardLines;
-          cardLines.push_back({title, kStyleAccent});
-          cardLines.push_back({sourceName, kStyleDim});
-          if (!detail.empty()) cardLines.push_back({detail, kStyleDim});
-
-          const int percent =
-              static_cast<int>(std::round(exportProgress * 100.0f));
-          const std::string percentText = std::to_string(percent) + "%";
-          const int barCells = std::max(0, innerWidth -
-                                              utf8DisplayWidth(percentText) -
-                                              4);
-          std::string progressLine;
-          if (barCells >= 4) {
-            const int filled = std::clamp(
-                static_cast<int>(std::round(barCells * exportProgress)), 0,
-                barCells);
-            progressLine = "[";
-            progressLine.append(static_cast<size_t>(filled), '#');
-            progressLine.append(static_cast<size_t>(barCells - filled), '.');
-            progressLine += "] " + percentText;
-          } else {
-            progressLine = percentText;
-          }
-          cardLines.push_back({std::move(progressLine), kStyleNormal});
-          if (isCancellableTask) {
-            cardLines.push_back({"F8: Cancel", kStyleDim});
-          }
-
-          const int visibleLines =
-              std::min(static_cast<int>(cardLines.size()), popupHeight - 2);
-          for (int lineIndex = 0; lineIndex < visibleLines; ++lineIndex) {
-            screen.writeText(
-                x0 + 1, y0 + 1 + lineIndex,
-                fitLine(cardLines[static_cast<size_t>(lineIndex)].first,
-                        innerWidth),
-                cardLines[static_cast<size_t>(lineIndex)].second);
-          }
-        }
+      if (const std::optional<media_processing::TaskActivity> activity =
+              mediaTasks.activity()) {
+        drawMediaTaskCard(
+            screen, width, height, listTop, mediaTaskCardModel(*activity),
+            {kStyleNormal, kStyleAccent, kStyleDim, kStyleNormal});
       }
 
       screen.draw();
@@ -4508,10 +4185,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   input.restore();
   screen.restore();
   std::cout << "\n";
-  joinMelodyExportWorker();
-  joinLoopSplitExportWorker(loopSplitTask);
-  subtitleGenerationJob.cancelAndJoin();
-  audioSeparationJob.cancelAndJoin();
+  mediaTasks.shutdown();
   audioShutdown();
   return 0;
 }

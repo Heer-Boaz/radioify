@@ -4,10 +4,7 @@ struct BrowserFooterLayout {
   int reservedLines = 0;
   bool showMeta = false;
   bool showWarning = false;
-  bool showAnalyzeStatus = false;
-  bool showLoopSplitStatus = false;
-  bool showSubtitleGenerationStatus = false;
-  bool showAudioSeparationStatus = false;
+  bool showMediaTaskStatus = false;
   bool showNowPlaying = true;
   int nowPlayingLines = 0;
   bool showActionStrip = false;
@@ -21,10 +18,7 @@ bool operator!=(const BrowserFooterLayout& a, const BrowserFooterLayout& b);
 
 BrowserFooterLayout computeBrowserFooterLayout(bool browserInteractionEnabled,
                                                bool showWarning,
-                                               bool showAnalyzeStatus,
-                                               bool showLoopSplitStatus,
-                                               bool showSubtitleGenerationStatus,
-                                               bool showAudioSeparationStatus,
+                                               bool showMediaTaskStatus,
                                                bool enableTransportUi,
                                                bool showNowPlaying,
                                                bool showPeakMeter);

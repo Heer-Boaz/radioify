@@ -863,7 +863,6 @@ target_sources(subtitle_generation_job_tests PRIVATE
   $<TARGET_OBJECTS:radioify_video_sidecar_identity>
   $<TARGET_OBJECTS:radioify_transcript_artifact>
   ${CMAKE_SOURCE_DIR}/playback/video/transcript/generation_job.cpp
-  ${CMAKE_SOURCE_DIR}/tui/ui/subtitle_generation_status.cpp
   ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
@@ -872,6 +871,26 @@ target_sources(subtitle_generation_job_tests PRIVATE
 radioify_link_repo_target(subtitle_generation_job_tests)
 add_test(NAME subtitle_generation_job_tests
          COMMAND $<TARGET_FILE:subtitle_generation_job_tests>)
+
+add_executable(media_processing_coordinator_tests)
+target_sources(media_processing_coordinator_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_media_processing_coordinator_tests>
+  $<TARGET_OBJECTS:radioify_video_sidecar_identity>
+  $<TARGET_OBJECTS:radioify_transcript_artifact>
+  ${CMAKE_SOURCE_DIR}/tui/media_processing_coordinator.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/media_task_presentation.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/transcript/generation_job.cpp
+  ${CMAKE_SOURCE_DIR}/audio/separation/artifact.cpp
+  ${CMAKE_SOURCE_DIR}/audio/separation/job.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+  ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/core/utf8.cpp
+  ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
+)
+radioify_link_repo_target(media_processing_coordinator_tests)
+add_test(NAME media_processing_coordinator_tests
+         COMMAND $<TARGET_FILE:media_processing_coordinator_tests>)
 
 add_executable(whisper_gpu_contract_tests)
 target_sources(whisper_gpu_contract_tests PRIVATE
@@ -958,7 +977,6 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
     ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
     ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
     ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
-    ${CMAKE_SOURCE_DIR}/tui/ui/audio_separation_status.cpp
   )
   set_target_properties(audio_separation_tests PROPERTIES
     CXX_STANDARD 20
