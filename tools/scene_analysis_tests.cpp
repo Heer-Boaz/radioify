@@ -131,6 +131,21 @@ int main() {
             {projected}, projected.spans.front().timelineStartUs, 0) ==
             projected.id,
         "timeline hit-testing must preserve semantic suggestion identity");
+    playback_video_edit::SceneSuggestionSnapshot precedingSuggestion =
+        projected;
+    precedingSuggestion.spans = {projected.spans.front()};
+    playback_video_edit::SceneSuggestionSnapshot adjacentSuggestion;
+    adjacentSuggestion.id = projected.id + 1;
+    adjacentSuggestion.spans.push_back(
+        {projected.spans.front().timelineEndUs,
+         projected.spans.front().timelineEndUs + 1'000'000});
+    ok &= expect(
+        playback_video_edit::sceneSuggestionAtTimeline(
+            {precedingSuggestion, adjacentSuggestion},
+            projected.spans.front().timelineEndUs, 0) ==
+            adjacentSuggestion.id,
+        "a shared half-open boundary must select the suggestion that starts "
+        "there instead of the preceding suggestion's exclusive end");
     playback_video_edit::Timeline removedTimeline(durationUs);
     ok &= expect(removedTimeline.rippleDelete(
                      {cutscene->startUs, cutscene->endUs}) &&
