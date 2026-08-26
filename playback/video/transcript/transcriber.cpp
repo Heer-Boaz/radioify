@@ -150,6 +150,7 @@ bool resolveWhisperModel(WhisperModelSelection* selection,
 
 bool createIndexedTranscript(const std::filesystem::path& videoPath,
                              const std::filesystem::path& outputPath,
+                             TranscriptPublishMode publishMode,
                              const ProgressCallback& onProgress,
                              const std::atomic<bool>* cancelRequested,
                              std::string* error) {
@@ -326,7 +327,9 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
 
   finalizeSubtitleCueTimeline(&segments);
   report(onProgress, 0.98f, "Writing indexed transcript");
-  if (!writeIndexedTranscript(outputPath, segments, error)) return false;
+  if (!writeIndexedTranscript(outputPath, segments, publishMode, error)) {
+    return false;
+  }
   report(onProgress, 1.0f, "Transcript complete");
   return true;
 }

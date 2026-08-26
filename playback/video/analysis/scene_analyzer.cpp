@@ -9,6 +9,7 @@
 #include "playback/video/decoder.h"
 #include "playback/video/analysis/scene_analysis_cache.h"
 #include "playback/video/transcript/document.h"
+#include "playback/video/transcript/artifact.h"
 
 namespace playback_video_analysis {
 namespace {
@@ -201,7 +202,7 @@ bool analyzeVideoScenes(const std::filesystem::path& videoPath,
   }
 
   const std::filesystem::path transcriptPath =
-      playback_video_transcript::latestIndexedTranscriptPath(videoPath);
+      playback_video_transcript::activeTranscriptPathForVideo(videoPath);
   if (allowCachedResult && expectedDurationUs > 0 &&
       loadCachedSceneAnalysis(videoPath, videoStreamIndex,
                               expectedDurationUs, transcriptPath, result)) {

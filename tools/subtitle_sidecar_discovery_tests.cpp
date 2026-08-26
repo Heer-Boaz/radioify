@@ -86,6 +86,7 @@ int main(int argc, char** argv) {
   touch(directory / "English.srt");
   touch(directory / "episode Part 2.srt");
   touch(directory / "episode.transcript.srt");
+  touch(directory / "episode.transcript.2.srt");
   touch(directory / "subs" / "episode.nl.forced.srt");
   const std::vector<std::filesystem::path> sidecars =
       subtitle::discoverAutomaticSubtitleSidecars(video);
@@ -100,6 +101,20 @@ int main(int argc, char** argv) {
                                  "episode.nl.forced.srt") != sidecars.end(),
                "the exact main-directory and subtitle-directory files must be "
                "returned");
+  ok &= expect(std::find(sidecars.begin(), sidecars.end(),
+                         directory / "episode.transcript.2.srt") ==
+                   sidecars.end(),
+               "legacy transcript versions must not become extra tracks");
+
+  ec.clear();
+  std::filesystem::remove(directory / "episode.transcript.srt", ec);
+  const std::vector<std::filesystem::path> legacySidecars =
+      subtitle::discoverAutomaticSubtitleSidecars(video);
+  ok &= expect(!ec && legacySidecars.size() == 2 &&
+                   std::find(legacySidecars.begin(), legacySidecars.end(),
+                             directory / "episode.transcript.2.srt") !=
+                       legacySidecars.end(),
+               "the legacy fallback must be shared with subtitle discovery");
 
   std::filesystem::remove_all(directory, ec);
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;

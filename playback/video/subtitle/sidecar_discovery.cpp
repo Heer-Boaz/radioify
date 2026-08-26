@@ -6,6 +6,7 @@
 #include <system_error>
 
 #include "playback/video/sidecar_identity.h"
+#include "playback/video/transcript/artifact.h"
 
 namespace playback_video_subtitle {
 namespace {
@@ -21,6 +22,20 @@ bool isSubtitleDirectoryName(const std::filesystem::path& path) {
   const std::wstring name = lowercase(path.filename().wstring());
   return name == L"subs" || name == L"sub" || name == L"subtitle" ||
          name == L"subtitles";
+}
+
+bool pathsReferToSameFile(const std::filesystem::path& left,
+                          const std::filesystem::path& right) {
+  if (left.empty() || right.empty()) return false;
+  std::error_code ec;
+  const bool equivalent = std::filesystem::equivalent(left, right, ec);
+  if (!ec) return equivalent;
+#ifdef _WIN32
+  return lowercase(left.lexically_normal().wstring()) ==
+         lowercase(right.lexically_normal().wstring());
+#else
+  return left.lexically_normal() == right.lexically_normal();
+#endif
 }
 
 void appendDirectoryCandidates(
@@ -104,6 +119,18 @@ std::vector<std::filesystem::path> discoverAutomaticSubtitleSidecars(
                     return lowercase(left.wstring()) ==
                            lowercase(right.wstring());
                   }),
+      candidates.end());
+
+  const std::filesystem::path activeTranscript =
+      playback_video_transcript::activeTranscriptPathForVideo(videoPath);
+  candidates.erase(
+      std::remove_if(
+          candidates.begin(), candidates.end(),
+          [&](const std::filesystem::path& candidate) {
+            return playback_video_sidecars::isIndexedTranscriptSidecar(
+                       videoPath, candidate) &&
+                   !pathsReferToSameFile(candidate, activeTranscript);
+          }),
       candidates.end());
   return candidates;
 }

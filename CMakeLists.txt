@@ -342,6 +342,7 @@ target_sources(radioify PRIVATE
   $<TARGET_OBJECTS:radioify_video_playback>
   $<TARGET_OBJECTS:radioify_timeline_preview>
   $<TARGET_OBJECTS:radioify_video_sidecar_identity>
+  $<TARGET_OBJECTS:radioify_transcript_artifact>
   $<TARGET_OBJECTS:radioify_transcript_document>
   $<TARGET_OBJECTS:radioify_transcript_cue_semantics>
   $<TARGET_OBJECTS:radioify_transcript_device_policy>
@@ -701,6 +702,7 @@ add_executable(subtitle_sidecar_discovery_tests)
 target_sources(subtitle_sidecar_discovery_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_subtitle_sidecar_discovery_tests>
   $<TARGET_OBJECTS:radioify_video_sidecar_identity>
+  $<TARGET_OBJECTS:radioify_transcript_artifact>
   ${CMAKE_SOURCE_DIR}/playback/video/subtitle/sidecar_discovery.cpp
 )
 radioify_link_repo_target(subtitle_sidecar_discovery_tests)
@@ -752,6 +754,7 @@ add_executable(indexed_transcript_tests)
 target_sources(indexed_transcript_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_indexed_transcript_tests>
   $<TARGET_OBJECTS:radioify_video_sidecar_identity>
+  $<TARGET_OBJECTS:radioify_transcript_artifact>
   $<TARGET_OBJECTS:radioify_transcript_document>
   $<TARGET_OBJECTS:radioify_transcript_cue_semantics>
   $<TARGET_OBJECTS:radioify_transcript_device_policy>
@@ -788,6 +791,7 @@ add_executable(indexed_transcript_smoke)
 target_sources(indexed_transcript_smoke PRIVATE
   $<TARGET_OBJECTS:radioify_tool_indexed_transcript_smoke>
   $<TARGET_OBJECTS:radioify_video_sidecar_identity>
+  $<TARGET_OBJECTS:radioify_transcript_artifact>
   $<TARGET_OBJECTS:radioify_transcript_document>
   $<TARGET_OBJECTS:radioify_transcript_cue_semantics>
   $<TARGET_OBJECTS:radioify_transcript_device_policy>
@@ -817,6 +821,7 @@ target_sources(scene_analysis_smoke PRIVATE
   $<TARGET_OBJECTS:radioify_tool_scene_analysis_smoke>
   $<TARGET_OBJECTS:radioify_scene_analysis>
   $<TARGET_OBJECTS:radioify_video_sidecar_identity>
+  $<TARGET_OBJECTS:radioify_transcript_artifact>
   $<TARGET_OBJECTS:radioify_transcript_document>
   $<TARGET_OBJECTS:radioify_transcript_cue_semantics>
   ${CMAKE_SOURCE_DIR}/playback/video/decoder.cpp

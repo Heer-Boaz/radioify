@@ -1,4 +1,5 @@
 #include "playback/video/transcript/document.h"
+#include "playback/video/transcript/artifact.h"
 #include "playback/video/transcript/cue_semantics.h"
 #include "playback/video/transcript/device_selection.h"
 #include "playback/video/transcript/subtitle_cues.h"
@@ -184,12 +185,12 @@ int main() {
                    overlappingCues[0].endUs == 5'000'000,
                "a successor cue must end an older overlapping cue");
 
-  ok &= expect(transcript::defaultTranscriptPath("film.mkv") ==
+  ok &= expect(transcript::transcriptPathForVideo("film.mkv") ==
                    std::filesystem::path("film.transcript.srt"),
-               "default sidecar must retain the video stem");
-  ok &= expect(transcript::defaultTranscriptPath("archive.name.mp4") ==
+               "canonical sidecar must retain the video stem");
+  ok &= expect(transcript::transcriptPathForVideo("archive.name.mp4") ==
                    std::filesystem::path("archive.name.transcript.srt"),
-               "default sidecar must retain multi-dot stems");
+               "canonical sidecar must retain multi-dot stems");
 
   const BrowserFooterLayout transcriptFooter = computeBrowserFooterLayout(
       true, false, false, false, true, false, false, false);
@@ -210,9 +211,11 @@ int main() {
   }
 
   const std::filesystem::path output = testDir / "film.transcript.srt";
-  ok &= expect(transcript::availableTranscriptPath(testDir / "film.mkv") ==
-                   output,
-               "the preferred transcript path must be selected when free");
+  ok &= expect(transcript::transcriptPathForVideo(testDir / "film.mkv") ==
+                   output &&
+                   transcript::activeTranscriptPathForVideo(
+                       testDir / "film.mkv").empty(),
+               "the canonical transcript path must not imply an artifact");
   std::string error;
   const std::vector<transcript::Segment> segments = {
       {2'345'000, 4'000'000, "  tweede\r\nregel  "},
@@ -221,7 +224,9 @@ int main() {
       {6'000'000, 7'000'000, " ... -- "},
       {8'000'000, 9'000'000, " [BLANK_AUDIO] "},
   };
-  ok &= expect(transcript::writeIndexedTranscript(output, segments, &error),
+  ok &= expect(transcript::writeIndexedTranscript(
+                   output, segments,
+                   transcript::TranscriptPublishMode::CreateNew, &error),
                "valid cues must be written");
   if (!error.empty()) std::cerr << error << '\n';
   const std::string expected =
@@ -239,10 +244,9 @@ int main() {
                    parsedSegments[1].text == "tweede regel",
                "indexed transcript readers must recover normalized SRT timing "
                "and text");
-  ok &= expect(transcript::latestIndexedTranscriptPath(testDir / "film.mkv") ==
-                   output,
-               "analysis readers must select the newest owned transcript "
-               "without reserving a writer destination");
+  ok &= expect(transcript::activeTranscriptPathForVideo(
+                   testDir / "film.mkv") == output,
+               "readers must select the canonical active transcript");
   const std::filesystem::path unrelatedTranscript =
       testDir / "other.transcript.srt";
   {
@@ -256,7 +260,7 @@ int main() {
         unrelatedTranscript, outputTime + std::chrono::hours(1), ec);
   }
   ok &= expect(!ec &&
-                   transcript::latestIndexedTranscriptPath(
+                   transcript::activeTranscriptPathForVideo(
                        testDir / "film.mkv") == output,
                "newer transcripts owned by another video must be ignored");
   const std::filesystem::path longOutput =
@@ -266,6 +270,7 @@ int main() {
                    longOutput,
                    {{hundredHoursUs, hundredHoursUs + 1'000'000,
                      "Long recording"}},
+                   transcript::TranscriptPublishMode::CreateNew,
                    &error) &&
                    transcript::readIndexedTranscript(
                        longOutput, &parsedSegments, &error) &&
@@ -273,20 +278,44 @@ int main() {
                    parsedSegments[0].startUs == hundredHoursUs,
                "the SRT reader must round-trip writer timestamps beyond 99 hours");
 
-  ok &= expect(transcript::availableTranscriptPath(testDir / "film.mkv") ==
-                   testDir / "film.transcript.2.srt",
-               "a new transcript must not overwrite an existing sidecar");
+  const std::filesystem::path legacyOutput =
+      testDir / "film.transcript.2.srt";
+  ok &= expect(transcript::writeIndexedTranscript(
+                   legacyOutput, {{40'000'000, 41'000'000, "legacy"}},
+                   transcript::TranscriptPublishMode::CreateNew, &error),
+               "legacy numbered fixtures must remain readable");
+  ec.clear();
+  std::filesystem::last_write_time(
+      legacyOutput, outputTime + std::chrono::hours(2), ec);
+  ok &= expect(!ec &&
+                   transcript::activeTranscriptPathForVideo(
+                       testDir / "film.mkv") == output,
+               "the canonical transcript must win over newer legacy files");
   const std::vector<transcript::Segment> replacement = {
       {60'000'000, 61'000'000, "vervangen"},
   };
-  const std::string beforeReplacement = readFile(output);
-  ok &= expect(!transcript::writeIndexedTranscript(output, replacement, &error),
-               "an existing transcript must not be overwritten");
-  ok &= expect(readFile(output) == beforeReplacement,
-               "a rejected replacement must preserve the existing transcript");
+  ok &= expect(transcript::writeIndexedTranscript(
+                   output, replacement,
+                   transcript::TranscriptPublishMode::ReplaceExisting,
+                   &error) &&
+                   readFile(output).find("vervangen") != std::string::npos,
+               "regeneration must atomically replace the active transcript");
+  ok &= expect(!transcript::writeIndexedTranscript(
+                   output, segments,
+                   transcript::TranscriptPublishMode::CreateNew, &error),
+               "create-new publication must still protect existing files");
+
+  ec.clear();
+  std::filesystem::remove(output, ec);
+  ok &= expect(!ec &&
+                   transcript::activeTranscriptPathForVideo(
+                       testDir / "film.mkv") == legacyOutput,
+               "the newest legacy transcript must be a migration fallback");
 
   const std::filesystem::path emptyOutput = testDir / "empty.transcript.srt";
-  ok &= expect(!transcript::writeIndexedTranscript(emptyOutput, {}, &error),
+  ok &= expect(!transcript::writeIndexedTranscript(
+                   emptyOutput, {},
+                   transcript::TranscriptPublishMode::CreateNew, &error),
                "an empty transcript must be rejected");
   ok &= expect(!std::filesystem::exists(emptyOutput),
                "a failed empty transcript must not leave an output file");

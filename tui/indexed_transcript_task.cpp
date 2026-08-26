@@ -4,7 +4,7 @@
 #include <exception>
 #include <utility>
 
-#include "playback/video/transcript/document.h"
+#include "playback/video/transcript/artifact.h"
 #include "playback/video/transcript/transcriber.h"
 #include "runtime_helpers.h"
 
@@ -37,7 +37,7 @@ bool IndexedTranscriptTask::tryStart(const std::filesystem::path& videoPath) {
   }
 
   const std::filesystem::path outputPath =
-      playback_video_transcript::availableTranscriptPath(videoPath);
+      playback_video_transcript::transcriptPathForVideo(videoPath);
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (state_.running) return false;
@@ -58,6 +58,8 @@ bool IndexedTranscriptTask::tryStart(const std::filesystem::path& videoPath) {
         try {
           ok = playback_video_transcript::createIndexedTranscript(
               videoPath, outputPath,
+              playback_video_transcript::TranscriptPublishMode::
+                  ReplaceExisting,
               [this](const playback_video_transcript::Progress& progress) {
                 std::lock_guard<std::mutex> progressLock(mutex_);
                 state_.progress =

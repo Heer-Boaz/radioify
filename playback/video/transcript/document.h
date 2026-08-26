@@ -8,16 +8,10 @@
 
 namespace playback_video_transcript {
 
-std::filesystem::path defaultTranscriptPath(
-    const std::filesystem::path& videoPath);
-std::filesystem::path availableTranscriptPath(
-    const std::filesystem::path& videoPath);
-
-// Returns the newest Radioify-owned transcript sidecar for a video. This is
-// deliberately separate from availableTranscriptPath(): readers select an
-// existing immutable result, while writers reserve a new destination.
-std::filesystem::path latestIndexedTranscriptPath(
-    const std::filesystem::path& videoPath);
+enum class TranscriptPublishMode {
+  CreateNew,
+  ReplaceExisting,
+};
 
 // Reads ordinary SRT timing/text into the transcript domain. Keeping this
 // parser here prevents downstream analysis from treating subtitle
@@ -26,10 +20,12 @@ bool readIndexedTranscript(const std::filesystem::path& inputPath,
                            std::vector<Segment>* segments,
                            std::string* error);
 
-// Writes a numbered, time-indexed SRT sidecar without exposing a partially
-// written destination. Existing files are never overwritten.
+// Publishes a time-indexed SRT sidecar without exposing a partially written
+// destination. ReplaceExisting atomically swaps a complete new document into
+// place while preserving the old document if publication fails.
 bool writeIndexedTranscript(const std::filesystem::path& outputPath,
                             const std::vector<Segment>& segments,
+                            TranscriptPublishMode publishMode,
                             std::string* error);
 
 }  // namespace playback_video_transcript

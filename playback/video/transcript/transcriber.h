@@ -5,6 +5,8 @@
 #include <functional>
 #include <string>
 
+#include "playback/video/transcript/document.h"
+
 namespace playback_video_transcript {
 
 struct Progress {
@@ -19,6 +21,7 @@ using ProgressCallback = std::function<void(const Progress&)>;
 // changed unless the complete transcript succeeds.
 bool createIndexedTranscript(const std::filesystem::path& videoPath,
                              const std::filesystem::path& outputPath,
+                             TranscriptPublishMode publishMode,
                              const ProgressCallback& onProgress,
                              const std::atomic<bool>* cancelRequested,
                              std::string* error);

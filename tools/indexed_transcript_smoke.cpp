@@ -24,7 +24,7 @@ int runSmoke(const std::filesystem::path& input,
   bool vulkanConfirmed = false;
   std::string error;
   const bool created = transcript::createIndexedTranscript(
-      input, output,
+      input, output, transcript::TranscriptPublishMode::CreateNew,
       [&](const transcript::Progress& progress) {
         std::lock_guard<std::mutex> lock(progressMutex);
         if (progress.fraction + 0.000001f < lastFraction) {

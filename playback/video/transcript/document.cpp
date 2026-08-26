@@ -20,7 +20,6 @@
 #include <system_error>
 #include <utility>
 
-#include "playback/video/sidecar_identity.h"
 #include "playback/video/transcript/cue_semantics.h"
 #include "runtime_helpers.h"
 
@@ -143,19 +142,26 @@ std::filesystem::path temporarySiblingPath(
 
 bool publishFile(const std::filesystem::path& source,
                  const std::filesystem::path& destination,
+                 TranscriptPublishMode publishMode,
                  std::string* error) {
 #ifdef _WIN32
-  if (MoveFileExW(source.c_str(), destination.c_str(), MOVEFILE_WRITE_THROUGH)) {
+  DWORD flags = MOVEFILE_WRITE_THROUGH;
+  if (publishMode == TranscriptPublishMode::ReplaceExisting) {
+    flags |= MOVEFILE_REPLACE_EXISTING;
+  }
+  if (MoveFileExW(source.c_str(), destination.c_str(), flags)) {
     return true;
   }
   setError(error, "Could not publish transcript (Windows error " +
                       std::to_string(GetLastError()) + ").");
   return false;
 #else
-  std::error_code existsError;
-  if (std::filesystem::exists(destination, existsError) || existsError) {
-    setError(error, "Transcript destination already exists.");
-    return false;
+  if (publishMode == TranscriptPublishMode::CreateNew) {
+    std::error_code existsError;
+    if (std::filesystem::exists(destination, existsError) || existsError) {
+      setError(error, "Transcript destination already exists.");
+      return false;
+    }
   }
   std::error_code ec;
   std::filesystem::rename(source, destination, ec);
@@ -166,63 +172,6 @@ bool publishFile(const std::filesystem::path& source,
 }
 
 }  // namespace
-
-std::filesystem::path defaultTranscriptPath(
-    const std::filesystem::path& videoPath) {
-  if (videoPath.filename().empty()) return {};
-  std::filesystem::path output = videoPath.parent_path() / videoPath.stem();
-  output += ".transcript.srt";
-  return output;
-}
-
-std::filesystem::path availableTranscriptPath(
-    const std::filesystem::path& videoPath) {
-  const std::filesystem::path preferred = defaultTranscriptPath(videoPath);
-  if (preferred.empty()) return {};
-  std::error_code ec;
-  if (!std::filesystem::exists(preferred, ec) && !ec) return preferred;
-
-  const std::filesystem::path prefix =
-      videoPath.parent_path() / videoPath.stem();
-  for (uint32_t suffix = 2; suffix < 10000; ++suffix) {
-    std::filesystem::path candidate = prefix;
-    candidate += ".transcript." + std::to_string(suffix) + ".srt";
-    ec.clear();
-    if (!std::filesystem::exists(candidate, ec) && !ec) return candidate;
-  }
-  return {};
-}
-
-std::filesystem::path latestIndexedTranscriptPath(
-    const std::filesystem::path& videoPath) {
-  if (videoPath.filename().empty()) return {};
-  std::filesystem::path directory = videoPath.parent_path();
-  if (directory.empty()) directory = std::filesystem::path(L".");
-  std::error_code ec;
-  std::filesystem::directory_iterator entries(directory, ec);
-  if (ec) return {};
-
-  std::filesystem::path newest;
-  std::filesystem::file_time_type newestTime{};
-  bool haveNewest = false;
-  for (const auto& entry : entries) {
-    ec.clear();
-    if (!entry.is_regular_file(ec) || ec ||
-        !playback_video_sidecars::isIndexedTranscriptSidecar(
-            videoPath, entry.path())) {
-      continue;
-    }
-    ec.clear();
-    const auto modified = entry.last_write_time(ec);
-    if (ec) continue;
-    if (!haveNewest || modified > newestTime) {
-      newest = entry.path();
-      newestTime = modified;
-      haveNewest = true;
-    }
-  }
-  return newest;
-}
 
 bool readIndexedTranscript(const std::filesystem::path& inputPath,
                            std::vector<Segment>* segments,
@@ -302,6 +251,7 @@ bool readIndexedTranscript(const std::filesystem::path& inputPath,
 
 bool writeIndexedTranscript(const std::filesystem::path& outputPath,
                             const std::vector<Segment>& segments,
+                            TranscriptPublishMode publishMode,
                             std::string* error) {
   if (error) error->clear();
   if (outputPath.empty() || outputPath.filename().empty()) {
@@ -310,7 +260,8 @@ bool writeIndexedTranscript(const std::filesystem::path& outputPath,
   }
   {
     std::error_code ec;
-    if (std::filesystem::exists(outputPath, ec)) {
+    if (publishMode == TranscriptPublishMode::CreateNew &&
+        std::filesystem::exists(outputPath, ec)) {
       setError(error, "Transcript already exists: " +
                           toUtf8String(outputPath.filename()));
       return false;
@@ -386,7 +337,7 @@ bool writeIndexedTranscript(const std::filesystem::path& outputPath,
     }
   }
 
-  if (!publishFile(temporaryPath, outputPath, error)) {
+  if (!publishFile(temporaryPath, outputPath, publishMode, error)) {
     std::error_code ignored;
     std::filesystem::remove(temporaryPath, ignored);
     return false;

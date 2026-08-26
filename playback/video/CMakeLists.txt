@@ -49,6 +49,10 @@ radioify_add_module_object_library(radioify_video_sidecar_identity
   ${CMAKE_CURRENT_SOURCE_DIR}/sidecar_identity.cpp
 )
 
+radioify_add_module_object_library(radioify_transcript_artifact
+  ${CMAKE_CURRENT_SOURCE_DIR}/transcript/artifact.cpp
+)
+
 radioify_add_module_object_library(radioify_transcript_document
   ${CMAKE_CURRENT_SOURCE_DIR}/transcript/document.cpp
 )
