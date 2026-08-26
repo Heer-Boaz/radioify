@@ -5,6 +5,7 @@ radioify_add_module_object_library(radioify_tui
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_grid_index.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/consoleinput.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/consolescreen.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/image_viewer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/image_viewer_sequence.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/terminal_input_sequence.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/terminal_cell_metrics.cpp
