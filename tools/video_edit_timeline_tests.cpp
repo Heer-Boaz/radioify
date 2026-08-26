@@ -1509,9 +1509,13 @@ int main() {
                    terminalMenu.items[0].label == "Edit video" &&
                    terminalMenu.items[1].label ==
                        "Create indexed transcript" &&
+                   terminalMenu.items[0].token != 0 &&
+                   terminalMenu.items[1].token != 0 &&
+                   terminalMenu.items[0].token !=
+                       terminalMenu.items[1].token &&
                    !windowMenu.visible,
-               "a playback context menu must share source actions while "
-               "belonging to exactly one presentation surface");
+               "a playback context menu must expose unique opaque source "
+               "action identities on exactly one presentation surface");
   cleanEdit.hasEdits = true;
   playbackMenu.refresh(cleanEdit, idleExport);
   const auto retainedMenu = playbackMenu.snapshotFor(
@@ -1521,9 +1525,14 @@ int main() {
                    retainedMenu.items[1].label ==
                        "Create indexed transcript" &&
                    retainedMenu.items[2].label == "Export edited copy" &&
-                   retainedMenu.items[3].label == "Discard changes",
+                   retainedMenu.items[3].label == "Discard changes" &&
+                   retainedMenu.items[0].token ==
+                       terminalMenu.items[0].token &&
+                   retainedMenu.items[1].token ==
+                       terminalMenu.items[1].token,
                "an exported edit revision must remain resumable, exportable, "
-               "transcribable, and discardable");
+               "transcribable, and discardable without changing semantic "
+               "item identity");
   cleanEdit.active = true;
   cleanEdit.hasUnexportedChanges = true;
   cleanEdit.inTimelineUs = 1'000'000;

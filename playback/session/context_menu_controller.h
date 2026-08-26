@@ -66,11 +66,19 @@ class ContextMenuController {
   struct Item {
     ContextMenuCommand command = playback_media_actions::Action::Play;
     std::string label;
+    playback_overlay::ContextMenuItemToken token = 0;
+  };
+
+  struct CommandToken {
+    ContextMenuCommand command = playback_media_actions::Action::Play;
+    playback_overlay::ContextMenuItemToken token = 0;
   };
 
   std::optional<size_t> itemIndex(const ContextMenuCommand& command) const;
   std::optional<size_t> itemIndex(
       playback_overlay::ContextMenuItemToken token) const;
+  playback_overlay::ContextMenuItemToken tokenFor(
+      const ContextMenuCommand& command);
 
   bool visible_ = false;
   ContextMenuSurface surface_ = ContextMenuSurface::Terminal;
@@ -78,6 +86,7 @@ class ContextMenuController {
   double anchorYRatio_ = 0.5;
   size_t selected_ = 0;
   std::vector<Item> items_;
+  std::vector<CommandToken> commandTokens_;
 };
 
 }  // namespace playback_session

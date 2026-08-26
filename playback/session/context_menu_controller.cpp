@@ -4,23 +4,6 @@
 #include <cmath>
 
 namespace playback_session {
-namespace {
-
-constexpr playback_overlay::ContextMenuItemToken itemToken(
-    const ContextMenuCommand& command) {
-  constexpr playback_overlay::ContextMenuItemToken kMediaActionTag = 0x10000;
-  constexpr playback_overlay::ContextMenuItemToken kEditCommandTag = 0x20000;
-  if (const auto* media =
-          std::get_if<playback_media_actions::Action>(&command)) {
-    return kMediaActionTag |
-           static_cast<playback_overlay::ContextMenuItemToken>(*media);
-  }
-  return kEditCommandTag |
-         static_cast<playback_overlay::ContextMenuItemToken>(
-             std::get<playback_video_edit::Command>(command));
-}
-
-}  // namespace
 
 std::optional<size_t> ContextMenuController::itemIndex(
     const ContextMenuCommand& command) const {
@@ -33,9 +16,27 @@ std::optional<size_t> ContextMenuController::itemIndex(
 std::optional<size_t> ContextMenuController::itemIndex(
     playback_overlay::ContextMenuItemToken token) const {
   for (size_t index = 0; index < items_.size(); ++index) {
-    if (itemToken(items_[index].command) == token) return index;
+    if (items_[index].token == token) return index;
   }
   return std::nullopt;
+}
+
+playback_overlay::ContextMenuItemToken ContextMenuController::tokenFor(
+    const ContextMenuCommand& command) {
+  const auto retained = std::find_if(
+      commandTokens_.begin(), commandTokens_.end(),
+      [&](const CommandToken& registered) {
+        return registered.command == command;
+      });
+  if (retained != commandTokens_.end()) return retained->token;
+
+  // Tokens are opaque presentation identities. The registry is bounded by the
+  // closed media-action and edit-command sets, so enum values and domains never
+  // need to be encoded into the token itself.
+  const auto token = static_cast<playback_overlay::ContextMenuItemToken>(
+      commandTokens_.size() + 1u);
+  commandTokens_.push_back({command, token});
+  return token;
 }
 
 void ContextMenuController::refresh(
@@ -136,6 +137,7 @@ void ContextMenuController::refresh(
   if (edit.active) {
     next.push_back({playback_video_edit::Command::Finish, "Done editing"});
   }
+  for (Item& item : next) item.token = tokenFor(item.command);
   items_ = std::move(next);
   if (items_.empty()) {
     selected_ = 0;
@@ -208,11 +210,11 @@ playback_overlay::ContextMenuSnapshot ContextMenuController::snapshotFor(
   snapshot.visible = true;
   snapshot.anchorXRatio = anchorXRatio_;
   snapshot.anchorYRatio = anchorYRatio_;
-  snapshot.selectedItem = itemToken(
-      items_[std::min(selected_, items_.size() - 1)].command);
+  snapshot.selectedItem =
+      items_[std::min(selected_, items_.size() - 1)].token;
   snapshot.items.reserve(items_.size());
   for (const Item& item : items_) {
-    snapshot.items.push_back({itemToken(item.command), item.label});
+    snapshot.items.push_back({item.token, item.label});
   }
   return snapshot;
 }
