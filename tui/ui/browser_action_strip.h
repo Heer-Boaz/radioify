@@ -13,6 +13,7 @@ enum class ActionStripItem {
   Next,
   Radio,
   Hz50,
+  PitchMonitor,
   View,
   PictureInPicture,
   Options
@@ -34,6 +35,8 @@ namespace browser_action_strip {
 
 struct Input {
   playback_overlay::PlaybackOverlayState playback;
+  bool pitchMonitorAvailable = false;
+  bool pitchMonitorActive = false;
   bool browserControlsAvailable = false;
   BrowserState::ViewMode viewMode = BrowserState::ViewMode::ListOnly;
   bool optionsAvailable = false;

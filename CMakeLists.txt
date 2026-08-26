@@ -863,6 +863,15 @@ radioify_link_repo_target(browser_action_strip_tests)
 add_test(NAME browser_action_strip_tests
          COMMAND $<TARGET_FILE:browser_action_strip_tests>)
 
+add_executable(melody_visualization_tests)
+target_sources(melody_visualization_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_melody_visualization_tests>
+  ${CMAKE_SOURCE_DIR}/tui/ui/melody_visualization.cpp
+)
+radioify_link_repo_target(melody_visualization_tests)
+add_test(NAME melody_visualization_tests
+         COMMAND $<TARGET_FILE:melody_visualization_tests>)
+
 add_executable(playback_queue_tests)
 target_sources(playback_queue_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_playback_queue_tests>

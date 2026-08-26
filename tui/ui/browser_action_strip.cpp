@@ -100,6 +100,11 @@ std::vector<Item> build(const Input& input) {
     items.push_back(std::move(item));
   }
 
+  if (input.pitchMonitorAvailable) {
+    items.push_back(textItem(ActionStripItem::PitchMonitor, "Pitch",
+                             input.pitchMonitorActive));
+  }
+
   if (input.browserControlsAvailable) {
     items.push_back(
         textItem(ActionStripItem::View, viewLabel(input.viewMode), false));

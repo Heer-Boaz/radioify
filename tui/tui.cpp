@@ -16,7 +16,6 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
-#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -91,6 +90,8 @@
 #include "ui_viewport.h"
 #include "media_task_card.h"
 #include "media_task_presentation.h"
+#include "melody_visualization.h"
+#include "melody_visualization_renderer.h"
 #include "playback/video/playback.h"
 #include "playback/video/transcript/artifact.h"
 #include "playback/video/framebuffer/window/window.h"
@@ -599,13 +600,11 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   GridLayout layout;
   BreadcrumbLine breadcrumbLine;
   bool didRender = false;
-  bool melodyVisualizationEnabled = false;
-  std::deque<int> melodyHistoryMidi;
-  std::deque<float> melodyHistoryConfidence;
-  constexpr size_t kMelodyHistoryMaxSamples = 4096;
-  std::filesystem::path lastMelodyTrack;
-  std::optional<int> lastMelodyTrackIndex;
-  bool lastMelodyAnalysisRunning = false;
+  tui_melody_visualization::Model melodyVisualization;
+  tui_melody_visualization::Styles melodyVisualizationStyles;
+  melodyVisualizationStyles.normal = kStyleNormal;
+  melodyVisualizationStyles.accent = kStyleAccent;
+  melodyVisualizationStyles.dim = kStyleDim;
   std::vector<ScreenCell> windowCells;
   AudioPictureInPictureWindow audioPictureInPicture;
   ConsoleInputPump consoleInputPump;
@@ -614,29 +613,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   BrowserPointerState browserPointerState;
   BrowserViewport viewport;
   BrowserFooterLayout footerLayout;
-  auto midiToNoteName = [](int midi) {
-    if (midi < 0 || midi > 127) return std::string("??");
-    static const char* kNoteNames[] = {"C",  "C#", "D",  "D#", "E",  "F",
-                                      "F#", "G",  "G#", "A",  "A#", "B"};
-    int note = midi % 12;
-    if (note < 0) note += 12;
-    int octave = midi / 12 - 1;
-    return std::string(kNoteNames[static_cast<size_t>(note)]) +
-           std::to_string(octave);
-  };
-  auto clearMelodyHistory = [&]() {
-    melodyHistoryMidi.clear();
-    melodyHistoryConfidence.clear();
-  };
-  auto pushMelodyHistory = [&](const AudioMelodyInfo& info) {
-    int midi = (info.midiNote >= 0) ? info.midiNote : -1;
-    melodyHistoryMidi.push_back(midi);
-    melodyHistoryConfidence.push_back(std::clamp(info.confidence, 0.0f, 1.0f));
-    while (melodyHistoryMidi.size() > kMelodyHistoryMaxSamples) {
-      melodyHistoryMidi.pop_front();
-      melodyHistoryConfidence.pop_front();
-    }
-  };
   std::function<std::filesystem::path()> currentPlaybackFile =
       []() { return audioGetNowPlaying(); };
   std::function<std::optional<int>()> currentPlaybackTrackIndex = []() {
@@ -800,6 +776,14 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   fileContextStyles.normal = kStyleNormal;
   fileContextStyles.border = kStyleDim;
   fileContextStyles.selected = kStyleHighlight;
+  auto dismissFileContextMenu = [&]() {
+    const bool changed = fileContextMenu.dismiss() ||
+                         fileContextEntry.has_value() ||
+                         !fileContextActions.empty();
+    fileContextEntry.reset();
+    fileContextActions.clear();
+    return changed;
+  };
 
   auto selectedOptionsSubject = [&]()
       -> std::optional<OptionsBrowserSubject> {
@@ -847,6 +831,10 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
                   PlaybackPresentationLayer::PictureInPicture
             : audioPictureInPicture.isOpen();
     stripInput.playback = std::move(actionOverlayState);
+    stripInput.pitchMonitorAvailable =
+        !videoActive && (melodyVisualization.active() || audioIsReady() ||
+                         !audioGetNowPlaying().empty());
+    stripInput.pitchMonitorActive = melodyVisualization.active();
     stripInput.browserControlsAvailable = browserInteractionEnabled;
     stripInput.viewMode = browser.viewMode;
     const bool selectedEntryHasOptions =
@@ -867,7 +855,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         !nowPlaying.empty() || audioIsReady() || audioIsSeeking() ||
         audioIsHolding();
     BrowserFooterLayoutInput layoutInput;
-    layoutInput.browserInteractionEnabled = !melodyVisualizationEnabled;
+    layoutInput.browserInteractionEnabled = !melodyVisualization.active();
     layoutInput.showWarning =
         !mediaCommandError.empty() || !audioGetWarning().empty();
     layoutInput.showMediaTaskStatus = hasMediaTaskStatus;
@@ -883,7 +871,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       layout.nowPlayingLines = nowPlayingLines;
     }
     if (layout.showActionStrip) {
-      const bool browserInteractionEnabled = !melodyVisualizationEnabled;
+      const bool browserInteractionEnabled = !melodyVisualization.active();
       layout.actionStripLines = browser_action_strip::wrappedLineCount(
           buildActionStripItems(browserInteractionEnabled), screen.width());
       layout.reservedLines += std::max(0, layout.actionStripLines - 1);
@@ -897,7 +885,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       screenSizeDirty = false;
     }
     footerLayout = buildFooterLayout();
-    const bool browserInteractionEnabled = !melodyVisualizationEnabled;
+    const bool browserInteractionEnabled = !melodyVisualization.active();
     const bool showHeaderLabel =
         browserInteractionEnabled &&
         (optionsBrowserIsActive(browser) || isTrackBrowserActive(browser));
@@ -1049,6 +1037,20 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       audioToggle50Hz();
       markDirty();
     }
+  };
+  callbacks.onTogglePitchMonitor = [&]() {
+    if (!melodyVisualization.active() && audioGetNowPlaying().empty() &&
+        !audioIsReady()) {
+      return;
+    }
+    const bool active = melodyVisualization.toggle();
+    if (active) {
+      setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
+      breadcrumbHover = -1;
+      actionHover = -1;
+    }
+    dismissFileContextMenu();
+    markLayoutDirty();
   };
   callbacks.onToggleOptions = [&]() {
     if (optionsBrowserIsActive(browser)) {
@@ -1353,7 +1355,18 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         markDirty();
       });
     }
-    if (!melodyVisualizationEnabled) {
+    if (melodyVisualization.active() || !audioGetNowPlaying().empty() ||
+        audioIsReady()) {
+      commands.emplace_back(
+          melodyVisualization.active() ? "Hide Pitch Monitor"
+                                       : "Show Pitch Monitor",
+          "M", [&]() {
+            if (callbacks.onTogglePitchMonitor) {
+              callbacks.onTogglePitchMonitor();
+            }
+          });
+    }
+    if (!melodyVisualization.active()) {
       commands.emplace_back("View: Grid", "T", [&]() {
         browser.viewMode = BrowserState::ViewMode::Thumbnails;
         markLayoutDirty();
@@ -1414,15 +1427,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
   };
 
-  auto dismissFileContextMenu = [&]() {
-    const bool changed = fileContextMenu.dismiss() ||
-                         fileContextEntry.has_value() ||
-                         !fileContextActions.empty();
-    fileContextEntry.reset();
-    fileContextActions.clear();
-    return changed;
-  };
-
   auto runFileContextAction = [&](int actionIndex) {
     if (!fileContextEntry || actionIndex < 0 ||
         actionIndex >= static_cast<int>(fileContextActions.size())) {
@@ -1480,137 +1484,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           markLayoutDirty();
           markDirty(UiDirtyFlags::Async);
         }
-      }
-    }
-  };
-
-  auto drawMelodyPanel = [&](int top, int panelHeight, int panelWidth,
-                             const AudioMelodyInfo& melodyInfo,
-                             const AudioMelodyAnalysisState& melodyAnalysisState) {
-    if (panelHeight <= 0 || panelWidth <= 0) return;
-    int bottom = top + panelHeight;
-    int row = top;
-
-    if (row < bottom) {
-      screen.writeText(0, row++, fitLine(" Melody", panelWidth), kStyleAccent);
-    }
-
-    if (row < bottom) {
-      std::string noteLine;
-      if (melodyInfo.midiNote >= 0) {
-        int hz = static_cast<int>(std::round(melodyInfo.frequencyHz));
-        noteLine = " " + midiToNoteName(melodyInfo.midiNote) + "   " +
-                   std::to_string(hz) + "Hz";
-      } else {
-        noteLine = " --";
-      }
-      screen.writeText(0, row++, fitLine(noteLine, panelWidth), kStyleNormal);
-    }
-
-    if (row < bottom) {
-      int pct =
-          static_cast<int>(std::round(std::clamp(melodyInfo.confidence, 0.0f, 1.0f) *
-                                      100.0f));
-      int meterWidth = std::max(8, panelWidth - 20);
-      int filled =
-          static_cast<int>(std::round(static_cast<float>(meterWidth) *
-                                      std::clamp(melodyInfo.confidence, 0.0f, 1.0f)));
-      filled = std::clamp(filled, 0, meterWidth);
-      std::string meter = "[";
-      meter.append(static_cast<size_t>(filled), '#');
-      meter.append(static_cast<size_t>(std::max(0, meterWidth - filled)), '.');
-      meter.push_back(']');
-      std::string confLine = " Confidence " + meter + " " + std::to_string(pct) + "%";
-      screen.writeText(0, row++, fitLine(confLine, panelWidth), kStyleDim);
-    }
-
-    if (row < bottom) {
-      std::string statusLine;
-      if (!melodyAnalysisState.error.empty()) {
-        statusLine = " Analysis: Error - " + melodyAnalysisState.error;
-      } else if (melodyAnalysisState.ready) {
-        statusLine =
-            " Analysis: Ready (" + std::to_string(melodyAnalysisState.frameCount) +
-            " pts)";
-      } else if (melodyAnalysisState.running) {
-        int progressPercent =
-            static_cast<int>(std::round(std::clamp(melodyAnalysisState.progress,
-                                                   0.0f, 1.0f) *
-                                      100.0f));
-        statusLine = " Analysis: " + std::to_string(progressPercent) + "%";
-      } else {
-        statusLine = " Analysis: Idle";
-      }
-      screen.writeText(0, row++, fitLine(statusLine, panelWidth), kStyleDim);
-    }
-
-    int graphTop = row;
-    int graphHeight = bottom - graphTop;
-    if (graphHeight < 4) return;
-
-    constexpr int kGraphMinMidi = 36;  // C2
-    constexpr int kGraphMaxMidi = 96;  // C7
-    int labelWidth = (panelWidth >= 34) ? 7 : 0;
-    int chartX = labelWidth;
-    int chartWidth = panelWidth - chartX;
-    if (chartWidth < 8) return;
-
-    auto midiToRow = [&](int midi) {
-      int clamped = std::clamp(midi, kGraphMinMidi, kGraphMaxMidi);
-      int range = kGraphMaxMidi - kGraphMinMidi;
-      if (range <= 0 || graphHeight <= 1) return graphTop;
-      float norm =
-          static_cast<float>(kGraphMaxMidi - clamped) / static_cast<float>(range);
-      int offset = static_cast<int>(std::round(norm * (graphHeight - 1)));
-      return graphTop + std::clamp(offset, 0, graphHeight - 1);
-    };
-
-    for (int midi = kGraphMinMidi; midi <= kGraphMaxMidi; midi += 12) {
-      int y = midiToRow(midi);
-      if (y < graphTop || y >= bottom) continue;
-      if (labelWidth > 0) {
-        std::string label = midiToNoteName(midi);
-        if (utf8DisplayWidth(label) < labelWidth) {
-          label.insert(label.begin(),
-                       static_cast<size_t>(labelWidth - utf8DisplayWidth(label)),
-                       ' ');
-        }
-        screen.writeText(0, y, utf8TakeDisplayWidth(label, labelWidth),
-                         kStyleDim);
-      }
-      screen.writeRun(chartX, y, chartWidth, L'.', kStyleDim);
-    }
-
-    size_t sampleCount = melodyHistoryMidi.size();
-    if (sampleCount > 0) {
-      size_t start = 0;
-      if (sampleCount > static_cast<size_t>(chartWidth)) {
-        start = sampleCount - static_cast<size_t>(chartWidth);
-      }
-      for (int x = 0; x < chartWidth; ++x) {
-        size_t idx = start + static_cast<size_t>(x);
-        if (idx >= sampleCount) break;
-        int midi = melodyHistoryMidi[idx];
-        if (midi < 0) continue;
-        int y = midiToRow(midi);
-        float conf = melodyHistoryConfidence[idx];
-        Style pointStyle = kStyleDim;
-        wchar_t point = L'*';
-        if (conf >= 0.75f) {
-          pointStyle = kStyleAccent;
-          point = L'#';
-        } else if (conf >= 0.45f) {
-          pointStyle = kStyleNormal;
-        }
-        screen.writeChar(chartX + x, y, point, pointStyle);
-      }
-    }
-
-    if (melodyInfo.midiNote >= 0) {
-      int y = midiToRow(melodyInfo.midiNote);
-      int x = chartX + chartWidth - 1;
-      if (x >= chartX && y >= graphTop && y < bottom) {
-        screen.writeChar(x, y, L'@', kStyleAccent);
       }
     }
   };
@@ -1787,7 +1660,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         ev.mouse.pos.X = static_cast<SHORT>(gx);
         ev.mouse.pos.Y = static_cast<SHORT>(gy);
       }
-      const bool browserInteractionEnabled = !melodyVisualizationEnabled;
+      const bool browserInteractionEnabled = !melodyVisualization.active();
       bool isLeftClick = (ev.type == InputEvent::Type::Mouse) &&
                          isMouseButtonDown(ev.mouse, MouseButton::Left);
       bool clearBtnHover = false;
@@ -1936,7 +1809,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     };
 
     const BrowserState::ViewMode preInputViewMode = browser.viewMode;
-    const bool preInputMelodyVisualization = melodyVisualizationEnabled;
+    const bool preInputMelodyVisualization = melodyVisualization.active();
     const bool preInputOptionsMode = optionsBrowserIsActive(browser);
     const bool preInputTrackMode = isTrackBrowserActive(browser);
     InputEvent ev{};
@@ -1981,7 +1854,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
 
     if (browser.viewMode != preInputViewMode ||
-        melodyVisualizationEnabled != preInputMelodyVisualization ||
+        melodyVisualization.active() != preInputMelodyVisualization ||
         optionsBrowserIsActive(browser) != preInputOptionsMode ||
         isTrackBrowserActive(browser) != preInputTrackMode) {
       markLayoutDirty();
@@ -2008,7 +1881,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           (browser.filterActive || browser.pathSearchActive)) {
         reduceTimeout(std::chrono::milliseconds(250));
       }
-      if (melodyVisualizationEnabled) {
+      if (melodyVisualization.active()) {
         reduceTimeout(std::chrono::milliseconds(50));
       }
       if (o.play &&
@@ -2051,7 +1924,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     if (dirty) {
       bool optionsMode = optionsBrowserIsActive(browser);
       bool trackMode = isTrackBrowserActive(browser);
-      bool browserInteractionEnabled = !melodyVisualizationEnabled;
+      bool browserInteractionEnabled = !melodyVisualization.active();
 
       screen.clear(kStyleNormal);
       screen.setAlwaysFullRedraw(forceFullRedraw);
@@ -2159,12 +2032,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       std::filesystem::path nowPlaying = currentPlaybackFile();
       const std::optional<int> nowPlayingTrackIndex =
           currentPlaybackTrackIndex();
-      if (nowPlaying != lastMelodyTrack ||
-          nowPlayingTrackIndex != lastMelodyTrackIndex) {
-        clearMelodyHistory();
-        lastMelodyTrack = nowPlaying;
-        lastMelodyTrackIndex = nowPlayingTrackIndex;
-      }
       std::string showingLabel;
       if (!browserInteractionEnabled) {
         showingLabel.clear();
@@ -2181,15 +2048,14 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         screen.writeText(0, std::min(height - 1, searchBarY + 1),
                          fitLine(showingLabel, width), kStyleDim);
       }
-      AudioMelodyInfo melodyInfo = audioGetMelodyInfo();
-      AudioMelodyAnalysisState melodyAnalysisState = audioGetMelodyAnalysisState();
-      if (melodyAnalysisState.running && !lastMelodyAnalysisRunning) {
-        clearMelodyHistory();
-      }
-      lastMelodyAnalysisRunning = melodyAnalysisState.running;
-      if (melodyVisualizationEnabled && !audioIsPaused() && !audioIsHolding()) {
-        pushMelodyHistory(melodyInfo);
-      }
+      tui_melody_visualization::Observation melodyObservation;
+      melodyObservation.source.file = nowPlaying;
+      melodyObservation.source.trackIndex = nowPlayingTrackIndex;
+      melodyObservation.pitch = audioGetMelodyInfo();
+      melodyObservation.analysis = audioGetMelodyAnalysisState();
+      melodyObservation.playbackAdvancing =
+          !audioIsPaused() && !audioIsHolding();
+      melodyVisualization.update(std::move(melodyObservation));
       if (browserInteractionEnabled) {
         const int playingEntryIndex = findBrowserPlaybackTargetEntry(
             browser.entries, currentPlaybackTarget());
@@ -2200,8 +2066,13 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
                            playingEntryIndex, isSupportedImageExt, isVideoExt,
                            isSupportedAudioExt);
       } else {
-        drawMelodyPanel(listTop, listHeight, width, melodyInfo,
-                        melodyAnalysisState);
+        tui_melody_visualization::Bounds melodyBounds;
+        melodyBounds.top = listTop;
+        melodyBounds.height = listHeight;
+        melodyBounds.width = width;
+        tui_melody_visualization::draw(screen, melodyVisualization,
+                                       melodyBounds,
+                                       melodyVisualizationStyles);
       }
 
       int footerStart = listTop + listHeight;

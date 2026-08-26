@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "audio/analysis/melody_types.h"
 #include "audiofilter/radio1938/radio_reception_profile.h"
 #include "core/runtime_defaults.h"
 #include "kssoptions.h"
@@ -29,20 +30,6 @@ struct AudioPerfStats {
   uint32_t sampleRate = 0;
   uint32_t channels = 0;
   bool usingFfmpeg = false;
-};
-
-struct AudioMelodyInfo {
-  float frequencyHz = 0.0f;
-  float confidence = 0.0f;
-  int midiNote = -1;
-};
-
-struct AudioMelodyAnalysisState {
-  bool ready = false;
-  bool running = false;
-  float progress = 0.0f;
-  size_t frameCount = 0;
-  std::string error;
 };
 
 struct AudioPlaybackConfig {

@@ -495,7 +495,9 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
     const KeyEvent& key = ev.key;
     bool backspaceKey = key.vk == VK_BACK;
     const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
+    const DWORD altMask = LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED;
     bool ctrl = (key.control & ctrlMask) != 0;
+    bool alt = (key.control & altMask) != 0;
 
     if (ctrl && (key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q')) {
       if (callbacks.onQuit) callbacks.onQuit();
@@ -584,6 +586,13 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
                             kPlaybackShortcutContextShared |
                                 kPlaybackShortcutContextGlobal) !=
             PlaybackInputResult::Ignored) {
+      dirty = true;
+      return;
+    }
+    if (!ctrl && !alt &&
+        (key.vk == 'M' || key.ch == 'm' || key.ch == 'M') &&
+        callbacks.onTogglePitchMonitor) {
+      callbacks.onTogglePitchMonitor();
       dirty = true;
       return;
     }
@@ -792,6 +801,11 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
           break;
         case ActionStripItem::Hz50:
           if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
+          break;
+        case ActionStripItem::PitchMonitor:
+          if (callbacks.onTogglePitchMonitor) {
+            callbacks.onTogglePitchMonitor();
+          }
           break;
         case ActionStripItem::View:
           browser.viewMode = nextViewMode(browser.viewMode);

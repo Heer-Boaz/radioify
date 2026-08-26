@@ -47,6 +47,7 @@ struct InputCallbacks {
   std::function<void()> onToggleFullscreen;
   std::function<void()> onToggleRadio;
   std::function<void()> onToggle50Hz;
+  std::function<void()> onTogglePitchMonitor;
   std::function<void()> onToggleSubtitles;
   std::function<void()> onToggleAudioTrack;
   std::function<void()> onToggleOptions;

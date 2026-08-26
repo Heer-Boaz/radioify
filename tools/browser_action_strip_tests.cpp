@@ -41,6 +41,8 @@ int main() {
   input.playback.hz50Enabled = true;
   input.playback.pictureInPictureAvailable = true;
   input.playback.pictureInPictureActive = true;
+  input.pitchMonitorAvailable = true;
+  input.pitchMonitorActive = true;
   input.browserControlsAvailable = true;
   input.viewMode = BrowserState::ViewMode::Thumbnails;
   input.optionsAvailable = true;
@@ -54,12 +56,17 @@ int main() {
       findItem(items, ActionStripItem::View);
   const browser_action_strip::Item* options =
       findItem(items, ActionStripItem::Options);
+  const browser_action_strip::Item* pitchMonitor =
+      findItem(items, ActionStripItem::PitchMonitor);
   ok &= expect(findItem(items, ActionStripItem::Previous) && playPause &&
                    findItem(items, ActionStripItem::Next) &&
                    findItem(items, ActionStripItem::Radio) &&
                    findItem(items, ActionStripItem::Hz50) &&
+                   pitchMonitor &&
                    findItem(items, ActionStripItem::PictureInPicture),
                "playback controls must map into browser action identities");
+  ok &= expect(pitchMonitor && pitchMonitor->active,
+               "the pitch monitor must expose its active state");
   ok &= expect(playPause && playPause->active,
                "playback active state must survive the projection");
   ok &= expect(view && view->label.find("Grid") != std::string::npos,
@@ -71,10 +78,12 @@ int main() {
 
   browser_action_strip::Input playbackOnly;
   playbackOnly.playback.playPauseAvailable = true;
+  playbackOnly.pitchMonitorAvailable = true;
   const std::vector<browser_action_strip::Item> playbackItems =
       browser_action_strip::build(playbackOnly);
   ok &= expect(!findItem(playbackItems, ActionStripItem::View) &&
-                   !findItem(playbackItems, ActionStripItem::Options),
+                   !findItem(playbackItems, ActionStripItem::Options) &&
+                   findItem(playbackItems, ActionStripItem::PitchMonitor),
                "browser-only actions must not leak into playback-only mode");
 
   ok &= expect(browser_action_strip::wrappedLineCount(items, 1) ==
