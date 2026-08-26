@@ -1,8 +1,11 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "playback/video/edit/decision_list.h"
@@ -43,24 +46,43 @@ struct ExportSnapshot {
   }
 };
 
+struct ExportResult {
+  ExportState state = ExportState::Failed;
+  std::string videoEncoder;
+  std::string error;
+};
+
 // Selects a non-existing sibling output. The source path is never returned,
 // and existing edit exports are never reused.
 std::filesystem::path uniqueEditedOutputPath(
     const std::filesystem::path& sourcePath);
 
+// Worker boundary owned by the video-edit workspace. The request and progress
+// are published as immutable snapshots, and each terminal result is consumed
+// exactly once before another export can replace it.
 class Exporter {
  public:
+  using ProgressReporter = std::function<void(double)>;
+  using Operation = std::function<ExportResult(
+      const ExportRequest&, const std::atomic<bool>*,
+      const ProgressReporter&)>;
+
+  // Uses Radioify's FFmpeg export pipeline.
   Exporter();
+  // The operation boundary keeps worker lifecycle and workspace coordination
+  // independent from the concrete encoder pipeline.
+  explicit Exporter(Operation operation);
   ~Exporter();
 
   Exporter(const Exporter&) = delete;
   Exporter& operator=(const Exporter&) = delete;
 
   bool start(ExportRequest request);
-  void cancel();
+  bool cancel();
   void stop();
 
   ExportSnapshot snapshot() const;
+  std::optional<ExportSnapshot> takeCompletion();
   bool consumeChanged();
 
  private:

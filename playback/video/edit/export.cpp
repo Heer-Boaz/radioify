@@ -11,11 +11,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <mutex>
 #include <thread>
 #include <utility>
-
-#include "playback/video/edit/export_pipeline.h"
 
 namespace playback_video_edit {
 namespace {
@@ -56,11 +55,16 @@ std::filesystem::path uniqueEditedOutputPath(
 }
 
 struct Exporter::Impl {
+  explicit Impl(Operation exportOperation)
+      : operation(std::move(exportOperation)) {}
+
   mutable std::mutex mutex;
   std::atomic<bool> changed{false};
   std::thread worker;
   std::atomic<bool> cancelled{false};
+  Operation operation;
   ExportSnapshot state;
+  std::optional<ExportSnapshot> completion;
   std::chrono::steady_clock::time_point lastProgressNotification =
       std::chrono::steady_clock::time_point::min();
 
@@ -87,23 +91,43 @@ struct Exporter::Impl {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     const HRESULT comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool uninitializeCom = SUCCEEDED(comResult);
-    detail::PipelineResult completed = detail::runExportPipeline(
-        request, &cancelled,
-        [this](double progress) { updateProgress(progress); });
+    ExportResult completed;
+    try {
+      completed = operation(
+          request, &cancelled,
+          [this](double progress) { updateProgress(progress); });
+    } catch (const std::exception& exception) {
+      completed.state = ExportState::Failed;
+      completed.error = exception.what();
+    } catch (...) {
+      completed.state = ExportState::Failed;
+      completed.error = "Unexpected export error.";
+    }
     if (uninitializeCom) CoUninitialize();
     {
       std::lock_guard<std::mutex> lock(mutex);
+      if (completed.state != ExportState::Succeeded &&
+          cancelled.load(std::memory_order_relaxed)) {
+        completed.state = ExportState::Cancelled;
+        completed.error.clear();
+      } else if (completed.state == ExportState::Idle ||
+                 completed.state == ExportState::Running) {
+        completed.state = ExportState::Failed;
+        completed.error = "Export backend returned a non-terminal result.";
+      }
       state.state = completed.state;
       state.progress = completed.state == ExportState::Succeeded ? 1.0
                                                                  : state.progress;
       state.videoEncoder = std::move(completed.videoEncoder);
       state.error = std::move(completed.error);
+      completion = state;
     }
     changed.store(true, std::memory_order_release);
   }
 };
 
-Exporter::Exporter() : impl_(std::make_unique<Impl>()) {}
+Exporter::Exporter(Operation operation)
+    : impl_(std::make_unique<Impl>(std::move(operation))) {}
 
 Exporter::~Exporter() { stop(); }
 
@@ -116,7 +140,10 @@ bool Exporter::start(ExportRequest request) {
   std::thread previous;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (impl_->state.state == ExportState::Running) return false;
+    if (!impl_->operation || impl_->state.state == ExportState::Running ||
+        impl_->completion) {
+      return false;
+    }
     if (impl_->worker.joinable()) previous = std::move(impl_->worker);
   }
   if (previous.joinable()) previous.join();
@@ -137,6 +164,7 @@ bool Exporter::start(ExportRequest request) {
     } catch (...) {
       impl_->state.state = ExportState::Failed;
       impl_->state.error = "Could not start the export worker.";
+      impl_->completion = impl_->state;
       impl_->changed.store(true, std::memory_order_release);
       return false;
     }
@@ -145,8 +173,15 @@ bool Exporter::start(ExportRequest request) {
   return true;
 }
 
-void Exporter::cancel() {
-  if (impl_) impl_->cancelled.store(true, std::memory_order_relaxed);
+bool Exporter::cancel() {
+  if (!impl_) return false;
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  if (impl_->state.state != ExportState::Running ||
+      impl_->cancelled.exchange(true, std::memory_order_relaxed)) {
+    return false;
+  }
+  impl_->changed.store(true, std::memory_order_release);
+  return true;
 }
 
 void Exporter::stop() {
@@ -157,6 +192,7 @@ void Exporter::stop() {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (impl_->state.state == ExportState::Running) {
       impl_->state.state = ExportState::Cancelled;
+      impl_->state.error.clear();
     }
   }
   impl_->changed.store(false, std::memory_order_release);
@@ -166,6 +202,24 @@ ExportSnapshot Exporter::snapshot() const {
   if (!impl_) return {};
   std::lock_guard<std::mutex> lock(impl_->mutex);
   return impl_->state;
+}
+
+std::optional<ExportSnapshot> Exporter::takeCompletion() {
+  if (!impl_) return std::nullopt;
+  std::optional<ExportSnapshot> completion;
+  std::thread finishedWorker;
+  {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (!impl_->completion) return std::nullopt;
+    completion = std::move(impl_->completion);
+    impl_->completion.reset();
+    if (impl_->state.state != ExportState::Running &&
+        impl_->worker.joinable()) {
+      finishedWorker = std::move(impl_->worker);
+    }
+  }
+  if (finishedWorker.joinable()) finishedWorker.join();
+  return completion;
 }
 
 bool Exporter::consumeChanged() {

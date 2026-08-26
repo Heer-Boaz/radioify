@@ -600,6 +600,7 @@ add_executable(video_edit_export_smoke)
 target_sources(video_edit_export_smoke PRIVATE
   $<TARGET_OBJECTS:radioify_tool_video_edit_export_smoke>
   ${CMAKE_SOURCE_DIR}/playback/video/edit/export.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/export_default.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/export_codec_support.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/export_dolby_vision.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/export_metadata.cpp
@@ -611,6 +612,15 @@ target_sources(video_edit_export_smoke PRIVATE
 radioify_link_repo_target(video_edit_export_smoke)
 add_test(NAME video_edit_export_cadence_audit_tests
          COMMAND $<TARGET_FILE:video_edit_export_smoke> --self-test)
+
+add_executable(exporter_job_tests)
+target_sources(exporter_job_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_exporter_job_tests>
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/export.cpp
+)
+radioify_link_repo_target(exporter_job_tests)
+add_test(NAME exporter_job_tests
+         COMMAND $<TARGET_FILE:exporter_job_tests>)
 
 add_executable(window_display_lifecycle_tests)
 target_sources(window_display_lifecycle_tests PRIVATE

@@ -57,10 +57,14 @@ struct VideoEditWorkspace::Impl {
   bool active = false;
   playback_video_edit::Prompt prompt = playback_video_edit::Prompt::None;
   playback_video_edit::Exporter exporter;
-  playback_video_edit::ExportState observedExportState =
-      playback_video_edit::ExportState::Idle;
   playback_video_analysis::SceneAnalysisJob sceneAnalysis;
   playback_video_edit::SceneSuggestionReview sceneSuggestionReview;
+
+  struct AppliedExportCompletion {
+    VideoEditExportCompletion outcome = VideoEditExportCompletion::None;
+    bool exportedCurrentRevision = false;
+    std::string message;
+  };
 
   CommandContext commandContext() const {
     CommandContext context;
@@ -316,6 +320,41 @@ struct VideoEditWorkspace::Impl {
     return true;
   }
 
+  std::optional<AppliedExportCompletion> takeExportCompletion() {
+    const std::optional<playback_video_edit::ExportSnapshot> completed =
+        exporter.takeCompletion();
+    if (!completed) return std::nullopt;
+    exporter.consumeChanged();
+
+    AppliedExportCompletion applied;
+    switch (completed->state) {
+      case playback_video_edit::ExportState::Succeeded:
+        applied.exportedCurrentRevision =
+            document.hasUnexportedChanges() &&
+            completed->decisions == document.timeline().decisionList();
+        document.markExported(completed->decisions);
+        applied.outcome = VideoEditExportCompletion::Succeeded;
+        applied.message =
+            "Exported " +
+            toUtf8String(completed->destinationPath.filename());
+        break;
+      case playback_video_edit::ExportState::Failed:
+        applied.outcome = VideoEditExportCompletion::Failed;
+        applied.message = completed->error.empty()
+                              ? "Export failed"
+                              : "Export failed: " + completed->error;
+        break;
+      case playback_video_edit::ExportState::Cancelled:
+        applied.outcome = VideoEditExportCompletion::Cancelled;
+        applied.message = "Export cancelled";
+        break;
+      case playback_video_edit::ExportState::Idle:
+      case playback_video_edit::ExportState::Running:
+        break;
+    }
+    return applied;
+  }
+
   VideoEditActionResult startExport(const CommandContext& context) {
     VideoEditActionResult result;
     result.handled = true;
@@ -324,21 +363,12 @@ struct VideoEditWorkspace::Impl {
       result.message = "An export is already running";
       return result;
     }
-    // Starting a new worker replaces its terminal snapshot. Reconcile a
-    // successful predecessor first so its immutable output revision can never
-    // be lost in the UI-thread/worker completion race.
-    const bool completedCurrentRevision =
-        document.hasUnexportedChanges() &&
-        previous.state == playback_video_edit::ExportState::Succeeded &&
-        previous.decisions == document.timeline().decisionList();
-    if (previous.state == playback_video_edit::ExportState::Succeeded) {
-      document.markExported(previous.decisions);
-    }
-    if (completedCurrentRevision) {
-      exporter.consumeChanged();
-      observedExportState = playback_video_edit::ExportState::Succeeded;
-      result.message =
-          "Exported " + toUtf8String(previous.destinationPath.filename());
+    // A terminal result remains owned by the job until the workspace applies
+    // it. This prevents a new export from overwriting an unobserved revision.
+    const std::optional<AppliedExportCompletion> completed =
+        takeExportCompletion();
+    if (completed && completed->exportedCurrentRevision) {
+      result.message = completed->message;
       return result;
     }
     const playback_video_edit::Timeline& timeline = document.timeline();
@@ -366,7 +396,6 @@ struct VideoEditWorkspace::Impl {
       result.message = "Could not start edit export";
       return result;
     }
-    observedExportState = playback_video_edit::ExportState::Running;
     result.exportStarted = true;
     result.message =
         "Export started: " +
@@ -375,8 +404,7 @@ struct VideoEditWorkspace::Impl {
   }
 
   VideoEditActionResult cancelExport() {
-    if (exporter.snapshot().running()) {
-      exporter.cancel();
+    if (exporter.cancel()) {
       return {true, false, "Cancelling edit export..."};
     }
     return {true, false, "No export is running"};
@@ -816,32 +844,11 @@ VideoEditPollResult VideoEditWorkspace::poll() {
 
   if (impl_->exporter.consumeChanged()) {
     result.changed = true;
-    const playback_video_edit::ExportState previous =
-        impl_->observedExportState;
-    const playback_video_edit::ExportSnapshot state =
-        impl_->exporter.snapshot();
-    impl_->observedExportState = state.state;
-    if (previous == playback_video_edit::ExportState::Running &&
-        state.finished()) {
-      switch (state.state) {
-        case playback_video_edit::ExportState::Succeeded:
-          impl_->document.markExported(state.decisions);
-          result.completion = VideoEditExportCompletion::Succeeded;
-          appendMessage(
-              "Exported " + toUtf8String(state.destinationPath.filename()));
-          break;
-        case playback_video_edit::ExportState::Failed:
-          result.completion = VideoEditExportCompletion::Failed;
-          appendMessage("Export failed: " + state.error);
-          break;
-        case playback_video_edit::ExportState::Cancelled:
-          result.completion = VideoEditExportCompletion::Cancelled;
-          appendMessage("Export cancelled");
-          break;
-        default:
-          break;
-      }
-    }
+  }
+  if (const auto completedExport = impl_->takeExportCompletion()) {
+    result.changed = true;
+    result.completion = completedExport->outcome;
+    appendMessage(completedExport->message);
   }
 
   if (impl_->sceneAnalysis.consumeChanged()) {
@@ -921,7 +928,6 @@ void VideoEditWorkspace::stop() {
   if (!impl_) return;
   impl_->sceneAnalysis.stop();
   impl_->exporter.stop();
-  impl_->observedExportState = impl_->exporter.snapshot().state;
 }
 
 playback_video_edit::EditSnapshot VideoEditWorkspace::edit() const {

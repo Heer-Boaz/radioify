@@ -285,7 +285,8 @@ struct CopiedStream {
 
 class ExportPipeline {
  public:
-  ExportPipeline(const ExportRequest& request, std::atomic<bool>* cancelled)
+  ExportPipeline(const ExportRequest& request,
+                 const std::atomic<bool>* cancelled)
       : request_(request), cancelled_(cancelled) {}
 
   ~ExportPipeline() {
@@ -370,7 +371,7 @@ class ExportPipeline {
   bool probeFirstRetainedVideoMetadata(std::string* error);
 
   const ExportRequest& request_;
-  std::atomic<bool>* cancelled_ = nullptr;
+  const std::atomic<bool>* cancelled_ = nullptr;
   AVFormatContext* input_ = nullptr;
   AVFormatContext* output_ = nullptr;
   int selectedVideoIndex_ = -1;
@@ -2156,10 +2157,10 @@ bool ExportPipeline::publish(std::string* error) {
 
 }  // namespace
 
-PipelineResult runExportPipeline(
-    const ExportRequest& request, std::atomic<bool>* cancelled,
+ExportResult runExportPipeline(
+    const ExportRequest& request, const std::atomic<bool>* cancelled,
     const std::function<void(double)>& reportProgress) {
-  PipelineResult result;
+  ExportResult result;
   if (request.sourcePath.empty() || request.destinationPath.empty() ||
       !validRanges(request.decisions.keptRanges) ||
       !request.decisions.hasValidShape()) {
