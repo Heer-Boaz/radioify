@@ -4,7 +4,6 @@
 #include "playback/video/transcript/device_selection.h"
 #include "playback/video/transcript/subtitle_cues.h"
 #include "playback/video/transcript/whisper_model_config.h"
-#include "tui/ui/ui_footer_layout.h"
 
 #include <algorithm>
 #include <chrono>
@@ -194,12 +193,6 @@ int main() {
   ok &= expect(transcript::transcriptPathForVideo("archive.name.mp4") ==
                    std::filesystem::path("archive.name.transcript.srt"),
                "canonical sidecar must retain multi-dot stems");
-
-  const BrowserFooterLayout mediaTaskFooter =
-      computeBrowserFooterLayout(true, false, true, false, false, false);
-  ok &= expect(mediaTaskFooter.showMediaTaskStatus &&
-                   mediaTaskFooter.reservedLines == 2,
-               "the latest media task must reserve one shared status row");
 
   const auto stamp =
       std::chrono::steady_clock::now().time_since_epoch().count();

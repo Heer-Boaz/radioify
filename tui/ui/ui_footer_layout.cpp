@@ -16,22 +16,18 @@ bool operator!=(const BrowserFooterLayout& a, const BrowserFooterLayout& b) {
   return !(a == b);
 }
 
-BrowserFooterLayout computeBrowserFooterLayout(bool browserInteractionEnabled,
-                                               bool showWarning,
-                                               bool showMediaTaskStatus,
-                                               bool enableTransportUi,
-                                               bool showNowPlaying,
-                                               bool showPeakMeter) {
+BrowserFooterLayout computeBrowserFooterLayout(
+    const BrowserFooterLayoutInput& input) {
   BrowserFooterLayout layout;
-  layout.showMeta = browserInteractionEnabled;
-  layout.showWarning = showWarning;
-  layout.showMediaTaskStatus = showMediaTaskStatus;
-  layout.showNowPlaying = showNowPlaying;
+  layout.showMeta = input.browserInteractionEnabled;
+  layout.showWarning = input.showWarning;
+  layout.showMediaTaskStatus = input.showMediaTaskStatus;
+  layout.showNowPlaying = input.showNowPlaying;
   layout.nowPlayingLines = layout.showNowPlaying ? 1 : 0;
-  layout.showActionStrip = enableTransportUi;
+  layout.showActionStrip = input.enableTransportUi;
   layout.actionStripLines = layout.showActionStrip ? 1 : 0;
-  layout.showPeakMeter = showPeakMeter;
-  layout.showProgress = enableTransportUi;
+  layout.showPeakMeter = input.showPeakMeter;
+  layout.showProgress = input.enableTransportUi;
 
   layout.reservedLines = 0;
   layout.reservedLines += layout.showMeta ? 1 : 0;

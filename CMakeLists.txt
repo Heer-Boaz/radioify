@@ -839,7 +839,6 @@ target_sources(indexed_transcript_tests PRIVATE
   $<TARGET_OBJECTS:radioify_transcript_device_policy>
   ${CMAKE_SOURCE_DIR}/playback/video/transcript/subtitle_cues.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/transcript/whisper_model_config.cpp
-  ${CMAKE_SOURCE_DIR}/tui/ui/ui_footer_layout.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
@@ -847,6 +846,15 @@ target_sources(indexed_transcript_tests PRIVATE
 radioify_link_repo_target(indexed_transcript_tests)
 add_test(NAME indexed_transcript_tests
          COMMAND $<TARGET_FILE:indexed_transcript_tests>)
+
+add_executable(ui_footer_layout_tests)
+target_sources(ui_footer_layout_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_ui_footer_layout_tests>
+  ${CMAKE_SOURCE_DIR}/tui/ui/ui_footer_layout.cpp
+)
+radioify_link_repo_target(ui_footer_layout_tests)
+add_test(NAME ui_footer_layout_tests
+         COMMAND $<TARGET_FILE:ui_footer_layout_tests>)
 
 add_executable(media_action_catalog_tests)
 target_sources(media_action_catalog_tests PRIVATE

@@ -2257,13 +2257,15 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     const bool showNowPlaying =
         !nowPlaying.empty() || audioIsReady() || audioIsSeeking() ||
         audioIsHolding();
-    BrowserFooterLayout layout = computeBrowserFooterLayout(
-        !melodyVisualizationEnabled,
-        !mediaCommandError.empty() || !audioGetWarning().empty(),
-        hasMediaTaskStatus,
-        o.play,
-        showNowPlaying,
-        o.play && audioIsReady());
+    BrowserFooterLayoutInput layoutInput;
+    layoutInput.browserInteractionEnabled = !melodyVisualizationEnabled;
+    layoutInput.showWarning =
+        !mediaCommandError.empty() || !audioGetWarning().empty();
+    layoutInput.showMediaTaskStatus = hasMediaTaskStatus;
+    layoutInput.enableTransportUi = o.play;
+    layoutInput.showNowPlaying = showNowPlaying;
+    layoutInput.showPeakMeter = o.play && audioIsReady();
+    BrowserFooterLayout layout = computeBrowserFooterLayout(layoutInput);
     if (layout.showNowPlaying) {
       const int nowPlayingLines = std::max(
           1, wrappedLineCount(" " + buildNowPlayingLabel(),
