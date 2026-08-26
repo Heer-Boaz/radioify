@@ -36,6 +36,8 @@
 #include "audio_picture_in_picture_window.h"
 #include "audioplayback.h"
 #include "browser_action_strip.h"
+#include "browser_media_menu.h"
+#include "browser_media_menu_renderer.h"
 #include "browser_playback_reveal.h"
 #include "browser_playback_source.h"
 #include "browser_content_preparation.h"
@@ -75,8 +77,6 @@
 #include "playback/session/session.h"
 #include "playback/system_media_transport/controls.h"
 #include "playback_target_match.h"
-#include "popup_menu.h"
-#include "popup_menu_renderer.h"
 #include "playback/target.h"
 #include "mouse_double_click_tracker.h"
 #include "tracklist.h"
@@ -748,18 +748,9 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
   }
 
-  tui_popup_menu::Model fileContextMenu;
-  std::optional<BrowserEntry> fileContextEntry;
-  std::vector<playback_media_actions::Item> fileContextActions;
+  tui_browser_media_menu::Model fileContextMenu;
   const tui_popup_menu::Styles fileContextStyles = theme.popupMenuStyles();
-  auto dismissFileContextMenu = [&]() {
-    const bool changed = fileContextMenu.dismiss() ||
-                         fileContextEntry.has_value() ||
-                         !fileContextActions.empty();
-    fileContextEntry.reset();
-    fileContextActions.clear();
-    return changed;
-  };
+  auto dismissFileContextMenu = [&]() { return fileContextMenu.dismiss(); };
 
   auto selectedOptionsSubject = [&]()
       -> std::optional<OptionsBrowserSubject> {
@@ -936,17 +927,10 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     std::vector<playback_media_actions::Item> items =
         playback_media_actions::build(context);
     if (items.empty()) return;
-    std::vector<std::string> labels;
-    labels.reserve(items.size());
-    for (const playback_media_actions::Item& item : items) {
-      labels.push_back(item.label);
-    }
-    fileContextEntry = entry;
-    fileContextActions = std::move(items);
     tui_popup_menu::Anchor anchor;
     anchor.x = x;
     anchor.y = y;
-    fileContextMenu.open(std::move(labels), anchor);
+    fileContextMenu.open(entry, std::move(items), anchor);
     markDirty();
   };
   callbacks.onRenderFile = [&](const std::filesystem::path& file) {
@@ -1393,15 +1377,9 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
   };
 
-  auto runFileContextAction = [&](int actionIndex) {
-    if (!fileContextEntry || actionIndex < 0 ||
-        actionIndex >= static_cast<int>(fileContextActions.size())) {
-      return;
-    }
-    const BrowserEntry entry = *fileContextEntry;
-    const playback_media_actions::Action action =
-        fileContextActions[static_cast<size_t>(actionIndex)].action;
-    dismissFileContextMenu();
+  auto runFileContextAction = [&](tui_browser_media_menu::Command command) {
+    const BrowserEntry& entry = command.entry;
+    const playback_media_actions::Action action = command.action;
     dirty = true;
     const playback_media_processing::ActionExecution processing =
         mediaProcessingActions.execute(action, entry.path);
@@ -1705,13 +1683,10 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         popupBounds.width = width;
         popupBounds.height = height;
         popupBounds.topInset = listTop;
-        const tui_popup_menu::Interaction interaction =
+        const tui_browser_media_menu::Interaction interaction =
             fileContextMenu.handle(ev, popupBounds);
-        if (interaction.activatedItem) {
-          runFileContextAction(
-              static_cast<int>(*interaction.activatedItem));
-        } else if (interaction.dismissed) {
-          dismissFileContextMenu();
+        if (interaction.command) {
+          runFileContextAction(std::move(*interaction.command));
         }
         if (interaction.changed) {
           dirty = true;
@@ -2225,8 +2200,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         popupBounds.width = width;
         popupBounds.height = height;
         popupBounds.topInset = listTop;
-        tui_popup_menu::draw(screen, fileContextMenu, popupBounds,
-                             fileContextStyles);
+        tui_browser_media_menu::draw(screen, fileContextMenu, popupBounds,
+                                     fileContextStyles);
       }
 
       if (const std::optional<media_processing::TaskActivity> activity =
