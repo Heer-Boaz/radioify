@@ -38,12 +38,12 @@
 #include "audioplayback.h"
 #include "browser_playback_reveal.h"
 #include "browser_playback_source.h"
+#include "browser_directory_listing.h"
 #include "browser_navigation.h"
 #include "browser_model.h"
 #include "browsermeta.h"
 #include "consoleinput.h"
 #include "consolescreen.h"
-#include "media_artwork_sidecar.h"
 #include "core/open_file_requests.h"
 #include "core/latest_request_worker.h"
 #include "core/windows_app_resources.h"
@@ -207,34 +207,11 @@ static bool isVideoExt(const std::filesystem::path& p) {
   return isSupportedVideoExt(p);
 }
 
-static bool shouldHideBrowserMediaMetadataFile(
-    const std::filesystem::directory_entry& entry) {
-#ifdef _WIN32
-  const std::filesystem::path& path = entry.path();
-  if (!isKnownMediaArtworkSidecarPath(path)) {
-    return false;
-  }
-
-  const DWORD attributes = GetFileAttributesW(path.c_str());
-  if (attributes == INVALID_FILE_ATTRIBUTES) {
-    return false;
-  }
-
-  return (attributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)) != 0;
-#else
-  (void)entry;
-  return false;
-#endif
-}
-
 using BrowserContentWorker =
     LatestRequestWorker<BrowserContentRequest, BrowserPreparationResult>;
 
 struct BrowserPreparationCancelled {};
 
-using DirectoryListingResult =
-    std::variant<std::vector<BrowserEntry>, BrowserPreparationCancelled,
-                 BrowserPreparationError>;
 using BrowserPopulationResult =
     std::variant<std::monostate, BrowserPreparationCancelled,
                  BrowserPreparationError>;
@@ -243,150 +220,6 @@ static BrowserPreparationError browserPreparationError(
     BrowserPreparationErrorKind kind, const BrowserLocation& location,
     std::string message) {
   return {kind, location, std::move(message)};
-}
-
-static DirectoryListingResult listEntries(
-    const BrowserLocation& location,
-    const BrowserContentWorker::Cancellation* cancellation) {
-  const std::filesystem::path& dir = location.path();
-  std::vector<BrowserEntry> entries;
-  std::vector<BrowserEntry> items;
-  std::vector<BrowserEntry> knownFolders;
-#ifdef _WIN32
-  std::filesystem::path browseDir = dir;
-  if (browseDir.has_root_name() && !browseDir.has_root_directory() &&
-      browseDir.relative_path().empty()) {
-    std::string root = toUtf8String(browseDir.root_name());
-    root.push_back('\\');
-    browseDir = std::filesystem::path(root);
-  }
-#else
-  const std::filesystem::path& browseDir = dir;
-#endif
-
-  auto appendKnownFolder = [&](const std::string& name,
-                              const std::filesystem::path& path) {
-    if (cancellation && cancellation->requested()) return;
-    if (path.empty()) return;
-    std::error_code ec;
-    if (!std::filesystem::is_directory(path, ec) || ec) {
-      return;
-    }
-    knownFolders.emplace_back(name, path, browser_entry::OpenDirectory{});
-  };
-
-  auto appendSectionHeader = [&](const std::string& name) {
-    entries.emplace_back(name, std::filesystem::path{},
-                         browser_entry::SectionHeader{});
-  };
-
-  auto addWindowsKnownFolders = [&]() {
-    std::string userProfile;
-    if (const auto envProfile = getEnvString("USERPROFILE")) {
-      userProfile = *envProfile;
-    }
-    if (userProfile.empty()) {
-      const auto homeDrive = getEnvString("HOMEDRIVE");
-      const auto homePath = getEnvString("HOMEPATH");
-      if (homeDrive && !homeDrive->empty() && homePath && !homePath->empty()) {
-        userProfile = *homeDrive + *homePath;
-      } else {
-        return;
-      }
-    }
-    std::filesystem::path homePath = std::filesystem::path(userProfile);
-    appendKnownFolder("Home", homePath);
-    appendKnownFolder("Desktop", homePath / "Desktop");
-    appendKnownFolder("Documents", homePath / "Documents");
-    appendKnownFolder("Downloads", homePath / "Downloads");
-    appendKnownFolder("Music", homePath / "Music");
-    appendKnownFolder("Pictures", homePath / "Pictures");
-    appendKnownFolder("Videos", homePath / "Videos");
-  };
-
-#ifdef _WIN32
-  if (browseDir.empty()) {
-    auto drives = listDriveEntries();
-    if (!drives.empty()) {
-      appendSectionHeader("Drives");
-      for (const auto& drive : drives) {
-        entries.emplace_back(drive.label, drive.path,
-                             browser_entry::OpenDirectory{});
-      }
-    }
-    addWindowsKnownFolders();
-    if (!knownFolders.empty()) {
-      appendSectionHeader("Locations");
-      entries.insert(entries.end(), knownFolders.begin(), knownFolders.end());
-    }
-    if (cancellation && cancellation->requested()) {
-      return BrowserPreparationCancelled{};
-    }
-    return entries;
-  } else if (browseDir == browseDir.root_path()) {
-    entries.emplace_back("..", std::filesystem::path{},
-                         browser_entry::NavigateUp{});
-  }
-#endif
-
-  if (browseDir.has_parent_path() && browseDir != browseDir.root_path()) {
-    entries.emplace_back("..", browseDir.parent_path(),
-                         browser_entry::NavigateUp{});
-  }
-
-  std::error_code iteratorError;
-  std::filesystem::directory_iterator iterator(
-      browseDir, std::filesystem::directory_options::none,
-      iteratorError);
-  if (iteratorError) {
-    return browserPreparationError(
-        BrowserPreparationErrorKind::Unavailable, location,
-        "Unable to open this folder: " + iteratorError.message());
-  }
-  const std::filesystem::directory_iterator end;
-  while (iterator != end) {
-    if (cancellation && cancellation->requested()) {
-      return BrowserPreparationCancelled{};
-    }
-    const auto& entry = *iterator;
-    const auto& p = entry.path();
-    std::error_code ec;
-    if (entry.is_directory(ec) && !ec) {
-      BrowserEntry item{toUtf8String(p.filename()), p,
-                        browser_entry::OpenDirectory{}};
-      item.sortMetadata.modifiedAt = entry.last_write_time(ec);
-      if (ec) {
-        item.sortMetadata.modifiedAt.reset();
-      }
-      items.push_back(std::move(item));
-    } else if (entry.is_regular_file(ec) && !ec && isSupportedMediaExt(p) &&
-               !shouldHideBrowserMediaMetadataFile(entry)) {
-      BrowserEntry item{toUtf8String(p.filename()), p,
-                        browser_entry::OpenFile{}};
-      item.sortMetadata.modifiedAt = entry.last_write_time(ec);
-      if (ec) {
-        item.sortMetadata.modifiedAt.reset();
-      }
-      item.sortMetadata.size = entry.file_size(ec);
-      if (ec) {
-        item.sortMetadata.size.reset();
-      }
-      items.push_back(std::move(item));
-    }
-    iterator.increment(iteratorError);
-    if (iteratorError) {
-      return browserPreparationError(
-          BrowserPreparationErrorKind::Unavailable, location,
-          "Unable to enumerate this folder: " + iteratorError.message());
-    }
-  }
-
-  if (cancellation && cancellation->requested()) {
-    return BrowserPreparationCancelled{};
-  }
-
-  entries.insert(entries.end(), items.begin(), items.end());
-  return entries;
 }
 
 static BrowserPopulationResult populateBrowser(
@@ -443,11 +276,18 @@ static BrowserPopulationResult populateBrowser(
       state.entries.push_back(std::move(entry));
     }
   } else {
-    DirectoryListingResult listing = listEntries(state.location, cancellation);
-    if (auto* error = std::get_if<BrowserPreparationError>(&listing)) {
-      return std::move(*error);
+    browser_directory_listing::Result listing =
+        browser_directory_listing::list(
+            state.location.path(), [cancellation]() {
+              return cancellation && cancellation->requested();
+            });
+    if (auto* error =
+            std::get_if<browser_directory_listing::Error>(&listing)) {
+      return browserPreparationError(BrowserPreparationErrorKind::Unavailable,
+                                     state.location,
+                                     std::move(error->message));
     }
-    if (std::holds_alternative<BrowserPreparationCancelled>(listing)) {
+    if (std::holds_alternative<browser_directory_listing::Cancelled>(listing)) {
       return BrowserPreparationCancelled{};
     }
     state.content = std::monostate{};

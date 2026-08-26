@@ -806,6 +806,19 @@ radioify_link_repo_target(browser_navigation_tests)
 add_test(NAME browser_navigation_tests
          COMMAND $<TARGET_FILE:browser_navigation_tests>)
 
+add_executable(browser_directory_listing_tests)
+target_sources(browser_directory_listing_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_browser_directory_listing_tests>
+  ${CMAKE_SOURCE_DIR}/tui/ui/browser_directory_listing.cpp
+  ${CMAKE_SOURCE_DIR}/core/media_artwork_sidecar.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+  ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+)
+radioify_link_repo_target(browser_directory_listing_tests)
+add_test(NAME browser_directory_listing_tests
+         COMMAND $<TARGET_FILE:browser_directory_listing_tests>)
+
 add_executable(playback_queue_tests)
 target_sources(playback_queue_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_playback_queue_tests>

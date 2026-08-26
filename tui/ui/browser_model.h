@@ -201,13 +201,6 @@ struct GridLayout {
   std::vector<std::string> names;
 };
 
-struct DriveEntry {
-  std::string label;
-  std::filesystem::path path;
-};
-
-std::vector<DriveEntry> listDriveEntries();
-
 void sortBrowserEntries(BrowserState& state);
 
 GridLayout buildLayout(const BrowserState& state, int width, int listHeight);
