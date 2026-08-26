@@ -832,6 +832,16 @@ radioify_link_repo_target(browser_content_view_tests)
 add_test(NAME browser_content_view_tests
          COMMAND $<TARGET_FILE:browser_content_view_tests>)
 
+add_executable(popup_menu_tests)
+target_sources(popup_menu_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_popup_menu_tests>
+  ${CMAKE_SOURCE_DIR}/tui/ui/popup_menu.cpp
+  ${CMAKE_SOURCE_DIR}/core/unicode_display_width.cpp
+)
+radioify_link_repo_target(popup_menu_tests)
+add_test(NAME popup_menu_tests
+         COMMAND $<TARGET_FILE:popup_menu_tests>)
+
 add_executable(playback_queue_tests)
 target_sources(playback_queue_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_playback_queue_tests>

@@ -73,6 +73,8 @@
 #include "playback/session/session.h"
 #include "playback/system_media_transport/controls.h"
 #include "playback_target_match.h"
+#include "popup_menu.h"
+#include "popup_menu_renderer.h"
 #include "playback/target.h"
 #include "mouse_double_click_tracker.h"
 #include "tracklist.h"
@@ -795,25 +797,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     std::function<void()> run;
   };
 
-  struct FileContextMenuState {
-    bool active = false;
-    std::optional<BrowserEntry> entry;
-    std::vector<playback_media_actions::Item> items;
-    int selected = 0;
-    int anchorX = -1;
-    int anchorY = -1;
-  };
-
-  struct FileContextMenuLayout {
-    int x = 0;
-    int y = 0;
-    int width = 0;
-    int height = 0;
-    int listY = 0;
-    int rows = 0;
-    bool valid = false;
-  };
-
   struct PaletteLayout {
     int x = 0;
     int y = 0;
@@ -826,8 +809,13 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     bool valid = false;
   };
 
-  FileContextMenuState fileContextMenu;
-  FileContextMenuLayout fileContextLayout;
+  tui_popup_menu::Model fileContextMenu;
+  std::optional<BrowserEntry> fileContextEntry;
+  std::vector<playback_media_actions::Item> fileContextActions;
+  tui_popup_menu::Styles fileContextStyles;
+  fileContextStyles.normal = kStyleNormal;
+  fileContextStyles.border = kStyleDim;
+  fileContextStyles.selected = kStyleHighlight;
 
   struct ActionRenderItem {
     ActionStripItem id;
@@ -1108,12 +1096,17 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     std::vector<playback_media_actions::Item> items =
         playback_media_actions::build(context);
     if (items.empty()) return;
-    fileContextMenu.active = true;
-    fileContextMenu.entry = entry;
-    fileContextMenu.items = std::move(items);
-    fileContextMenu.selected = 0;
-    fileContextMenu.anchorX = x;
-    fileContextMenu.anchorY = y;
+    std::vector<std::string> labels;
+    labels.reserve(items.size());
+    for (const playback_media_actions::Item& item : items) {
+      labels.push_back(item.label);
+    }
+    fileContextEntry = entry;
+    fileContextActions = std::move(items);
+    tui_popup_menu::Anchor anchor;
+    anchor.x = x;
+    anchor.y = y;
+    fileContextMenu.open(std::move(labels), anchor);
     markDirty();
   };
   callbacks.onRenderFile = [&](const std::filesystem::path& file) {
@@ -1612,44 +1605,24 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
   };
 
-  auto computeFileContextLayout = [&](int w, int h, int topInset) {
-    FileContextMenuLayout layout{};
-    if (fileContextMenu.items.empty()) return layout;
-    int itemWidth = 0;
-    for (const auto& item : fileContextMenu.items) {
-      itemWidth = std::max(itemWidth, utf8DisplayWidth(item.label));
-    }
-    layout.width = std::max(18, itemWidth + 4);
-    layout.height = static_cast<int>(fileContextMenu.items.size()) + 2;
-    const int minTop = std::clamp(topInset, 1, std::max(1, h - 1));
-    const int maxY = std::max(minTop, h - layout.height);
-    int x = fileContextMenu.anchorX;
-    int y = fileContextMenu.anchorY;
-    if (x < 0 || y < 0) {
-      x = (w - layout.width) / 2;
-      y = minTop + std::max(0, (std::max(1, h - minTop) - layout.height) / 2);
-    }
-    x = std::clamp(x, 0, std::max(0, w - layout.width));
-    y = std::clamp(y, minTop, maxY);
-    layout.x = x;
-    layout.y = y;
-    layout.listY = y + 1;
-    layout.rows = static_cast<int>(fileContextMenu.items.size());
-    layout.valid = true;
-    return layout;
+  auto dismissFileContextMenu = [&]() {
+    const bool changed = fileContextMenu.dismiss() ||
+                         fileContextEntry.has_value() ||
+                         !fileContextActions.empty();
+    fileContextEntry.reset();
+    fileContextActions.clear();
+    return changed;
   };
 
   auto runFileContextAction = [&](int actionIndex) {
-    if (!fileContextMenu.active || !fileContextMenu.entry || actionIndex < 0 ||
-        actionIndex >= static_cast<int>(fileContextMenu.items.size())) {
+    if (!fileContextEntry || actionIndex < 0 ||
+        actionIndex >= static_cast<int>(fileContextActions.size())) {
       return;
     }
-    const BrowserEntry entry = *fileContextMenu.entry;
+    const BrowserEntry entry = *fileContextEntry;
     const playback_media_actions::Action action =
-        fileContextMenu.items[static_cast<size_t>(actionIndex)].action;
-    fileContextMenu.active = false;
-    fileContextMenu.entry.reset();
-    fileContextMenu.items.clear();
+        fileContextActions[static_cast<size_t>(actionIndex)].action;
+    dismissFileContextMenu();
     dirty = true;
     if (action == playback_media_actions::Action::Play) {
       if (playBrowserEntry(entry)) {
@@ -2029,7 +2002,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         if (paletteToggle) {
           paletteActive = !paletteActive;
           if (paletteActive) {
-            fileContextMenu.active = false;
+            dismissFileContextMenu();
           }
           setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
           paletteQuery.clear();
@@ -2057,8 +2030,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       }
       if (ev.type == InputEvent::Type::Action &&
           ev.action == InputAction::Back) {
-        if (fileContextMenu.active) {
-          fileContextMenu.active = false;
+        if (fileContextMenu.active()) {
+          dismissFileContextMenu();
           dirty = true;
           return;
         }
@@ -2068,88 +2041,23 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           return;
         }
       }
-      if (fileContextMenu.active) {
-        fileContextLayout =
-            computeFileContextLayout(width, height, listTop);
-        if (ev.type == InputEvent::Type::Key) {
-          const KeyEvent& key = ev.key;
-          if (key.vk == VK_ESCAPE) {
-            fileContextMenu.active = false;
-            dirty = true;
-            return;
-          }
-          if (key.vk == VK_UP) {
-            fileContextMenu.selected =
-                (fileContextMenu.selected + fileContextLayout.rows - 1) %
-                fileContextLayout.rows;
-            dirty = true;
-            return;
-          }
-          if (key.vk == VK_DOWN) {
-            fileContextMenu.selected =
-                (fileContextMenu.selected + 1) % fileContextLayout.rows;
-            dirty = true;
-            return;
-          }
-          if (key.vk == VK_RETURN) {
-            runFileContextAction(fileContextMenu.selected);
-            return;
-          }
-          return;
+      if (fileContextMenu.active()) {
+        tui_popup_menu::Bounds popupBounds;
+        popupBounds.width = width;
+        popupBounds.height = height;
+        popupBounds.topInset = listTop;
+        const tui_popup_menu::Interaction interaction =
+            fileContextMenu.handle(ev, popupBounds);
+        if (interaction.activatedItem) {
+          runFileContextAction(
+              static_cast<int>(*interaction.activatedItem));
+        } else if (interaction.dismissed) {
+          dismissFileContextMenu();
         }
-        if (ev.type == InputEvent::Type::Mouse) {
-          const MouseEvent& mouse = ev.mouse;
-          bool leftPressed = isMouseButtonDown(mouse, MouseButton::Left);
-          if (mouse.kind == MouseEventKind::VerticalWheel) {
-            int delta = mouse.wheelDelta;
-            if (delta != 0) {
-              if (delta > 0) {
-                fileContextMenu.selected =
-                    (fileContextMenu.selected + fileContextLayout.rows - 1) %
-                    fileContextLayout.rows;
-              } else {
-                fileContextMenu.selected =
-                    (fileContextMenu.selected + 1) % fileContextLayout.rows;
-              }
-              dirty = true;
-            }
-            return;
-          }
-          if (mouse.kind == MouseEventKind::Move) {
-            if (fileContextLayout.valid &&
-                mouse.pos.X >= fileContextLayout.x &&
-                mouse.pos.X < fileContextLayout.x + fileContextLayout.width &&
-                mouse.pos.Y >= fileContextLayout.listY &&
-                mouse.pos.Y < fileContextLayout.listY + fileContextLayout.rows) {
-              int action = mouse.pos.Y - fileContextLayout.listY;
-              if (action >= 0 && action < fileContextLayout.rows &&
-                  fileContextMenu.selected != action) {
-                fileContextMenu.selected = action;
-                dirty = true;
-              }
-            }
-            return;
-          }
-          if (mouse.kind == MouseEventKind::Press && leftPressed) {
-            bool inside =
-                fileContextLayout.valid &&
-                mouse.pos.X >= fileContextLayout.x &&
-                mouse.pos.X < fileContextLayout.x + fileContextLayout.width &&
-                mouse.pos.Y >= fileContextLayout.y &&
-                mouse.pos.Y < fileContextLayout.y + fileContextLayout.height;
-            if (inside && mouse.pos.Y >= fileContextLayout.listY &&
-                mouse.pos.Y < fileContextLayout.listY + fileContextLayout.rows) {
-              int action = mouse.pos.Y - fileContextLayout.listY;
-              if (action >= 0 && action < fileContextLayout.rows) {
-                fileContextMenu.selected = action;
-                runFileContextAction(action);
-                return;
-              }
-            }
-            fileContextMenu.active = false;
-            dirty = true;
-            return;
-          }
+        if (interaction.changed) {
+          dirty = true;
+        }
+        if (interaction.consumed) {
           return;
         }
       }
@@ -2818,53 +2726,13 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         paletteLayout.valid = false;
       }
 
-      if (fileContextMenu.active) {
-        fileContextLayout = computeFileContextLayout(width, height, listTop);
-        if (fileContextLayout.valid) {
-          int x0 = fileContextLayout.x;
-          int y0 = fileContextLayout.y;
-          int w = fileContextLayout.width;
-          int h = fileContextLayout.height;
-
-          for (int y = 0; y < h; ++y) {
-            screen.writeRun(x0, y0 + y, w, L' ', kStyleNormal);
-          }
-
-          screen.writeChar(x0, y0, L'+', kStyleDim);
-          screen.writeRun(x0 + 1, y0, w - 2, L'-', kStyleDim);
-          screen.writeChar(x0 + w - 1, y0, L'+', kStyleDim);
-          screen.writeChar(x0, y0 + h - 1, L'+', kStyleDim);
-          screen.writeRun(x0 + 1, y0 + h - 1, w - 2, L'-', kStyleDim);
-          screen.writeChar(x0 + w - 1, y0 + h - 1, L'+', kStyleDim);
-          for (int y = 1; y < h - 1; ++y) {
-            screen.writeChar(x0, y0 + y, L'|', kStyleDim);
-            screen.writeChar(x0 + w - 1, y0 + y, L'|', kStyleDim);
-          }
-
-          int inner = std::max(1, w - 2);
-          for (int i = 0; i < fileContextLayout.rows; ++i) {
-            if (i < 0 ||
-                i >= static_cast<int>(fileContextMenu.items.size())) {
-              continue;
-            }
-            std::string text =
-                " " + fileContextMenu.items[static_cast<size_t>(i)].label;
-            if (utf8DisplayWidth(text) > inner) {
-              text = utf8TakeDisplayWidth(text, inner);
-            }
-            int textWidth = utf8DisplayWidth(text);
-            if (textWidth < inner) {
-              text.append(static_cast<size_t>(inner - textWidth), ' ');
-            }
-            Style rowStyle = kStyleNormal;
-            if (i == fileContextMenu.selected) {
-              rowStyle = kStyleHighlight;
-            }
-            screen.writeText(x0 + 1, fileContextLayout.listY + i, text, rowStyle);
-          }
-        }
-      } else {
-        fileContextLayout.valid = false;
+      if (fileContextMenu.active()) {
+        tui_popup_menu::Bounds popupBounds;
+        popupBounds.width = width;
+        popupBounds.height = height;
+        popupBounds.topInset = listTop;
+        tui_popup_menu::draw(screen, fileContextMenu, popupBounds,
+                             fileContextStyles);
       }
 
       if (const std::optional<media_processing::TaskActivity> activity =

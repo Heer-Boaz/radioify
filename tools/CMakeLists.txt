@@ -132,6 +132,10 @@ radioify_add_module_object_library(radioify_tool_browser_content_view_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_content_view_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_popup_menu_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/popup_menu_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_playback_queue_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_queue_tests.cpp
 )
