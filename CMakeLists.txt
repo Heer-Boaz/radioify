@@ -872,6 +872,14 @@ radioify_link_repo_target(melody_visualization_tests)
 add_test(NAME melody_visualization_tests
          COMMAND $<TARGET_FILE:melody_visualization_tests>)
 
+add_executable(tui_theme_tests)
+target_sources(tui_theme_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_tui_theme_tests>
+  ${CMAKE_SOURCE_DIR}/tui/tui_theme.cpp
+)
+radioify_link_repo_target(tui_theme_tests)
+add_test(NAME tui_theme_tests COMMAND $<TARGET_FILE:tui_theme_tests>)
+
 add_executable(playback_queue_tests)
 target_sources(playback_queue_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_playback_queue_tests>

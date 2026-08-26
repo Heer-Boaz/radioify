@@ -14,12 +14,11 @@
 #include "playback/session/presentation_policy.h"
 #include "playback/session/state.h"
 #include "playback/video/playback.h"
+#include "tui/style.h"
 
 class ConsoleInput;
 class ConsoleScreen;
-struct Color;
 struct InputEvent;
-struct Style;
 
 enum class PlaybackSessionOpenOutcome {
   Ready,
@@ -40,6 +39,16 @@ struct PlaybackSessionCompletion {
 
 class PlaybackSession {
  public:
+  struct Appearance {
+    Style baseStyle;
+    Style accentStyle;
+    Style dimStyle;
+    Style progressEmptyStyle;
+    Style progressFrameStyle;
+    Color progressStart;
+    Color progressEnd;
+  };
+
   // Session-owned activation data; it remains valid across pump() calls.
   struct Request {
     std::filesystem::path file;
@@ -53,17 +62,12 @@ class PlaybackSession {
     std::function<void()> activateBrowserSurface;
   };
 
-  // These dependencies are borrowed and must outlive the session.
+  // Input and screen are borrowed and must outlive the session. Appearance is
+  // copied so presentation state has no separate lifetime contract.
   struct Dependencies {
     ConsoleInput& input;
     ConsoleScreen& screen;
-    const Style& baseStyle;
-    const Style& accentStyle;
-    const Style& dimStyle;
-    const Style& progressEmptyStyle;
-    const Style& progressFrameStyle;
-    const Color& progressStart;
-    const Color& progressEnd;
+    Appearance appearance;
   };
 
   PlaybackSession(Request request, Dependencies dependencies);

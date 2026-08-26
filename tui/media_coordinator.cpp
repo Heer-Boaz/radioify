@@ -524,8 +524,9 @@ struct TuiMediaCoordinator::Impl {
         services_.sessionDependencies;
     const image_viewer::Exit exit = image_viewer::run(
         std::move(image.sequence), dependencies.input, dependencies.screen,
-        dependencies.baseStyle, dependencies.accentStyle,
-        dependencies.dimStyle, services_.openFileRequests,
+        dependencies.appearance.baseStyle,
+        dependencies.appearance.accentStyle,
+        dependencies.appearance.dimStyle, services_.openFileRequests,
         [this](const OpenFilesRequest& request) {
           return enqueueOpenFiles(request).accepted();
         });

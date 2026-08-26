@@ -467,9 +467,13 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
       frameOutput.overlayInteractions =
           playback_overlay::buildContextMenuInteractionMap(contextMenuLayout);
     }
-    playback_overlay::OverlayRenderStyles overlayStyles{
-        baseStyle, accentStyle, progressEmptyStyle, progressFrameStyle,
-        progressStart, progressEnd};
+    playback_overlay::OverlayRenderStyles overlayStyles;
+    overlayStyles.baseStyle = baseStyle;
+    overlayStyles.accentStyle = accentStyle;
+    overlayStyles.progressEmptyStyle = progressEmptyStyle;
+    overlayStyles.progressFrameStyle = progressFrameStyle;
+    overlayStyles.progressStart = progressStart;
+    overlayStyles.progressEnd = progressEnd;
     if (showPlaybackChrome) {
       playback_overlay::renderOverlayToScreen(
           screen, overlayLayout, overlayStyles, ratio, &overlayState.videoEdit,
@@ -516,9 +520,13 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   }
 
   if (contextMenuLayout.drawable()) {
-    playback_overlay::OverlayRenderStyles menuStyles{
-        baseStyle, accentStyle, progressEmptyStyle, progressFrameStyle,
-        progressStart, progressEnd};
+    playback_overlay::OverlayRenderStyles menuStyles;
+    menuStyles.baseStyle = baseStyle;
+    menuStyles.accentStyle = accentStyle;
+    menuStyles.progressEmptyStyle = progressEmptyStyle;
+    menuStyles.progressFrameStyle = progressFrameStyle;
+    menuStyles.progressStart = progressStart;
+    menuStyles.progressEnd = progressEnd;
     playback_overlay::renderContextMenuToScreen(screen, contextMenuLayout,
                                                 menuStyles);
   }

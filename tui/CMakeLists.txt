@@ -13,4 +13,5 @@ radioify_add_module_object_library(radioify_tui
   ${CMAKE_CURRENT_SOURCE_DIR}/terminal_cell_metrics.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/tui.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/tui_export.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/tui_theme.cpp
 )

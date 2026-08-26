@@ -83,6 +83,7 @@
 #include "track_browser_state.h"
 #include "loopsplit_cli.h"
 #include "tui_export.h"
+#include "tui_theme.h"
 #include "ui_footer_layout.h"
 #include "ui_helpers.h"
 #include "ui_inputlogic.h"
@@ -506,26 +507,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     logLine("Done.");
   };
 
-  const Color kBgBase{12, 15, 20};
-  const Style kStyleNormal{{215, 220, 226}, kBgBase};
-  const Style kStyleHeader{{230, 238, 248}, {18, 28, 44}};
-  const Style kStyleHeaderGlow{{255, 213, 118}, {22, 34, 52}};
-  const Style kStyleHeaderHot{{255, 249, 214}, {38, 50, 72}};
-  const Style kStyleSearchBar{{24, 36, 66}, {160, 190, 238}};
-  const Style kStyleSearchBarGlow{{18, 30, 60}, {178, 206, 246}};
-  const Style kStyleSearchBarActive{{14, 24, 50}, {196, 220, 248}};
-  const Style kStyleAccent{{255, 214, 120}, kBgBase};
-  const Style kStyleDim{{138, 144, 153}, kBgBase};
-  const Style kStyleAlert{{255, 92, 92}, kBgBase};
-  const Style kStyleDir{{110, 231, 183}, kBgBase};
-  const Style kStyleHighlight{{15, 20, 28}, {230, 238, 248}};
-  const Style kStyleBrowserHover{{215, 220, 226}, {35, 43, 54}};
-  const Style kStyleBreadcrumbHover{{15, 20, 28}, {255, 214, 120}};
-  const Style kStyleActionActive{{15, 20, 28}, {255, 214, 120}};
-  const Color kProgressStart{110, 231, 183};
-  const Color kProgressEnd{255, 214, 110};
-  const Style kStyleProgressEmpty{{32, 38, 46}, {32, 38, 46}};
-  const Style kStyleProgressFrame{{160, 170, 182}, kBgBase};
+  const TuiTheme theme = radioifyTuiTheme();
 
   auto showPlaybackErrorDialog = [&](const std::filesystem::path& file) {
     std::string error = audioGetWarning();
@@ -547,7 +529,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
 
     playback_dialog::showInfoDialog(
-        input, screen, kStyleNormal, kStyleAccent, kStyleDim, title, message,
+        input, screen, theme.normal, theme.accent, theme.dim, title, message,
         detail, "Enter/Space/Esc: close");
   };
 
@@ -573,7 +555,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
   }
 
-  screen.clear(kStyleNormal);
+  screen.clear(theme.normal);
   screen.draw();
 
   bool running = true;
@@ -601,10 +583,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   BreadcrumbLine breadcrumbLine;
   bool didRender = false;
   tui_melody_visualization::Model melodyVisualization;
-  tui_melody_visualization::Styles melodyVisualizationStyles;
-  melodyVisualizationStyles.normal = kStyleNormal;
-  melodyVisualizationStyles.accent = kStyleAccent;
-  melodyVisualizationStyles.dim = kStyleDim;
+  const tui_melody_visualization::Styles melodyVisualizationStyles =
+      theme.pitchMonitorStyles();
   std::vector<ScreenCell> windowCells;
   AudioPictureInPictureWindow audioPictureInPicture;
   ConsoleInputPump consoleInputPump;
@@ -645,7 +625,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
                                    ? "The picture-in-picture window did not open."
                                    : audioPictureInPicture.lastError();
     playback_dialog::showInfoDialog(
-        input, screen, kStyleNormal, kStyleAccent, kStyleDim,
+        input, screen, theme.normal, theme.accent, theme.dim,
         "Picture-in-Picture Error",
         RADIOIFY_APP_NAME " could not open picture-in-picture.",
         detail, "Enter/Space/Esc: close");
@@ -688,8 +668,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   };
 
   PlaybackSession::Dependencies mediaSessionDependencies{
-      input, screen, kStyleNormal, kStyleAccent, kStyleDim,
-      kStyleProgressEmpty, kStyleProgressFrame, kProgressStart, kProgressEnd};
+      input, screen, theme.playbackSessionAppearance()};
   TuiMediaCoordinator::Callbacks mediaCallbacks;
   mediaCallbacks.startAudio =
       [&](const std::filesystem::path& file, int trackIndex) {
@@ -772,10 +751,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   tui_popup_menu::Model fileContextMenu;
   std::optional<BrowserEntry> fileContextEntry;
   std::vector<playback_media_actions::Item> fileContextActions;
-  tui_popup_menu::Styles fileContextStyles;
-  fileContextStyles.normal = kStyleNormal;
-  fileContextStyles.border = kStyleDim;
-  fileContextStyles.selected = kStyleHighlight;
+  const tui_popup_menu::Styles fileContextStyles = theme.popupMenuStyles();
   auto dismissFileContextMenu = [&]() {
     const bool changed = fileContextMenu.dismiss() ||
                          fileContextEntry.has_value() ||
@@ -1115,15 +1091,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
   };
 
-  AudioPictureInPictureWindow::Styles audioPictureInPictureStyles{kStyleNormal,
-                                          kStyleAccent,
-                                          kStyleDim,
-                                          kStyleAlert,
-                                          kStyleActionActive,
-                                          kStyleProgressEmpty,
-                                          kStyleProgressFrame,
-                                          kProgressStart,
-                                          kProgressEnd};
+  const AudioPictureInPictureWindow::Styles audioPictureInPictureStyles =
+      theme.audioPictureInPictureStyles();
   auto buildAudioPictureInPictureContext = [&]() {
     AudioPictureInPictureWindow::Context context;
     context.nowPlayingLabel = buildNowPlayingLabel();
@@ -1313,11 +1282,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   };
 
   tui_command_palette::Model commandPalette;
-  tui_command_palette::Styles commandPaletteStyles;
-  commandPaletteStyles.normal = kStyleNormal;
-  commandPaletteStyles.border = kStyleDim;
-  commandPaletteStyles.dim = kStyleDim;
-  commandPaletteStyles.selected = kStyleHighlight;
+  const tui_command_palette::Styles commandPaletteStyles =
+      theme.commandPaletteStyles();
 
   auto buildCommands = [&]() {
     std::vector<tui_command_palette::Command> commands;
@@ -1926,7 +1892,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       bool trackMode = isTrackBrowserActive(browser);
       bool browserInteractionEnabled = !melodyVisualization.active();
 
-      screen.clear(kStyleNormal);
+      screen.clear(theme.normal);
       screen.setAlwaysFullRedraw(forceFullRedraw);
 
       const std::string headerTitleRaw = RADIOIFY_APP_NAME;
@@ -1948,19 +1914,19 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         flash = (t - 0.88f) / 0.12f;
         flash = flash * flash;
       }
-      Color headerBg = lerpColor(kStyleHeader.bg, kStyleHeaderHot.bg,
+      Color headerBg = lerpColor(theme.header.bg, theme.headerHot.bg,
                                  std::min(0.85f, t * 0.9f));
       headerBg = lerpColor(headerBg, Color{52, 44, 26}, flash * 0.7f);
-      Style headerLineStyle{kStyleHeader.fg, headerBg};
+      Style headerLineStyle{theme.header.fg, headerBg};
       screen.writeRun(0, 0, width, L' ', headerLineStyle);
 
       Color titleFg;
       if (t < 0.35f) {
-        titleFg = lerpColor(kStyleHeader.fg, kStyleHeaderGlow.fg, t / 0.35f);
+        titleFg = lerpColor(theme.header.fg, theme.headerGlow.fg, t / 0.35f);
       } else {
         float hotT = (t - 0.35f) / 0.65f;
         titleFg =
-            lerpColor(kStyleHeaderGlow.fg, kStyleHeaderHot.fg, clamp01(hotT));
+            lerpColor(theme.headerGlow.fg, theme.headerHot.fg, clamp01(hotT));
       }
       if (t > 0.85f) {
         float whiteT = (t - 0.85f) / 0.15f;
@@ -1981,8 +1947,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
             browser.filterActive || browser.pathSearchActive;
         Style searchStyle =
             browserSearchFocused
-                ? kStyleSearchBarActive
-                : (searchBarHover ? kStyleSearchBarGlow : kStyleSearchBar);
+                ? theme.searchBarActive
+                : (searchBarHover ? theme.searchBarGlow : theme.searchBar);
         screen.writeRun(0, searchBarY, width, L' ', searchStyle);
         bool showSearchCursor =
             browserSearchFocused &&
@@ -2008,7 +1974,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         }
         if (searchBarClearStart >= 0 && searchBarClearEnd > searchBarClearStart) {
           Style clearStyle =
-              searchBarClearHover ? kStyleSearchBarActive : searchStyle;
+              searchBarClearHover ? theme.searchBarActive : searchStyle;
           screen.writeText(searchBarClearStart, searchBarY,
                            fitLine(" [x] ", searchBarClearEnd - searchBarClearStart),
                            clearStyle);
@@ -2017,14 +1983,14 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         if (breadcrumbHover >= static_cast<int>(breadcrumbLine.crumbs.size())) {
           breadcrumbHover = -1;
         }
-        screen.writeText(0, breadcrumbY, breadcrumbLine.text, kStyleAccent);
+        screen.writeText(0, breadcrumbY, breadcrumbLine.text, theme.accent);
         if (breadcrumbHover >= 0) {
           const auto& crumb =
               breadcrumbLine.crumbs[static_cast<size_t>(breadcrumbHover)];
           std::string hoverText = utf8SliceDisplayWidth(
               breadcrumbLine.text, crumb.startX, crumb.endX - crumb.startX);
           screen.writeText(crumb.startX, breadcrumbY, hoverText,
-                           kStyleBreadcrumbHover);
+                           theme.breadcrumbHover);
         }
       } else {
         breadcrumbHover = -1;
@@ -2046,7 +2012,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       }
       if (!showingLabel.empty()) {
         screen.writeText(0, std::min(height - 1, searchBarY + 1),
-                         fitLine(showingLabel, width), kStyleDim);
+                         fitLine(showingLabel, width), theme.dim);
       }
       tui_melody_visualization::Observation melodyObservation;
       melodyObservation.source.file = nowPlaying;
@@ -2060,9 +2026,9 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         const int playingEntryIndex = findBrowserPlaybackTargetEntry(
             browser.entries, currentPlaybackTarget());
         drawBrowserEntries(screen, browser, layout, listTop, listHeight,
-                           kStyleNormal, kStyleNormal, kStyleDir,
-                           kStyleHighlight, kStyleBrowserHover, kStyleDim,
-                           kStyleAccent,
+                           theme.normal, theme.normal, theme.directory,
+                           theme.highlight, theme.browserHover, theme.dim,
+                           theme.accent,
                            playingEntryIndex, isSupportedImageExt, isVideoExt,
                            isSupportedAudioExt);
       } else {
@@ -2079,12 +2045,12 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       int line = footerStart;
       if (line < height && footerLayout.showMeta) {
         std::string meta;
-        Style metaStyle = kStyleDim;
+        Style metaStyle = theme.dim;
         if (browser.contentLoading) {
           meta = " Loading...";
         } else if (!browser.contentError.empty()) {
           meta = " Error: " + browser.contentError;
-          metaStyle = kStyleAlert;
+          metaStyle = theme.alert;
         } else if (optionsMode) {
           meta = optionsBrowserSelectionMeta(browser);
         } else if (trackMode) {
@@ -2100,12 +2066,12 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         if (!mediaCommandError.empty()) {
           screen.writeText(
               0, line++, fitLine("  Error: " + mediaCommandError, width),
-              kStyleAlert);
+              theme.alert);
         } else {
           std::string warning = audioGetWarning();
           if (!warning.empty()) {
           screen.writeText(0, line++, fitLine("  Warning: " + warning, width),
-                           kStyleDim);
+                           theme.dim);
           }
         }
       }
@@ -2118,7 +2084,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           if (!status.text.empty()) {
             screen.writeText(
                 0, line++, fitLine(" " + status.text, width),
-                status.succeeded ? kStyleDim : kStyleAlert);
+                status.succeeded ? theme.dim : theme.alert);
           }
         }
       }
@@ -2134,7 +2100,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           const int y = nowStart + i;
           if (y >= height) break;
           screen.writeText(0, y, lines[static_cast<size_t>(i)],
-                           kStyleAccent);
+                           theme.accent);
         }
         line = nowStart + nowPlayingLines;
       }
@@ -2175,7 +2141,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           }
           ActionStripButton btn{item.id, x, x + widthUsed, itemLine};
           actionStrip.buttons.push_back(btn);
-          Style style = item.active ? kStyleActionActive : kStyleNormal;
+          Style style = item.active ? theme.actionActive : theme.normal;
           screen.writeText(x, itemLine, text, style);
           x += widthUsed;
         }
@@ -2215,13 +2181,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       if (totalSec > 0.0 && std::isfinite(totalSec)) {
         ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
       }
-      ProgressFooterStyles footerStyles{kStyleNormal,
-                                        kStyleProgressEmpty,
-                                        kStyleProgressFrame,
-                                        kStyleAlert,
-                                        kStyleAccent,
-                                        kProgressStart,
-                                        kProgressEnd};
+      const ProgressFooterStyles footerStyles = theme.progressFooterStyles();
       ProgressFooterInput footerInput;
       footerInput.displaySec = displaySec;
       footerInput.totalSec = totalSec;
@@ -2259,9 +2219,9 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
 
       if (const std::optional<media_processing::TaskActivity> activity =
               mediaTasks.activity()) {
-        drawMediaTaskCard(
-            screen, width, height, listTop, mediaTaskCardModel(*activity),
-            {kStyleNormal, kStyleAccent, kStyleDim, kStyleNormal});
+        drawMediaTaskCard(screen, width, height, listTop,
+                          mediaTaskCardModel(*activity),
+                          theme.mediaTaskCardStyles());
       }
 
       screen.draw();
@@ -2281,7 +2241,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
   }
   // Clear screen before exiting
-  screen.clear(kStyleNormal);
+  screen.clear(theme.normal);
   screen.draw();
   audioPictureInPicture.close();
   if (windowTuiEnabled && tuiWindow.IsOpen()) {

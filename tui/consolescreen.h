@@ -16,18 +16,8 @@
 
 #include "ui/browser_location.h"
 #include "core/native_wait_handle.h"
+#include "style.h"
 #include "terminal_cell_metrics.h"
-
-struct Color {
-  uint8_t r = 0;
-  uint8_t g = 0;
-  uint8_t b = 0;
-};
-
-struct Style {
-  Color fg;
-  Color bg;
-};
 
 struct Breadcrumb {
   int startX = 0;

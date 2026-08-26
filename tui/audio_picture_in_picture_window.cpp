@@ -285,13 +285,14 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
     }
     writeFitted(screen_, item.x, item.y, width - item.x, item.text, style);
   }
-  ProgressFooterStyles footerStyles{styles.normal,
-                                    styles.progressEmpty,
-                                    styles.progressFrame,
-                                    styles.alert,
-                                    styles.accent,
-                                    styles.progressStart,
-                                    styles.progressEnd};
+  ProgressFooterStyles footerStyles;
+  footerStyles.normal = styles.normal;
+  footerStyles.progressEmpty = styles.progressEmpty;
+  footerStyles.progressFrame = styles.progressFrame;
+  footerStyles.alert = styles.alert;
+  footerStyles.accent = styles.accent;
+  footerStyles.progressStart = styles.progressStart;
+  footerStyles.progressEnd = styles.progressEnd;
   ProgressFooterInput footerInput;
   footerInput.displaySec = displaySec;
   footerInput.totalSec = totalSec;
