@@ -58,6 +58,30 @@ void ContextMenuController::refresh(
   }
 
   if (edit.active) {
+    if (edit.sceneAnalysisStatus ==
+        playback_video_edit::SceneAnalysisStatus::Running) {
+      next.push_back({playback_video_edit::Command::CancelSceneAnalysis,
+                      "Cancel scene analysis"});
+    } else {
+      next.push_back(
+          {playback_video_edit::Command::StartSceneAnalysis,
+           edit.sceneAnalysisStatus ==
+                   playback_video_edit::SceneAnalysisStatus::Ready
+               ? "Analyze scenes again"
+               : "Analyze scenes and cutscenes"});
+    }
+    if (!edit.sceneSuggestions.empty()) {
+      next.push_back({playback_video_edit::Command::PreviousSceneSuggestion,
+                      "Previous scene suggestion"});
+      next.push_back({playback_video_edit::Command::NextSceneSuggestion,
+                      "Next scene suggestion"});
+      if (edit.selectedSceneSuggestionId) {
+        next.push_back({playback_video_edit::Command::SelectSceneSuggestion,
+                        "Select suggested scene"});
+        next.push_back({playback_video_edit::Command::DismissSceneSuggestion,
+                        "Dismiss scene suggestion"});
+      }
+    }
     if (edit.inTimelineUs) {
       next.push_back(
           {playback_video_edit::Command::ClearIn, "Clear selection start"});

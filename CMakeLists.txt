@@ -804,6 +804,9 @@ target_sources(scene_analysis_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_scene_analysis_tests>
   $<TARGET_OBJECTS:radioify_transcript_cue_semantics>
   ${CMAKE_SOURCE_DIR}/playback/video/analysis/scene_analysis.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/scene_suggestions.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/timeline.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/sequence.cpp
 )
 radioify_link_repo_target(scene_analysis_tests)
 add_test(NAME scene_analysis_tests

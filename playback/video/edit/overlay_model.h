@@ -15,8 +15,18 @@ enum class TimelineCellKind : uint8_t {
   Selected,
 };
 
+enum class SceneSuggestionCellKind : uint8_t {
+  None,
+  Dialogue,
+  Cutscene,
+  MenuOrLoading,
+  Selected,
+};
+
 struct OverlayModel {
   std::vector<TimelineCellKind> cells;
+  std::vector<SceneSuggestionCellKind> sceneSuggestionCells;
+  std::vector<int> sceneSuggestionBoundaryCells;
   int playheadCell = 0;
   std::optional<int> inCell;
   std::optional<int> outCell;

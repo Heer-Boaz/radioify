@@ -1,4 +1,5 @@
 #include "playback/video/analysis/scene_analysis.h"
+#include "playback/video/edit/scene_suggestions.h"
 
 #include <algorithm>
 #include <iostream>
@@ -116,6 +117,31 @@ int main() {
                    loading->startUs >= 44'000'000 &&
                    loading->endUs <= 64'000'000,
                "dark static windows must form a loading/menu candidate");
+
+  if (cutscene != suggestions.end()) {
+    playback_video_edit::Timeline timeline(durationUs);
+    ok &= expect(timeline.rippleDelete({30'000'000, 36'000'000}),
+                 "projection fixture must create an edited source gap");
+    const playback_video_edit::SceneSuggestionSnapshot projected =
+        playback_video_edit::projectSceneSuggestion(*cutscene, timeline, true);
+    ok &= expect(projected.selected && projected.spans.size() == 2,
+                 "one source suggestion must project across retained EDL clips");
+    ok &= expect(
+        playback_video_edit::sceneSuggestionAtTimeline(
+            {projected}, projected.spans.front().timelineStartUs, 0) ==
+            projected.id,
+        "timeline hit-testing must preserve semantic suggestion identity");
+    playback_video_edit::Timeline removedTimeline(durationUs);
+    ok &= expect(removedTimeline.rippleDelete(
+                     {cutscene->startUs, cutscene->endUs}) &&
+                     !playback_video_edit::sceneSuggestionVisibleOnTimeline(
+                         *cutscene, removedTimeline) &&
+                     playback_video_edit::projectSceneSuggestion(
+                         *cutscene, removedTimeline, true)
+                         .spans.empty(),
+                 "fully removed suggestions must leave navigation and the "
+                 "timeline projection together");
+  }
 
   constexpr int64_t squeezedDurationUs = 36'000'000;
   std::vector<analysis::VisualSample> squeezedSamples;

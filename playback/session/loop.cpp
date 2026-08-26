@@ -585,6 +585,8 @@ struct PlaybackLoopRunner::Impl {
           if (request.timelineUs) {
             videoEditWorkspace.selectCutAt(
                 *request.timelineUs, request.timelineToleranceUs);
+            videoEditWorkspace.selectSceneSuggestionAt(
+                *request.timelineUs, request.timelineToleranceUs);
           } else {
             videoEditWorkspace.clearCutSelection();
           }
@@ -806,8 +808,14 @@ struct PlaybackLoopRunner::Impl {
   }
 
   bool overlayVisible() const {
+    const playback_video_edit::EditSnapshot edit =
+        videoEditWorkspace.edit();
     return config.debugOverlay || osd.controlsVisible() ||
            videoEditWorkspace.active() || pendingExit.has_value() ||
+           edit.sceneAnalysisStatus ==
+               playback_video_edit::SceneAnalysisStatus::Running ||
+           edit.sceneAnalysisStatus ==
+               playback_video_edit::SceneAnalysisStatus::Failed ||
            videoEditWorkspace.exportProgress().running() ||
            contextMenuController.visible();
   }

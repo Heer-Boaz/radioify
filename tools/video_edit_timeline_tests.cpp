@@ -733,6 +733,39 @@ int main() {
                     overlayModel.cutCells == std::vector<int>{2} &&
                     overlayModel.smoothCutCells.empty(),
                 "marks, cuts, and playhead must share the program-time axis");
+  playback_video_edit::EditSnapshot suggestedOverlay = overlayEdit;
+  playback_video_edit::SceneSuggestionSnapshot suggestedScene;
+  suggestedScene.id = 7;
+  suggestedScene.source = {4'000'000, 6'000'000};
+  suggestedScene.kind = playback_video_edit::SceneSuggestionKind::Cutscene;
+  suggestedScene.confidence = 0.87f;
+  suggestedScene.selected = true;
+  suggestedScene.spans.push_back({2'000'000, 4'000'000});
+  suggestedOverlay.sceneAnalysisStatus =
+      playback_video_edit::SceneAnalysisStatus::Ready;
+  suggestedOverlay.sceneSuggestions.push_back(suggestedScene);
+  suggestedOverlay.selectedSceneSuggestionId = suggestedScene.id;
+  const playback_video_edit::OverlayModel suggestedOverlayModel =
+      playback_video_edit::buildOverlayModel(
+          suggestedOverlay, nullptr, Prompt::None, 10, 0.5);
+  ok &= expect(suggestedOverlayModel.sceneSuggestionCells.size() == 10 &&
+                   suggestedOverlayModel.sceneSuggestionCells[2] ==
+                       playback_video_edit::SceneSuggestionCellKind::Selected &&
+                   suggestedOverlayModel.sceneSuggestionBoundaryCells ==
+                       std::vector<int>{2},
+               "scene suggestions must share the edited timeline projection "
+               "without becoming cut markers");
+  playback_video_edit::EditSnapshot analysingOverlay = overlayEdit;
+  analysingOverlay.sceneAnalysisStatus =
+      playback_video_edit::SceneAnalysisStatus::Running;
+  analysingOverlay.sceneAnalysisProgress = 0.42;
+  const playback_video_edit::OverlayModel analysingOverlayModel =
+      playback_video_edit::buildOverlayModel(
+          analysingOverlay, nullptr, Prompt::None, 40, 0.5);
+  ok &= expect(analysingOverlayModel.status.find("SCENES 42%") !=
+                   std::string::npos,
+               "background scene-analysis progress must remain visible in "
+               "the shared overlay model");
   playback_video_edit::EditSnapshot smoothOverlay = overlayEdit;
   smoothOverlay.cuts.front().transition =
       playback_video_edit::CutTransition::motionSmooth();
@@ -1545,6 +1578,10 @@ int main() {
       dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
         return item.label == "Smooth cut";
       });
+  const auto analyseScenesItem = std::find_if(
+      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
+        return item.label == "Analyze scenes and cutscenes";
+      });
   ok &= expect(clearAllItem != dirtyMenu.items.end() &&
                    removeItem != dirtyMenu.items.end() &&
                    keepOnlyItem != dirtyMenu.items.end() &&
@@ -1554,8 +1591,31 @@ int main() {
                    doneItem != dirtyMenu.items.end() &&
                    discardItem != dirtyMenu.items.end() &&
                    exportItem != dirtyMenu.items.end() &&
-                   smoothCutItem != dirtyMenu.items.end(),
+                   smoothCutItem != dirtyMenu.items.end() &&
+                   analyseScenesItem != dirtyMenu.items.end(),
                "the context menu must own secondary edit commands");
+  cleanEdit.sceneAnalysisStatus =
+      playback_video_edit::SceneAnalysisStatus::Ready;
+  playback_video_edit::SceneSuggestionSnapshot menuSuggestion;
+  menuSuggestion.id = 9;
+  menuSuggestion.selected = true;
+  menuSuggestion.spans.push_back({0, 1'000'000});
+  cleanEdit.sceneSuggestions = {menuSuggestion};
+  cleanEdit.selectedSceneSuggestionId = menuSuggestion.id;
+  playbackMenu.refresh(cleanEdit, idleExport);
+  const auto analysedMenu = playbackMenu.snapshotFor(
+      playback_session::ContextMenuSurface::Terminal);
+  ok &= expect(std::any_of(
+                   analysedMenu.items.begin(), analysedMenu.items.end(),
+                   [](const auto& item) {
+                     return item.label == "Select suggested scene";
+                   }) &&
+                   std::any_of(
+                       analysedMenu.items.begin(), analysedMenu.items.end(),
+                       [](const auto& item) {
+                         return item.label == "Dismiss scene suggestion";
+                       }),
+               "analysed ranges must expose deliberate selection and dismissal");
   cleanEdit.selectedCutTransition =
       playback_video_edit::CutTransition::motionSmooth();
   playbackMenu.refresh(cleanEdit, idleExport);

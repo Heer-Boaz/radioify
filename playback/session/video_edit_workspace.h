@@ -60,6 +60,7 @@ class VideoEditWorkspace {
   VideoEditActionResult execute(playback_video_edit::Command command);
   VideoEditActionResult navigateBack();
   bool selectCutAt(int64_t timelineUs, int64_t toleranceUs);
+  bool selectSceneSuggestionAt(int64_t timelineUs, int64_t toleranceUs);
   void clearCutSelection();
   bool moveBoundary(playback_video_edit::EditBoundary boundary,
                     int64_t timelineUs);

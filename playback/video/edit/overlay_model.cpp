@@ -120,6 +120,52 @@ bool appendStatusPart(std::string* status, const std::string& part, int width) {
   return true;
 }
 
+SceneSuggestionCellKind suggestionCellKind(
+    const SceneSuggestionSnapshot& suggestion) {
+  if (suggestion.selected) return SceneSuggestionCellKind::Selected;
+  switch (suggestion.kind) {
+    case SceneSuggestionKind::Dialogue:
+      return SceneSuggestionCellKind::Dialogue;
+    case SceneSuggestionKind::Cutscene:
+      return SceneSuggestionCellKind::Cutscene;
+    case SceneSuggestionKind::MenuOrLoading:
+      return SceneSuggestionCellKind::MenuOrLoading;
+    case SceneSuggestionKind::Gameplay:
+      return SceneSuggestionCellKind::None;
+  }
+  return SceneSuggestionCellKind::None;
+}
+
+int suggestionPriority(SceneSuggestionCellKind kind) {
+  switch (kind) {
+    case SceneSuggestionCellKind::Selected:
+      return 4;
+    case SceneSuggestionCellKind::Cutscene:
+      return 3;
+    case SceneSuggestionCellKind::Dialogue:
+      return 2;
+    case SceneSuggestionCellKind::MenuOrLoading:
+      return 1;
+    case SceneSuggestionCellKind::None:
+      return 0;
+  }
+  return 0;
+}
+
+const char* shortSuggestionLabel(SceneSuggestionKind kind) {
+  switch (kind) {
+    case SceneSuggestionKind::Gameplay:
+      return "CHAPTER";
+    case SceneSuggestionKind::Dialogue:
+      return "DIALOGUE";
+    case SceneSuggestionKind::Cutscene:
+      return "CUTSCENE?";
+    case SceneSuggestionKind::MenuOrLoading:
+      return "MENU/LOAD?";
+  }
+  return "SCENE";
+}
+
 }  // namespace
 
 std::string retainedProgramBadge(const EditSnapshot& edit) {
@@ -134,9 +180,13 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
   OverlayModel model;
   const bool exportRunning = editExport && editExport->running();
   const bool exportFailed = editExport && editExport->failed();
+  const bool analysisRunning =
+      edit.sceneAnalysisStatus == SceneAnalysisStatus::Running;
+  const bool analysisFailed =
+      edit.sceneAnalysisStatus == SceneAnalysisStatus::Failed;
   if (width <= 0 ||
       (!edit.active && prompt == Prompt::None && !exportRunning &&
-       !exportFailed)) {
+       !exportFailed && !analysisRunning && !analysisFailed)) {
     return model;
   }
 
@@ -197,6 +247,41 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
         destination.push_back(cutCell);
       }
     }
+
+    if (!edit.sceneSuggestions.empty()) {
+      model.sceneSuggestionCells.assign(
+          static_cast<size_t>(width), SceneSuggestionCellKind::None);
+      for (const SceneSuggestionSnapshot& suggestion :
+           edit.sceneSuggestions) {
+        const SceneSuggestionCellKind kind = suggestionCellKind(suggestion);
+        for (const SceneSuggestionSpanSnapshot& span : suggestion.spans) {
+          const int startCell = timelineCell(
+              span.timelineStartUs, edit.timelineDurationUs, width);
+          const int endCell = timelineCell(
+              std::max(span.timelineStartUs, span.timelineEndUs - 1),
+              edit.timelineDurationUs, width);
+          if (model.sceneSuggestionBoundaryCells.empty() ||
+              model.sceneSuggestionBoundaryCells.back() != startCell) {
+            model.sceneSuggestionBoundaryCells.push_back(startCell);
+          }
+          if (kind == SceneSuggestionCellKind::None) continue;
+          for (int cell = startCell; cell <= endCell; ++cell) {
+            auto& destination = model.sceneSuggestionCells[
+                static_cast<size_t>(cell)];
+            if (suggestionPriority(kind) >
+                suggestionPriority(destination)) {
+              destination = kind;
+            }
+          }
+        }
+      }
+      std::sort(model.sceneSuggestionBoundaryCells.begin(),
+                model.sceneSuggestionBoundaryCells.end());
+      model.sceneSuggestionBoundaryCells.erase(
+          std::unique(model.sceneSuggestionBoundaryCells.begin(),
+                      model.sceneSuggestionBoundaryCells.end()),
+          model.sceneSuggestionBoundaryCells.end());
+    }
   }
 
   if (prompt == Prompt::LeaveEditMode) {
@@ -242,6 +327,48 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
         &model.status,
         shortestFittingStatus({"EXPORT FAILED", "FAILED", "!"}, width),
         width);
+  }
+
+  if (analysisFailed) {
+    appendStatusPart(
+        &model.status,
+        shortestFittingStatus(
+            {"SCENE ANALYSIS FAILED", "ANALYSIS FAILED", "FAILED"},
+            width),
+        width);
+  } else if (analysisRunning) {
+    const int percentage = static_cast<int>(std::lround(
+        std::clamp(edit.sceneAnalysisProgress, 0.0, 1.0) * 100.0));
+    if (!appendStatusPart(&model.status,
+                          "SCENES " + std::to_string(percentage) + "%",
+                          width)) {
+      appendStatusPart(&model.status,
+                       shortestFittingStatus(
+                           {"ANALYSING", "SCANNING", "AI"}, width),
+                       width);
+    }
+  } else if (edit.active && !edit.sceneSuggestions.empty()) {
+    const auto selected = std::find_if(
+        edit.sceneSuggestions.begin(), edit.sceneSuggestions.end(),
+        [](const SceneSuggestionSnapshot& suggestion) {
+          return suggestion.selected;
+        });
+    if (selected != edit.sceneSuggestions.end()) {
+      const int percentage = static_cast<int>(std::lround(
+          std::clamp(selected->confidence, 0.0f, 1.0f) * 100.0f));
+      appendStatusPart(
+          &model.status,
+          std::string(shortSuggestionLabel(selected->kind)) + " " +
+              std::to_string(percentage) + "% " +
+              formatTimecode(selected->source.startUs,
+                             edit.timecodeFrameDurationUs, true),
+          width);
+    } else {
+      appendStatusPart(&model.status,
+                       std::to_string(edit.sceneSuggestions.size()) +
+                           " SCENES",
+                       width);
+    }
   }
 
   if (edit.active) {

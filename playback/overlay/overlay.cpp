@@ -108,7 +108,11 @@ PlaybackOverlayState buildPlaybackOverlayState(
                         state.videoEdit.active ||
                         state.videoEditPrompt !=
                             playback_video_edit::Prompt::None ||
-                        state.videoEditExport.visible();
+                        state.videoEditExport.visible() ||
+                        state.videoEdit.sceneAnalysisStatus ==
+                            playback_video_edit::SceneAnalysisStatus::Running ||
+                        state.videoEdit.sceneAnalysisStatus ==
+                            playback_video_edit::SceneAnalysisStatus::Failed;
 
   if (inputs.subtitleManager) {
     state.subtitleText = buildSubtitleText(*inputs.subtitleManager,
@@ -286,7 +290,11 @@ OverlayCellLayout layoutPlaybackOverlayCells(
   input.reservedRowsAboveProgress =
       (state.videoEdit.active ||
        state.videoEditPrompt != playback_video_edit::Prompt::None ||
-       state.videoEditExport.visible())
+       state.videoEditExport.visible() ||
+       state.videoEdit.sceneAnalysisStatus ==
+           playback_video_edit::SceneAnalysisStatus::Running ||
+       state.videoEdit.sceneAnalysisStatus ==
+           playback_video_edit::SceneAnalysisStatus::Failed)
           ? 1
           : 0;
   input.controls = buildOverlayCellControlInputs(specs, hoverControlToken);
@@ -303,7 +311,11 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
   input.reservedRowsAboveProgress =
       (ui.videoEdit.active ||
        ui.videoEditPrompt != playback_video_edit::Prompt::None ||
-       ui.videoEditExport.visible())
+       ui.videoEditExport.visible() ||
+       ui.videoEdit.sceneAnalysisStatus ==
+           playback_video_edit::SceneAnalysisStatus::Running ||
+       ui.videoEdit.sceneAnalysisStatus ==
+           playback_video_edit::SceneAnalysisStatus::Failed)
           ? 1
           : 0;
   input.controls.reserve(ui.controlButtons.size());
@@ -542,6 +554,12 @@ void renderVideoEditTimelineToTarget(
                                  styles.progressEmptyStyle.bg};
   const Style selectedStyle{styles.accentStyle.bg, styles.accentStyle.fg};
   const Style cutStyle{{255, 145, 96}, styles.progressEmptyStyle.bg};
+  const Style chapterStyle{{136, 118, 170}, styles.progressEmptyStyle.bg};
+  const Style dialogueStyle{{93, 205, 226}, styles.progressEmptyStyle.bg};
+  const Style cutsceneStyle{{205, 132, 255}, styles.progressEmptyStyle.bg};
+  const Style menuStyle{{165, 173, 190}, styles.progressEmptyStyle.bg};
+  const Style selectedSuggestionStyle{{255, 215, 96},
+                                      styles.progressEmptyStyle.bg};
   const Style playheadStyle{styles.baseStyle.bg, styles.baseStyle.fg};
 
   for (int cell = 0; cell < static_cast<int>(model.cells.size()); ++cell) {
@@ -557,6 +575,43 @@ void renderVideoEditTimelineToTarget(
                              : (alternate ? alternateKeptStyle : keptStyle);
     target.writeChar(layout.progressBarX + cell, layout.progressBarY, glyph,
                      style);
+  }
+
+  for (int cell = 0;
+       cell < static_cast<int>(model.sceneSuggestionCells.size()); ++cell) {
+    const playback_video_edit::SceneSuggestionCellKind kind =
+        model.sceneSuggestionCells[static_cast<size_t>(cell)];
+    wchar_t glyph = L' ';
+    const Style* style = nullptr;
+    switch (kind) {
+      case playback_video_edit::SceneSuggestionCellKind::Dialogue:
+        glyph = L'┄';
+        style = &dialogueStyle;
+        break;
+      case playback_video_edit::SceneSuggestionCellKind::Cutscene:
+        glyph = L'━';
+        style = &cutsceneStyle;
+        break;
+      case playback_video_edit::SceneSuggestionCellKind::MenuOrLoading:
+        glyph = L'░';
+        style = &menuStyle;
+        break;
+      case playback_video_edit::SceneSuggestionCellKind::Selected:
+        glyph = L'═';
+        style = &selectedSuggestionStyle;
+        break;
+      case playback_video_edit::SceneSuggestionCellKind::None:
+        break;
+    }
+    if (style) {
+      target.writeChar(layout.progressBarX + cell, layout.progressBarY,
+                       glyph, *style);
+    }
+  }
+
+  for (const int boundaryCell : model.sceneSuggestionBoundaryCells) {
+    target.writeChar(layout.progressBarX + boundaryCell,
+                     layout.progressBarY, L'┊', chapterStyle);
   }
 
   for (const int cutCell : model.cutCells) {

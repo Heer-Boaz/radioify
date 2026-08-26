@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "playback/video/edit/decision_list.h"
@@ -36,6 +37,35 @@ struct EditCutSnapshot {
   CutTransition transition;
 };
 
+enum class SceneAnalysisStatus : uint8_t {
+  Idle,
+  Running,
+  Ready,
+  Failed,
+  Cancelled,
+};
+
+enum class SceneSuggestionKind : uint8_t {
+  Gameplay,
+  Dialogue,
+  Cutscene,
+  MenuOrLoading,
+};
+
+struct SceneSuggestionSpanSnapshot {
+  int64_t timelineStartUs = 0;
+  int64_t timelineEndUs = 0;
+};
+
+struct SceneSuggestionSnapshot {
+  uint64_t id = 0;
+  SourceRange source;
+  SceneSuggestionKind kind = SceneSuggestionKind::Gameplay;
+  float confidence = 0.0f;
+  bool selected = false;
+  std::vector<SceneSuggestionSpanSnapshot> spans;
+};
+
 // Immutable value state consumed by both ASCII and framebuffer renderers.
 // All fields carrying "timeline" time use the edited program timeline. Source
 // time is kept explicit and is never used as the seek-bar coordinate system.
@@ -58,6 +88,15 @@ struct EditSnapshot {
   std::vector<SourceRange> keptRanges;
   std::vector<EditClipSnapshot> clips;
   std::vector<EditCutSnapshot> cuts;
+  // Scene analysis is an immutable, source-coordinate suggestion layer. It is
+  // projected through the current EDL for presentation but never participates
+  // in document history until the user invokes an existing edit command.
+  SceneAnalysisStatus sceneAnalysisStatus = SceneAnalysisStatus::Idle;
+  double sceneAnalysisProgress = 0.0;
+  std::string sceneAnalysisPhase;
+  std::string sceneAnalysisError;
+  std::vector<SceneSuggestionSnapshot> sceneSuggestions;
+  std::optional<uint64_t> selectedSceneSuggestionId;
   std::optional<CutTransition> selectedCutTransition;
   std::optional<int64_t> inSourceUs;
   std::optional<int64_t> outSourceUs;
