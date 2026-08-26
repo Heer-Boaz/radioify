@@ -472,15 +472,15 @@ std::vector<SceneSuggestion> buildSceneSuggestions(
 const char* sceneKindLabel(SceneKind kind) {
   switch (kind) {
     case SceneKind::Gameplay:
-      return "Gameplay chapter";
+      return "Gameplay segment";
     case SceneKind::Dialogue:
-      return "Dialogue scene";
+      return "Dialogue segment";
     case SceneKind::Cutscene:
       return "Cutscene candidate";
     case SceneKind::MenuOrLoading:
-      return "Menu/loading candidate";
+      return "Menu/loading segment";
   }
-  return "Scene";
+  return "Detected segment";
 }
 
 std::string sceneEvidenceSummary(const SceneSuggestion& suggestion) {

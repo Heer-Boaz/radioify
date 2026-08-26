@@ -70,18 +70,18 @@ struct SceneAnalysisJob::Impl {
       if (succeeded) {
         state.state = JobState::Succeeded;
         state.progress = 1.0;
-        state.phase = "Scene analysis complete";
+        state.phase = "Segment detection complete";
         state.visualSampleCount = result.visualSampleCount;
         state.usedIndexedTranscript = !result.transcriptPath.empty();
         state.suggestions = std::move(result.suggestions);
       } else if (cancelled.load(std::memory_order_relaxed)) {
         state.state = JobState::Cancelled;
-        state.phase = "Scene analysis cancelled";
+        state.phase = "Segment detection cancelled";
         state.error.clear();
       } else {
         state.state = JobState::Failed;
-        state.phase = "Scene analysis failed";
-        state.error = error.empty() ? "Scene analysis failed unexpectedly."
+        state.phase = "Segment detection failed";
+        state.error = error.empty() ? "Segment detection failed unexpectedly."
                                     : std::move(error);
       }
     }
@@ -110,7 +110,7 @@ bool SceneAnalysisJob::start(JobRequest request) {
     impl_->state = JobSnapshot{};
     impl_->state.state = JobState::Running;
     impl_->state.generation = impl_->nextGeneration++;
-    impl_->state.phase = "Starting scene analysis";
+    impl_->state.phase = "Starting segment detection";
     impl_->lastProgressNotification =
         std::chrono::steady_clock::time_point::min();
     try {
@@ -120,8 +120,8 @@ bool SceneAnalysisJob::start(JobRequest request) {
           });
     } catch (...) {
       impl_->state.state = JobState::Failed;
-      impl_->state.phase = "Scene analysis failed";
-      impl_->state.error = "Could not start the scene-analysis worker.";
+      impl_->state.phase = "Segment detection failed";
+      impl_->state.error = "Could not start the segment-detection worker.";
       impl_->changed.store(true, std::memory_order_release);
       return false;
     }
@@ -142,7 +142,7 @@ void SceneAnalysisJob::stop() {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (impl_->state.state == JobState::Running) {
       impl_->state.state = JobState::Cancelled;
-      impl_->state.phase = "Scene analysis cancelled";
+      impl_->state.phase = "Segment detection cancelled";
     }
   }
   impl_->changed.store(false, std::memory_order_release);

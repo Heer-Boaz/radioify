@@ -1,6 +1,7 @@
 #include "playback/video/edit/overlay_model.h"
 
 #include "playback/video/edit/command.h"
+#include "playback/video/edit/scene_suggestions.h"
 
 #include <algorithm>
 #include <cmath>
@@ -155,15 +156,15 @@ int suggestionPriority(SceneSuggestionCellKind kind) {
 const char* shortSuggestionLabel(SceneSuggestionKind kind) {
   switch (kind) {
     case SceneSuggestionKind::Gameplay:
-      return "CHAPTER";
+      return "GAMEPLAY";
     case SceneSuggestionKind::Dialogue:
       return "DIALOGUE";
     case SceneSuggestionKind::Cutscene:
-      return "CUTSCENE?";
+      return "CUTSCENE";
     case SceneSuggestionKind::MenuOrLoading:
-      return "MENU/LOAD?";
+      return "MENU/LOAD";
   }
-  return "SCENE";
+  return "SEGMENT";
 }
 
 }  // namespace
@@ -343,42 +344,71 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
     appendStatusPart(
         &model.status,
         shortestFittingStatus(
-            {"SCENE ANALYSIS FAILED", "ANALYSIS FAILED", "FAILED"},
+            {"SEGMENT DETECTION FAILED", "DETECTION FAILED", "FAILED"},
             width),
         width);
   } else if (analysisRunning) {
     const int percentage = static_cast<int>(std::lround(
         std::clamp(edit.sceneAnalysisProgress, 0.0, 1.0) * 100.0));
     if (!appendStatusPart(&model.status,
-                          "SCENES " + std::to_string(percentage) + "%",
+                          "SEGMENTS " + std::to_string(percentage) + "%",
                           width)) {
       appendStatusPart(&model.status,
                        shortestFittingStatus(
-                           {"ANALYSING", "SCANNING", "AI"}, width),
+                           {"DETECTING", "SCANNING"}, width),
                        width);
     }
-  } else if (edit.active && !edit.sceneSuggestions.empty()) {
+  } else if (edit.active && edit.sceneSuggestionsPanelVisible &&
+             !edit.sceneSuggestions.empty()) {
     const auto selected = std::find_if(
         edit.sceneSuggestions.begin(), edit.sceneSuggestions.end(),
         [](const SceneSuggestionSnapshot& suggestion) {
           return suggestion.selected;
         });
     if (selected != edit.sceneSuggestions.end()) {
-      const int percentage = static_cast<int>(std::lround(
-          std::clamp(selected->confidence, 0.0f, 1.0f) * 100.0f));
-      appendStatusPart(
-          &model.status,
-          std::string(shortSuggestionLabel(selected->kind)) + " " +
-              std::to_string(percentage) + "% " +
-              formatTimecode(selected->source.startUs,
-                             edit.timecodeFrameDurationUs, true),
-          width);
+      const std::string ordinal =
+          edit.selectedSceneSuggestionOrdinal
+              ? std::to_string(*edit.selectedSceneSuggestionOrdinal) + "/" +
+                    std::to_string(edit.sceneSuggestionFilteredCount) + " "
+              : std::string{};
+      const std::string kind = shortSuggestionLabel(selected->kind);
+      const std::string strength =
+          sceneSuggestionStrengthLabel(selected->confidence);
+      const std::string full =
+          ordinal + kind + " " + strength + " " +
+          formatTimecode(selected->source.startUs,
+                         edit.timecodeFrameDurationUs, true) +
+          "-" +
+          formatTimecode(selected->source.endUs,
+                         edit.timecodeFrameDurationUs, true);
+      if (!appendStatusPart(&model.status, full, width) &&
+          !appendStatusPart(&model.status,
+                            ordinal + kind + " " + strength, width)) {
+        appendStatusPart(&model.status, ordinal + kind, width);
+      }
     } else {
       appendStatusPart(&model.status,
                        std::to_string(edit.sceneSuggestions.size()) +
-                           " SCENES",
+                           " SUGGESTIONS",
                        width);
     }
+  } else if (edit.active && edit.sceneSuggestionsPanelVisible &&
+             edit.sceneAnalysisStatus == SceneAnalysisStatus::Ready) {
+    appendStatusPart(
+        &model.status,
+        std::string("NO ") +
+            sceneSuggestionFilterLabel(edit.sceneSuggestionFilter) +
+            " SUGGESTIONS",
+        width);
+  }
+
+  if (edit.active && edit.sceneSuggestionsPanelVisible &&
+      edit.sceneAnalysisStatus == SceneAnalysisStatus::Ready) {
+    appendStatusPart(&model.status,
+                     edit.sceneAnalysisUsedTranscript
+                         ? "VIDEO + SUBTITLES"
+                         : "VIDEO ONLY",
+                     width);
   }
 
   if (edit.active) {

@@ -586,6 +586,7 @@ target_sources(video_edit_timeline_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/composition/render_plan.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/frame_step_prefetch_mapping.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/sequence.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/scene_suggestions.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/timeline.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/overlay_model.cpp
   ${CMAKE_SOURCE_DIR}/core/unicode_display_width.cpp

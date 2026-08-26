@@ -10,6 +10,16 @@
 
 namespace playback_video_edit {
 
+SceneSuggestionKind projectSceneSuggestionKind(
+    playback_video_analysis::SceneKind kind);
+bool sceneSuggestionMatchesFilter(SceneSuggestionKind kind,
+                                  SceneSuggestionFilter filter);
+SceneSuggestionFilter nextSceneSuggestionFilter(
+    SceneSuggestionFilter filter);
+const char* sceneSuggestionFilterLabel(SceneSuggestionFilter filter);
+const char* sceneSuggestionKindLabel(SceneSuggestionKind kind);
+const char* sceneSuggestionStrengthLabel(float confidence);
+
 SceneSuggestionSnapshot projectSceneSuggestion(
     const playback_video_analysis::SceneSuggestion& suggestion,
     const Timeline& timeline, bool selected);

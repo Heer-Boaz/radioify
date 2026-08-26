@@ -4,6 +4,7 @@
 #include <string>
 #include <utility>
 
+#include "playback/video/edit/scene_suggestions.h"
 #include "unicode_display_width.h"
 
 namespace playback_overlay {
@@ -115,6 +116,23 @@ bool dispatchOverlayControl(OverlayControlId id,
       return invokeEdit(playback_video_edit::Command::RippleDelete);
     case OverlayControlId::EditTrim:
       return invokeEdit(playback_video_edit::Command::Trim);
+    case OverlayControlId::EditSuggestions:
+      return invokeEdit(playback_video_edit::Command::ToggleSceneSuggestions);
+    case OverlayControlId::EditSuggestionFilter:
+      return invokeEdit(
+          playback_video_edit::Command::CycleSceneSuggestionFilter);
+    case OverlayControlId::EditPreviousSuggestion:
+      return invokeEdit(
+          playback_video_edit::Command::PreviousSceneSuggestion);
+    case OverlayControlId::EditNextSuggestion:
+      return invokeEdit(playback_video_edit::Command::NextSceneSuggestion);
+    case OverlayControlId::EditSelectSuggestion:
+      return invokeEdit(playback_video_edit::Command::SelectSceneSuggestion);
+    case OverlayControlId::EditHideSuggestion:
+      return invokeEdit(playback_video_edit::Command::DismissSceneSuggestion);
+    case OverlayControlId::EditUndoHideSuggestion:
+      return invokeEdit(
+          playback_video_edit::Command::UndoDismissSceneSuggestion);
     case OverlayControlId::EditDone:
       return invokeEdit(playback_video_edit::Command::Finish);
     case OverlayControlId::EditStartExport:
@@ -218,6 +236,52 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     }
     if (hasMarks) {
       add(OverlayControlId::EditClearSelection, "Cancel", false);
+    }
+    const bool detectingSegments =
+        state.videoEdit.sceneAnalysisStatus ==
+        playback_video_edit::SceneAnalysisStatus::Running;
+    const bool suggestionsReady =
+        state.videoEdit.sceneAnalysisStatus ==
+        playback_video_edit::SceneAnalysisStatus::Ready;
+    const bool suggestionsFailed =
+        state.videoEdit.sceneAnalysisStatus ==
+        playback_video_edit::SceneAnalysisStatus::Failed;
+    std::string suggestionsLabel;
+    if (detectingSegments) {
+      suggestionsLabel = "Cancel detection";
+    } else if (suggestionsFailed) {
+      suggestionsLabel = "Retry suggestions";
+    } else if (suggestionsReady) {
+      suggestionsLabel = "Suggestions " +
+                         std::to_string(
+                             state.videoEdit.sceneSuggestionTotalCount);
+    } else {
+      suggestionsLabel = "Suggestions";
+    }
+    add(OverlayControlId::EditSuggestions, suggestionsLabel,
+        detectingSegments || state.videoEdit.sceneSuggestionsPanelVisible);
+
+    if (suggestionsReady &&
+        state.videoEdit.sceneSuggestionsPanelVisible) {
+      add(OverlayControlId::EditSuggestionFilter,
+          std::string("Filter: ") +
+              playback_video_edit::sceneSuggestionFilterLabel(
+                  state.videoEdit.sceneSuggestionFilter),
+          state.videoEdit.sceneSuggestionFilter !=
+              playback_video_edit::SceneSuggestionFilter::All);
+      const bool hasSuggestion =
+          state.videoEdit.selectedSceneSuggestionId.has_value();
+      add(OverlayControlId::EditPreviousSuggestion, "Previous", false,
+          hasSuggestion);
+      add(OverlayControlId::EditNextSuggestion, "Next", false,
+          hasSuggestion);
+      add(OverlayControlId::EditSelectSuggestion, "Select range", false,
+          hasSuggestion);
+      add(OverlayControlId::EditHideSuggestion, "Hide", false,
+          hasSuggestion);
+      if (state.videoEdit.canUndoSceneSuggestionDismissal) {
+        add(OverlayControlId::EditUndoHideSuggestion, "Undo hide", false);
+      }
     }
     out.push_back(makePlayPauseSpec(state));
     add(OverlayControlId::EditDone, "Done", false);

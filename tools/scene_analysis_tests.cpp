@@ -41,6 +41,34 @@ int main() {
                    analysis::visualChangeScore(black, white) > 0.95f,
                "visual change scoring must separate identical and opposite frames");
 
+  using playback_video_edit::SceneSuggestionFilter;
+  using playback_video_edit::SceneSuggestionKind;
+  ok &= expect(
+      playback_video_edit::sceneSuggestionMatchesFilter(
+          SceneSuggestionKind::Cutscene, SceneSuggestionFilter::All) &&
+          playback_video_edit::sceneSuggestionMatchesFilter(
+              SceneSuggestionKind::Cutscene,
+              SceneSuggestionFilter::Cutscenes) &&
+          !playback_video_edit::sceneSuggestionMatchesFilter(
+              SceneSuggestionKind::Dialogue,
+              SceneSuggestionFilter::Cutscenes),
+      "suggestion filters must retain only their named segment kind");
+  SceneSuggestionFilter cycledFilter = SceneSuggestionFilter::All;
+  for (int step = 0; step < 5; ++step) {
+    cycledFilter =
+        playback_video_edit::nextSceneSuggestionFilter(cycledFilter);
+  }
+  ok &= expect(
+      cycledFilter == SceneSuggestionFilter::All &&
+          std::string(playback_video_edit::sceneSuggestionKindLabel(
+              SceneSuggestionKind::Gameplay)) == "Gameplay segment" &&
+          std::string(playback_video_edit::sceneSuggestionStrengthLabel(
+              0.71f)) == "Possible" &&
+          std::string(playback_video_edit::sceneSuggestionStrengthLabel(
+              0.72f)) == "Strong",
+      "suggestion filters, kind names, and confidence bands must remain "
+      "stable presentation policy");
+
   const std::vector<playback_video_transcript::Segment> transcript = {
       {0, 10'000'000, "[music]"},
       {10'000'000, 40'000'000, "This cue has a needlessly long display span"},

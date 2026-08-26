@@ -2128,6 +2128,13 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
             case playback_overlay::OverlayControlId::EditClearSelection:
             case playback_overlay::OverlayControlId::EditRippleDelete:
             case playback_overlay::OverlayControlId::EditTrim:
+            case playback_overlay::OverlayControlId::EditSuggestions:
+            case playback_overlay::OverlayControlId::EditSuggestionFilter:
+            case playback_overlay::OverlayControlId::EditPreviousSuggestion:
+            case playback_overlay::OverlayControlId::EditNextSuggestion:
+            case playback_overlay::OverlayControlId::EditSelectSuggestion:
+            case playback_overlay::OverlayControlId::EditHideSuggestion:
+            case playback_overlay::OverlayControlId::EditUndoHideSuggestion:
             case playback_overlay::OverlayControlId::EditDone:
             case playback_overlay::OverlayControlId::EditStartExport:
             case playback_overlay::OverlayControlId::EditWaitForExport:

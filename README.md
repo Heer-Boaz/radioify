@@ -7,7 +7,7 @@ Console media browser/player with selectable period-radio receiver models.
 - CMake 3.16+
 - MSVC (Visual Studio Build Tools)
 - vcpkg (for `-InstallDeps`)
-- A Vulkan-capable GPU and current graphics driver (indexed transcripts)
+- A Vulkan-capable GPU and current graphics driver (generated subtitles)
 
 ## Build
 For the repo-specific Windows build/run flow and common failure recovery, see
@@ -25,7 +25,7 @@ The binary is written to `dist/radioify.exe`.
 
 The default build enables whisper.cpp's Vulkan backend and downloads the
 SHA-256-verified multilingual Whisper base model used for offline,
-GPU-accelerated indexed transcripts. Set
+GPU-accelerated subtitle generation. Set
 `RADIOIFY_WHISPER_MODEL` to use another compatible whisper.cpp model at
 runtime. Custom models use ordinary token timestamps unless the matching
 official alignment-head preset is explicitly selected with
@@ -189,10 +189,11 @@ to the browser.
 
 - Mouse: select; click to play/open
 - Right-click a video in the browser or the active video and choose
-  `Create indexed transcript` to generate a local `video.transcript.srt`
-  sidecar. Its numbered, timestamped cues are discovered as subtitles the next
-  time that exact video is opened. Existing sidecars are preserved; another run
-  uses `video.transcript.2.srt`, and so on.
+  `Generate subtitles...` to create its managed `video.transcript.srt`
+  sidecar. The active player picks it up as soon as generation completes.
+  `Regenerate subtitles...` atomically replaces that managed result instead of
+  accumulating competing subtitle tracks. F8 cancels the active generation
+  task from either the browser or player.
 - Enter: open folder / play file
 - Backspace: up
 - Arrows: move selection
@@ -212,8 +213,13 @@ to the browser.
   keeps the unmarked side at the current sequence edge
 - Drag the visible I/O handles on the program timeline to adjust either boundary; handles clamp instead of crossing
 - In the video editor: Ctrl+Z/Ctrl+Y undo/redo; Ctrl+R resets all edits
-- The editor bar contains only playback, In/Out, Delete, Trim, and Done;
-  right-click exposes history, export, discard, and the same Done action
+- The editor bar keeps playback, In/Out, Remove, Keep only, and Done visible.
+  `Suggestions` detects useful segments and opens a persistent review workflow
+  with filters for cutscenes, dialogue, gameplay, and menu/loading ranges.
+  Previous/Next seeks between suggestions, Select range only sets In/Out, Hide
+  is reversible with Undo hide, and no suggestion changes the edit by itself.
+  Right-click remains available for secondary history, export, and discard
+  actions.
 - Done only leaves edit mode; it never starts or cancels an export. Committed
   edits remain in the live program preview, while an unapplied In/Out selection
   is temporary and is cleared without changing the edit

@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -776,18 +777,29 @@ int main() {
   suggestedScene.spans.push_back({2'000'000, 4'000'000});
   suggestedOverlay.sceneAnalysisStatus =
       playback_video_edit::SceneAnalysisStatus::Ready;
+  suggestedOverlay.sceneSuggestionsPanelVisible = true;
+  suggestedOverlay.sceneSuggestionFilteredCount = 1;
+  suggestedOverlay.selectedSceneSuggestionOrdinal = 1;
   suggestedOverlay.sceneSuggestions.push_back(suggestedScene);
   suggestedOverlay.selectedSceneSuggestionId = suggestedScene.id;
   const playback_video_edit::OverlayModel suggestedOverlayModel =
       playback_video_edit::buildOverlayModel(
           suggestedOverlay, nullptr, Prompt::None, 10, 0.5);
+  const playback_video_edit::OverlayModel wideSuggestedOverlayModel =
+      playback_video_edit::buildOverlayModel(
+          suggestedOverlay, nullptr, Prompt::None, 80, 0.5);
   ok &= expect(suggestedOverlayModel.sceneSuggestionCells.size() == 10 &&
                    suggestedOverlayModel.sceneSuggestionCells[2] ==
                        playback_video_edit::SceneSuggestionCellKind::Selected &&
                    suggestedOverlayModel.sceneSuggestionBoundaryCells ==
-                       std::vector<int>{2},
+                       std::vector<int>{2} &&
+                   wideSuggestedOverlayModel.status.find("Strong") !=
+                       std::string::npos &&
+                   wideSuggestedOverlayModel.status.find("87%") ==
+                       std::string::npos,
                "scene suggestions must share the edited timeline projection "
-               "without becoming cut markers");
+               "without becoming cut markers or exposing false-precision "
+               "confidence");
   playback_video_edit::EditSnapshot analysingOverlay = overlayEdit;
   analysingOverlay.sceneAnalysisStatus =
       playback_video_edit::SceneAnalysisStatus::Running;
@@ -795,10 +807,16 @@ int main() {
   const playback_video_edit::OverlayModel analysingOverlayModel =
       playback_video_edit::buildOverlayModel(
           analysingOverlay, nullptr, Prompt::None, 40, 0.5);
-  ok &= expect(analysingOverlayModel.status.find("SCENES 42%") !=
+  ok &= expect(analysingOverlayModel.status.find("SEGMENTS 42%") !=
                    std::string::npos,
-               "background scene-analysis progress must remain visible in "
+               "background segment-detection progress must remain visible in "
                "the shared overlay model");
+  const playback_video_edit::OverlayModel narrowAnalysingOverlayModel =
+      playback_video_edit::buildOverlayModel(
+          analysingOverlay, nullptr, Prompt::None, 8, 0.5);
+  ok &= expect(narrowAnalysingOverlayModel.status.find("AI") ==
+                   std::string::npos,
+               "narrow status text must not leak an unexplained AI label");
   playback_video_edit::EditSnapshot smoothOverlay = overlayEdit;
   smoothOverlay.cuts.front().transition =
       playback_video_edit::CutTransition::motionSmooth();
@@ -982,6 +1000,7 @@ int main() {
   const std::vector<playback_overlay::OverlayControlId> expectedEmptyControls{
       playback_overlay::OverlayControlId::EditMarkIn,
       playback_overlay::OverlayControlId::EditMarkOut,
+      playback_overlay::OverlayControlId::EditSuggestions,
       playback_overlay::OverlayControlId::PlayPause,
       playback_overlay::OverlayControlId::EditDone,
   };
@@ -1016,6 +1035,7 @@ int main() {
           playback_overlay::OverlayControlId::EditMarkIn,
           playback_overlay::OverlayControlId::EditMarkOut,
           playback_overlay::OverlayControlId::EditClearSelection,
+          playback_overlay::OverlayControlId::EditSuggestions,
           playback_overlay::OverlayControlId::PlayPause,
           playback_overlay::OverlayControlId::EditDone,
       };
@@ -1049,6 +1069,7 @@ int main() {
           playback_overlay::OverlayControlId::EditRippleDelete,
           playback_overlay::OverlayControlId::EditTrim,
           playback_overlay::OverlayControlId::EditClearSelection,
+          playback_overlay::OverlayControlId::EditSuggestions,
           playback_overlay::OverlayControlId::PlayPause,
           playback_overlay::OverlayControlId::EditDone,
       };
@@ -1112,6 +1133,78 @@ int main() {
                        playback_video_edit::Command::ClearInAndOut,
                "endpoint buttons must toggle and Cancel must clear only the "
                "local range-selection tool");
+
+  playback_overlay::PlaybackOverlayState suggestionControlState;
+  suggestionControlState.videoEdit.active = true;
+  suggestionControlState.playPauseAvailable = true;
+  suggestionControlState.paused = true;
+  suggestionControlState.videoEdit.sceneAnalysisStatus =
+      playback_video_edit::SceneAnalysisStatus::Ready;
+  suggestionControlState.videoEdit.sceneSuggestionsPanelVisible = true;
+  suggestionControlState.videoEdit.sceneSuggestionFilter =
+      playback_video_edit::SceneSuggestionFilter::Cutscenes;
+  suggestionControlState.videoEdit.sceneSuggestionTotalCount = 8;
+  suggestionControlState.videoEdit.sceneSuggestionFilteredCount = 3;
+  suggestionControlState.videoEdit.selectedSceneSuggestionId = 42;
+  suggestionControlState.videoEdit.canUndoSceneSuggestionDismissal = true;
+  const auto suggestionControls = playback_overlay::buildOverlayControlSpecs(
+      suggestionControlState, -1);
+  const std::vector<playback_overlay::OverlayControlId>
+      expectedSuggestionControls{
+          playback_overlay::OverlayControlId::EditMarkIn,
+          playback_overlay::OverlayControlId::EditMarkOut,
+          playback_overlay::OverlayControlId::EditSuggestions,
+          playback_overlay::OverlayControlId::EditSuggestionFilter,
+          playback_overlay::OverlayControlId::EditPreviousSuggestion,
+          playback_overlay::OverlayControlId::EditNextSuggestion,
+          playback_overlay::OverlayControlId::EditSelectSuggestion,
+          playback_overlay::OverlayControlId::EditHideSuggestion,
+          playback_overlay::OverlayControlId::EditUndoHideSuggestion,
+          playback_overlay::OverlayControlId::PlayPause,
+          playback_overlay::OverlayControlId::EditDone,
+      };
+  const auto suggestionsControl = controlFor(
+      suggestionControls,
+      playback_overlay::OverlayControlId::EditSuggestions);
+  const auto suggestionFilterControl = controlFor(
+      suggestionControls,
+      playback_overlay::OverlayControlId::EditSuggestionFilter);
+  ok &= expect(
+      controlIds(suggestionControls) == expectedSuggestionControls &&
+          suggestionsControl != suggestionControls.end() &&
+          suggestionsControl->normalText == " [Suggestions 8] " &&
+          suggestionsControl->active &&
+          suggestionFilterControl != suggestionControls.end() &&
+          suggestionFilterControl->normalText == " [Filter: Cutscenes] ",
+      "the shared editor toolbar must expose a persistent, filterable "
+      "suggestion review workflow");
+  for (const auto [control, command] : {
+           std::pair{playback_overlay::OverlayControlId::EditSuggestions,
+                     playback_video_edit::Command::ToggleSceneSuggestions},
+           std::pair{
+               playback_overlay::OverlayControlId::EditSuggestionFilter,
+               playback_video_edit::Command::CycleSceneSuggestionFilter},
+           std::pair{
+               playback_overlay::OverlayControlId::EditPreviousSuggestion,
+               playback_video_edit::Command::PreviousSceneSuggestion},
+           std::pair{playback_overlay::OverlayControlId::EditNextSuggestion,
+                     playback_video_edit::Command::NextSceneSuggestion},
+           std::pair{
+               playback_overlay::OverlayControlId::EditSelectSuggestion,
+               playback_video_edit::Command::SelectSceneSuggestion},
+           std::pair{playback_overlay::OverlayControlId::EditHideSuggestion,
+                     playback_video_edit::Command::DismissSceneSuggestion},
+           std::pair{
+               playback_overlay::OverlayControlId::EditUndoHideSuggestion,
+               playback_video_edit::Command::UndoDismissSceneSuggestion},
+       }) {
+    dispatchedEditCommand.reset();
+    ok &= expect(playback_overlay::dispatchOverlayControl(
+                     control, editControlActions) &&
+                     dispatchedEditCommand == command,
+                 "each suggestion control must dispatch through the shared "
+                 "editor command boundary");
+  }
   ok &= expect(playback_overlay::dispatchOverlayControl(
                    playback_overlay::OverlayControlId::EditStartExport,
                    editControlActions) &&
@@ -1147,6 +1240,7 @@ int main() {
           playback_overlay::OverlayControlId::EditRippleDelete,
           playback_overlay::OverlayControlId::EditTrim,
           playback_overlay::OverlayControlId::EditClearSelection,
+          playback_overlay::OverlayControlId::EditSuggestions,
           playback_overlay::OverlayControlId::PlayPause,
           playback_overlay::OverlayControlId::EditDone,
       };
@@ -1620,9 +1714,9 @@ int main() {
       dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
         return item.label == "Smooth cut";
       });
-  const auto analyseScenesItem = std::find_if(
+  const auto detectSegmentsItem = std::find_if(
       dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
-        return item.label == "Analyze scenes and cutscenes";
+        return item.label == "Detect segments...";
       });
   ok &= expect(clearAllItem != dirtyMenu.items.end() &&
                    removeItem != dirtyMenu.items.end() &&
@@ -1634,10 +1728,12 @@ int main() {
                    discardItem != dirtyMenu.items.end() &&
                    exportItem != dirtyMenu.items.end() &&
                    smoothCutItem != dirtyMenu.items.end() &&
-                   analyseScenesItem != dirtyMenu.items.end(),
+                   detectSegmentsItem != dirtyMenu.items.end(),
                "the context menu must own secondary edit commands");
   cleanEdit.sceneAnalysisStatus =
       playback_video_edit::SceneAnalysisStatus::Ready;
+  cleanEdit.sceneSuggestionsPanelVisible = true;
+  cleanEdit.canUndoSceneSuggestionDismissal = true;
   playback_video_edit::SceneSuggestionSnapshot menuSuggestion;
   menuSuggestion.id = 9;
   menuSuggestion.selected = true;
@@ -1650,14 +1746,20 @@ int main() {
   ok &= expect(std::any_of(
                    analysedMenu.items.begin(), analysedMenu.items.end(),
                    [](const auto& item) {
-                     return item.label == "Select suggested scene";
+                     return item.label == "Select suggested segment";
                    }) &&
                    std::any_of(
                        analysedMenu.items.begin(), analysedMenu.items.end(),
                        [](const auto& item) {
-                         return item.label == "Dismiss scene suggestion";
+                         return item.label == "Hide suggestion";
+                       }) &&
+                   std::any_of(
+                       analysedMenu.items.begin(), analysedMenu.items.end(),
+                       [](const auto& item) {
+                         return item.label == "Undo hidden suggestion";
                        }),
-               "analysed ranges must expose deliberate selection and dismissal");
+               "detected ranges must expose deliberate selection, reversible "
+               "hiding, and no destructive edit");
   cleanEdit.selectedCutTransition =
       playback_video_edit::CutTransition::motionSmooth();
   playbackMenu.refresh(cleanEdit, idleExport);

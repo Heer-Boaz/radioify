@@ -197,7 +197,7 @@ bool analyzeVideoScenes(const std::filesystem::path& videoPath,
     return false;
   }
   if (cancelled(cancelRequested)) {
-    setError(error, "Scene analysis cancelled.");
+    setError(error, "Segment detection cancelled.");
     return false;
   }
 
@@ -206,11 +206,11 @@ bool analyzeVideoScenes(const std::filesystem::path& videoPath,
   if (allowCachedResult && expectedDurationUs > 0 &&
       loadCachedSceneAnalysis(videoPath, videoStreamIndex,
                               expectedDurationUs, transcriptPath, result)) {
-    report(onProgress, 1.0, "Loaded cached scene analysis");
+    report(onProgress, 1.0, "Loaded cached segment suggestions");
     return true;
   }
 
-  report(onProgress, 0.01, "Opening video analysis stream");
+  report(onProgress, 0.01, "Opening video for segment detection");
   VideoDecoder decoder;
   std::string decoderError;
   DecoderInterruptContext interruptContext{cancelRequested};
@@ -232,13 +232,13 @@ bool analyzeVideoScenes(const std::filesystem::path& videoPath,
   const int64_t durationUs =
       expectedDurationUs > 0 ? expectedDurationUs : decoderDurationUs;
   if (durationUs <= 0) {
-    setError(error, "Scene analysis requires a known video duration.");
+    setError(error, "Segment detection requires a known video duration.");
     return false;
   }
   if (allowCachedResult && expectedDurationUs <= 0 &&
       loadCachedSceneAnalysis(videoPath, videoStreamIndex, durationUs,
                               transcriptPath, result)) {
-    report(onProgress, 1.0, "Loaded cached scene analysis");
+    report(onProgress, 1.0, "Loaded cached segment suggestions");
     return true;
   }
 
@@ -258,7 +258,7 @@ bool analyzeVideoScenes(const std::filesystem::path& videoPath,
     VisualSample sample;
     if (!decoder.redecodeLastFrame(pixels) ||
         !extractVisualSample(pixels, timestampUs, &sample)) {
-      setError(error, "Could not transfer a scene-analysis video sample.");
+      setError(error, "Could not read a video sample for segment detection.");
       return false;
     }
     if (!samples.empty()) {
@@ -278,14 +278,15 @@ bool analyzeVideoScenes(const std::filesystem::path& videoPath,
         static_cast<double>(std::min(timestampUs, durationUs)) /
         static_cast<double>(durationUs);
     report(onProgress, 0.03 + fraction * 0.87,
-           "Scanning visual scene changes");
+           "Scanning visual changes");
   }
   if (cancelled(cancelRequested)) {
-    setError(error, "Scene analysis cancelled.");
+    setError(error, "Segment detection cancelled.");
     return false;
   }
   if (!decoder.reachedEndOfStream()) {
-    setError(error, "Video decoding stopped before scene analysis completed.");
+    setError(error,
+             "Video decoding stopped before segment detection completed.");
     return false;
   }
   if (samples.size() < 2) {
@@ -304,11 +305,11 @@ bool analyzeVideoScenes(const std::filesystem::path& videoPath,
   }
   const std::vector<SpeechActivity> speech =
       buildSpeechActivity(transcriptSegments);
-  report(onProgress, 0.96, "Grouping chapters and cutscene candidates");
+  report(onProgress, 0.96, "Grouping detected segments");
   std::vector<SceneSuggestion> suggestions =
       buildSceneSuggestions(durationUs, samples, speech);
   if (suggestions.empty()) {
-    setError(error, "Scene analysis produced no usable ranges.");
+    setError(error, "Segment detection produced no usable ranges.");
     return false;
   }
 
@@ -319,7 +320,7 @@ bool analyzeVideoScenes(const std::filesystem::path& videoPath,
   result->suggestions = std::move(suggestions);
   storeCachedSceneAnalysis(videoPath, videoStreamIndex, durationUs,
                            transcriptPath, *result);
-  report(onProgress, 1.0, "Scene analysis complete");
+  report(onProgress, 1.0, "Segment detection complete");
   return true;
 }
 

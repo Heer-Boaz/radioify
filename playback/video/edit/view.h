@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -52,6 +53,14 @@ enum class SceneSuggestionKind : uint8_t {
   MenuOrLoading,
 };
 
+enum class SceneSuggestionFilter : uint8_t {
+  All,
+  Cutscenes,
+  Dialogue,
+  Gameplay,
+  MenuOrLoading,
+};
+
 struct SceneSuggestionSpanSnapshot {
   int64_t timelineStartUs = 0;
   int64_t timelineEndUs = 0;
@@ -95,6 +104,14 @@ struct EditSnapshot {
   double sceneAnalysisProgress = 0.0;
   std::string sceneAnalysisPhase;
   std::string sceneAnalysisError;
+  bool sceneAnalysisUsedTranscript = false;
+  bool sceneSuggestionsPanelVisible = false;
+  SceneSuggestionFilter sceneSuggestionFilter = SceneSuggestionFilter::All;
+  size_t sceneSuggestionTotalCount = 0;
+  size_t sceneSuggestionFilteredCount = 0;
+  // One-based position inside the active filter, for presentation as N / M.
+  std::optional<size_t> selectedSceneSuggestionOrdinal;
+  bool canUndoSceneSuggestionDismissal = false;
   std::vector<SceneSuggestionSnapshot> sceneSuggestions;
   std::optional<uint64_t> selectedSceneSuggestionId;
   std::optional<CutTransition> selectedCutTransition;

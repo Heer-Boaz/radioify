@@ -66,25 +66,34 @@ void ContextMenuController::refresh(
     if (edit.sceneAnalysisStatus ==
         playback_video_edit::SceneAnalysisStatus::Running) {
       next.push_back({playback_video_edit::Command::CancelSceneAnalysis,
-                      "Cancel scene analysis"});
+                      "Cancel segment detection"});
+    } else if (edit.sceneAnalysisStatus ==
+               playback_video_edit::SceneAnalysisStatus::Ready) {
+      next.push_back({playback_video_edit::Command::ToggleSceneSuggestions,
+                      edit.sceneSuggestionsPanelVisible
+                          ? "Hide suggestions"
+                          : "Show suggestions"});
+      next.push_back({playback_video_edit::Command::StartSceneAnalysis,
+                      "Detect segments again"});
     } else {
       next.push_back(
           {playback_video_edit::Command::StartSceneAnalysis,
            edit.sceneAnalysisStatus ==
-                   playback_video_edit::SceneAnalysisStatus::Ready
-               ? "Analyze scenes again"
-               : "Analyze scenes and cutscenes"});
+                   playback_video_edit::SceneAnalysisStatus::Failed
+               ? "Retry segment detection"
+               : "Detect segments..."});
     }
-    if (!edit.sceneSuggestions.empty()) {
-      next.push_back({playback_video_edit::Command::PreviousSceneSuggestion,
-                      "Previous scene suggestion"});
-      next.push_back({playback_video_edit::Command::NextSceneSuggestion,
-                      "Next scene suggestion"});
+    if (edit.sceneSuggestionsPanelVisible) {
       if (edit.selectedSceneSuggestionId) {
         next.push_back({playback_video_edit::Command::SelectSceneSuggestion,
-                        "Select suggested scene"});
+                        "Select suggested segment"});
         next.push_back({playback_video_edit::Command::DismissSceneSuggestion,
-                        "Dismiss scene suggestion"});
+                        "Hide suggestion"});
+      }
+      if (edit.canUndoSceneSuggestionDismissal) {
+        next.push_back(
+            {playback_video_edit::Command::UndoDismissSceneSuggestion,
+             "Undo hidden suggestion"});
       }
     }
     if (edit.inTimelineUs) {
