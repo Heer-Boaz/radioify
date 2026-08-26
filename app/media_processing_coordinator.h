@@ -52,9 +52,9 @@ struct PollResult {
   std::vector<TaskCompletion> completions;
 };
 
-// Owns Radioify's mutually-exclusive, offline media-processing jobs. The TUI
-// observes one common activity/completion contract instead of understanding
-// every worker's lifecycle and synchronization details.
+// Application-level owner of Radioify's mutually-exclusive, offline media
+// processing. UI surfaces observe one common activity/completion contract
+// instead of understanding every worker's lifecycle and synchronization.
 class Coordinator {
  public:
   using MelodyProgressReporter = std::function<void(float)>;

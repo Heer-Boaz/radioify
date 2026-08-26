@@ -2,7 +2,7 @@
 
 #include <string>
 
-#include "tui/media_processing_coordinator.h"
+#include "app/media_processing_coordinator.h"
 
 struct MediaTaskCardModel {
   std::string title;
