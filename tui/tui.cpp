@@ -36,6 +36,7 @@
 #include "app/playback_route.h"
 #include "audio_picture_in_picture_window.h"
 #include "audioplayback.h"
+#include "browser_action_strip.h"
 #include "browser_playback_reveal.h"
 #include "browser_playback_source.h"
 #include "browser_content_preparation.h"
@@ -800,14 +801,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   fileContextStyles.border = kStyleDim;
   fileContextStyles.selected = kStyleHighlight;
 
-  struct ActionRenderItem {
-    ActionStripItem id;
-    std::string label;
-    std::string labelHover;
-    bool active;
-    int width;
-  };
-
   auto selectedOptionsSubject = [&]()
       -> std::optional<OptionsBrowserSubject> {
     if (optionsBrowserIsActive(browser) || browser.entries.empty() ||
@@ -819,57 +812,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         browser.entries[static_cast<size_t>(browser.selected)]);
   };
 
-  auto buildActionRenderItems = [&](bool browserInteractionEnabled) {
-    std::vector<ActionRenderItem> items;
-    auto addActionItem = [&](ActionStripItem id, const std::string& text,
-                             bool active) {
-      BracketButtonLabels labels = makeBracketButtonLabels(text);
-      items.push_back(
-          {id, labels.normal, labels.hover, active, labels.width});
-    };
-    auto actionStripItemForOverlayControl =
-        [](playback_overlay::OverlayControlId id)
-        -> std::optional<ActionStripItem> {
-          switch (id) {
-            case playback_overlay::OverlayControlId::Previous:
-              return ActionStripItem::Previous;
-            case playback_overlay::OverlayControlId::PlayPause:
-              return ActionStripItem::PlayPause;
-            case playback_overlay::OverlayControlId::Next:
-              return ActionStripItem::Next;
-            case playback_overlay::OverlayControlId::Radio:
-              return ActionStripItem::Radio;
-            case playback_overlay::OverlayControlId::Hz50:
-              return ActionStripItem::Hz50;
-            case playback_overlay::OverlayControlId::PictureInPicture:
-              return ActionStripItem::PictureInPicture;
-            case playback_overlay::OverlayControlId::AudioTrack:
-            case playback_overlay::OverlayControlId::Subtitles:
-            case playback_overlay::OverlayControlId::EditMarkIn:
-            case playback_overlay::OverlayControlId::EditMarkOut:
-            case playback_overlay::OverlayControlId::EditClearSelection:
-            case playback_overlay::OverlayControlId::EditRippleDelete:
-            case playback_overlay::OverlayControlId::EditTrim:
-            case playback_overlay::OverlayControlId::EditSuggestions:
-            case playback_overlay::OverlayControlId::EditSuggestionFilter:
-            case playback_overlay::OverlayControlId::EditPreviousSuggestion:
-            case playback_overlay::OverlayControlId::EditNextSuggestion:
-            case playback_overlay::OverlayControlId::EditSelectSuggestion:
-            case playback_overlay::OverlayControlId::EditHideSuggestion:
-            case playback_overlay::OverlayControlId::EditUndoHideSuggestion:
-            case playback_overlay::OverlayControlId::EditDone:
-            case playback_overlay::OverlayControlId::EditStartExport:
-            case playback_overlay::OverlayControlId::EditWaitForExport:
-            case playback_overlay::OverlayControlId::EditCancelExport:
-            case playback_overlay::OverlayControlId::EditConfirmPrompt:
-            case playback_overlay::OverlayControlId::EditCancelPrompt:
-            case playback_overlay::OverlayControlId::EditDiscardAndExit:
-            case playback_overlay::OverlayControlId::EditCancelExit:
-              return std::nullopt;
-          }
-          return std::nullopt;
-        };
-
+  auto buildActionStripItems = [&](bool browserInteractionEnabled) {
+    browser_action_strip::Input stripInput;
     playback_overlay::PlaybackOverlayState actionOverlayState;
     const std::filesystem::path nowPlaying = currentPlaybackFile();
     const std::optional<PlaybackControlState> videoControlState =
@@ -902,67 +846,16 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
             ? videoPresentation->layer() ==
                   PlaybackPresentationLayer::PictureInPicture
             : audioPictureInPicture.isOpen();
-    playback_overlay::OverlayControlSpecOptions controlOptions;
-    controlOptions.includeAudioTrack = false;
-    controlOptions.includeSubtitles = false;
-    std::vector<playback_overlay::OverlayControlSpec> controlSpecs =
-        playback_overlay::buildOverlayControlSpecs(actionOverlayState, -1,
-                                                   controlOptions);
-    for (const playback_overlay::OverlayControlSpec& spec : controlSpecs) {
-      std::optional<ActionStripItem> actionId =
-          actionStripItemForOverlayControl(spec.id);
-      if (actionId) {
-        items.push_back({*actionId, spec.normalText, spec.hoverText,
-                         spec.active, spec.width});
-      }
-    }
-
-    if (browserInteractionEnabled) {
-      const std::string gridIcon = "\xE2\x96\xA6";
-      const std::string listIcon = "\xE2\x89\xA1";
-      const std::string previewIcon = "\xE2\x98\x90";
-      std::string viewState;
-      switch (browser.viewMode) {
-        case BrowserState::ViewMode::Thumbnails:
-          viewState = gridIcon + " Grid";
-          break;
-        case BrowserState::ViewMode::ListOnly:
-          viewState = listIcon + " List";
-          break;
-        case BrowserState::ViewMode::ListPreview:
-          viewState = previewIcon + " Preview";
-          break;
-      }
-      addActionItem(ActionStripItem::View, viewState, false);
-    }
+    stripInput.playback = std::move(actionOverlayState);
+    stripInput.browserControlsAvailable = browserInteractionEnabled;
+    stripInput.viewMode = browser.viewMode;
     const bool selectedEntryHasOptions =
         browserInteractionEnabled && selectedOptionsSubject().has_value();
-    if (browserInteractionEnabled &&
-        (optionsBrowserIsActive(browser) || selectedEntryHasOptions)) {
-      addActionItem(ActionStripItem::Options, "Options",
-                    optionsBrowserIsActive(browser));
-    }
-    return items;
+    stripInput.optionsAvailable =
+        optionsBrowserIsActive(browser) || selectedEntryHasOptions;
+    stripInput.optionsActive = optionsBrowserIsActive(browser);
+    return browser_action_strip::build(stripInput);
   };
-
-  auto countWrappedActionLines =
-      [](const std::vector<ActionRenderItem>& items, int width) {
-        if (items.empty() || width <= 0) return 0;
-        const int gapWidth = 2;
-        int lines = 1;
-        int x = 0;
-        for (const auto& item : items) {
-          const int itemWidth = std::min(std::max(1, item.width), width);
-          const int gap = x > 0 ? gapWidth : 0;
-          if (x > 0 && x + gap + itemWidth > width) {
-            ++lines;
-            x = itemWidth;
-          } else {
-            x += gap + itemWidth;
-          }
-        }
-        return lines;
-      };
 
   auto buildFooterLayout = [&]() {
     const std::optional<media_processing::TaskCompletion> completion =
@@ -991,8 +884,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
     if (layout.showActionStrip) {
       const bool browserInteractionEnabled = !melodyVisualizationEnabled;
-      layout.actionStripLines = countWrappedActionLines(
-          buildActionRenderItems(browserInteractionEnabled), screen.width());
+      layout.actionStripLines = browser_action_strip::wrappedLineCount(
+          buildActionStripItems(browserInteractionEnabled), screen.width());
       layout.reservedLines += std::max(0, layout.actionStripLines - 1);
     }
     return layout;
@@ -2379,8 +2272,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       actionStrip.y = -1;
       if (footerLayout.showActionStrip && line < height) {
         actionStrip.y = line;
-        std::vector<ActionRenderItem> items =
-            buildActionRenderItems(browserInteractionEnabled);
+        std::vector<browser_action_strip::Item> items =
+            buildActionStripItems(browserInteractionEnabled);
         const int gapWidth = 2;
         int x = 0;
         int itemLine = line;
@@ -2396,7 +2289,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           if (itemLine >= height) break;
           bool hovered =
               (actionHover == static_cast<int>(actionStrip.buttons.size()));
-          std::string text = hovered ? item.labelHover : item.label;
+          std::string text = hovered ? item.hoverLabel : item.label;
           int textWidth = utf8DisplayWidth(text);
           widthUsed = std::min(widthUsed, width - x);
           if (widthUsed <= 0) break;

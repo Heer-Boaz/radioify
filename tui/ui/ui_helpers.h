@@ -45,16 +45,9 @@ struct ProgressFooterRenderResult {
   int progressBarWidth = 0;
 };
 
-struct BracketButtonLabels {
-  std::string normal;
-  std::string hover;
-  int width = 0;
-};
-
 float clamp01(float v);
 Color scaleColor(const Color& color, float amount);
 Color lerpColor(const Color& a, const Color& b, float t);
-BracketButtonLabels makeBracketButtonLabels(const std::string& text);
 
 int utf8CodepointCount(const std::string& s);
 std::string utf8Take(const std::string& s, int count);

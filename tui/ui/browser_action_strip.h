@@ -1,0 +1,54 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#include "browser_model.h"
+#include "playback/overlay/overlay.h"
+
+enum class ActionStripItem {
+  Previous,
+  PlayPause,
+  Next,
+  Radio,
+  Hz50,
+  View,
+  PictureInPicture,
+  Options
+};
+
+struct ActionStripButton {
+  ActionStripItem id = ActionStripItem::Radio;
+  int x0 = 0;
+  int x1 = 0;
+  int y = 0;
+};
+
+struct ActionStripLayout {
+  int y = -1;
+  std::vector<ActionStripButton> buttons;
+};
+
+namespace browser_action_strip {
+
+struct Input {
+  playback_overlay::PlaybackOverlayState playback;
+  bool browserControlsAvailable = false;
+  BrowserState::ViewMode viewMode = BrowserState::ViewMode::ListOnly;
+  bool optionsAvailable = false;
+  bool optionsActive = false;
+};
+
+struct Item {
+  ActionStripItem id = ActionStripItem::Radio;
+  std::string label;
+  std::string hoverLabel;
+  bool active = false;
+  int width = 0;
+};
+
+std::vector<Item> build(const Input& input);
+int wrappedLineCount(const std::vector<Item>& items, int width);
+
+}  // namespace browser_action_strip

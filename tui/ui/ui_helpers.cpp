@@ -68,15 +68,6 @@ Color lerpColor(const Color& a, const Color& b, float t) {
   return out;
 }
 
-BracketButtonLabels makeBracketButtonLabels(const std::string& text) {
-  BracketButtonLabels labels;
-  labels.normal = " [" + text + "] ";
-  labels.hover = "[ " + text + " ]";
-  labels.width =
-      std::max(utf8DisplayWidth(labels.normal), utf8DisplayWidth(labels.hover));
-  return labels;
-}
-
 static size_t utf8Next(const std::string& s, size_t i) {
   if (i >= s.size()) return s.size();
   unsigned char c = static_cast<unsigned char>(s[i]);

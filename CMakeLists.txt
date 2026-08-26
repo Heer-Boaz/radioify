@@ -851,6 +851,18 @@ radioify_link_repo_target(command_palette_tests)
 add_test(NAME command_palette_tests
          COMMAND $<TARGET_FILE:command_palette_tests>)
 
+add_executable(browser_action_strip_tests)
+target_sources(browser_action_strip_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_browser_action_strip_tests>
+  ${CMAKE_SOURCE_DIR}/tui/ui/browser_action_strip.cpp
+  ${CMAKE_SOURCE_DIR}/playback/overlay/controls.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/scene_suggestions.cpp
+  ${CMAKE_SOURCE_DIR}/core/unicode_display_width.cpp
+)
+radioify_link_repo_target(browser_action_strip_tests)
+add_test(NAME browser_action_strip_tests
+         COMMAND $<TARGET_FILE:browser_action_strip_tests>)
+
 add_executable(playback_queue_tests)
 target_sources(playback_queue_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_playback_queue_tests>

@@ -6,6 +6,7 @@
 #include <optional>
 #include <vector>
 
+#include "browser_action_strip.h"
 #include "browser_model.h"
 #include "input_event.h"
 #include "playback/input/shortcut_types.h"
@@ -78,29 +79,6 @@ enum class BrowserSearchFocus {
 
 void setBrowserSearchFocus(BrowserState& browser, BrowserSearchFocus focus,
                            bool& dirty);
-
-enum class ActionStripItem {
-  Previous,
-  PlayPause,
-  Next,
-  Radio,
-  Hz50,
-  View,
-  PictureInPicture,
-  Options
-};
-
-struct ActionStripButton {
-  ActionStripItem id = ActionStripItem::Radio;
-  int x0 = 0;
-  int x1 = 0;
-  int y = 0;
-};
-
-struct ActionStripLayout {
-  int y = -1;
-  std::vector<ActionStripButton> buttons;
-};
 
 class BrowserPointerState {
  public:
