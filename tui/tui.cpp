@@ -103,6 +103,7 @@
 #include "windows_file_drop_apartment.h"
 #include "media_formats.h"
 #include "runtime_helpers.h"
+#include "shell_command_catalog.h"
 #include "shell_shortcuts.h"
 
 #include "tui.h"
@@ -135,36 +136,6 @@ inline UiDirtyFlags& operator|=(UiDirtyFlags& a, UiDirtyFlags b) {
 inline bool hasDirtyFlag(UiDirtyFlags value, UiDirtyFlags flag) {
   return (static_cast<uint32_t>(value) & static_cast<uint32_t>(flag)) != 0;
 }
-
-struct SetBrowserView {
-  BrowserState::ViewMode mode = BrowserState::ViewMode::Thumbnails;
-};
-
-struct RevealPlayingFile {};
-
-using ShellPaletteIntent =
-    std::variant<PlaybackAction, SetBrowserView, RevealPlayingFile>;
-
-class ShellPaletteCatalog {
- public:
-  template <typename Intent>
-  void add(std::string label, std::string hotkey, Intent intent) {
-    commands_.emplace_back(std::move(label), std::move(hotkey));
-    intents_.emplace_back(std::move(intent));
-  }
-
-  const std::vector<tui_command_palette::Command>& commands() const {
-    return commands_;
-  }
-
-  const ShellPaletteIntent* intentAt(std::size_t index) const {
-    return index < intents_.size() ? &intents_[index] : nullptr;
-  }
-
- private:
-  std::vector<tui_command_palette::Command> commands_;
-  std::vector<ShellPaletteIntent> intents_;
-};
 
 static DWORD waitForBrowserWake(ConsoleInput& input,
                                 const OpenFileRequests& openFileRequests,
@@ -1156,63 +1127,36 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   auto buildCommands = [&]() {
     const PlaybackPresentationModel presentation = playbackPresenter.model();
     const AudioPlaybackSnapshot& audio = presentation.audio;
-    const bool videoActive =
+    shell_command_catalog::Context context;
+    context.videoActive =
         presentation.control && presentation.control->isVideo;
-    ShellPaletteCatalog catalog;
-    catalog.add("Play/Pause", "Space", PlaybackAction::TogglePause);
-    if (videoActive) {
-      catalog.add("Window mode (framebuffer)", "Ctrl+W",
-                  PlaybackAction::ToggleWindow);
-      catalog.add("Fullscreen", "Alt+Enter",
-                  PlaybackAction::ToggleFullscreen);
-    }
-    if (videoActive || audioPictureInPicture.isOpen() ||
-        audio.source || audio.ready) {
-      catalog.add("Picture-in-Picture", "Ctrl+P",
-                  PlaybackAction::TogglePictureInPicture);
-    }
-    catalog.add("Cycle Radio Filter", "R", PlaybackAction::ToggleRadio);
-    const bool show50Hz = audio.supports50HzToggle;
-    if (show50Hz) {
-      catalog.add("50Hz", "H", PlaybackAction::Toggle50Hz);
-    }
-    if (melodyVisualization.active() || audio.source || audio.ready) {
-      catalog.add(
-          melodyVisualization.active() ? "Hide Pitch Monitor"
-                                       : "Show Pitch Monitor",
-          "M", PlaybackAction::TogglePitchMonitor);
-    }
-    if (!melodyVisualization.active()) {
-      catalog.add("View: Grid", "T",
-                  SetBrowserView{BrowserState::ViewMode::Thumbnails});
-      catalog.add("View: List", "T",
-                  SetBrowserView{BrowserState::ViewMode::ListOnly});
-      catalog.add("View: Preview", "T",
-                  SetBrowserView{BrowserState::ViewMode::ListPreview});
-      const bool selectedEntryHasOptions =
-          selectedOptionsSubject().has_value();
-      if (optionsBrowserIsActive(browser) || selectedEntryHasOptions) {
-        catalog.add("Options", "O", PlaybackAction::ToggleOptions);
-      }
-      if (presentation.currentTarget) {
-        catalog.add("Show Playing File", "", RevealPlayingFile{});
-      }
-    }
-    catalog.add("Quit", "Q", PlaybackAction::Quit);
-    return catalog;
+    context.audioAvailable = audio.source || audio.ready;
+    context.pictureInPictureOpen = audioPictureInPicture.isOpen();
+    context.supports50Hz = audio.supports50HzToggle;
+    context.pitchMonitorActive = melodyVisualization.active();
+    context.optionsAvailable =
+        optionsBrowserIsActive(browser) ||
+        selectedOptionsSubject().has_value();
+    context.currentTargetAvailable =
+        presentation.currentTarget.has_value();
+    return shell_command_catalog::build(context);
   };
 
-  auto dispatchPaletteIntent = [&](const ShellPaletteIntent& intent) {
+  auto dispatchPaletteIntent =
+      [&](const shell_command_catalog::Intent& intent) {
     std::visit(
         [&](const auto& value) {
           using Intent = std::decay_t<decltype(value)>;
           if constexpr (std::is_same_v<Intent, PlaybackAction>) {
             dispatchPlaybackShortcut(value);
-          } else if constexpr (std::is_same_v<Intent, SetBrowserView>) {
+          } else if constexpr (
+              std::is_same_v<Intent,
+                             shell_command_catalog::SetBrowserView>) {
             browser.viewMode = value.mode;
             markLayoutDirty();
-          } else if constexpr (std::is_same_v<Intent,
-                                              RevealPlayingFile>) {
+          } else if constexpr (
+              std::is_same_v<Intent,
+                             shell_command_catalog::RevealPlayingFile>) {
             const PlaybackPresentationModel current =
                 playbackPresenter.model();
             if (current.currentTarget) {
@@ -1550,7 +1494,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         }
       }
       if (commandPalette.active()) {
-        const ShellPaletteCatalog catalog =
+        const shell_command_catalog::Catalog catalog =
             buildCommands();
         tui_command_palette::Bounds paletteBounds;
         paletteBounds.width = width;
@@ -1559,7 +1503,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         const tui_command_palette::Interaction interaction =
             commandPalette.handle(ev, catalog.commands(), paletteBounds);
         if (interaction.activatedCommand) {
-          if (const ShellPaletteIntent* intent =
+          if (const shell_command_catalog::Intent* intent =
                   catalog.intentAt(*interaction.activatedCommand)) {
             dispatchPaletteIntent(*intent);
           }
@@ -2033,7 +1977,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       progressBarWidth = footerResult.progressBarWidth;
 
       if (commandPalette.active()) {
-        const ShellPaletteCatalog catalog =
+        const shell_command_catalog::Catalog catalog =
             buildCommands();
         tui_command_palette::Bounds paletteBounds;
         paletteBounds.width = width;

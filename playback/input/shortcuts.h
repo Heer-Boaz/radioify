@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string_view>
 
 #include "input_event.h"
 #include "playback/input/media_keys.h"
@@ -12,6 +13,22 @@
 #include "shortcut_match.h"
 
 struct PlaybackShortcutBinding {
+  constexpr PlaybackShortcutBinding() = default;
+
+  constexpr PlaybackShortcutBinding(
+      PlaybackAction actionValue, WORD virtualKey, char lowerCharacter,
+      char upperCharacter, DWORD requiredModifiers,
+      DWORD forbiddenModifiers, uint32_t shortcutContexts,
+      std::string_view label = {})
+      : action(actionValue),
+        vk(virtualKey),
+        lower(lowerCharacter),
+        upper(upperCharacter),
+        requiredModifierMask(requiredModifiers),
+        forbiddenModifierMask(forbiddenModifiers),
+        contexts(shortcutContexts),
+        displayLabel(label) {}
+
   PlaybackAction action = PlaybackAction::TogglePause;
   WORD vk = 0;
   char lower = 0;
@@ -19,6 +36,7 @@ struct PlaybackShortcutBinding {
   DWORD requiredModifierMask = 0;
   DWORD forbiddenModifierMask = 0;
   uint32_t contexts = kPlaybackShortcutContextAll;
+  std::string_view displayLabel;
 };
 
 inline constexpr DWORD kPlaybackShortcutCtrlMask = kShortcutCtrlMask;
@@ -75,12 +93,14 @@ inline constexpr DWORD kPlaybackShortcutFrameStepForbiddenMask =
 inline constexpr std::array<PlaybackShortcutBinding, 55>
     kPlaybackShortcutBindings = {{
         {PlaybackAction::Quit, 'Q', 'q', 'Q', kPlaybackShortcutCtrlMask,
-         kPlaybackShortcutChordForbiddenMask, kPlaybackShortcutContextGlobal},
+         kPlaybackShortcutChordForbiddenMask, kPlaybackShortcutContextGlobal,
+         "Ctrl+Q"},
         {PlaybackAction::TogglePictureInPicture, 'P', 'p', 'P',
          kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
          kPlaybackShortcutContextShared |
              kPlaybackShortcutContextPlaybackSession |
-              kPlaybackShortcutContextPictureInPicture},
+              kPlaybackShortcutContextPictureInPicture,
+         "Ctrl+P"},
         {PlaybackAction::CancelVideoEditPrompt, VK_ESCAPE, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoEditExitConfirmation |
@@ -181,7 +201,7 @@ inline constexpr std::array<PlaybackShortcutBinding, 55>
          kPlaybackShortcutContextShared},
         {PlaybackAction::TogglePause, VK_SPACE, ' ', ' ',
          0, kPlaybackShortcutTextForbiddenMask,
-         kPlaybackShortcutContextShared},
+         kPlaybackShortcutContextShared, "Space"},
         {PlaybackAction::TogglePause, VK_MEDIA_PLAY_PAUSE, 0, 0, 0, 0,
          kPlaybackShortcutContextShared},
         {PlaybackAction::Stop, VK_MEDIA_STOP, 0, 0, 0, 0,
@@ -200,17 +220,17 @@ inline constexpr std::array<PlaybackShortcutBinding, 55>
          kPlaybackShortcutChordForbiddenMask, kPlaybackShortcutContextShared},
         {PlaybackAction::ToggleWindow, 'W', 'w', 'W',
          kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
-         kPlaybackShortcutContextShared},
+         kPlaybackShortcutContextShared, "Ctrl+W"},
         {PlaybackAction::ToggleFullscreen, VK_RETURN, 0, 0,
          kPlaybackShortcutAltMask,
          kPlaybackShortcutCtrlMask | kPlaybackShortcutShiftMask,
-         kPlaybackShortcutContextPlaybackSession},
+         kPlaybackShortcutContextPlaybackSession, "Alt+Enter"},
         {PlaybackAction::ToggleRadio, 'R', 'r', 'R', 0,
          kPlaybackShortcutTextForbiddenMask,
-         kPlaybackShortcutContextShared},
+         kPlaybackShortcutContextShared, "R"},
         {PlaybackAction::Toggle50Hz, 'H', 'h', 'H', 0,
          kPlaybackShortcutTextForbiddenMask,
-         kPlaybackShortcutContextShared},
+         kPlaybackShortcutContextShared, "H"},
         {PlaybackAction::ToggleSubtitles, 'S', 's', 'S', 0,
          kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
          kPlaybackShortcutContextShared},
@@ -219,7 +239,7 @@ inline constexpr std::array<PlaybackShortcutBinding, 55>
          kPlaybackShortcutContextShared},
         {PlaybackAction::ToggleOptions, 'O', 'o', 'O', 0,
          kPlaybackShortcutTextForbiddenMask,
-         kPlaybackShortcutContextShared},
+         kPlaybackShortcutContextShared, "O"},
         {PlaybackAction::SeekBackward, VK_OEM_4, '[', '[', 0,
          kPlaybackShortcutSeekForbiddenMask,
          kPlaybackShortcutContextShared},
@@ -252,6 +272,17 @@ inline constexpr std::array<PlaybackShortcutBinding, 55>
          kPlaybackShortcutCtrlMask | kPlaybackShortcutAltMask,
          kPlaybackShortcutContextShared},
     }};
+
+inline constexpr std::string_view playbackActionDisplayLabel(
+    PlaybackAction action) {
+  for (const PlaybackShortcutBinding& binding :
+       kPlaybackShortcutBindings) {
+    if (binding.action == action && !binding.displayLabel.empty()) {
+      return binding.displayLabel;
+    }
+  }
+  return {};
+}
 
 inline std::optional<PlaybackAction> resolvePlaybackAction(
     const KeyEvent& key,

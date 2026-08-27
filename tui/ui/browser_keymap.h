@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <string_view>
 
 #include "input_event.h"
 #include "shortcut_match.h"
@@ -39,6 +40,20 @@ inline constexpr std::uint8_t shortcutContext(ShortcutContext context) {
 }
 
 struct KeyBinding {
+  constexpr KeyBinding(KeyAction actionValue, WORD virtualKey,
+                       char lowerCharacter, char upperCharacter,
+                       DWORD requiredModifiers, DWORD forbiddenModifiers,
+                       std::uint8_t shortcutContexts,
+                       std::string_view label = {})
+      : action(actionValue),
+        vk(virtualKey),
+        lower(lowerCharacter),
+        upper(upperCharacter),
+        requiredModifierMask(requiredModifiers),
+        forbiddenModifierMask(forbiddenModifiers),
+        contexts(shortcutContexts),
+        displayLabel(label) {}
+
   KeyAction action;
   WORD vk = 0;
   char lower = 0;
@@ -46,6 +61,7 @@ struct KeyBinding {
   DWORD requiredModifierMask = 0;
   DWORD forbiddenModifierMask = 0;
   std::uint8_t contexts = 0;
+  std::string_view displayLabel;
 };
 
 inline constexpr std::array<KeyBinding, 17> kKeyBindings = {{
@@ -60,7 +76,7 @@ inline constexpr std::array<KeyBinding, 17> kKeyBindings = {{
      shortcutContext(ShortcutContext::SearchActivation)},
     {KeyAction::TogglePitchMonitor, 'M', 'm', 'M', 0,
      kShortcutTextForbiddenMask,
-     shortcutContext(ShortcutContext::Application)},
+     shortcutContext(ShortcutContext::Application), "M"},
     {KeyAction::ToggleSortDirection, 'S', 's', 'S', kShortcutAltMask,
      kShortcutCtrlMask | kShortcutShiftMask,
      shortcutContext(ShortcutContext::Navigation)},
@@ -76,7 +92,7 @@ inline constexpr std::array<KeyBinding, 17> kKeyBindings = {{
     {KeyAction::ActivateSelection, VK_RETURN, 0, 0, 0, 0,
      shortcutContext(ShortcutContext::Navigation)},
     {KeyAction::CycleView, 'T', 't', 'T', 0, kShortcutTextForbiddenMask,
-     shortcutContext(ShortcutContext::Navigation)},
+     shortcutContext(ShortcutContext::Navigation), "T"},
     {KeyAction::MoveLeft, VK_LEFT, 0, 0, 0, 0,
      shortcutContext(ShortcutContext::Navigation)},
     {KeyAction::MoveRight, VK_RIGHT, 0, 0, 0, 0,
@@ -104,6 +120,15 @@ inline std::optional<KeyAction> resolveKeyAction(const KeyEvent& key,
     }
   }
   return std::nullopt;
+}
+
+inline constexpr std::string_view keyActionDisplayLabel(KeyAction action) {
+  for (const KeyBinding& binding : kKeyBindings) {
+    if (binding.action == action && !binding.displayLabel.empty()) {
+      return binding.displayLabel;
+    }
+  }
+  return {};
 }
 
 }  // namespace browser_input

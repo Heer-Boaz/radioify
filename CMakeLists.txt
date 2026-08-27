@@ -916,6 +916,17 @@ radioify_link_repo_target(command_palette_tests)
 add_test(NAME command_palette_tests
          COMMAND $<TARGET_FILE:command_palette_tests>)
 
+add_executable(shell_command_catalog_tests)
+target_sources(shell_command_catalog_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_shell_command_catalog_tests>
+  ${CMAKE_SOURCE_DIR}/tui/ui/shell_command_catalog.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/command_palette.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/single_line_text_input.cpp
+)
+radioify_link_repo_target(shell_command_catalog_tests)
+add_test(NAME shell_command_catalog_tests
+         COMMAND $<TARGET_FILE:shell_command_catalog_tests>)
+
 add_executable(browser_action_strip_tests)
 target_sources(browser_action_strip_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_browser_action_strip_tests>
