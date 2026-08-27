@@ -3,10 +3,8 @@
 
 #include "app_common.h"
 
-namespace playback_queue {
-class Queue;
-}
+class ApplicationRuntime;
 
-int runTui(Options o, playback_queue::Queue& playbackQueue);
+int runTui(Options o, ApplicationRuntime& runtime);
 
 #endif  // TUI_H

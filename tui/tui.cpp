@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "app_common.h"
+#include "app/application_runtime.h"
 #include "app/media_processing_coordinator.h"
 #include "app/playback_queue.h"
 #include "app/playback_route.h"
@@ -266,7 +267,7 @@ static std::vector<std::filesystem::path> imageFilesFromBrowserEntries(
   return images;
 }
 
-int runTui(Options o, playback_queue::Queue& playbackQueue) {
+int runTui(Options o, ApplicationRuntime& runtime) {
   const ShellOpenMode shellOpenMode = resolveWindowsShellOpenMode(o);
   const bool acceptShellOpenHandoffs =
       shellOpenMode == ShellOpenMode::SameInstance;
@@ -280,30 +281,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     if (!ec) {
       o.input = toUtf8String(absoluteInput);
     }
-  }
-
-  configureFfmpegVideoLog({});
-
-  AudioPlaybackConfig audioConfig;
-  audioConfig.enableAudio = o.enableAudio;
-  audioConfig.enableRadio = o.enableRadio;
-  audioConfig.mono = o.mono;
-  audioConfig.dry = o.dry;
-  audioConfig.radioSettingsPath = o.radioSettingsPath;
-  audioConfig.radioPresetName = o.radioPresetName;
-  audioConfig.radioReceiverProfile = o.radioReceiverProfile;
-  audioConfig.radioReceptionProfile = o.radioReceptionProfile;
-  audioConfig.bwHz = o.bwHz;
-  audioConfig.noise = o.noise;
-
-  if (o.extractSheet) {
-    return runExtractSheetCli(o, audioConfig);
-  }
-  if (o.splitLoop) {
-    return runSplitLoopCli(o);
-  }
-  if (o.renderRadio) {
-    return runRenderRadioCli(o);
   }
 
   ConsoleInput input;
@@ -407,7 +384,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         BrowserContentRequest workerRequest = request;
         if (request.location.kind() == BrowserLocationKind::OptionsBrowser) {
           workerRequest.optionsRuntime = captureOptionsBrowserRuntimeSnapshot(
-              request.location, sampleRate, audioConfig.mono ? 1u : 2u);
+              request.location, sampleRate, o.mono ? 1u : 2u);
         }
         if (!browserContentWorker.submit(preparationId,
                                          std::move(workerRequest))) {
@@ -457,7 +434,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
   }
 
-  AudioPlaybackRuntime audioRuntime(audioConfig);
   PlaybackSystemControls systemControls;
   systemControls.initialize();
   PlaybackNotificationAreaControls notificationAreaControls;
@@ -652,7 +628,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       activateWindowsConsoleWindow();
     }
   };
-  media_processing::Coordinator mediaProcessing;
+  playback_queue::Queue& playbackQueue = runtime.playbackQueue();
+  media_processing::Coordinator& mediaProcessing = runtime.mediaProcessing();
   playback_media_processing::Actions mediaProcessingActions(mediaProcessing);
   MediaTaskPresenter mediaTaskPresenter(mediaProcessing);
   TuiMediaCoordinator mediaCoordinator(
