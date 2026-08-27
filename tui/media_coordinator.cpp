@@ -8,7 +8,6 @@
 #include "audio/audioplayback.h"
 #include "audio/media_formats.h"
 #include "core/path_identity.h"
-#include "core/wakeable_mailbox.h"
 #include "playback/target.h"
 #include "tui/media_activation_plan.h"
 
@@ -137,7 +136,9 @@ struct TuiMediaCoordinator::Impl {
         drainVideoSessionEvents();
       }
     }
-    return PollResult{playbackChanged, events_.drain()};
+    std::vector<Event> events;
+    events.swap(events_);
+    return PollResult{playbackChanged, std::move(events)};
   }
 
   bool videoActive() const { return videoSession_.has_value(); }
@@ -169,14 +170,16 @@ struct TuiMediaCoordinator::Impl {
     std::vector<NativeWaitHandle> handles =
         videoSession_ ? videoSession_->activityWaitHandles()
                       : std::vector<NativeWaitHandle>{};
-    if (NativeWaitHandle eventHandle = events_.nativeWaitHandle()) {
-      handles.push_back(eventHandle);
-    }
     return handles;
   }
 
   wake_schedule::Deadline nextWakeDeadline() const {
-    return videoSession_ ? videoSession_->nextWakeDeadline() : std::nullopt;
+    wake_schedule::Deadline deadline =
+        videoSession_ ? videoSession_->nextWakeDeadline() : std::nullopt;
+    if (!events_.empty()) {
+      wake_schedule::include(deadline, wake_schedule::Clock::now());
+    }
+    return deadline;
   }
 
   bool capturesBrowserInput() const {
@@ -653,7 +656,7 @@ struct TuiMediaCoordinator::Impl {
   }
 
   void publishEvent(Event event) {
-    events_.publish(std::move(event));
+    events_.push_back(std::move(event));
   }
 
   Services services_;
@@ -664,7 +667,9 @@ struct TuiMediaCoordinator::Impl {
   std::optional<Command> handoffCommand_;
   std::optional<playback_session_exit::RequestId> handoffRequestId_;
   std::string commandError_;
-  WakeableMailbox<Event> events_;
+  // Commands and session pumping are owner-thread operations. Keeping their
+  // events as an outbox avoids pretending they are asynchronous wait sources.
+  std::vector<Event> events_;
   bool driving_ = false;
 };
 

@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "asciiart.h"
 #include "asciiart_gpu.h"
@@ -22,7 +23,6 @@
 #include "playback/video/timeline_preview_model.h"
 #include "playback/ascii/frame_output.h"
 #include "playback/ascii/screen_renderer.h"
-#include "core/wakeable_mailbox.h"
 #include "playback/framebuffer/presenter.h"
 #include "playback/debug/lines.h"
 #include "playback/session/osd_timeline.h"
@@ -125,7 +125,10 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   playback_session::VideoEditWorkspace videoEditWorkspace;
   playback_session::ContextMenuController contextMenuController;
   playback_session_exit::ExitCoordinator exitCoordinator;
-  WakeableMailbox<playback_session::Event> events;
+  // Session transitions run on the owner thread and are drained by the
+  // coordinator before it can wait again. Cross-thread activity has separate
+  // native signals and must not publish through this outbox.
+  std::vector<playback_session::Event> events;
   bool exitWhenExportSucceeds = false;
   bool loopStopRequested = false;
   bool initialized = false;
@@ -239,11 +242,10 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       const playback_session_exit::Transition& transition) {
     if (!transition.handled) return false;
     if (transition.handoffRequest) {
-      events.publish(playback_session::Event{*transition.handoffRequest});
+      events.emplace_back(*transition.handoffRequest);
     }
     if (transition.handoffCancellation) {
-      events.publish(
-          playback_session::Event{*transition.handoffCancellation});
+      events.emplace_back(*transition.handoffCancellation);
     }
     if (transition.resumePlayback) {
       playback_session_input::setPlaybackPaused(*this, seekState, false);
@@ -922,9 +924,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
 
   void activateBrowser() {
     if (capabilities.browserSurfaceActivation) {
-      events.publish(
-          playback_session::Event{
-              playback_session::BrowserSurfaceActivationRequested{}});
+      events.emplace_back(
+          playback_session::BrowserSurfaceActivationRequested{});
     } else {
       activateWindowsConsoleWindow();
     }
@@ -1380,7 +1381,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
 
   std::vector<NativeWaitHandle> activityWaitHandles() const {
     std::vector<NativeWaitHandle> handles;
-    handles.reserve(7);
+    handles.reserve(5);
     const auto append = [&](NativeWaitHandle handle) {
       if (handle) handles.push_back(handle);
     };
@@ -1394,7 +1395,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       append(timelinePreviewProvider.changedWaitHandle());
     }
     append(videoEditWorkspace.waitHandle());
-    append(events.nativeWaitHandle());
     return handles;
   }
 
@@ -1522,7 +1522,9 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   std::vector<playback_session::Event> drainEvents() {
-    return events.drain();
+    std::vector<playback_session::Event> drained;
+    drained.swap(events);
+    return drained;
   }
 
   void requestStop() {

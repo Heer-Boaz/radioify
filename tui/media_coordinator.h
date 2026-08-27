@@ -70,7 +70,7 @@ class TuiMediaCoordinator {
     playback_queue::Queue& queue;
     playback_media_processing::Actions mediaProcessingActions;
     PlaybackSession::Dependencies sessionDependencies;
-    const VideoPlaybackConfig& videoConfig;
+    VideoPlaybackConfig videoConfig;
   };
 
   explicit TuiMediaCoordinator(Services services);
