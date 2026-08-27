@@ -8,8 +8,8 @@
 #include "audio/audioplayback.h"
 #include "audio/media_formats.h"
 #include "core/path_identity.h"
+#include "core/wakeable_mailbox.h"
 #include "playback/target.h"
-#include "tui/image_viewer.h"
 #include "tui/media_activation_plan.h"
 
 namespace {
@@ -120,16 +120,17 @@ struct TuiMediaCoordinator::Impl {
     return submit(PreparedPlayback{std::move(*activation)});
   }
 
-  bool pump() {
+  PollResult poll() {
+    bool playbackChanged = false;
     if (videoSession_) {
       if (std::optional<PlaybackSessionCompletion> completion =
               videoSession_->pump()) {
         finishVideoSession(std::move(*completion));
         drainPendingCommands();
-        return true;
+        playbackChanged = true;
       }
     }
-    return false;
+    return PollResult{playbackChanged, events_.drain()};
   }
 
   bool videoActive() const { return videoSession_.has_value(); }
@@ -158,8 +159,13 @@ struct TuiMediaCoordinator::Impl {
   }
 
   std::vector<NativeWaitHandle> waitHandles() const {
-    return videoSession_ ? videoSession_->activityWaitHandles()
-                         : std::vector<NativeWaitHandle>{};
+    std::vector<NativeWaitHandle> handles =
+        videoSession_ ? videoSession_->activityWaitHandles()
+                      : std::vector<NativeWaitHandle>{};
+    if (NativeWaitHandle eventHandle = events_.nativeWaitHandle()) {
+      handles.push_back(eventHandle);
+    }
+    return handles;
   }
 
   wake_schedule::Deadline nextWakeDeadline() const {
@@ -255,8 +261,8 @@ struct TuiMediaCoordinator::Impl {
   void requestQuit() {
     if (videoSession_) {
       videoSession_->requestQuit();
-    } else if (services_.callbacks.requestQuit) {
-      services_.callbacks.requestQuit();
+    } else {
+      publishEvent(QuitRequested{});
     }
   }
 
@@ -437,17 +443,14 @@ struct TuiMediaCoordinator::Impl {
     if (route.videoContinuation) {
       continuationState_ = *route.videoContinuation;
     }
-    if (services_.callbacks.applyAudioPictureInPicturePlan) {
-      services_.callbacks.applyAudioPictureInPicturePlan(
-          route.audioPictureInPicture);
-    }
+    publishEvent(ApplyAudioPictureInPicture{route.audioPictureInPicture});
 
     const PlaybackTarget target = route.target;
     const std::filesystem::path& targetFile = playbackTargetFile(target);
     if (const std::optional<int> trackIndex =
             playbackTargetTrackIndex(target)) {
-      if (!services_.callbacks.startAudio ||
-          !services_.callbacks.startAudio(targetFile, *trackIndex)) {
+      if (!services_.audioPlayback.startFile(targetFile, *trackIndex)) {
+        publishEvent(AudioPlaybackFailed{targetFile});
         return MediaCommandResult::rejected(
             {MediaCommandFailureKind::PlaybackFailed, {}});
       }
@@ -460,8 +463,8 @@ struct TuiMediaCoordinator::Impl {
            "The image request did not contain an image sequence."});
     }
     if (!isSupportedVideoExt(targetFile)) {
-      if (!services_.callbacks.startAudio ||
-          !services_.callbacks.startAudio(targetFile, 0)) {
+      if (!services_.audioPlayback.startFile(targetFile, 0)) {
+        publishEvent(AudioPlaybackFailed{targetFile});
         return MediaCommandResult::rejected(
             {MediaCommandFailureKind::PlaybackFailed, {}});
       }
@@ -494,7 +497,7 @@ struct TuiMediaCoordinator::Impl {
     sessionRequest.requestOpenFiles = std::move(requestDroppedFiles);
     sessionRequest.mediaProcessingActions = services_.mediaProcessingActions;
     sessionRequest.activateBrowserSurface =
-        services_.callbacks.activateBrowserSurface;
+        [this]() { publishEvent(ActivateBrowserSurface{}); };
     videoSession_.emplace(std::move(sessionRequest),
                           services_.sessionDependencies);
 
@@ -507,8 +510,8 @@ struct TuiMediaCoordinator::Impl {
     }
     if (openOutcome == PlaybackSessionOpenOutcome::AudioFallbackRequested) {
       videoSession_.reset();
-      if (!services_.callbacks.startAudio ||
-          !services_.callbacks.startAudio(targetFile, 0)) {
+      if (!services_.audioPlayback.startFile(targetFile, 0)) {
+        publishEvent(AudioPlaybackFailed{targetFile});
         return MediaCommandResult::rejected(
             {MediaCommandFailureKind::PlaybackFailed, {}});
       }
@@ -542,22 +545,8 @@ struct TuiMediaCoordinator::Impl {
   }
 
   MediaCommandResult dispatch(tui_media_activation::ShowImages image) {
-    if (services_.callbacks.applyAudioPictureInPicturePlan) {
-      services_.callbacks.applyAudioPictureInPicturePlan(
-          image.route.audioPictureInPicture);
-    }
-    const PlaybackSession::Dependencies& dependencies =
-        services_.sessionDependencies;
-    const image_viewer::Exit exit = image_viewer::run(
-        std::move(image.sequence), dependencies.input, dependencies.screen,
-        dependencies.appearance.baseStyle,
-        dependencies.appearance.accentStyle,
-        dependencies.appearance.dimStyle, services_.openFileRequests,
-        [this](const OpenFilesRequest& request) {
-          return enqueueOpenFiles(request).accepted();
-        });
-    if (exit == image_viewer::Exit::QuitRequested) enqueueQuit();
-    presentationFinished();
+    publishEvent(ShowImages{image.route.audioPictureInPicture,
+                            std::move(image.sequence)});
     return MediaCommandResult::applied();
   }
 
@@ -573,7 +562,7 @@ struct TuiMediaCoordinator::Impl {
   }
 
   MediaCommandResult dispatch(Quit) {
-    if (services_.callbacks.requestQuit) services_.callbacks.requestQuit();
+    publishEvent(QuitRequested{});
     return MediaCommandResult::applied();
   }
 
@@ -598,21 +587,24 @@ struct TuiMediaCoordinator::Impl {
   void publishFailure(const MediaCommandResult& result) {
     const MediaCommandFailure* failure = result.failure();
     if (failure && !failure->message.empty() &&
-        services_.callbacks.setCommandError) {
-      services_.callbacks.setCommandError(failure->message);
+        failure->message != commandError_) {
+      commandError_ = failure->message;
+      publishEvent(CommandErrorChanged{commandError_});
     }
   }
 
   void clearCommandError() {
-    if (services_.callbacks.setCommandError) {
-      services_.callbacks.setCommandError({});
-    }
+    if (commandError_.empty()) return;
+    commandError_.clear();
+    publishEvent(CommandErrorChanged{});
   }
 
   void presentationFinished() {
-    if (services_.callbacks.presentationFinished) {
-      services_.callbacks.presentationFinished();
-    }
+    publishEvent(PresentationFinished{});
+  }
+
+  void publishEvent(Event event) {
+    events_.publish(std::move(event));
   }
 
   Services services_;
@@ -621,6 +613,8 @@ struct TuiMediaCoordinator::Impl {
   std::optional<PlaybackTarget> videoTarget_;
   std::optional<Command> pendingCommand_;
   std::optional<Command> handoffCommand_;
+  std::string commandError_;
+  WakeableMailbox<Event> events_;
   bool driving_ = false;
 };
 
@@ -652,8 +646,8 @@ bool TuiMediaCoordinator::openFiles(const OpenFilesRequest& request) {
   return impl_->openFiles(request).accepted();
 }
 
-bool TuiMediaCoordinator::pump() {
-  return impl_->pump();
+TuiMediaCoordinator::PollResult TuiMediaCoordinator::poll() {
+  return impl_->poll();
 }
 
 void TuiMediaCoordinator::handleMediaTaskCompletion(

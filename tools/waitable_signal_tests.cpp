@@ -3,8 +3,10 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <vector>
 
 #include "core/wake_event.h"
+#include "core/wakeable_mailbox.h"
 #include "core/waitable_signal.h"
 
 namespace {
@@ -59,6 +61,27 @@ int main() {
                  "only the event owner must consume a fanned-in wake");
   }
   expiredNotifier.notify();
+
+  WakeableMailbox<int> mailbox;
+  ok &= expect(WaitForSingleObject(
+                   static_cast<HANDLE>(mailbox.nativeWaitHandle().get()), 0) ==
+                   WAIT_TIMEOUT,
+               "a new mailbox must start unsignaled");
+  mailbox.publish(17);
+  mailbox.publish(23);
+  ok &= expect(WaitForSingleObject(
+                   static_cast<HANDLE>(mailbox.nativeWaitHandle().get()), 0) ==
+                   WAIT_OBJECT_0,
+               "publishing must wake the mailbox owner");
+  const std::vector<int> messages = mailbox.drain();
+  ok &= expect(messages == std::vector<int>({17, 23}),
+               "drain must preserve publication order");
+  ok &= expect(WaitForSingleObject(
+                   static_cast<HANDLE>(mailbox.nativeWaitHandle().get()), 0) ==
+                   WAIT_TIMEOUT,
+               "drain must reset the mailbox wake event");
+  ok &= expect(mailbox.drain().empty(),
+               "draining an empty mailbox must return an empty batch");
 
   return ok ? 0 : 1;
 }

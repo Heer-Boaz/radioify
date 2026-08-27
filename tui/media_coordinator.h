@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "app/playback_queue.h"
@@ -17,6 +18,7 @@
 #include "playback/media_processing_actions.h"
 #include "playback/session/session.h"
 #include "playback/target.h"
+#include "tui/image_viewer_sequence.h"
 
 struct InputEvent;
 class AudioPlaybackRuntime;
@@ -34,15 +36,36 @@ class TuiMediaCoordinator {
     PlaybackPresentationState presentation;
   };
 
+  struct ApplyAudioPictureInPicture {
+    playback_route::AudioPictureInPicturePlan plan =
+        playback_route::AudioPictureInPicturePlan::Keep;
+  };
+  struct CommandErrorChanged {
+    std::string message;
+  };
+  struct AudioPlaybackFailed {
+    std::filesystem::path file;
+  };
+  struct ShowImages {
+    playback_route::AudioPictureInPicturePlan audioPictureInPicture =
+        playback_route::AudioPictureInPicturePlan::Keep;
+    image_viewer_sequence::Sequence sequence;
+  };
+  struct QuitRequested {};
+  struct PresentationFinished {};
+  struct ActivateBrowserSurface {};
+
+  using Event = std::variant<ApplyAudioPictureInPicture, CommandErrorChanged,
+                             AudioPlaybackFailed, ShowImages, QuitRequested,
+                             PresentationFinished, ActivateBrowserSurface>;
+
+  struct PollResult {
+    bool playbackChanged = false;
+    std::vector<Event> events;
+  };
+
   struct Callbacks {
-    std::function<bool(const std::filesystem::path&, int)> startAudio;
-    std::function<void(playback_route::AudioPictureInPicturePlan)>
-        applyAudioPictureInPicturePlan;
     std::function<bool(const std::filesystem::path&)> openBrowserDirectory;
-    std::function<void(std::string)> setCommandError;
-    std::function<void()> requestQuit;
-    std::function<void()> presentationFinished;
-    std::function<void()> activateBrowserSurface;
   };
 
   struct Services {
@@ -51,7 +74,6 @@ class TuiMediaCoordinator {
     playback_media_processing::Actions mediaProcessingActions;
     PlaybackSession::Dependencies sessionDependencies;
     const VideoPlaybackConfig& videoConfig;
-    OpenFileRequests& openFileRequests;
     Callbacks callbacks;
   };
 
@@ -70,7 +92,7 @@ class TuiMediaCoordinator {
       const WindowPlacementState* sourcePlacement,
       std::optional<PlaybackPresentationState> videoPresentation);
   bool openFiles(const OpenFilesRequest& request);
-  bool pump();
+  PollResult poll();
   void handleMediaTaskCompletion(
       const media_processing::TaskCompletion& completion,
       std::string presentationStatus);

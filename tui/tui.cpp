@@ -24,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -59,6 +60,7 @@
 #include "core/windows_console_window.h"
 #include "core/windows_shell_open.h"
 #include "media_coordinator.h"
+#include "image_viewer.h"
 #include "playback_presenter.h"
 #include "m4adecoder.h"
 #include "miniaudio.h"
@@ -512,15 +514,6 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         detail, "Enter/Space/Esc: close");
   };
 
-  auto tryStartAudioFile = [&](const std::filesystem::path& file,
-                               int trackIndex = 0) {
-    if (audioPlayback.startFile(file, trackIndex)) {
-      return true;
-    }
-    showPlaybackErrorDialog(file);
-    return false;
-  };
-
   if (!o.input.empty() && o.play) {
     std::filesystem::path inputPath = pathFromUtf8String(o.input);
     if (std::filesystem::exists(inputPath)) {
@@ -610,35 +603,69 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   PlaybackSession::Dependencies mediaSessionDependencies{
       input, screen, theme.playbackSessionAppearance()};
   TuiMediaCoordinator::Callbacks mediaCallbacks;
-  mediaCallbacks.startAudio =
-      [&](const std::filesystem::path& file, int trackIndex) {
-        return tryStartAudioFile(file, trackIndex);
-      };
-  mediaCallbacks.applyAudioPictureInPicturePlan =
-      applyAudioPictureInPicturePlan;
   mediaCallbacks.openBrowserDirectory = openBrowserDirectory;
-  mediaCallbacks.setCommandError = [&](std::string error) {
-    mediaCommandError = std::move(error);
-    markDirty(UiDirtyFlags::Async);
-  };
-  mediaCallbacks.requestQuit = [&]() { running = false; };
-  mediaCallbacks.presentationFinished = [&]() { markDirty(); };
-  mediaCallbacks.activateBrowserSurface = [&]() {
-    if (windowTuiEnabled && tuiWindow.IsOpen()) {
-      tuiWindow.Activate();
-    } else {
-      activateWindowsConsoleWindow();
-    }
-  };
   playback_queue::Queue& playbackQueue = runtime.playbackQueue();
   media_processing::Coordinator& mediaProcessing = runtime.mediaProcessing();
   playback_media_processing::Actions mediaProcessingActions(mediaProcessing);
   MediaTaskPresenter mediaTaskPresenter(mediaProcessing);
   TuiMediaCoordinator mediaCoordinator(
       {audioPlayback, playbackQueue, mediaProcessingActions,
-       mediaSessionDependencies,
-       videoConfig, openFileRequests, std::move(mediaCallbacks)});
+       mediaSessionDependencies, videoConfig, std::move(mediaCallbacks)});
   TuiPlaybackPresenter playbackPresenter(mediaCoordinator, audioPlayback);
+  auto handleMediaCoordinatorEvent =
+      [&](TuiMediaCoordinator::Event event) {
+    std::visit(
+        [&](auto&& value) {
+          using Event = std::decay_t<decltype(value)>;
+          if constexpr (std::is_same_v<
+                            Event,
+                            TuiMediaCoordinator::ApplyAudioPictureInPicture>) {
+            applyAudioPictureInPicturePlan(value.plan);
+          } else if constexpr (
+              std::is_same_v<Event,
+                             TuiMediaCoordinator::CommandErrorChanged>) {
+            mediaCommandError = value.message;
+            markDirty(UiDirtyFlags::Async);
+          } else if constexpr (
+              std::is_same_v<Event,
+                             TuiMediaCoordinator::AudioPlaybackFailed>) {
+            showPlaybackErrorDialog(value.file);
+          } else if constexpr (
+              std::is_same_v<Event, TuiMediaCoordinator::ShowImages>) {
+            applyAudioPictureInPicturePlan(value.audioPictureInPicture);
+            std::optional<OpenFilesRequest> deferredOpenRequest;
+            const image_viewer::Exit exit = image_viewer::run(
+                std::move(value.sequence), input, screen, theme.normal,
+                theme.accent, theme.dim, openFileRequests,
+                [&](const OpenFilesRequest& request) {
+                  deferredOpenRequest = request;
+                  return true;
+                });
+            if (exit == image_viewer::Exit::QuitRequested) {
+              mediaCoordinator.requestQuit();
+            } else if (deferredOpenRequest) {
+              mediaCoordinator.openFiles(*deferredOpenRequest);
+            }
+            markDirty();
+          } else if constexpr (
+              std::is_same_v<Event, TuiMediaCoordinator::QuitRequested>) {
+            running = false;
+          } else if constexpr (
+              std::is_same_v<Event,
+                             TuiMediaCoordinator::PresentationFinished>) {
+            markDirty();
+          } else if constexpr (
+              std::is_same_v<Event,
+                             TuiMediaCoordinator::ActivateBrowserSurface>) {
+            if (windowTuiEnabled && tuiWindow.IsOpen()) {
+              tuiWindow.Activate();
+            } else {
+              activateWindowsConsoleWindow();
+            }
+          }
+        },
+        event);
+  };
   auto mediaWaitHandles = [&]() {
     std::vector<NativeWaitHandle> handles = mediaCoordinator.waitHandles();
     if (NativeWaitHandle taskWake = mediaProcessing.waitHandle()) {
@@ -1271,7 +1298,10 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   PlaybackShellTerminalRole previousTerminalRole =
       mediaCoordinator.terminalRole();
   while (running) {
-    const bool playbackChanged = mediaCoordinator.pump();
+    TuiMediaCoordinator::PollResult mediaUpdate = mediaCoordinator.poll();
+    for (TuiMediaCoordinator::Event& event : mediaUpdate.events) {
+      handleMediaCoordinatorEvent(std::move(event));
+    }
     media_processing::PollResult taskUpdate = mediaProcessing.poll();
     for (const media_processing::TaskCompletion& completion :
          taskUpdate.completions) {
@@ -1280,7 +1310,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
     if (!taskUpdate.completions.empty()) {
       markLayoutDirty();
-    } else if (playbackChanged || taskUpdate.changed) {
+    } else if (mediaUpdate.playbackChanged || taskUpdate.changed) {
       markDirty(UiDirtyFlags::Async);
     }
     if (!running) break;
