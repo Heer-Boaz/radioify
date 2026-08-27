@@ -755,25 +755,25 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     browser_action_strip::Input stripInput;
     playback_overlay::PlaybackOverlayState actionOverlayState;
     const std::filesystem::path nowPlaying = currentPlaybackFile();
-    const std::optional<PlaybackControlState> videoControlState =
-        mediaCoordinator.videoControlState();
-    const bool videoActive = videoControlState.has_value();
+    const std::optional<PlaybackControlState> controlState =
+        mediaCoordinator.playbackControlState();
+    const bool videoActive = controlState && controlState->isVideo;
     actionOverlayState.audioOk = videoActive || audioIsReady();
     actionOverlayState.playPauseAvailable = actionOverlayState.audioOk;
     actionOverlayState.audioSupports50HzToggle =
         audioIsReady() && audioSupports50HzToggle();
     actionOverlayState.canPlayPrevious =
-        videoActive ? videoControlState->canPrevious
-                    : actionOverlayState.audioOk || !nowPlaying.empty();
+        controlState ? controlState->canPrevious
+                     : actionOverlayState.audioOk || !nowPlaying.empty();
     actionOverlayState.canPlayNext =
-        videoActive ? videoControlState->canNext
-                    : actionOverlayState.audioOk || !nowPlaying.empty();
+        controlState ? controlState->canNext
+                     : actionOverlayState.audioOk || !nowPlaying.empty();
     actionOverlayState.radioEnabled = audioIsRadioEnabled();
     actionOverlayState.radioLabel = std::string(audioGetRadioFilterLabel());
     actionOverlayState.hz50Enabled = audioIs50HzEnabled();
     actionOverlayState.paused =
-        videoActive
-            ? videoControlState->status != PlaybackControlStatus::Playing
+        controlState
+            ? controlState->status != PlaybackControlStatus::Playing
             : audioIsPaused() || audioIsFinished();
     actionOverlayState.pictureInPictureAvailable =
         videoActive || audioPictureInPicture.isOpen() ||
@@ -1175,45 +1175,9 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     activateWindowsConsoleWindow();
   };
 
-  auto buildAudioControlState = [&]()
-      -> std::optional<PlaybackControlState> {
-    std::filesystem::path nowPlaying = audioGetNowPlaying();
-    if (nowPlaying.empty()) {
-      return std::nullopt;
-    }
-
-    PlaybackTarget target = playbackFileTarget(nowPlaying);
-    if (const std::optional<PlaybackTarget> trackTarget =
-            playbackTrackTarget(nowPlaying, audioGetTrackIndex())) {
-      target = *trackTarget;
-    }
-    PlaybackControlState state(std::move(target), false);
-    state.positionSec = audioGetTimeSec();
-    const double durationSec = audioGetTotalSec();
-    if (std::isfinite(durationSec) && durationSec > 0.0) {
-      state.durationSec = durationSec;
-    }
-    state.canPlay = true;
-    state.canPause = true;
-    state.canStop = true;
-    state.canPrevious = true;
-    state.canNext = true;
-    if (audioIsFinished()) {
-      state.status = PlaybackControlStatus::Stopped;
-    } else if (audioIsPaused()) {
-      state.status = PlaybackControlStatus::Paused;
-    } else {
-      state.status = PlaybackControlStatus::Playing;
-    }
-    return state;
-  };
-
   auto syncShellControls = [&]() {
     std::optional<PlaybackControlState> state =
-        mediaCoordinator.videoControlState();
-    if (!state) {
-      state = buildAudioControlState();
-    }
+        mediaCoordinator.playbackControlState();
     if (!state) {
       systemControls.clear();
       notificationAreaControls.clear();
@@ -2124,15 +2088,15 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         line++;
       }
 
-      const std::optional<PlaybackControlState> videoControlState =
-          mediaCoordinator.videoControlState();
-      const bool videoActive = videoControlState.has_value();
+      const std::optional<PlaybackControlState> controlState =
+          mediaCoordinator.playbackControlState();
+      const bool videoActive = controlState && controlState->isVideo;
       bool audioReady = audioIsReady();
-      double currentSec = videoActive
-                              ? videoControlState->positionSec
+      double currentSec = controlState
+                              ? controlState->positionSec
                               : (audioReady ? audioGetTimeSec() : 0.0);
-      double totalSec = videoActive
-                            ? videoControlState->durationSec.value_or(-1.0)
+      double totalSec = controlState
+                            ? controlState->durationSec.value_or(-1.0)
                             : (audioReady ? audioGetTotalSec() : -1.0);
       double displaySec = currentSec;
       if (!videoActive && audioReady && audioIsSeeking()) {

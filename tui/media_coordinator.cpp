@@ -1,5 +1,6 @@
 #include "tui/media_coordinator.h"
 
+#include <cmath>
 #include <cstdint>
 #include <utility>
 #include <variant>
@@ -136,8 +137,7 @@ struct TuiMediaCoordinator::Impl {
                          : PlaybackShellTerminalRole::Browser;
   }
 
-  std::optional<PlaybackTarget> currentPlaybackTarget() const {
-    if (videoTarget_) return *videoTarget_;
+  std::optional<PlaybackTarget> audioPlaybackTarget() const {
     const std::filesystem::path file = audioGetNowPlaying();
     if (file.empty()) return std::nullopt;
     const int trackIndex = audioGetTrackIndex();
@@ -150,6 +150,10 @@ struct TuiMediaCoordinator::Impl {
     return playbackFileTarget(file);
   }
 
+  std::optional<PlaybackTarget> currentPlaybackTarget() const {
+    return videoTarget_ ? videoTarget_ : audioPlaybackTarget();
+  }
+
   std::vector<NativeWaitHandle> activityWaitHandles() const {
     return videoSession_ ? videoSession_->activityWaitHandles()
                          : std::vector<NativeWaitHandle>{};
@@ -159,11 +163,31 @@ struct TuiMediaCoordinator::Impl {
     return videoSession_ ? videoSession_->nextWakeTimeoutMs() : 250;
   }
 
-  std::optional<PlaybackControlState> videoControlState() const {
-    return videoSession_
-               ? std::optional<PlaybackControlState>(
-                     videoSession_->controlState())
-               : std::nullopt;
+  std::optional<PlaybackControlState> playbackControlState() const {
+    if (videoSession_) return videoSession_->controlState();
+
+    std::optional<PlaybackTarget> target = audioPlaybackTarget();
+    if (!target) return std::nullopt;
+
+    PlaybackControlState state(std::move(*target), false);
+    state.positionSec = audioGetTimeSec();
+    const double durationSec = audioGetTotalSec();
+    if (std::isfinite(durationSec) && durationSec > 0.0) {
+      state.durationSec = durationSec;
+    }
+    state.canPlay = true;
+    state.canPause = true;
+    state.canStop = true;
+    state.canPrevious = true;
+    state.canNext = true;
+    if (audioIsFinished()) {
+      state.status = PlaybackControlStatus::Stopped;
+    } else if (audioIsPaused()) {
+      state.status = PlaybackControlStatus::Paused;
+    } else {
+      state.status = PlaybackControlStatus::Playing;
+    }
+    return state;
   }
 
   std::optional<PlaybackPresentationState> videoPresentationState() const {
@@ -657,8 +681,8 @@ int TuiMediaCoordinator::nextWakeTimeoutMs() const {
 }
 
 std::optional<PlaybackControlState>
-TuiMediaCoordinator::videoControlState() const {
-  return impl_->videoControlState();
+TuiMediaCoordinator::playbackControlState() const {
+  return impl_->playbackControlState();
 }
 
 std::optional<PlaybackPresentationState>

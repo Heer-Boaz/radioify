@@ -71,7 +71,7 @@ class TuiMediaCoordinator {
   std::optional<PlaybackTarget> currentPlaybackTarget() const;
   std::vector<NativeWaitHandle> activityWaitHandles() const;
   int nextWakeTimeoutMs() const;
-  std::optional<PlaybackControlState> videoControlState() const;
+  std::optional<PlaybackControlState> playbackControlState() const;
   std::optional<PlaybackPresentationState> videoPresentationState() const;
   bool capturesBrowserInput() const;
 
