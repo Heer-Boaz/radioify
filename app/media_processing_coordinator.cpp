@@ -359,7 +359,25 @@ bool Coordinator::tryStartLoopSplit(
   return started;
 }
 
-bool Coordinator::tryStartSubtitleGeneration(
+playback_media_processing::SourceState Coordinator::sourceStateFor(
+    const std::filesystem::path& sourceFile) const {
+  playback_media_processing::SourceState state;
+  const std::optional<TaskActivity> currentActivity = activity();
+  state.backgroundTaskRunning = currentActivity.has_value();
+  if (currentActivity &&
+      samePath(currentActivity->sourceFile, sourceFile)) {
+    state.subtitleGenerationRunning =
+        currentActivity->kind == TaskKind::SubtitleGeneration;
+    state.audioSeparationRunning =
+        currentActivity->kind == TaskKind::AudioSeparation;
+  }
+  state.audioSeparationAvailable =
+      audioSeparationAvailableFor(sourceFile);
+  state.separatedAudioExists = hasSeparatedAudioFor(sourceFile);
+  return state;
+}
+
+bool Coordinator::requestSubtitles(
     const std::filesystem::path& sourceFile) {
   if (!impl_ || !impl_->subtitles || !isSupportedVideoExt(sourceFile) ||
       running() || impl_->completionPending() ||
@@ -371,7 +389,7 @@ bool Coordinator::tryStartSubtitleGeneration(
   return true;
 }
 
-bool Coordinator::tryStartAudioSeparation(
+bool Coordinator::requestAudioSeparation(
     const std::filesystem::path& sourceFile) {
   if (!audioSeparationAvailableFor(sourceFile) || running() ||
       impl_->completionPending() ||
@@ -411,11 +429,11 @@ bool Coordinator::hasSeparatedAudioFor(
   return audio_separation::artifactsExistFor(sourceFile);
 }
 
-bool Coordinator::cancelSubtitleGeneration() {
+bool Coordinator::requestSubtitleCancellation() {
   return impl_ && impl_->subtitles && impl_->subtitles->requestCancel();
 }
 
-bool Coordinator::cancelAudioSeparation() {
+bool Coordinator::requestAudioSeparationCancellation() {
   return impl_ && impl_->audioSeparation &&
          impl_->audioSeparation->requestCancel();
 }
@@ -423,11 +441,11 @@ bool Coordinator::cancelAudioSeparation() {
 bool Coordinator::cancelActive() {
   if (!impl_) return false;
   if (impl_->subtitles && impl_->subtitles->snapshot().running()) {
-    return cancelSubtitleGeneration();
+    return requestSubtitleCancellation();
   }
   if (impl_->audioSeparation &&
       impl_->audioSeparation->snapshot().running()) {
-    return cancelAudioSeparation();
+    return requestAudioSeparationCancellation();
   }
   return false;
 }

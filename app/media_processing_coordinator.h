@@ -11,6 +11,7 @@
 #include "audio/loopsplit/loopsplit.h"
 #include "audio/separation/job.h"
 #include "core/native_wait_handle.h"
+#include "playback/media_processing_service.h"
 #include "playback/video/transcript/generation_job.h"
 
 namespace media_processing {
@@ -55,7 +56,7 @@ struct PollResult {
 // Application-level owner of Radioify's mutually-exclusive, offline media
 // processing. UI surfaces observe one common activity/completion contract
 // instead of understanding every worker's lifecycle and synchronization.
-class Coordinator {
+class Coordinator final : public playback_media_processing::Service {
  public:
   using MelodyProgressReporter = std::function<void(float)>;
   using MelodyOperation = std::function<bool(
@@ -80,7 +81,7 @@ class Coordinator {
   // The operation boundary keeps lifecycle and presentation tests independent
   // from heavyweight media/GPU backends.
   explicit Coordinator(Operations operations);
-  ~Coordinator();
+  ~Coordinator() override;
 
   Coordinator(const Coordinator&) = delete;
   Coordinator& operator=(const Coordinator&) = delete;
@@ -96,8 +97,15 @@ class Coordinator {
                          const std::filesystem::path& stingerOutput,
                          const std::filesystem::path& loopOutput,
                          const LoopSplitConfig& config);
-  bool tryStartSubtitleGeneration(const std::filesystem::path& sourceFile);
-  bool tryStartAudioSeparation(const std::filesystem::path& sourceFile);
+
+  playback_media_processing::SourceState sourceStateFor(
+      const std::filesystem::path& sourceFile) const override;
+  bool requestSubtitles(
+      const std::filesystem::path& sourceFile) override;
+  bool requestSubtitleCancellation() override;
+  bool requestAudioSeparation(
+      const std::filesystem::path& sourceFile) override;
+  bool requestAudioSeparationCancellation() override;
 
   bool subtitleGenerationRunningFor(
       const std::filesystem::path& sourceFile) const;
@@ -107,8 +115,6 @@ class Coordinator {
       const std::filesystem::path& sourceFile) const;
   bool hasSeparatedAudioFor(const std::filesystem::path& sourceFile) const;
 
-  bool cancelSubtitleGeneration();
-  bool cancelAudioSeparation();
   bool cancelActive();
 
   PollResult poll();

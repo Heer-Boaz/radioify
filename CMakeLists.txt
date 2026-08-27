@@ -1011,7 +1011,6 @@ target_sources(media_processing_coordinator_tests PRIVATE
   $<TARGET_OBJECTS:radioify_video_sidecar_identity>
   $<TARGET_OBJECTS:radioify_transcript_artifact>
   ${CMAKE_SOURCE_DIR}/app/media_processing_coordinator.cpp
-  ${CMAKE_SOURCE_DIR}/app/media_processing_playback_service.cpp
   ${CMAKE_SOURCE_DIR}/playback/media_processing_actions.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/media_task_presentation.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/transcript/generation_job.cpp

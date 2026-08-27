@@ -55,7 +55,6 @@
 #include "core/windows_shell_open.h"
 #include "media_coordinator.h"
 #include "media_processing_coordinator.h"
-#include "app/media_processing_playback_service.h"
 #include "m4adecoder.h"
 #include "miniaudio.h"
 #include "optionsbrowser.h"
@@ -624,15 +623,14 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       browserNavigator, std::move(browserPlaybackCallbacks));
 
   media_processing::Coordinator mediaTasks;
-  media_processing::PlaybackService mediaTaskPlaybackService(
-      mediaTasks, [&]() {
-        markLayoutDirty();
-        markDirty(UiDirtyFlags::Async);
-      });
-  playback_media_processing::Actions mediaProcessingActions(
-      mediaTaskPlaybackService);
+  playback_media_processing::Actions mediaProcessingActions(mediaTasks);
   auto cancelActiveMediaTask = [&]() {
-    return mediaTaskPlaybackService.requestActiveCancellation();
+    const bool accepted = mediaTasks.cancelActive();
+    if (accepted) {
+      markLayoutDirty();
+      markDirty(UiDirtyFlags::Async);
+    }
+    return accepted;
   };
 
   std::string mediaCommandError;

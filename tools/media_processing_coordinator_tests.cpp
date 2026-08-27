@@ -1,5 +1,4 @@
 #include "app/media_processing_coordinator.h"
-#include "app/media_processing_playback_service.h"
 #include "playback/media_processing_actions.h"
 #include "tui/ui/media_task_presentation.h"
 
@@ -109,10 +108,7 @@ int main() {
   operations.audioSeparationAvailable = true;
   processing::Coordinator coordinator(std::move(operations));
 
-  int playbackStateChanges = 0;
-  processing::PlaybackService playbackService(
-      coordinator, [&]() { ++playbackStateChanges; });
-  playback_media_processing::Actions playbackActions(playbackService);
+  playback_media_processing::Actions playbackActions(coordinator);
   const std::optional<playback_media_processing::ActionResult>
       unsupportedAction =
       playbackActions.execute(playback_media_actions::Action::EditVideo,
@@ -171,7 +167,6 @@ int main() {
   ok &= expect(subtitleStart && subtitleStart->accepted &&
                    subtitleStart->feedback ==
                        "Generating subtitles (F8 to cancel)" &&
-                   playbackStateChanges == 1 &&
                    waitUntil([&]() {
                      return subtitlesStarted.load(std::memory_order_acquire);
                    }) &&
@@ -179,7 +174,12 @@ int main() {
                "subtitle generation must retain source identity");
   const std::optional<processing::TaskActivity> subtitles =
       coordinator.activity();
+  const playback_media_processing::SourceState subtitleSourceState =
+      coordinator.sourceStateFor("movie.mp4");
   ok &= expect(subtitles && subtitles->cancellable &&
+                   subtitleSourceState.backgroundTaskRunning &&
+                   subtitleSourceState.subtitleGenerationRunning &&
+                   !subtitleSourceState.audioSeparationRunning &&
                    mediaTaskCardModel(*subtitles).title ==
                        "Generating subtitles" &&
                    mediaTaskCardModel(*subtitles).detail ==
@@ -201,14 +201,12 @@ int main() {
   ok &= expect(separationStart && separationStart->accepted &&
                    separationStart->feedback ==
                        "Separating audio (F8 to cancel)" &&
-                   playbackStateChanges == 2 &&
                    waitUntil([&]() {
                      return separationStarted.load(std::memory_order_acquire);
                    }) &&
                    coordinator.audioSeparationRunningFor("movie.mp4") &&
-                   playbackService.requestActiveCancellation() &&
-                   playbackStateChanges == 3 &&
-                   !playbackService.requestActiveCancellation() &&
+                   coordinator.cancelActive() &&
+                   !coordinator.cancelActive() &&
                    waitUntil([&]() {
                      return separationCancellationObserved.load(
                          std::memory_order_acquire);
@@ -216,7 +214,12 @@ int main() {
                "F8 cancellation must dispatch through the active task owner");
   const std::optional<processing::TaskActivity> cancelling =
       coordinator.activity();
+  const playback_media_processing::SourceState separationSourceState =
+      coordinator.sourceStateFor("movie.mp4");
   ok &= expect(cancelling && cancelling->cancelling &&
+                   separationSourceState.backgroundTaskRunning &&
+                   !separationSourceState.subtitleGenerationRunning &&
+                   separationSourceState.audioSeparationRunning &&
                    mediaTaskCardModel(*cancelling).title ==
                        "Cancelling audio separation",
                "cancellation must remain an explicit generic activity state");
