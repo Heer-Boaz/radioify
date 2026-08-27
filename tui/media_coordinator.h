@@ -84,8 +84,7 @@ class TuiMediaCoordinator {
   bool activateVideoPresentation();
 
   void handleMediaTaskCompletion(
-      const media_processing::TaskCompletion& completion,
-      std::string status);
+      const media_processing::TaskCompletion& completion);
   void requestQuit();
 
  private:

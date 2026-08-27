@@ -1375,8 +1375,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     const media_processing::PollResult mediaTaskUpdate = mediaTasks.poll();
     for (const media_processing::TaskCompletion& completion :
          mediaTaskUpdate.completions) {
-      const MediaTaskStatusModel status = mediaTaskStatusModel(completion);
-      mediaCoordinator.handleMediaTaskCompletion(completion, status.text);
+      mediaCoordinator.handleMediaTaskCompletion(completion);
       markLayoutDirty();
     }
     if (mediaTaskUpdate.changed) markDirty(UiDirtyFlags::Async);

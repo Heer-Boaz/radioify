@@ -12,6 +12,7 @@
 #include "playback/target.h"
 #include "tui/image_viewer.h"
 #include "tui/media_activation_plan.h"
+#include "tui/ui/media_task_presentation.h"
 
 namespace {
 
@@ -259,12 +260,12 @@ struct TuiMediaCoordinator::Impl {
   }
 
   void handleMediaTaskCompletion(
-      const media_processing::TaskCompletion& completion,
-      std::string status) {
+      const media_processing::TaskCompletion& completion) {
     if (!videoSession_ || !videoTarget_ ||
         !samePath(playbackTargetFile(*videoTarget_), completion.sourceFile)) {
       return;
     }
+    std::string status = mediaTaskStatusModel(completion).text;
     switch (completion.kind) {
       case media_processing::TaskKind::SubtitleGeneration:
         videoSession_->subtitleGenerationFinished(
@@ -750,9 +751,8 @@ bool TuiMediaCoordinator::activateVideoPresentation() {
 }
 
 void TuiMediaCoordinator::handleMediaTaskCompletion(
-    const media_processing::TaskCompletion& completion,
-    std::string status) {
-  impl_->handleMediaTaskCompletion(completion, std::move(status));
+    const media_processing::TaskCompletion& completion) {
+  impl_->handleMediaTaskCompletion(completion);
 }
 
 void TuiMediaCoordinator::requestQuit() { impl_->requestQuit(); }
