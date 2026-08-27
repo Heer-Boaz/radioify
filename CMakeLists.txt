@@ -1100,7 +1100,10 @@ target_sources(media_processing_coordinator_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_media_processing_coordinator_tests>
   $<TARGET_OBJECTS:radioify_video_sidecar_identity>
   $<TARGET_OBJECTS:radioify_transcript_artifact>
+  ${CMAKE_SOURCE_DIR}/app/media_processing_actions.cpp
   ${CMAKE_SOURCE_DIR}/app/media_processing_coordinator.cpp
+  ${CMAKE_SOURCE_DIR}/audio/analysis/melody_artifact_paths.cpp
+  ${CMAKE_SOURCE_DIR}/audio/loopsplit/output_paths.cpp
   ${CMAKE_SOURCE_DIR}/playback/media_processing_actions.cpp
   ${CMAKE_SOURCE_DIR}/playback/session/media_task_feedback.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/media_task_presentation.cpp

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/app_common.h"
+#include "app/media_processing_actions.h"
 #include "app/media_processing_coordinator.h"
 #include "app/playback_queue.h"
 #include "audio/audioplayback.h"
@@ -20,6 +21,7 @@ class ApplicationRuntime {
   GpuRuntime& gpu() { return gpu_; }
   playback_queue::Queue& playbackQueue() { return playbackQueue_; }
   media_processing::Coordinator& mediaProcessing() { return mediaProcessing_; }
+  media_processing::Actions& mediaActions() { return mediaActions_; }
 
  private:
   // GPU and audio must outlive every surface/session and media worker that
@@ -28,6 +30,7 @@ class ApplicationRuntime {
   AudioPlaybackRuntime audioPlayback_;
   playback_queue::Queue playbackQueue_;
   media_processing::Coordinator mediaProcessing_;
+  media_processing::Actions mediaActions_;
 };
 
 AudioPlaybackConfig audioPlaybackConfigFor(const Options& options);

@@ -31,11 +31,10 @@
 
 #include "app_common.h"
 #include "app/application_runtime.h"
+#include "app/media_processing_actions.h"
 #include "app/media_processing_coordinator.h"
 #include "app/playback_queue.h"
 #include "app/playback_route.h"
-#include "audio/analysis/melody_artifact_paths.h"
-#include "audio/loopsplit/loopsplit.h"
 #include "audio_picture_in_picture_window.h"
 #include "audioplayback.h"
 #include "browser_action_strip.h"
@@ -82,8 +81,6 @@
 #include "mouse_double_click_tracker.h"
 #include "tracklist.h"
 #include "track_browser_state.h"
-#include "loopsplit_cli.h"
-#include "audio/loopsplit/output_paths.h"
 #include "tui_export.h"
 #include "tui_theme.h"
 #include "ui_helpers.h"
@@ -555,7 +552,9 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       audioPlayback, gpu, input, screen, theme.playbackSessionAppearance()};
   playback_queue::Queue& playbackQueue = runtime.playbackQueue();
   media_processing::Coordinator& mediaProcessing = runtime.mediaProcessing();
-  playback_media_processing::Actions mediaProcessingActions(mediaProcessing);
+  media_processing::Actions& mediaActions = runtime.mediaActions();
+  playback_media_processing::Actions mediaProcessingActions =
+      mediaActions.playbackActions();
   MediaTaskPresenter mediaTaskPresenter(mediaProcessing);
   TuiMediaCoordinator mediaCoordinator(
       {playbackQueue, mediaProcessingActions, mediaSessionDependencies,
@@ -816,7 +815,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     context.hasGeneratedSubtitles =
         !playback_video_transcript::activeTranscriptPathForVideo(entry.path)
              .empty();
-    mediaProcessingActions.applySourceState(entry.path, context);
+    mediaActions.applySourceState(entry.path, context);
     std::vector<playback_media_actions::Item> items =
         playback_media_actions::build(context);
     if (items.empty()) return;
@@ -1162,34 +1161,24 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         intent);
   };
 
-  auto startMelodyExport = [&](const BrowserEntry& entry) {
-    if (!entry.isMedia() || !isSupportedAudioExt(entry.path)) {
-      return;
-    }
-
-    const auto* track = entry.actionAs<browser_entry::PlayTrack>();
-    if (track && track->trackIndex < 0) return;
-    const int trackIndex = track ? track->trackIndex : 0;
-    const std::filesystem::path outputPath =
-        track ? melodyArtifactPathForTrack(
-                    entry.path, static_cast<std::uint32_t>(trackIndex))
-              : defaultMelodyArtifactPath(entry.path);
-    if (mediaProcessing.tryStartMelodyAnalysis(entry.path, trackIndex,
-                                               outputPath)) {
-      markLayoutDirty();
-      markDirty(UiDirtyFlags::Async);
-    }
-  };
-
   auto runFileContextAction = [&](tui_browser_media_menu::Command command) {
     const BrowserEntry& entry = command.entry;
     const playback_media_actions::Action action = command.action;
     dirty = true;
+    const auto* track = entry.actionAs<browser_entry::PlayTrack>();
+    const std::optional<int> trackIndex =
+        track ? std::optional<int>(track->trackIndex) : std::nullopt;
+    const media_processing::ActionRequest processingRequest =
+        media_processing::captureActionRequest(
+            action, entry.path, trackIndex, o.output, audioPlayback);
     const std::optional<playback_media_processing::ActionResult> processing =
-        mediaProcessingActions.execute(action, entry.path);
+        mediaActions.execute(processingRequest);
     if (processing) {
       mediaCommandError =
           processing->accepted ? std::string() : processing->feedback;
+      if (processing->accepted) {
+        markDirty(UiDirtyFlags::Async);
+      }
       markLayoutDirty();
       return;
     }
@@ -1216,28 +1205,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         return;
       }
       case playback_media_actions::Action::AnalyzeAudio:
-        startMelodyExport(entry);
-        return;
-      case playback_media_actions::Action::SplitLoop: {
-        if (!entry.isMedia() || !isSupportedAudioExt(entry.path)) {
-          return;
-        }
-        LoopSplitConfig splitConfig;
-        const auto* track = entry.actionAs<browser_entry::PlayTrack>();
-        splitConfig.trackIndex = track ? track->trackIndex : 0;
-        splitConfig.kssOptions = audioPlayback.kssOptions();
-        splitConfig.nsfOptions = audioPlayback.nsfOptions();
-        splitConfig.vgmOptions = audioPlayback.vgmOptions();
-        const LoopSplitOutputPaths outputPaths =
-            resolveLoopSplitOutputPaths(entry.path, o.output);
-        if (mediaProcessing.tryStartLoopSplit(
-                entry.path, outputPaths.stinger, outputPaths.loop,
-                splitConfig)) {
-          markLayoutDirty();
-          markDirty(UiDirtyFlags::Async);
-        }
-        return;
-      }
+      case playback_media_actions::Action::SplitLoop:
       case playback_media_actions::Action::GenerateSubtitles:
       case playback_media_actions::Action::CancelSubtitleGeneration:
       case playback_media_actions::Action::SeparateAudio:

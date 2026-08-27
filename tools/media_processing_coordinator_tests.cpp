@@ -6,6 +6,7 @@
 #endif
 #include <windows.h>
 
+#include "app/media_processing_actions.h"
 #include "app/media_processing_coordinator.h"
 #include "playback/media_processing_actions.h"
 #include "playback/session/media_task_feedback.h"
@@ -74,13 +75,22 @@ int main() {
   std::atomic<bool> separationStarted{false};
   std::atomic<bool> separationCancellationObserved{false};
   std::atomic<bool> releaseSeparation{false};
+  int observedMelodyTrackIndex = -1;
+  std::filesystem::path observedMelodyOutput;
+  int observedLoopTrackIndex = -1;
+  std::filesystem::path observedStingerOutput;
+  std::filesystem::path observedLoopOutput;
+  float observedLoopConfidence = 0.0f;
 
   processing::Coordinator::Operations operations;
   operations.analyzeMelody =
-      [&](const std::filesystem::path&, int, const std::filesystem::path&,
+      [&](const std::filesystem::path&, int trackIndex,
+          const std::filesystem::path& outputFile,
           const processing::Coordinator::ProgressReporter& progress,
           const processing::Coordinator::CancellationRequested& cancellation,
           std::string*) {
+        observedMelodyTrackIndex = trackIndex;
+        observedMelodyOutput = outputFile;
         progress(0.4f, "Analyzing melody");
         melodyStarted.store(true, std::memory_order_release);
         while (!releaseMelody.load(std::memory_order_acquire) &&
@@ -90,12 +100,18 @@ int main() {
         return !cancellation();
       };
   operations.splitLoop =
-      [&](const std::filesystem::path&, const std::filesystem::path&,
-          const std::filesystem::path&, const LoopSplitConfig&,
+      [&](const std::filesystem::path&,
+          const std::filesystem::path& stingerOutput,
+          const std::filesystem::path& loopOutput,
+          const LoopSplitConfig& config,
           LoopSplitResult* result,
           const processing::Coordinator::ProgressReporter&,
           const processing::Coordinator::CancellationRequested& cancellation,
           std::string*) {
+        observedLoopTrackIndex = config.trackIndex;
+        observedStingerOutput = stingerOutput;
+        observedLoopOutput = loopOutput;
+        observedLoopConfidence = config.minConfidence;
         loopStarted.store(true, std::memory_order_release);
         while (!releaseLoop.load(std::memory_order_acquire) &&
                !cancellation()) {
@@ -137,7 +153,9 @@ int main() {
   operations.audioSeparationAvailable = true;
   processing::Coordinator coordinator(std::move(operations));
 
-  playback_media_processing::Actions playbackActions(coordinator);
+  processing::Actions applicationActions(coordinator);
+  playback_media_processing::Actions playbackActions =
+      applicationActions.playbackActions();
   MediaTaskPresenter presenter(coordinator);
   const std::optional<playback_media_processing::ActionResult>
       unsupportedAction =
@@ -335,6 +353,56 @@ int main() {
                    mediaTaskStatusModel(*separationCompletion).text ==
                        "Audio separation cancelled.",
                "cancelled separation must not leak backend error text");
+
+  processing::ActionRequest unsupportedRequest;
+  unsupportedRequest.action = playback_media_actions::Action::EditVideo;
+  unsupportedRequest.sourceFile = "movie.mp4";
+  ok &= expect(!applicationActions.execute(unsupportedRequest),
+               "surface navigation actions must remain outside processing");
+
+  processing::ActionRequest trackedMelodyRequest;
+  trackedMelodyRequest.action =
+      playback_media_actions::Action::AnalyzeAudio;
+  trackedMelodyRequest.sourceFile = "album.flac";
+  trackedMelodyRequest.trackIndex = 7;
+  const auto trackedMelodyStart =
+      applicationActions.execute(trackedMelodyRequest);
+  const auto trackedMelodyCompletion = waitForCompletion(coordinator);
+  ok &= expect(
+      trackedMelodyStart && trackedMelodyStart->accepted &&
+          trackedMelodyStart->feedback == "Analyzing melody" &&
+          trackedMelodyCompletion && trackedMelodyCompletion->succeeded() &&
+          observedMelodyTrackIndex == 7 &&
+          observedMelodyOutput ==
+              std::filesystem::path("album.flac.track007.melody"),
+      "application actions must own tracked melody output naming");
+
+  processing::ActionRequest invalidTrackRequest = trackedMelodyRequest;
+  invalidTrackRequest.trackIndex = -1;
+  const auto invalidTrackResult =
+      applicationActions.execute(invalidTrackRequest);
+  ok &= expect(invalidTrackResult && !invalidTrackResult->accepted &&
+                   !coordinator.running(),
+               "invalid track selections must be rejected before task start");
+
+  processing::ActionRequest splitRequest;
+  splitRequest.action = playback_media_actions::Action::SplitLoop;
+  splitRequest.sourceFile = "concert.flac";
+  splitRequest.trackIndex = 4;
+  splitRequest.outputArgument = R"(D:\exports\named.flac)";
+  splitRequest.loopSplitConfig.minConfidence = 0.73f;
+  const auto splitStart = applicationActions.execute(splitRequest);
+  const auto splitCompletion = waitForCompletion(coordinator);
+  ok &= expect(
+      splitStart && splitStart->accepted &&
+          splitStart->feedback == "Splitting loop" && splitCompletion &&
+          splitCompletion->succeeded() && observedLoopTrackIndex == 4 &&
+          observedStingerOutput ==
+              std::filesystem::path(R"(D:\exports\named_stinger.wav)") &&
+          observedLoopOutput ==
+              std::filesystem::path(R"(D:\exports\named_loop.wav)") &&
+          observedLoopConfidence == 0.73f,
+      "application actions must own loop settings and output resolution");
 
   coordinator.shutdown();
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;

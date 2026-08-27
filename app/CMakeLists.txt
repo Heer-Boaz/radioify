@@ -4,6 +4,8 @@ radioify_add_module_object_library(radioify_app
   ${CMAKE_CURRENT_SOURCE_DIR}/app_common.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/crash_handler.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/media_processing_action_context.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/media_processing_actions.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_processing_coordinator.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_processing_coordinator_default.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_queue.cpp
