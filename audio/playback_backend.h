@@ -18,15 +18,19 @@ enum class AudioMode : int {
   Psf,
 };
 
-using BackendInitProc = bool (*)(const std::filesystem::path& file,
-                                uint64_t startFrame, int trackIndex,
-                                std::string* error);
-using BackendUninitProc = void (*)();
-using BackendReadProc = bool (*)(float* out, uint32_t frameCount,
-                                uint64_t* framesRead);
-using BackendSeekProc = bool (*)(uint64_t frame);
-using BackendTotalFramesProc = bool (*)(uint64_t* outFrames);
-using BackendWarningProc = std::string (*)();
+struct AudioPlaybackState;
+
+using BackendInitProc = bool (*)(AudioPlaybackState& audio,
+                                 const std::filesystem::path& file,
+                                 uint64_t startFrame, int trackIndex,
+                                 std::string* error);
+using BackendUninitProc = void (*)(AudioPlaybackState& audio);
+using BackendReadProc = bool (*)(AudioPlaybackState& audio, float* out,
+                                 uint32_t frameCount, uint64_t* framesRead);
+using BackendSeekProc = bool (*)(AudioPlaybackState& audio, uint64_t frame);
+using BackendTotalFramesProc = bool (*)(AudioPlaybackState& audio,
+                                        uint64_t* outFrames);
+using BackendWarningProc = std::string (*)(const AudioPlaybackState& audio);
 
 struct AudioBackendHandlers {
   AudioMode mode = AudioMode::None;
@@ -41,18 +45,23 @@ struct AudioBackendHandlers {
   BackendWarningProc warning = nullptr;
 };
 
-AudioMode currentAudioMode();
-bool isAudioMode(AudioMode mode);
+AudioMode currentAudioMode(const AudioPlaybackState& audio);
+bool isAudioMode(const AudioPlaybackState& audio, AudioMode mode);
 
 const AudioBackendHandlers* selectAudioBackend(
     const std::filesystem::path& file);
-std::string warningForBackend(const AudioBackendHandlers* backend);
-void activateBackend(const AudioBackendHandlers* backend, int trackIndex);
-void storeTotalFramesFromBackend(const AudioBackendHandlers* backend);
-bool openDecoderForBackend(const AudioBackendHandlers* backend,
+std::string warningForBackend(const AudioPlaybackState& audio,
+                              const AudioBackendHandlers* backend);
+void activateBackend(AudioPlaybackState& audio,
+                     const AudioBackendHandlers* backend, int trackIndex);
+void storeTotalFramesFromBackend(AudioPlaybackState& audio,
+                                 const AudioBackendHandlers* backend);
+bool openDecoderForBackend(AudioPlaybackState& audio,
+                           const AudioBackendHandlers* backend,
                            const std::filesystem::path& file,
-                           uint64_t startFrame,
-                           int trackIndex);
-void uninitOpenedDecoder(const AudioBackendHandlers* backend);
-void seekLoadedDecoderToStart(const AudioBackendHandlers* backend,
+                           uint64_t startFrame, int trackIndex);
+void uninitOpenedDecoder(AudioPlaybackState& audio,
+                         const AudioBackendHandlers* backend);
+void seekLoadedDecoderToStart(AudioPlaybackState& audio,
+                              const AudioBackendHandlers* backend,
                               uint64_t* startFrame);

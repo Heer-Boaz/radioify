@@ -679,19 +679,23 @@ bool queuedAudioSourceWrite(AudioState* state,
 }
 
 bool queuedAudioSourceStartDecoderWorker(
+    AudioPlaybackState& audio,
     const AudioBackendHandlers* backend,
     uint64_t startFrame) {
   if (!queuedAudioSourceUsesDecoderWorker(backend) || !backend->read) {
     return false;
   }
-  queuedAudioSourceStopDecoderWorker(&gAudio.state);
-  gAudio.state.decodeStop.store(false, std::memory_order_relaxed);
-  gAudio.state.decodeThreadRunning.store(true, std::memory_order_relaxed);
-  const uint32_t workerChannels = gAudio.channels;
-  const uint32_t workerRate = gAudio.sampleRate;
+  queuedAudioSourceStopDecoderWorker(&audio.state);
+  audio.state.decodeStop.store(false, std::memory_order_relaxed);
+  audio.state.decodeThreadRunning.store(true, std::memory_order_relaxed);
+  const uint32_t workerChannels = audio.channels;
+  const uint32_t workerRate = audio.sampleRate;
   const bool finishOnShortRead = backend->finishOnShortRead;
-  gAudio.state.decodeThread = std::thread(
-      [backend, startFrame, workerChannels, workerRate, finishOnShortRead]() {
+  AudioPlaybackState* const workerAudio = &audio;
+  audio.state.decodeThread = std::thread(
+      [backend, startFrame, workerChannels, workerRate, finishOnShortRead,
+       workerAudio]() {
+        AudioPlaybackState& audio = *workerAudio;
         constexpr uint32_t kQueuedDecodeEmptyReadLimit = 32;
         std::vector<float> buffer(
             static_cast<size_t>(kRadioDspChunkFrames) * workerChannels);
@@ -699,59 +703,59 @@ bool queuedAudioSourceStartDecoderWorker(
         uint32_t consecutiveEmptyReads = 0;
         bool seekCommitPending = false;
 
-        while (!gAudio.state.decodeStop.load(std::memory_order_relaxed)) {
+        while (!audio.state.decodeStop.load(std::memory_order_relaxed)) {
           if (seekCommitPending &&
               !audioPipelineTransitionCommitInProgress(
-                  gAudio.state.pipelineTransition)) {
+                  audio.state.pipelineTransition)) {
             seekCommitPending = false;
           }
 
           if (!seekCommitPending && backend->seek &&
-              gAudio.state.seekRequested.load(std::memory_order_relaxed) &&
+              audio.state.seekRequested.load(std::memory_order_relaxed) &&
               audioPipelineTransitionBeginCommit(
-                  gAudio.state.pipelineTransition)) {
-            int64_t target = gAudio.state.pendingSeekFrames.load(
+                  audio.state.pipelineTransition)) {
+            int64_t target = audio.state.pendingSeekFrames.load(
                 std::memory_order_relaxed);
             if (target < 0) target = 0;
             const uint64_t total =
-                gAudio.state.totalFrames.load(std::memory_order_relaxed);
+                audio.state.totalFrames.load(std::memory_order_relaxed);
             if (total > 0 && static_cast<uint64_t>(target) > total) {
               target = static_cast<int64_t>(total);
             }
             uint64_t targetFrame = static_cast<uint64_t>(target);
-            if (!backend->seek(targetFrame)) {
+            if (!backend->seek(audio, targetFrame)) {
               targetFrame = 0;
-              backend->seek(0);
+              backend->seek(audio, 0);
             }
             framePos = targetFrame;
             consecutiveEmptyReads = 0;
             const uint64_t resetGeneration =
-                queuedAudioSourceRequestSourceReset(&gAudio.state,
+                queuedAudioSourceRequestSourceReset(&audio.state,
                                                     targetFrame);
-            if (!queuedAudioSourceWaitForSourceReset(&gAudio.state,
+            if (!queuedAudioSourceWaitForSourceReset(&audio.state,
                                                      resetGeneration)) {
               break;
             }
             seekCommitPending = transitionCommitIsCurrent(
-                gAudio.state.pipelineTransition);
+                audio.state.pipelineTransition);
             continue;
           }
 
           if (!seekCommitPending &&
               audioPipelineTransitionActive(
-                  gAudio.state.pipelineTransition)) {
+                  audio.state.pipelineTransition)) {
             std::unique_lock<std::mutex> lock(
-                gAudio.state.audioQueueMutex);
-            gAudio.state.audioQueueCv.wait(lock, [&]() {
-              return gAudio.state.decodeStop.load(
+                audio.state.audioQueueMutex);
+            audio.state.audioQueueCv.wait(lock, [&]() {
+              return audio.state.decodeStop.load(
                          std::memory_order_relaxed) ||
-                     !gAudio.state.streamQueueEnabled.load(
+                     !audio.state.streamQueueEnabled.load(
                          std::memory_order_relaxed) ||
                      !audioPipelineTransitionActive(
-                         gAudio.state.pipelineTransition) ||
-                     (gAudio.state.seekRequested.load(
+                         audio.state.pipelineTransition) ||
+                     (audio.state.seekRequested.load(
                           std::memory_order_relaxed) &&
-                      gAudio.state.pipelineTransition.phase.load(
+                      audio.state.pipelineTransition.phase.load(
                           std::memory_order_acquire) ==
                           AudioPipelineTransitionPhase::CommitReady);
             });
@@ -759,18 +763,18 @@ bool queuedAudioSourceStartDecoderWorker(
           }
 
           const uint64_t writable =
-              gAudio.state.decodedAudio.writableFrames();
+              audio.state.decodedAudio.writableFrames();
           if (writable == 0) {
             std::unique_lock<std::mutex> lock(
-                gAudio.state.audioQueueMutex);
-            gAudio.state.audioQueueCv.wait(lock, [&]() {
-              return gAudio.state.decodeStop.load(
+                audio.state.audioQueueMutex);
+            audio.state.audioQueueCv.wait(lock, [&]() {
+              return audio.state.decodeStop.load(
                          std::memory_order_relaxed) ||
-                     !gAudio.state.streamQueueEnabled.load(
+                     !audio.state.streamQueueEnabled.load(
                          std::memory_order_relaxed) ||
                      audioPipelineTransitionActive(
-                         gAudio.state.pipelineTransition) ||
-                     gAudio.state.decodedAudio.writableFrames() > 0;
+                         audio.state.pipelineTransition) ||
+                     audio.state.decodedAudio.writableFrames() > 0;
             });
             continue;
           }
@@ -778,25 +782,26 @@ bool queuedAudioSourceStartDecoderWorker(
           const uint32_t framesToRead = static_cast<uint32_t>(
               std::min<uint64_t>(writable, kRadioDspChunkFrames));
           uint64_t framesRead = 0;
-          if (!backend->read(buffer.data(), framesToRead, &framesRead)) {
-            gAudio.state.sourceAtEnd.store(true,
+          if (!backend->read(audio, buffer.data(), framesToRead,
+                             &framesRead)) {
+            audio.state.sourceAtEnd.store(true,
                                            std::memory_order_relaxed);
-            gAudio.state.radioDspCv.notify_all();
+            audio.state.radioDspCv.notify_all();
             break;
           }
 
           bool reachedEnd = false;
           if (framesRead == 0) {
-            if (queuedDecodeReachedKnownEnd(&gAudio.state, framePos)) {
+            if (queuedDecodeReachedKnownEnd(&audio.state, framePos)) {
               reachedEnd = true;
             } else if (++consecutiveEmptyReads >=
                        kQueuedDecodeEmptyReadLimit) {
               reachedEnd = true;
             } else {
-              waitForQueuedDecodeRetry(&gAudio.state);
+              waitForQueuedDecodeRetry(&audio.state);
             }
           } else if (finishOnShortRead && framesRead < framesToRead &&
-                     queuedDecodeReachedKnownEnd(&gAudio.state,
+                     queuedDecodeReachedKnownEnd(&audio.state,
                                                 framePos + framesRead)) {
             reachedEnd = true;
           }
@@ -806,13 +811,13 @@ bool queuedAudioSourceStartDecoderWorker(
             uint64_t remaining = framesRead;
             uint64_t offset = 0;
             while (remaining > 0 &&
-                   !gAudio.state.decodeStop.load(
+                   !audio.state.decodeStop.load(
                        std::memory_order_relaxed)) {
               uint64_t written = 0;
               const int64_t ptsUs = static_cast<int64_t>(
                   (framePos + offset) * 1000000ULL / workerRate);
               if (!queuedAudioSourceWriteInternal(
-                      &gAudio.state,
+                      &audio.state,
                       buffer.data() +
                           static_cast<size_t>(offset) * workerChannels,
                       remaining, ptsUs, 0, true, seekCommitPending,
@@ -824,22 +829,22 @@ bool queuedAudioSourceStartDecoderWorker(
               offset += written;
             }
             framePos += offset;
-            if (queuedDecodeReachedKnownEnd(&gAudio.state, framePos)) {
+            if (queuedDecodeReachedKnownEnd(&audio.state, framePos)) {
               reachedEnd = true;
             }
           }
 
           if (reachedEnd) {
-            gAudio.state.sourceAtEnd.store(true,
+            audio.state.sourceAtEnd.store(true,
                                            std::memory_order_relaxed);
-            gAudio.state.radioDspCv.notify_all();
+            audio.state.radioDspCv.notify_all();
             break;
           }
         }
 
-        gAudio.state.decodeThreadRunning.store(false,
+        audio.state.decodeThreadRunning.store(false,
                                                std::memory_order_release);
-        gAudio.state.audioQueueCv.notify_all();
+        audio.state.audioQueueCv.notify_all();
       });
   return true;
 }

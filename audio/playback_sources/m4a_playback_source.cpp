@@ -13,8 +13,8 @@
 
 namespace {
 
-void stopM4aWorker() {
-  AudioState& state = gAudio.state;
+void stopM4aWorker(AudioPlaybackState& audio) {
+  AudioState& state = audio.state;
   state.m4aStop.store(true, std::memory_order_relaxed);
   state.audioQueueCv.notify_all();
   if (state.m4aThread.joinable()) {
@@ -32,12 +32,13 @@ void stopM4aWorker() {
   }
 }
 
-bool startM4aWorker(const std::filesystem::path& file,
+bool startM4aWorker(AudioPlaybackState& audio,
+                    const std::filesystem::path& file,
                     uint64_t startFrame,
                     std::string* error) {
-  stopM4aWorker();
+  stopM4aWorker(audio);
 
-  AudioState& state = gAudio.state;
+  AudioState& state = audio.state;
   {
     std::lock_guard<std::mutex> lock(state.audioQueueMutex);
     state.m4aInitDone = false;
@@ -49,11 +50,12 @@ bool startM4aWorker(const std::filesystem::path& file,
   state.processedAtEnd.store(false, std::memory_order_relaxed);
   state.m4aThreadRunning.store(true, std::memory_order_release);
 
-  const uint32_t workerChannels = gAudio.channels;
-  const uint32_t workerRate = gAudio.sampleRate;
+  const uint32_t workerChannels = audio.channels;
+  const uint32_t workerRate = audio.sampleRate;
+  AudioState* const workerState = &state;
   state.m4aThread =
-      std::thread([file, startFrame, workerChannels, workerRate]() {
-        AudioState& state = gAudio.state;
+      std::thread([file, startFrame, workerChannels, workerRate, workerState]() {
+        AudioState& state = *workerState;
         FfmpegAudioDecoder decoder;
         std::string initError;
 #if RADIOIFY_ENABLE_TIMING_LOG
@@ -286,7 +288,7 @@ bool startM4aWorker(const std::filesystem::path& file,
     if (!initOk && error) *error = state.m4aInitError;
   }
   if (!initOk) {
-    stopM4aWorker();
+    stopM4aWorker(audio);
     return false;
   }
   return true;
@@ -294,18 +296,19 @@ bool startM4aWorker(const std::filesystem::path& file,
 
 }  // namespace
 
-bool initM4aBackend(const std::filesystem::path& file,
+bool initM4aBackend(AudioPlaybackState& audio,
+                    const std::filesystem::path& file,
                     uint64_t startFrame,
                     int,
                     std::string* error) {
-  gAudio.state.totalFrames.store(0, std::memory_order_relaxed);
-  return startM4aWorker(file, startFrame, error);
+  audio.state.totalFrames.store(0, std::memory_order_relaxed);
+  return startM4aWorker(audio, file, startFrame, error);
 }
 
-void uninitM4aBackend() { stopM4aWorker(); }
+void uninitM4aBackend(AudioPlaybackState& audio) { stopM4aWorker(audio); }
 
-bool totalM4aBackend(uint64_t* outFrames) {
+bool totalM4aBackend(AudioPlaybackState& audio, uint64_t* outFrames) {
   if (!outFrames) return false;
-  *outFrames = gAudio.state.totalFrames.load(std::memory_order_relaxed);
+  *outFrames = audio.state.totalFrames.load(std::memory_order_relaxed);
   return true;
 }

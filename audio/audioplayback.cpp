@@ -118,7 +118,7 @@ void stopAndUninitActiveDecoder() {
   if (gAudio.decoderReady) {
     const AudioBackendHandlers* backend = gAudio.state.backend;
     if (backend && backend->uninit) {
-      backend->uninit();
+      backend->uninit(gAudio);
     }
   }
   queuedAudioSourceStopProcessing(&gAudio.state);
@@ -216,21 +216,21 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
         priming.primeFrames, startFrame, 0);
   }
 
-  if (!openDecoderForBackend(backend, file, startFrame, trackIndex)) {
+  if (!openDecoderForBackend(gAudio, backend, file, startFrame, trackIndex)) {
     queuedAudioSourceStopProcessing(&gAudio.state);
     gAudio.state.sourcePreparing.store(false, std::memory_order_release);
     audioPipelineTransitionReset(gAudio.state.pipelineTransition);
     return false;
   }
 
-  seekLoadedDecoderToStart(backend, &startFrame);
+  seekLoadedDecoderToStart(gAudio, backend, &startFrame);
   if (usesDecoderWorker) {
     resetPlaybackStateForLoad(startFrame, false);
     queuedAudioSourceStartProcessing(
         &gAudio.state, priming.capacityFrames, priming.targetFrames,
         priming.primeFrames, startFrame, 0);
-    if (!queuedAudioSourceStartDecoderWorker(backend, startFrame)) {
-      uninitOpenedDecoder(backend);
+    if (!queuedAudioSourceStartDecoderWorker(gAudio, backend, startFrame)) {
+      uninitOpenedDecoder(gAudio, backend);
       queuedAudioSourceStopProcessing(&gAudio.state);
       gAudio.lastInitError = "Failed to start audio source decoder.";
       gAudio.state.sourcePreparing.store(false, std::memory_order_release);
@@ -241,14 +241,14 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
 
   if (!queuedAudioSourceWaitPrimed(&gAudio.state, priming.primeFrames)) {
     queuedAudioSourceStopDecoderWorker(&gAudio.state);
-    uninitOpenedDecoder(backend);
+    uninitOpenedDecoder(gAudio, backend);
     queuedAudioSourceStopProcessing(&gAudio.state);
     gAudio.lastInitError = "Failed to prime audio source.";
     gAudio.state.sourcePreparing.store(false, std::memory_order_release);
     audioPipelineTransitionReset(gAudio.state.pipelineTransition);
     return false;
   }
-  activateBackend(backend, trackIndex);
+  activateBackend(gAudio, backend, trackIndex);
   gAudio.state.sourcePreparing.store(false, std::memory_order_release);
   audioPipelineTransitionRequestOutputFadeIn(
       gAudio.state.pipelineTransition, gAudio.state.sampleRate);
@@ -723,7 +723,7 @@ AudioPerfStats audioGetPerfStats() {
       gAudio.state.lastFramesRead.load(std::memory_order_relaxed);
   stats.sampleRate = gAudio.state.sampleRate;
   stats.channels = gAudio.state.channels;
-  const AudioMode mode = currentAudioMode();
+  const AudioMode mode = currentAudioMode(gAudio);
   stats.usingFfmpeg = mode == AudioMode::M4a || mode == AudioMode::Ffmpeg;
   audioPlaybackDeviceFillPerfStats(&stats);
   return stats;
@@ -891,7 +891,7 @@ bool audioCanAnalyzeFileToMelodyFile(const std::filesystem::path& file) {
 }
 
 std::string audioGetWarning() {
-  std::string warning = warningForBackend(gAudio.state.backend);
+  std::string warning = warningForBackend(gAudio, gAudio.state.backend);
   if (!warning.empty()) return warning;
   return gAudio.lastInitError;
 }

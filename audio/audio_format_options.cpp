@@ -180,7 +180,7 @@ bool buildSccAuditionTone(const KssInstrumentProfile& profile,
 }
 
 static void reloadKssWithOptions() {
-  if (!gAudio.decoderReady || !isAudioMode(AudioMode::Kss)) return;
+  if (!gAudio.decoderReady || !isAudioMode(gAudio, AudioMode::Kss)) return;
   uint64_t resumeFrame = gAudio.state.framesPlayed.load();
   bool wasPaused = gAudio.state.paused.load();
   if (loadFileAt(gAudio.nowPlaying, resumeFrame, gAudio.trackIndex)) {
@@ -196,7 +196,7 @@ void audioToggle50Hz() {
   if (!audioSupports50HzToggle()) {
     return;
   }
-  switch (currentAudioMode()) {
+  switch (currentAudioMode(gAudio)) {
     case AudioMode::Vgm: {
       gAudio.vgmOptions.playbackHz =
           (gAudio.vgmOptions.playbackHz == VgmPlaybackHz::Hz50)
@@ -228,7 +228,7 @@ void audioToggle50Hz() {
 }
 
 bool audioIs50HzEnabled() {
-  switch (currentAudioMode()) {
+  switch (currentAudioMode(gAudio)) {
     case AudioMode::Vgm:
       return gAudio.vgmOptions.playbackHz == VgmPlaybackHz::Hz50;
     case AudioMode::Gme:
@@ -241,7 +241,7 @@ bool audioIs50HzEnabled() {
 }
 
 bool audioSupports50HzToggle() {
-  const AudioMode mode = currentAudioMode();
+  const AudioMode mode = currentAudioMode(gAudio);
   return mode == AudioMode::Kss || mode == AudioMode::Gme ||
          mode == AudioMode::Vgm;
 }
@@ -272,7 +272,7 @@ static bool toKssDevice(KssInstrumentDevice device, KSS_DEVICE* out) {
 bool audioGetKssInstrumentRegs(KssInstrumentDevice device,
                                std::vector<uint8_t>* out) {
   if (!out) return false;
-  if (!isAudioMode(AudioMode::Kss)) return false;
+  if (!isAudioMode(gAudio, AudioMode::Kss)) return false;
   if (!gAudio.state.kss.active()) return false;
   KSS_DEVICE kssDevice{};
   if (!toKssDevice(device, &kssDevice)) return false;
@@ -700,7 +700,7 @@ NsfPlaybackOptions audioGetNsfOptionState() {
 }
 
 static void reloadNsfWithOptions() {
-  if (!gAudio.decoderReady || !isAudioMode(AudioMode::Gme)) return;
+  if (!gAudio.decoderReady || !isAudioMode(gAudio, AudioMode::Gme)) return;
   if (!isGmeExt(gAudio.nowPlaying)) return;
   uint64_t resumeFrame = gAudio.state.framesPlayed.load();
   bool wasPaused = gAudio.state.paused.load();
@@ -759,7 +759,7 @@ VgmPlaybackOptions audioGetVgmOptionState() {
 
 bool audioGetVgmDeviceOptions(uint32_t deviceId, VgmDeviceOptions* out) {
   if (!out) return false;
-  if (isAudioMode(AudioMode::Vgm)) {
+  if (isAudioMode(gAudio, AudioMode::Vgm)) {
     if (gAudio.state.vgm.getDeviceOptions(deviceId, out)) {
       return true;
     }
@@ -773,7 +773,7 @@ bool audioGetVgmDeviceOptions(uint32_t deviceId, VgmDeviceOptions* out) {
 }
 
 static void reloadVgmWithOptions() {
-  if (!gAudio.decoderReady || !isAudioMode(AudioMode::Vgm)) return;
+  if (!gAudio.decoderReady || !isAudioMode(gAudio, AudioMode::Vgm)) return;
   if (!isVgmExt(gAudio.nowPlaying)) return;
   uint64_t resumeFrame = gAudio.state.framesPlayed.load();
   bool wasPaused = gAudio.state.paused.load();
@@ -873,7 +873,7 @@ bool audioAdjustVgmOption(VgmOptionId id, int direction) {
     default:
       break;
   }
-  if (changed && isAudioMode(AudioMode::Vgm)) {
+  if (changed && isAudioMode(gAudio, AudioMode::Vgm)) {
     gAudio.state.vgm.applyOptions(gAudio.vgmOptions);
     uint64_t totalFrames = 0;
     if (gAudio.state.vgm.getTotalFrames(&totalFrames)) {
@@ -892,7 +892,7 @@ bool audioAdjustVgmDeviceOption(const VgmDeviceInfo& device,
   if (direction == 0) return false;
 
   VgmDeviceOptions options = baseline;
-  if (isAudioMode(AudioMode::Vgm)) {
+  if (isAudioMode(gAudio, AudioMode::Vgm)) {
     VgmDeviceOptions activeOptions{};
     if (gAudio.state.vgm.getDeviceOptions(device.id, &activeOptions)) {
       options = activeOptions;
@@ -971,7 +971,7 @@ bool audioAdjustVgmDeviceOption(const VgmDeviceInfo& device,
   if (!changed) return false;
 
   gAudio.vgmDeviceOverrides[device.id] = options;
-  if (isAudioMode(AudioMode::Vgm)) {
+  if (isAudioMode(gAudio, AudioMode::Vgm)) {
     if (id == VgmDeviceOptionId::Mute) {
       gAudio.state.vgm.setDeviceOptions(device.id, options);
     } else {

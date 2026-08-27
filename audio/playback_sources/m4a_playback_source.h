@@ -4,9 +4,10 @@
 #include <filesystem>
 #include <string>
 
-bool initM4aBackend(const std::filesystem::path& file,
-                    uint64_t startFrame,
-                    int trackIndex,
-                    std::string* error);
-void uninitM4aBackend();
-bool totalM4aBackend(uint64_t* outFrames);
+struct AudioPlaybackState;
+
+bool initM4aBackend(AudioPlaybackState& audio,
+                    const std::filesystem::path& file, uint64_t startFrame,
+                    int trackIndex, std::string* error);
+void uninitM4aBackend(AudioPlaybackState& audio);
+bool totalM4aBackend(AudioPlaybackState& audio, uint64_t* outFrames);
