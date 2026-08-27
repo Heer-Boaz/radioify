@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <variant>
 
@@ -12,6 +13,8 @@ namespace playback_session_input {
 
 enum class CommandAction : std::uint8_t {
   RequestWindowPresent,
+  RequestRedraw,
+  RequestFrameRefresh,
   ToggleWindowPresentation,
   TogglePictureInPicture,
   ToggleFullscreen,
@@ -20,6 +23,14 @@ enum class CommandAction : std::uint8_t {
   NavigateBack,
   ConfirmPendingExit,
   CancelPendingExit,
+};
+
+struct ShowPlaybackControls {
+  std::chrono::milliseconds duration{0};
+};
+
+struct SetOverlayControlHover {
+  int token = -1;
 };
 
 struct TransportRequest {
@@ -60,7 +71,8 @@ using Command =
     std::variant<CommandAction, TransportRequest, VideoEditRequest,
                  ContextMenuRequest, MoveVideoEditBoundary,
                  PlaybackExitRequest, TimelinePreviewRequest,
-                 ClearTimelinePreview>;
+                 ClearTimelinePreview, ShowPlaybackControls,
+                 SetOverlayControlHover>;
 
 class CommandTarget {
  public:
@@ -70,6 +82,8 @@ class CommandTarget {
   virtual bool videoEditorActive() const = 0;
   virtual playback_video_edit::Prompt videoEditPrompt() const = 0;
   virtual bool contextMenuVisible() const = 0;
+  virtual bool playbackControlsVisible() const = 0;
+  virtual bool stopRequested() const = 0;
 };
 
 }  // namespace playback_session_input

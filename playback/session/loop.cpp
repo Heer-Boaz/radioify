@@ -136,7 +136,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
   std::chrono::steady_clock::time_point lastUiHeartbeat =
       std::chrono::steady_clock::now();
 
-  playback_session_input::PlaybackInputSignals inputSignals;
   pointer_input::MouseDoubleClickTracker mouseDoubleClickTracker;
   playback_session_input::PlaybackSeekGestureState seekState;
   // Constructed last and therefore stopped first. The presenter cannot outlive
@@ -194,8 +193,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
                 screenResources, subtitleMutex})),
         videoEditWorkspace(file, core.player(), timelinePreviewModel,
                            timelinePreviewProvider),
-        inputSignals(*this, overlayControlHover, osd, loopStopRequested,
-                     redraw, forceRefreshArt),
         output(args.player, windowTitle, presentationModel) {
     hasGeneratedSubtitles =
         !playback_video_transcript::activeTranscriptPathForVideo(file).empty();
@@ -258,7 +255,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     }
     if (transition.resumePlayback) {
       playback_session_input::setPlaybackPaused(
-          inputView(), inputSignals, seekState, false);
+          inputView(), *this, seekState, false);
     }
     if (transition.finishSession) {
       finishLoopExit(transition.quitApplication);
@@ -283,7 +280,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
       exitWhenExportSucceeds = false;
       overlayControlHover.store(-1, std::memory_order_relaxed);
       playback_session_input::setPlaybackPaused(
-          inputView(), inputSignals, seekState, true);
+          inputView(), *this, seekState, true);
       syncVideoEditPresentation();
     }
     applyExitTransition(transition);
@@ -466,7 +463,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
         videoEditWorkspace.execute(command);
     if (result.pausePlayback) {
       playback_session_input::setPlaybackPaused(
-          inputView(), inputSignals, seekState, true);
+          inputView(), *this, seekState, true);
     }
     overlayControlHover.store(-1, std::memory_order_relaxed);
     std::string message = result.message;
@@ -641,12 +638,27 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     return contextMenuController.visible();
   }
 
+  bool playbackControlsVisible() const override {
+    return osd.controlsVisible();
+  }
+
+  bool stopRequested() const override {
+    return loopStopRequested;
+  }
+
   bool executeInputCommand(playback_session_input::CommandAction action) {
     using Action = playback_session_input::CommandAction;
     switch (action) {
       case Action::RequestWindowPresent:
         publishWindowUiState();
         output.requestWindowPresent();
+        return true;
+      case Action::RequestRedraw:
+        redraw = true;
+        return true;
+      case Action::RequestFrameRefresh:
+        redraw = true;
+        forceRefreshArt = true;
         return true;
       case Action::ToggleWindowPresentation: {
         const bool changed = presentationController.toggleWindow();
@@ -746,6 +758,25 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
       playback_session_input::ClearTimelinePreview request) {
     if (!timelinePreviewModel.hide(request.surface)) return false;
     timelinePreviewProvider.cancelBefore(timelinePreviewModel.requestId());
+    redraw = true;
+    publishWindowUiState();
+    output.requestWindowPresent();
+    return true;
+  }
+
+  bool executeInputCommand(
+      playback_session_input::ShowPlaybackControls request) {
+    osd.showControls(playback_session::PlaybackOsdTimeline::Clock::now(),
+                     request.duration);
+    redraw = true;
+    return true;
+  }
+
+  bool executeInputCommand(
+      playback_session_input::SetOverlayControlHover request) {
+    const int previous = overlayControlHover.exchange(
+        request.token, std::memory_order_relaxed);
+    if (previous == request.token) return false;
     redraw = true;
     publishWindowUiState();
     output.requestWindowPresent();
@@ -1016,17 +1047,17 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     } else if (event.type == InputEvent::Type::Key ||
                event.type == InputEvent::Type::Action) {
       playback_session_input::handlePlaybackInputEvent(
-          inputView(), inputSignals, seekState, event);
+          inputView(), *this, seekState, event);
     } else if (event.type == InputEvent::Type::Mouse) {
       MouseEvent mouse = event.mouse;
       mouseDoubleClickTracker.classifyUsingSystemSettings(
           mouse, screen.cellPixelWidth(), screen.cellPixelHeight());
       playback_session_input::handlePlaybackMouseEvent(
-          inputView(), inputSignals, seekState, mouse);
+          inputView(), *this, seekState, mouse);
     } else if (event.type == InputEvent::Type::PointerLeave) {
       mouseDoubleClickTracker.reset();
       playback_session_input::handlePlaybackPointerLeave(
-          inputSignals, seekState, inputView());
+          *this, seekState, inputView());
     }
     if (!loopStopRequested) applyPresenterSync(syncPresentation());
     if (loopStopRequested) {
@@ -1091,7 +1122,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
         (now - seekState.lastSeekSentTime >= kSeekThrottleInterval);
     if (canSend) {
       playback_session_input::sendSeekRequest(
-          inputView(), inputSignals, seekState,
+          inputView(), *this, seekState,
           seekState.queuedSeekTargetSec);
     }
   }
@@ -1288,7 +1319,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
   bool handleControlCommand(PlaybackControlCommand command) {
     if (finished) return false;
     playback_session_input::handlePlaybackControlCommand(
-        inputView(), inputSignals, seekState, command);
+        inputView(), *this, seekState, command);
     if (!loopStopRequested) {
       applyPresenterSync(syncPresentation());
     }
@@ -1302,8 +1333,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     const double targetSec =
         std::clamp(ratio, 0.0, 1.0) *
         (static_cast<double>(durationUs) / 1000000.0);
-    playback_session_input::queueSeekRequest(inputSignals, seekState,
-                                             targetSec);
+    playback_session_input::queueSeekRequest(*this, seekState, targetSec);
     return true;
   }
 
