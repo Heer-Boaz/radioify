@@ -6,7 +6,7 @@
 #include "tui/media_coordinator.h"
 
 PlaybackPresentationModel TuiPlaybackPresenter::model() const {
-  AudioPlaybackSnapshot audio = audioGetPlaybackSnapshot();
+  AudioPlaybackSnapshot audio = audioPlayback_.snapshot();
   std::optional<TuiMediaCoordinator::VideoSnapshot> video =
       coordinator_.videoSnapshot();
   if (!video) {

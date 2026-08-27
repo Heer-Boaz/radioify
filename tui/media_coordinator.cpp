@@ -177,25 +177,25 @@ struct TuiMediaCoordinator::Impl {
   bool handleControlCommand(PlaybackControlCommand command) {
     if (videoSession_) return videoSession_->handleControlCommand(command);
 
-    const AudioPlaybackSnapshot audio = audioGetPlaybackSnapshot();
+    const AudioPlaybackSnapshot audio = services_.audioPlayback.snapshot();
     const bool hasAudioTarget =
         playbackTargetForAudio(audio.source).has_value();
     switch (command) {
       case PlaybackControlCommand::Play:
         if (!hasAudioTarget) return false;
-        audioPlay();
+        services_.audioPlayback.play();
         return true;
       case PlaybackControlCommand::Pause:
         if (!hasAudioTarget) return false;
-        audioPause();
+        services_.audioPlayback.pause();
         return true;
       case PlaybackControlCommand::TogglePause:
         if (!hasAudioTarget) return false;
-        audioTogglePause();
+        services_.audioPlayback.togglePause();
         return true;
       case PlaybackControlCommand::Stop:
         if (!audio.ready) return false;
-        audioStop();
+        services_.audioPlayback.stop();
         return true;
       case PlaybackControlCommand::Previous:
         if (!hasAudioTarget) return false;
@@ -209,8 +209,8 @@ struct TuiMediaCoordinator::Impl {
 
   bool seekToRatio(double ratio) {
     if (videoSession_) return videoSession_->seekToRatio(ratio);
-    if (!audioGetPlaybackSnapshot().ready) return false;
-    audioSeekToRatio(ratio);
+    if (!services_.audioPlayback.snapshot().ready) return false;
+    services_.audioPlayback.seekToRatio(ratio);
     return true;
   }
 

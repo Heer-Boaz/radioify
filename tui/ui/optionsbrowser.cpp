@@ -622,21 +622,22 @@ bool optionsBrowserSupportsLocation(const BrowserLocation& location) {
 }
 
 OptionsBrowserRuntimeSnapshot captureOptionsBrowserRuntimeSnapshot(
-    const BrowserLocation& location, uint32_t sampleRate, uint32_t channels) {
+    const BrowserLocation& location, const AudioPlaybackRuntime& audioPlayback,
+    uint32_t sampleRate, uint32_t channels) {
   OptionsBrowserRuntimeSnapshot runtime;
-  runtime.kssOptions = audioGetKssOptionState();
-  runtime.nsfOptions = audioGetNsfOptionState();
-  runtime.vgmOptions = audioGetVgmOptionState();
+  runtime.kssOptions = audioPlayback.kssOptions();
+  runtime.nsfOptions = audioPlayback.nsfOptions();
+  runtime.vgmOptions = audioPlayback.vgmOptions();
   runtime.scanSampleRate = sampleRate == 0 ? 48000 : sampleRate;
   runtime.scanChannels = channels == 0 ? 2 : channels;
-  runtime.instrumentAuditionActive = audioGetKssInstrumentAuditionState(
+  runtime.instrumentAuditionActive = audioPlayback.kssInstrumentAuditionState(
       &runtime.auditionDevice, &runtime.auditionHash);
   if (browserOptionsPageKind(location) ==
       BrowserOptionsPageKind::VgmDevice) {
     const std::optional<uint32_t> deviceId = browserOptionsDeviceId(location);
     if (!deviceId) return runtime;
     VgmDeviceOptions options;
-    if (audioGetVgmDeviceOptions(*deviceId, &options)) {
+    if (audioPlayback.vgmDeviceOptions(*deviceId, &options)) {
       runtime.selectedVgmDeviceOptions = options;
     }
   }
@@ -688,12 +689,14 @@ bool prepareOptionsBrowserContent(
 }
 
 OptionsBrowserResult optionsBrowserActivateEntry(const BrowserState& browser,
-                                                 const BrowserEntry& entry) {
+                                                 const BrowserEntry& entry,
+                                                 AudioPlaybackRuntime&
+                                                     audioPlayback) {
   if (!optionsBrowserIsActive(browser)) {
     return OptionsBrowserResult::NotHandled;
   }
   if (entry.actionAs<browser_entry::StopInstrumentAudition>()) {
-    return audioStopKssInstrumentAudition()
+    return audioPlayback.stopKssInstrumentAudition()
                ? OptionsBrowserResult::Changed
                : OptionsBrowserResult::Handled;
   }
@@ -701,7 +704,7 @@ OptionsBrowserResult optionsBrowserActivateEntry(const BrowserState& browser,
           entry.actionAs<browser_entry::StartInstrumentAudition>()) {
     const OptionsBrowserContent* content = optionsBrowserContent(browser);
     if (content && audition->profileIndex < content->instruments.size()) {
-      if (audioStartKssInstrumentAudition(
+      if (audioPlayback.startKssInstrumentAudition(
               content->instruments[audition->profileIndex])) {
         return OptionsBrowserResult::Changed;
       }
@@ -710,18 +713,21 @@ OptionsBrowserResult optionsBrowserActivateEntry(const BrowserState& browser,
   }
   if (const auto* option =
           entry.actionAs<browser_entry::AdjustKssOption>()) {
-    return audioAdjustKssOption(option->option) ? OptionsBrowserResult::Changed
-                                                : OptionsBrowserResult::Handled;
+    return audioPlayback.adjustKssOption(option->option)
+               ? OptionsBrowserResult::Changed
+               : OptionsBrowserResult::Handled;
   }
   if (const auto* option =
           entry.actionAs<browser_entry::AdjustNsfOption>()) {
-    return audioAdjustNsfOption(option->option) ? OptionsBrowserResult::Changed
-                                                : OptionsBrowserResult::Handled;
+    return audioPlayback.adjustNsfOption(option->option)
+               ? OptionsBrowserResult::Changed
+               : OptionsBrowserResult::Handled;
   }
   if (const auto* option =
           entry.actionAs<browser_entry::AdjustVgmOption>()) {
-    return audioAdjustVgmOption(option->option) ? OptionsBrowserResult::Changed
-                                                : OptionsBrowserResult::Handled;
+    return audioPlayback.adjustVgmOption(option->option)
+               ? OptionsBrowserResult::Changed
+               : OptionsBrowserResult::Handled;
   }
   if (const auto* option =
           entry.actionAs<browser_entry::AdjustVgmDeviceOption>()) {
@@ -747,11 +753,12 @@ OptionsBrowserResult optionsBrowserActivateEntry(const BrowserState& browser,
     VgmDeviceOptions baseline = defaultOptions->second;
     if (!browser.entries.empty()) {
       VgmDeviceOptions current;
-      if (audioGetVgmDeviceOptions(*deviceId, &current)) {
+      if (audioPlayback.vgmDeviceOptions(*deviceId, &current)) {
         baseline = current;
       }
     }
-    return audioAdjustVgmDeviceOption(*device, baseline, option->option)
+    return audioPlayback.adjustVgmDeviceOption(*device, baseline,
+                                               option->option)
                ? OptionsBrowserResult::Changed
                : OptionsBrowserResult::Handled;
   }

@@ -361,6 +361,126 @@ AudioPlaybackRuntime::~AudioPlaybackRuntime() {
   audioPlaybackDeviceUninit();
 }
 
+bool AudioPlaybackRuntime::enabled() const { return audioIsEnabled(); }
+
+bool AudioPlaybackRuntime::ready() const { return audioIsReady(); }
+
+bool AudioPlaybackRuntime::startFile(const std::filesystem::path& file,
+                                     int trackIndex) {
+  return audioStartFile(file, trackIndex);
+}
+
+void AudioPlaybackRuntime::stop() { audioStop(); }
+
+AudioPlaybackSnapshot AudioPlaybackRuntime::snapshot() const {
+  return audioGetPlaybackSnapshot();
+}
+
+void AudioPlaybackRuntime::play() { audioPlay(); }
+
+void AudioPlaybackRuntime::pause() { audioPause(); }
+
+void AudioPlaybackRuntime::togglePause() { audioTogglePause(); }
+
+void AudioPlaybackRuntime::seekBy(int direction) { audioSeekBy(direction); }
+
+void AudioPlaybackRuntime::seekToRatio(double ratio) {
+  audioSeekToRatio(ratio);
+}
+
+void AudioPlaybackRuntime::cycleRadioFilter() { audioCycleRadioFilter(); }
+
+void AudioPlaybackRuntime::toggle50Hz() { audioToggle50Hz(); }
+
+void AudioPlaybackRuntime::adjustVolume(float delta) {
+  audioAdjustVolume(delta);
+}
+
+RadioFilterMode AudioPlaybackRuntime::radioFilterMode() const {
+  return audioGetRadioFilterMode();
+}
+
+bool AudioPlaybackRuntime::radioEnabled() const {
+  return audioIsRadioEnabled();
+}
+
+bool AudioPlaybackRuntime::supports50HzToggle() const {
+  return audioSupports50HzToggle();
+}
+
+std::string AudioPlaybackRuntime::warning() const { return audioGetWarning(); }
+
+AudioMelodyInfo AudioPlaybackRuntime::melodyInfo() const {
+  return audioGetMelodyInfo();
+}
+
+AudioMelodyAnalysisState AudioPlaybackRuntime::melodyAnalysisState() const {
+  return audioGetMelodyAnalysisState();
+}
+
+bool AudioPlaybackRuntime::analyzeFileToMelodyFile(
+    const std::filesystem::path& file, int trackIndex,
+    const std::filesystem::path& outputFile,
+    const std::function<void(float)>& progressCallback,
+    std::string* error) const {
+  return audioAnalyzeFileToMelodyFile(file, trackIndex, outputFile,
+                                      progressCallback, error);
+}
+
+bool AudioPlaybackRuntime::canAnalyzeFile(
+    const std::filesystem::path& file) const {
+  return audioCanAnalyzeFileToMelodyFile(file);
+}
+
+KssPlaybackOptions AudioPlaybackRuntime::kssOptions() const {
+  return audioGetKssOptionState();
+}
+
+bool AudioPlaybackRuntime::kssInstrumentAuditionState(
+    KssInstrumentDevice* device, uint32_t* hash) const {
+  return audioGetKssInstrumentAuditionState(device, hash);
+}
+
+bool AudioPlaybackRuntime::startKssInstrumentAudition(
+    const KssInstrumentProfile& profile) {
+  return audioStartKssInstrumentAudition(profile);
+}
+
+bool AudioPlaybackRuntime::stopKssInstrumentAudition() {
+  return audioStopKssInstrumentAudition();
+}
+
+bool AudioPlaybackRuntime::adjustKssOption(KssOptionId id, int direction) {
+  return audioAdjustKssOption(id, direction);
+}
+
+NsfPlaybackOptions AudioPlaybackRuntime::nsfOptions() const {
+  return audioGetNsfOptionState();
+}
+
+bool AudioPlaybackRuntime::adjustNsfOption(NsfOptionId id, int direction) {
+  return audioAdjustNsfOption(id, direction);
+}
+
+VgmPlaybackOptions AudioPlaybackRuntime::vgmOptions() const {
+  return audioGetVgmOptionState();
+}
+
+bool AudioPlaybackRuntime::adjustVgmOption(VgmOptionId id, int direction) {
+  return audioAdjustVgmOption(id, direction);
+}
+
+bool AudioPlaybackRuntime::vgmDeviceOptions(uint32_t deviceId,
+                                            VgmDeviceOptions* out) const {
+  return audioGetVgmDeviceOptions(deviceId, out);
+}
+
+bool AudioPlaybackRuntime::adjustVgmDeviceOption(
+    const VgmDeviceInfo& device, const VgmDeviceOptions& baseline,
+    VgmDeviceOptionId id, int direction) {
+  return audioAdjustVgmDeviceOption(device, baseline, id, direction);
+}
+
 bool audioIsEnabled() { return gAudio.enableAudio; }
 
 bool audioIsReady() { return gAudio.decoderReady; }

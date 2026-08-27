@@ -19,6 +19,7 @@
 #include "playback/target.h"
 
 struct InputEvent;
+class AudioPlaybackRuntime;
 namespace media_processing {
 struct TaskCompletion;
 }
@@ -45,6 +46,7 @@ class TuiMediaCoordinator {
   };
 
   struct Services {
+    AudioPlaybackRuntime& audioPlayback;
     playback_queue::Queue& queue;
     playback_media_processing::Actions mediaProcessingActions;
     PlaybackSession::Dependencies sessionDependencies;

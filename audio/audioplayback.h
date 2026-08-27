@@ -67,6 +67,49 @@ class AudioPlaybackRuntime {
   AudioPlaybackRuntime& operator=(const AudioPlaybackRuntime&) = delete;
   AudioPlaybackRuntime(AudioPlaybackRuntime&&) = delete;
   AudioPlaybackRuntime& operator=(AudioPlaybackRuntime&&) = delete;
+
+  // Application-facing audio-player API. Low-level decoder and stream
+  // functions below remain available to the playback engine, while shells
+  // receive this owner instead of reaching into process globals.
+  bool enabled() const;
+  bool ready() const;
+  bool startFile(const std::filesystem::path& file, int trackIndex = 0);
+  void stop();
+  AudioPlaybackSnapshot snapshot() const;
+  void play();
+  void pause();
+  void togglePause();
+  void seekBy(int direction);
+  void seekToRatio(double ratio);
+  void cycleRadioFilter();
+  void toggle50Hz();
+  void adjustVolume(float delta);
+  RadioFilterMode radioFilterMode() const;
+  bool radioEnabled() const;
+  bool supports50HzToggle() const;
+  std::string warning() const;
+  AudioMelodyInfo melodyInfo() const;
+  AudioMelodyAnalysisState melodyAnalysisState() const;
+  bool analyzeFileToMelodyFile(
+      const std::filesystem::path& file, int trackIndex,
+      const std::filesystem::path& outputFile,
+      const std::function<void(float)>& progressCallback,
+      std::string* error) const;
+  bool canAnalyzeFile(const std::filesystem::path& file) const;
+  KssPlaybackOptions kssOptions() const;
+  bool kssInstrumentAuditionState(KssInstrumentDevice* device,
+                                  uint32_t* hash) const;
+  bool startKssInstrumentAudition(const KssInstrumentProfile& profile);
+  bool stopKssInstrumentAudition();
+  bool adjustKssOption(KssOptionId id, int direction = 1);
+  NsfPlaybackOptions nsfOptions() const;
+  bool adjustNsfOption(NsfOptionId id, int direction = 1);
+  VgmPlaybackOptions vgmOptions() const;
+  bool adjustVgmOption(VgmOptionId id, int direction = 1);
+  bool vgmDeviceOptions(uint32_t deviceId, VgmDeviceOptions* out) const;
+  bool adjustVgmDeviceOption(const VgmDeviceInfo& device,
+                             const VgmDeviceOptions& baseline,
+                             VgmDeviceOptionId id, int direction = 1);
 };
 
 bool audioIsEnabled();

@@ -5,15 +5,16 @@
 
 namespace media_processing {
 
-Coordinator::Coordinator()
-    : Coordinator([]() {
+Coordinator::Coordinator(AudioPlaybackRuntime& audioPlayback)
+    : Coordinator([&audioPlayback]() {
         Operations operations;
         operations.analyzeMelody =
-            [](const std::filesystem::path& sourceFile, int trackIndex,
-               const std::filesystem::path& outputFile,
-               const MelodyProgressReporter& reportProgress,
-               std::string* error) {
-              return audioAnalyzeFileToMelodyFile(
+            [&audioPlayback](const std::filesystem::path& sourceFile,
+                             int trackIndex,
+                             const std::filesystem::path& outputFile,
+                             const MelodyProgressReporter& reportProgress,
+                             std::string* error) {
+              return audioPlayback.analyzeFileToMelodyFile(
                   sourceFile, trackIndex, outputFile, reportProgress, error);
             };
         operations.splitLoop =

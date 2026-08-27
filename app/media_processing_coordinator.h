@@ -14,6 +14,8 @@
 #include "playback/media_processing_service.h"
 #include "playback/video/transcript/generation_job.h"
 
+class AudioPlaybackRuntime;
+
 namespace media_processing {
 
 enum class TaskKind {
@@ -77,7 +79,7 @@ class Coordinator final : public playback_media_processing::Service {
 
   // Uses Radioify's production melody, loop-split, Vulkan transcript, and
   // DirectML separation backends.
-  Coordinator();
+  explicit Coordinator(AudioPlaybackRuntime& audioPlayback);
   // The operation boundary keeps lifecycle and presentation tests independent
   // from heavyweight media/GPU backends.
   explicit Coordinator(Operations operations);

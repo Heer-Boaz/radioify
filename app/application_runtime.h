@@ -15,6 +15,7 @@ class ApplicationRuntime {
   ApplicationRuntime(const ApplicationRuntime&) = delete;
   ApplicationRuntime& operator=(const ApplicationRuntime&) = delete;
 
+  AudioPlaybackRuntime& audioPlayback() { return audioPlayback_; }
   playback_queue::Queue& playbackQueue() { return playbackQueue_; }
   media_processing::Coordinator& mediaProcessing() { return mediaProcessing_; }
 

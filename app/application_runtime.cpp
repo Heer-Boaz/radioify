@@ -26,6 +26,7 @@ ApplicationRuntime::ApplicationRuntime(const Options& options)
            },
            [](const PlaybackTarget& target) {
              return playback_route::resolveTarget(target);
-           }}) {}
+           }}),
+      mediaProcessing_(audioPlayback_) {}
 
 ApplicationRuntime::~ApplicationRuntime() = default;

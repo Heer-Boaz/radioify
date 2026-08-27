@@ -268,6 +268,7 @@ static std::vector<std::filesystem::path> imageFilesFromBrowserEntries(
 }
 
 int runTui(Options o, ApplicationRuntime& runtime) {
+  AudioPlaybackRuntime& audioPlayback = runtime.audioPlayback();
   const ShellOpenMode shellOpenMode = resolveWindowsShellOpenMode(o);
   const bool acceptShellOpenHandoffs =
       shellOpenMode == ShellOpenMode::SameInstance;
@@ -384,7 +385,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         BrowserContentRequest workerRequest = request;
         if (request.location.kind() == BrowserLocationKind::OptionsBrowser) {
           workerRequest.optionsRuntime = captureOptionsBrowserRuntimeSnapshot(
-              request.location, sampleRate, o.mono ? 1u : 2u);
+              request.location, audioPlayback, sampleRate,
+              o.mono ? 1u : 2u);
         }
         if (!browserContentWorker.submit(preparationId,
                                          std::move(workerRequest))) {
@@ -463,7 +465,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     logLine(std::string("  Output: ") + toUtf8String(outputPath));
     logLine("Rendering output...");
     Radio1938 activeRadioTemplate = *radio1938Template;
-    const RadioFilterMode activeMode = audioGetRadioFilterMode();
+    const RadioFilterMode activeMode = audioPlayback.radioFilterMode();
     if (radioFilterModeEnabled(activeMode) &&
         activeRadioTemplate.receiverProfile !=
             radioFilterModeReceiverProfile(activeMode)) {
@@ -480,14 +482,14 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       }
     }
     renderToFile(renderOpt, file, outputPath, activeRadioTemplate,
-                 audioIsRadioEnabled());
+                 audioPlayback.radioEnabled());
     logLine("Done.");
   };
 
   const TuiTheme theme = radioifyTuiTheme();
 
   auto showPlaybackErrorDialog = [&](const std::filesystem::path& file) {
-    std::string error = audioGetWarning();
+    std::string error = audioPlayback.warning();
     if (error.empty()) {
       error = "Failed to start playback.";
     }
@@ -512,7 +514,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
 
   auto tryStartAudioFile = [&](const std::filesystem::path& file,
                                int trackIndex = 0) {
-    if (audioStartFile(file, trackIndex)) {
+    if (audioPlayback.startFile(file, trackIndex)) {
       return true;
     }
     showPlaybackErrorDialog(file);
@@ -633,9 +635,10 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   playback_media_processing::Actions mediaProcessingActions(mediaProcessing);
   MediaTaskPresenter mediaTaskPresenter(mediaProcessing);
   TuiMediaCoordinator mediaCoordinator(
-      {playbackQueue, mediaProcessingActions, mediaSessionDependencies,
+      {audioPlayback, playbackQueue, mediaProcessingActions,
+       mediaSessionDependencies,
        videoConfig, openFileRequests, std::move(mediaCallbacks)});
-  TuiPlaybackPresenter playbackPresenter(mediaCoordinator);
+  TuiPlaybackPresenter playbackPresenter(mediaCoordinator, audioPlayback);
   auto mediaWaitHandles = [&]() {
     std::vector<NativeWaitHandle> handles = mediaCoordinator.waitHandles();
     if (NativeWaitHandle taskWake = mediaProcessing.waitHandle()) {
@@ -746,7 +749,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     chromeInput.hasMediaTaskStatus =
         mediaTaskStatus && !mediaTaskStatus->text.empty();
     chromeInput.hasWarning =
-        !mediaCommandError.empty() || !audioGetWarning().empty();
+        !mediaCommandError.empty() || !audioPlayback.warning().empty();
     chromeInput.viewMode = browser.viewMode;
     chromeInput.nowPlayingLabel =
         buildPlaybackLabel(presentation.currentTarget);
@@ -803,7 +806,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   callbacks.onQuit = [&]() { mediaCoordinator.requestQuit(); };
   callbacks.onActivateEntry = [&](const BrowserEntry& entry) {
     OptionsBrowserResult optionsResult =
-        optionsBrowserActivateEntry(browser, entry);
+        optionsBrowserActivateEntry(browser, entry, audioPlayback);
     if (optionsResult == OptionsBrowserResult::Changed) {
       browserNavigator.reload();
       return true;
@@ -833,7 +836,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     context.canBrowseTracks =
         audio && supportsPlaybackTrackCatalog(entry.path);
     context.canAnalyzeAudio =
-        audio && audioCanAnalyzeFileToMelodyFile(entry.path);
+        audio && audioPlayback.canAnalyzeFile(entry.path);
     context.hasGeneratedSubtitles =
         !playback_video_transcript::activeTranscriptPathForVideo(entry.path)
              .empty();
@@ -871,12 +874,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     handlePlaybackControlCommand(PlaybackControlCommand::Next);
   };
   callbacks.onToggleRadio = [&]() {
-    audioCycleRadioFilter();
+    audioPlayback.cycleRadioFilter();
     markDirty();
   };
   callbacks.onToggle50Hz = [&]() {
-    if (audioSupports50HzToggle()) {
-      audioToggle50Hz();
+    if (audioPlayback.supports50HzToggle()) {
+      audioPlayback.toggle50Hz();
       markDirty();
     }
   };
@@ -905,14 +908,14 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
   };
   callbacks.onSeekBy = [&](int direction) {
-    audioSeekBy(direction);
+    audioPlayback.seekBy(direction);
     markDirty();
   };
   callbacks.onSeekToRatio = [&](double ratio) {
     if (mediaCoordinator.seekToRatio(ratio)) markDirty();
   };
   callbacks.onAdjustVolume = [&](float delta) {
-    audioAdjustVolume(delta);
+    audioPlayback.adjustVolume(delta);
     markDirty();
   };
   callbacks.onToggleWindow = [&]() {
@@ -1109,13 +1112,13 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       });
     }
     commands.emplace_back("Cycle Radio Filter", "R", [&]() {
-      audioCycleRadioFilter();
+      audioPlayback.cycleRadioFilter();
       markDirty();
     });
     const bool show50Hz = audio.supports50HzToggle;
     if (show50Hz) {
       commands.emplace_back("50Hz", "H", [&]() {
-        audioToggle50Hz();
+        audioPlayback.toggle50Hz();
         markDirty();
       });
     }
@@ -1229,9 +1232,9 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         LoopSplitConfig splitConfig;
         const auto* track = entry.actionAs<browser_entry::PlayTrack>();
         splitConfig.trackIndex = track ? track->trackIndex : 0;
-        splitConfig.kssOptions = audioGetKssOptionState();
-        splitConfig.nsfOptions = audioGetNsfOptionState();
-        splitConfig.vgmOptions = audioGetVgmOptionState();
+        splitConfig.kssOptions = audioPlayback.kssOptions();
+        splitConfig.nsfOptions = audioPlayback.nsfOptions();
+        splitConfig.vgmOptions = audioPlayback.vgmOptions();
         const LoopSplitOutputPaths outputPaths =
             resolveLoopSplitOutputPaths(entry.path, o.output);
         if (mediaProcessing.tryStartLoopSplit(
@@ -1526,7 +1529,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           layout,
           breadcrumbLine, breadcrumbY, searchBarY, searchBarWidth, listTop,
           listHeight, progressBarX, progressBarY, progressBarWidth, actionStrip,
-          browserInteractionEnabled, o.play, audioIsReady(), breadcrumbHover,
+          browserInteractionEnabled, o.play, audioPlayback.ready(),
+          breadcrumbHover,
           actionHover, searchBarHover, dirty, running, callbacks);
     };
 
@@ -1779,8 +1783,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       tui_melody_visualization::Observation melodyObservation;
       melodyObservation.source.file = nowPlaying;
       melodyObservation.source.trackIndex = nowPlayingTrackIndex;
-      melodyObservation.pitch = audioGetMelodyInfo();
-      melodyObservation.analysis = audioGetMelodyAnalysisState();
+      melodyObservation.pitch = audioPlayback.melodyInfo();
+      melodyObservation.analysis = audioPlayback.melodyAnalysisState();
       melodyObservation.playbackAdvancing =
           !audio.paused && !audio.holding;
       melodyVisualization.update(std::move(melodyObservation));
@@ -1833,7 +1837,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
               0, line++, fitLine("  Error: " + mediaCommandError, width),
               theme.alert);
         } else {
-          std::string warning = audioGetWarning();
+          std::string warning = audioPlayback.warning();
           if (!warning.empty()) {
           screen.writeText(0, line++, fitLine("  Warning: " + warning, width),
                            theme.dim);

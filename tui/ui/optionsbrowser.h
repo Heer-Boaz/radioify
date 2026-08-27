@@ -10,6 +10,8 @@
 #include "nsfoptions.h"
 #include "vgmoptions.h"
 
+class AudioPlaybackRuntime;
+
 enum class OptionsBrowserResult {
   NotHandled,
   Handled,
@@ -39,11 +41,14 @@ std::optional<OptionsBrowserSubject> optionsBrowserSubjectForEntry(
 BrowserLocation optionsBrowserOpenLocation(const OptionsBrowserSubject& subject);
 bool optionsBrowserSupportsLocation(const BrowserLocation& location);
 OptionsBrowserRuntimeSnapshot captureOptionsBrowserRuntimeSnapshot(
-    const BrowserLocation& location, uint32_t sampleRate, uint32_t channels);
+    const BrowserLocation& location, const AudioPlaybackRuntime& audioPlayback,
+    uint32_t sampleRate, uint32_t channels);
 bool prepareOptionsBrowserContent(
     BrowserState& browser, const OptionsBrowserRuntimeSnapshot& runtime,
     const std::function<bool()>& cancellationRequested = {});
 OptionsBrowserResult optionsBrowserActivateEntry(const BrowserState& browser,
-                                                 const BrowserEntry& entry);
+                                                 const BrowserEntry& entry,
+                                                 AudioPlaybackRuntime&
+                                                     audioPlayback);
 std::string optionsBrowserSelectionMeta(const BrowserState& browser);
 std::string optionsBrowserShowingLabel(const BrowserState& browser);
