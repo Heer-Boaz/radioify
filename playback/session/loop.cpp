@@ -74,7 +74,7 @@ PlaybackPresentationState initialPlaybackPresentation(
 
 }  // namespace
 
-struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
+struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   static constexpr auto kSeekThrottleInterval = std::chrono::milliseconds(50);
   static constexpr auto kFrameCopyMessageDuration =
       std::chrono::milliseconds(1500);
@@ -236,7 +236,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     return videoEditWorkspace.needsExitConfirmation();
   }
 
-  playback_video_edit::Prompt videoEditPrompt() const override {
+  playback_video_edit::Prompt videoEditPrompt() const {
     if (exitCoordinator.confirmationVisible()) {
       return playback_video_edit::Prompt::LeavePlayback;
     }
@@ -254,8 +254,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
           playback_session::Event{*transition.handoffCancellation});
     }
     if (transition.resumePlayback) {
-      playback_session_input::setPlaybackPaused(
-          inputView(), *this, seekState, false);
+      playback_session_input::setPlaybackPaused(*this, seekState, false);
     }
     if (transition.finishSession) {
       finishLoopExit(transition.quitApplication);
@@ -279,8 +278,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     if (transition.handled && exitCoordinator.confirmationVisible()) {
       exitWhenExportSucceeds = false;
       overlayControlHover.store(-1, std::memory_order_relaxed);
-      playback_session_input::setPlaybackPaused(
-          inputView(), *this, seekState, true);
+      playback_session_input::setPlaybackPaused(*this, seekState, true);
       syncVideoEditPresentation();
     }
     applyExitTransition(transition);
@@ -462,8 +460,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     const playback_session::VideoEditActionResult result =
         videoEditWorkspace.execute(command);
     if (result.pausePlayback) {
-      playback_session_input::setPlaybackPaused(
-          inputView(), *this, seekState, true);
+      playback_session_input::setPlaybackPaused(*this, seekState, true);
     }
     overlayControlHover.store(-1, std::memory_order_relaxed);
     std::string message = result.message;
@@ -630,20 +627,56 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
         std::move(command));
   }
 
-  bool videoEditorActive() const override {
-    return videoEditWorkspace.active();
+  playback_session_input::SessionSnapshot snapshot() const override {
+    const AudioPlaybackSnapshot audio = audioPlayback.snapshot();
+    playback_session_input::SessionSnapshot state;
+    state.transport = core.snapshot();
+    state.audioDurationSec = audio.durationSec;
+    state.audioSupports50HzToggle = audio.supports50HzToggle;
+    state.pictureInPicture = output.window().IsPictureInPicture();
+    state.videoEditorActive = videoEditWorkspace.active();
+    state.videoEditPrompt = videoEditPrompt();
+    state.contextMenuVisible = contextMenuController.visible();
+    state.playbackControlsVisible = osd.controlsVisible();
+    state.stopRequested = loopStopRequested;
+    return state;
   }
 
-  bool contextMenuVisible() const override {
-    return contextMenuController.visible();
+  playback_overlay::InteractionHit hitTest(
+      const playback_session_input::InteractionRequest& request)
+      const override {
+    if (request.surface == playback_video_timeline_preview::
+                               PresentationSurface::VideoWindow) {
+      return output.window().OverlayHitAt(request.x, request.y,
+                                          request.capturedProgress);
+    }
+    if (request.scaleX != 1.0 || request.scaleY != 1.0) {
+      return playback_overlay::interactionHitAtTransformed(
+          frameOutputState.overlayInteractions, 0.0, 0.0,
+          request.scaleX, request.scaleY, request.x, request.y,
+          request.capturedProgress);
+    }
+    return playback_overlay::interactionHitAt(
+        frameOutputState.overlayInteractions, request.x, request.y,
+        request.capturedProgress);
   }
 
-  bool playbackControlsVisible() const override {
-    return osd.controlsVisible();
-  }
-
-  bool stopRequested() const override {
-    return loopStopRequested;
+  bool toggleSubtitles() {
+    if (!hasSubtitles) return false;
+    std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
+    const bool enabled =
+        enableSubtitlesShared.load(std::memory_order_relaxed);
+    if (!enabled) {
+      subtitleManager.selectFirstTrackWithCues();
+      enableSubtitlesShared.store(true, std::memory_order_relaxed);
+      return true;
+    }
+    const size_t count = subtitleManager.selectableTrackCount();
+    if (count <= 1 || subtitleManager.isActiveLastCueTrack()) {
+      enableSubtitlesShared.store(false, std::memory_order_relaxed);
+      return true;
+    }
+    return subtitleManager.cycleLanguage();
   }
 
   bool executeInputCommand(playback_session_input::CommandAction action) {
@@ -660,6 +693,21 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
         redraw = true;
         forceRefreshArt = true;
         return true;
+      case Action::ToggleRadio:
+        if (!core.snapshot().audioAvailable) return false;
+        audioPlayback.cycleRadioFilter();
+        return true;
+      case Action::Toggle50Hz:
+        if (!core.snapshot().audioAvailable ||
+            !audioPlayback.snapshot().supports50HzToggle) {
+          return false;
+        }
+        audioPlayback.toggle50Hz();
+        return true;
+      case Action::CycleAudioTrack:
+        return core.cycleAudioTrack();
+      case Action::ToggleSubtitles:
+        return toggleSubtitles();
       case Action::ToggleWindowPresentation: {
         const bool changed = presentationController.toggleWindow();
         redraw = redraw || changed;
@@ -783,16 +831,49 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     return true;
   }
 
-  playback_session_input::PlaybackInputView inputView() {
-    return {core,
-            audioPlayback,
-            output.window(),
-            subtitleManager,
-            subtitleMutex,
-            enableSubtitlesShared,
-            hasSubtitles,
-            frameOutputState,
-            timingSink};
+  bool executeInputCommand(playback_session_input::SetPaused request) {
+    core.setPaused(request.paused);
+    return true;
+  }
+
+  bool executeInputCommand(playback_session_input::SeekTo request) {
+    if (!core.seekTo(request.targetUs)) return false;
+    if (timingSink) {
+      char buf[192];
+      std::snprintf(buf, sizeof(buf),
+                    "seek_request target_sec=%.3f target_us=%lld",
+                    static_cast<double>(request.targetUs) / 1000000.0,
+                    static_cast<long long>(request.targetUs));
+      timingSink(std::string(buf));
+    }
+    return true;
+  }
+
+  bool executeInputCommand(playback_session_input::SeekBy request) {
+    if (!core.seekBy(request.deltaUs)) return false;
+    if (timingSink) {
+      const playback_session_input::TransportSnapshot transport =
+          core.snapshot();
+      char buf[256];
+      std::snprintf(
+          buf, sizeof(buf),
+          "seek_relative_request delta_us=%lld target_us=%lld generation=%llu",
+          static_cast<long long>(request.deltaUs),
+          static_cast<long long>(transport.positionUs),
+          static_cast<unsigned long long>(
+              transport.latestSeekRequestGeneration));
+      timingSink(std::string(buf));
+    }
+    return true;
+  }
+
+  bool executeInputCommand(playback_session_input::StepFrame request) {
+    return core.requestFrameStep(request.direction);
+  }
+
+  bool executeInputCommand(playback_session_input::AdjustVolume request) {
+    audioPlayback.adjustVolume(request.delta);
+    return true;
   }
 
   bool overlayVisible() const {
@@ -1046,18 +1127,17 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
       requestOpenFilesExit(event.fileDrop.files);
     } else if (event.type == InputEvent::Type::Key ||
                event.type == InputEvent::Type::Action) {
-      playback_session_input::handlePlaybackInputEvent(
-          inputView(), *this, seekState, event);
+      playback_session_input::handlePlaybackInputEvent(*this, seekState,
+                                                       event);
     } else if (event.type == InputEvent::Type::Mouse) {
       MouseEvent mouse = event.mouse;
       mouseDoubleClickTracker.classifyUsingSystemSettings(
           mouse, screen.cellPixelWidth(), screen.cellPixelHeight());
-      playback_session_input::handlePlaybackMouseEvent(
-          inputView(), *this, seekState, mouse);
+      playback_session_input::handlePlaybackMouseEvent(*this, seekState,
+                                                       mouse);
     } else if (event.type == InputEvent::Type::PointerLeave) {
       mouseDoubleClickTracker.reset();
-      playback_session_input::handlePlaybackPointerLeave(
-          *this, seekState, inputView());
+      playback_session_input::handlePlaybackPointerLeave(*this, seekState);
     }
     if (!loopStopRequested) applyPresenterSync(syncPresentation());
     if (loopStopRequested) {
@@ -1122,8 +1202,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
         (now - seekState.lastSeekSentTime >= kSeekThrottleInterval);
     if (canSend) {
       playback_session_input::sendSeekRequest(
-          inputView(), *this, seekState,
-          seekState.queuedSeekTargetSec);
+          *this, seekState, seekState.queuedSeekTargetSec);
     }
   }
 
@@ -1318,8 +1397,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
 
   bool handleControlCommand(PlaybackControlCommand command) {
     if (finished) return false;
-    playback_session_input::handlePlaybackControlCommand(
-        inputView(), *this, seekState, command);
+    playback_session_input::handlePlaybackControlCommand(*this, seekState,
+                                                         command);
     if (!loopStopRequested) {
       applyPresenterSync(syncPresentation());
     }

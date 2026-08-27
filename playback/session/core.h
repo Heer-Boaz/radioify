@@ -25,7 +25,7 @@ struct PlaybackSessionPresentationSnapshot {
   bool frameAvailable = false;
 };
 
-class PlaybackSessionCore final : public playback_session_input::Transport {
+class PlaybackSessionCore final {
  public:
   struct Args {
     Player& player;
@@ -47,13 +47,13 @@ class PlaybackSessionCore final : public playback_session_input::Transport {
   void initialize(ConsoleScreen& screen);
 
   bool finalizeAudioStart();
-  playback_session_input::TransportSnapshot snapshot() const override;
-  bool seekTo(int64_t targetUs) override;
-  bool seekBy(int64_t deltaUs) override;
-  void setPaused(bool paused) override;
+  playback_session_input::TransportSnapshot snapshot() const;
+  bool seekTo(int64_t targetUs);
+  bool seekBy(int64_t deltaUs);
+  void setPaused(bool paused);
   bool requestFrameStep(
-      playback_video_frame_step::Direction direction) override;
-  bool cycleAudioTrack() override;
+      playback_video_frame_step::Direction direction);
+  bool cycleAudioTrack();
   void beginExit();
   bool applyPresentationSync(bool switchedAwayFromWindow);
   PlaybackSessionRefreshResult refresh(bool nativeWindowActive, bool& redraw);

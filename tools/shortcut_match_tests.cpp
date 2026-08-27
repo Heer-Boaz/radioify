@@ -74,9 +74,9 @@ int main() {
   bool ok = true;
 
   static_assert(
-      !std::is_default_constructible_v<
-          playback_session_input::PlaybackInputView>,
-      "playback input dependencies must be supplied explicitly");
+      std::is_copy_constructible_v<
+          playback_session_input::SessionSnapshot>,
+      "playback input must consume a publishable value snapshot");
   static_assert(
       !std::is_default_constructible_v<
           playback_screen_renderer::PlaybackScreenResources> &&
@@ -88,7 +88,7 @@ int main() {
           playback_screen_renderer::PlaybackScreenModel>,
       "the playback presentation read model must be publishable by value");
   static_assert(
-      std::is_abstract_v<playback_session_input::CommandTarget>,
+      std::is_abstract_v<playback_session_input::SessionPort>,
       "playback input must dispatch intent through its typed command port");
 
   using BoundaryCommitState =

@@ -1,24 +1,16 @@
 #pragma once
 
-#include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <mutex>
 #include <optional>
-#include <string>
 
 #include "playback/control/command.h"
 #include "playback/control/transport.h"
 #include "playback/input/shortcut_types.h"
 #include "input_event.h"
-#include "playback/ascii/frame_output.h"
 #include "playback/session/input_command.h"
 #include "playback/session/input_transport.h"
 #include "state.h"
-
-class SubtitleManager;
-class VideoWindow;
-class AudioPlaybackRuntime;
 
 namespace playback_session_input {
 
@@ -26,18 +18,6 @@ inline bool isPlaybackFullscreenGesture(const MouseEvent& mouse) {
   return mouse.button == MouseButton::Left &&
          mouse.kind == MouseEventKind::DoubleClick;
 }
-
-struct PlaybackInputView {
-  Transport& transport;
-  AudioPlaybackRuntime& audioPlayback;
-  VideoWindow& videoWindow;
-  SubtitleManager& subtitleManager;
-  std::mutex& subtitleMutex;
-  std::atomic<bool>& enableSubtitlesShared;
-  bool hasSubtitles = false;
-  playback_frame_output::FrameOutputState& frameOutputState;
-  playback_frame_output::LogLineWriter timingSink;
-};
 
 struct PlaybackSeekGestureState {
   struct VideoEditBoundaryDrag {
@@ -97,30 +77,24 @@ inline constexpr int64_t videoEditBoundarySeekTargetUs(
              : clampedUs;
 }
 
-bool isOverlayVisible(const CommandTarget& target);
-void setPlaybackPaused(const PlaybackInputView& view,
-                       CommandTarget& target,
+bool isOverlayVisible(const SessionPort& session);
+void setPlaybackPaused(SessionPort& session,
                        PlaybackSeekGestureState& seekState, bool paused);
-void queueSeekRequest(CommandTarget& target,
+void queueSeekRequest(SessionPort& session,
                       PlaybackSeekGestureState& seekState, double targetSec);
-void sendSeekRequest(const PlaybackInputView& view,
-                     CommandTarget& target,
+void sendSeekRequest(SessionPort& session,
                      PlaybackSeekGestureState& seekState, double targetSec);
 
-void handlePlaybackInputEvent(const PlaybackInputView& view,
-                              CommandTarget& target,
+void handlePlaybackInputEvent(SessionPort& session,
                               PlaybackSeekGestureState& seekState,
                               const InputEvent& ev);
-void handlePlaybackControlCommand(const PlaybackInputView& view,
-                                  CommandTarget& target,
+void handlePlaybackControlCommand(SessionPort& session,
                                   PlaybackSeekGestureState& seekState,
                                   PlaybackControlCommand command);
-void handlePlaybackMouseEvent(const PlaybackInputView& view,
-                              CommandTarget& target,
+void handlePlaybackMouseEvent(SessionPort& session,
                               PlaybackSeekGestureState& seekState,
                               const MouseEvent& mouse);
-void handlePlaybackPointerLeave(CommandTarget& target,
-                                PlaybackSeekGestureState& seekState,
-                                const PlaybackInputView& view);
+void handlePlaybackPointerLeave(SessionPort& session,
+                                PlaybackSeekGestureState& seekState);
 
 }  // namespace playback_session_input
