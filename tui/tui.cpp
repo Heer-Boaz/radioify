@@ -141,10 +141,10 @@ static DWORD waitForBrowserWake(ConsoleInput& input,
                                 const AudioPictureInPictureWindow&
                                     audioPictureInPicture,
                                 const std::vector<NativeWaitHandle>&
-                                    playbackActivityHandles,
+                                    activityHandles,
                                 wake_schedule::Deadline deadline) {
   std::vector<NativeWaitHandle> handles;
-  handles.reserve(10 + playbackActivityHandles.size());
+  handles.reserve(10 + activityHandles.size());
   const auto append = [&](NativeWaitHandle handle) {
     if (handle) handles.push_back(handle);
   };
@@ -162,7 +162,7 @@ static DWORD waitForBrowserWake(ConsoleInput& input,
     append(audioPictureInPicture.inputWaitHandle());
     append(audioPictureInPicture.closeRequestedWaitHandle());
   }
-  for (NativeWaitHandle handle : playbackActivityHandles) append(handle);
+  for (NativeWaitHandle handle : activityHandles) append(handle);
   return waitForHandlesAndPumpThreadWindowMessages(
       static_cast<DWORD>(handles.size()),
       handles.empty() ? nullptr : handles.data(), deadline);
@@ -652,11 +652,20 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
   };
   media_processing::Coordinator mediaProcessing;
+  playback_media_processing::Actions mediaProcessingActions(mediaProcessing);
+  MediaTaskPresenter mediaTaskPresenter(mediaProcessing);
   TuiMediaCoordinator mediaCoordinator(
-      {playbackQueue, mediaProcessing, mediaSessionDependencies, videoConfig,
-       openFileRequests, std::move(mediaCallbacks)});
+      {playbackQueue, mediaProcessingActions, mediaSessionDependencies,
+       videoConfig, openFileRequests, std::move(mediaCallbacks)});
+  auto mediaWaitHandles = [&]() {
+    std::vector<NativeWaitHandle> handles = mediaCoordinator.waitHandles();
+    std::vector<NativeWaitHandle> taskHandles = mediaProcessing.waitHandles();
+    handles.reserve(handles.size() + taskHandles.size());
+    handles.insert(handles.end(), taskHandles.begin(), taskHandles.end());
+    return handles;
+  };
   auto cancelActiveMediaTask = [&]() {
-    const bool accepted = mediaCoordinator.cancelActiveMediaTask();
+    const bool accepted = mediaProcessing.cancelActive();
     if (accepted) {
       markLayoutDirty();
       markDirty(UiDirtyFlags::Async);
@@ -756,7 +765,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     chromeInput.selectedEntryHasOptions =
         selectedOptionsSubject().has_value();
     const std::optional<MediaTaskStatusModel> mediaTaskStatus =
-        mediaCoordinator.latestMediaTaskStatus();
+        mediaTaskPresenter.latestStatus();
     chromeInput.hasMediaTaskStatus =
         mediaTaskStatus && !mediaTaskStatus->text.empty();
     chromeInput.hasWarning =
@@ -851,7 +860,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     context.hasGeneratedSubtitles =
         !playback_video_transcript::activeTranscriptPathForVideo(entry.path)
              .empty();
-    mediaCoordinator.applyMediaProcessingState(entry.path, context);
+    mediaProcessingActions.applySourceState(entry.path, context);
     std::vector<playback_media_actions::Item> items =
         playback_media_actions::build(context);
     if (items.empty()) return;
@@ -1199,8 +1208,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         track ? melodyArtifactPathForTrack(
                     entry.path, static_cast<std::uint32_t>(trackIndex))
               : defaultMelodyArtifactPath(entry.path);
-    if (mediaCoordinator.tryStartMelodyAnalysis(
-            entry.path, trackIndex, outputPath)) {
+    if (mediaProcessing.tryStartMelodyAnalysis(entry.path, trackIndex,
+                                               outputPath)) {
       markLayoutDirty();
       markDirty(UiDirtyFlags::Async);
     }
@@ -1211,7 +1220,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     const playback_media_actions::Action action = command.action;
     dirty = true;
     const std::optional<playback_media_processing::ActionResult> processing =
-        mediaCoordinator.executeMediaProcessingAction(action, entry.path);
+        mediaProcessingActions.execute(action, entry.path);
     if (processing) {
       mediaCommandError =
           processing->accepted ? std::string() : processing->feedback;
@@ -1255,7 +1264,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         splitConfig.vgmOptions = audioGetVgmOptionState();
         const LoopSplitOutputPaths outputPaths =
             resolveLoopSplitOutputPaths(entry.path, o.output);
-        if (mediaCoordinator.tryStartLoopSplit(
+        if (mediaProcessing.tryStartLoopSplit(
                 entry.path, outputPaths.stinger, outputPaths.loop,
                 splitConfig)) {
           markLayoutDirty();
@@ -1274,11 +1283,16 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   PlaybackShellTerminalRole previousTerminalRole =
       mediaCoordinator.terminalRole();
   while (running) {
-    const TuiMediaCoordinator::PumpResult mediaUpdate =
-        mediaCoordinator.pump();
-    if (mediaUpdate.layoutChanged) {
+    const bool playbackChanged = mediaCoordinator.pump();
+    media_processing::PollResult taskUpdate = mediaProcessing.poll();
+    for (const media_processing::TaskCompletion& completion :
+         taskUpdate.completions) {
+      mediaCoordinator.handleMediaTaskCompletion(
+          completion, mediaTaskStatusModel(completion).text);
+    }
+    if (!taskUpdate.completions.empty()) {
       markLayoutDirty();
-    } else if (mediaUpdate.changed) {
+    } else if (playbackChanged || taskUpdate.changed) {
       markDirty(UiDirtyFlags::Async);
     }
     if (!running) break;
@@ -1361,14 +1375,14 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       dirty = false;
       dirtyFlags = UiDirtyFlags::None;
       forceFullRedraw = false;
-      const std::vector<NativeWaitHandle> playbackActivityHandles =
-          mediaCoordinator.activityWaitHandles();
+      const std::vector<NativeWaitHandle> activityHandles =
+          mediaWaitHandles();
       waitForBrowserWake(
           input, openFileRequests, browserThumbnailWakeHandle(),
           browserContentWorker.nativeWaitHandle(),
           browserSelectionMetadata.nativeWaitHandle(),
           notificationAreaControls.nativeWaitHandle(), tuiWindow,
-          audioPictureInPicture, playbackActivityHandles,
+          audioPictureInPicture, activityHandles,
           mediaCoordinator.nextWakeDeadline());
       continue;
     }
@@ -1646,14 +1660,14 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
 
     if (!dirty) {
       const wake_schedule::Deadline wakeDeadline = computeWakeDeadline(now);
-      const std::vector<NativeWaitHandle> playbackActivityHandles =
-          mediaCoordinator.activityWaitHandles();
+      const std::vector<NativeWaitHandle> activityHandles =
+          mediaWaitHandles();
       DWORD waitResult = waitForBrowserWake(
           input, openFileRequests, browserThumbnailWakeHandle(),
           browserContentWorker.nativeWaitHandle(),
           browserSelectionMetadata.nativeWaitHandle(),
           notificationAreaControls.nativeWaitHandle(), tuiWindow,
-          audioPictureInPicture, playbackActivityHandles, wakeDeadline);
+          audioPictureInPicture, activityHandles, wakeDeadline);
       if (consumeBrowserThumbnailWake()) {
         markDirty(UiDirtyFlags::Async);
       } else if (waitResult == WAIT_TIMEOUT) {
@@ -1860,7 +1874,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       }
       if (line < height && browserChrome.footer.showMediaTaskStatus) {
         const std::optional<MediaTaskStatusModel> status =
-            mediaCoordinator.latestMediaTaskStatus();
+            mediaTaskPresenter.latestStatus();
         if (status) {
           if (!status->text.empty()) {
             screen.writeText(
@@ -2000,7 +2014,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       }
 
       if (const std::optional<MediaTaskCardModel> taskCard =
-              mediaCoordinator.activeMediaTaskCard()) {
+              mediaTaskPresenter.activeCard()) {
         drawMediaTaskCard(screen, width, height, listTop, *taskCard,
                           theme.mediaTaskCardStyles());
       }

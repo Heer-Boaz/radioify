@@ -98,3 +98,19 @@ MediaTaskStatusModel mediaTaskStatusModel(
   model.succeeded = completion.succeeded();
   return model;
 }
+
+std::optional<MediaTaskCardModel> MediaTaskPresenter::activeCard() const {
+  const std::optional<media_processing::TaskActivity> activity =
+      coordinator_.activity();
+  return activity ? std::optional<MediaTaskCardModel>(
+                        mediaTaskCardModel(*activity))
+                  : std::nullopt;
+}
+
+std::optional<MediaTaskStatusModel> MediaTaskPresenter::latestStatus() const {
+  const std::optional<media_processing::TaskCompletion> completion =
+      coordinator_.latestCompletion();
+  return completion ? std::optional<MediaTaskStatusModel>(
+                          mediaTaskStatusModel(*completion))
+                    : std::nullopt;
+}

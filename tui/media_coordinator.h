@@ -18,12 +18,10 @@
 #include "playback/media_processing_actions.h"
 #include "playback/session/session.h"
 #include "playback/target.h"
-#include "tui/ui/media_task_presentation.h"
 
 struct InputEvent;
-struct LoopSplitConfig;
 namespace media_processing {
-class Coordinator;
+struct TaskCompletion;
 }
 
 // Owns media activation, playback-session handoff and image-viewer routing for
@@ -41,11 +39,6 @@ class TuiMediaCoordinator {
     std::optional<PlaybackPresentationState> videoPresentation;
   };
 
-  struct PumpResult {
-    bool changed = false;
-    bool layoutChanged = false;
-  };
-
   struct Callbacks {
     std::function<bool(const std::filesystem::path&, int)> startAudio;
     std::function<void(playback_route::AudioPictureInPicturePlan)>
@@ -59,7 +52,7 @@ class TuiMediaCoordinator {
 
   struct Services {
     playback_queue::Queue& queue;
-    media_processing::Coordinator& mediaProcessing;
+    playback_media_processing::Actions mediaProcessingActions;
     PlaybackSession::Dependencies sessionDependencies;
     const VideoPlaybackConfig& videoConfig;
     OpenFileRequests& openFileRequests;
@@ -81,29 +74,15 @@ class TuiMediaCoordinator {
       const WindowPlacementState* sourcePlacement,
       std::optional<PlaybackPresentationState> videoPresentation);
   bool openFiles(const OpenFilesRequest& request);
-  PumpResult pump();
-
-  bool tryStartMelodyAnalysis(const std::filesystem::path& sourceFile,
-                              int trackIndex,
-                              const std::filesystem::path& outputFile);
-  bool tryStartLoopSplit(const std::filesystem::path& sourceFile,
-                         const std::filesystem::path& stingerOutput,
-                         const std::filesystem::path& loopOutput,
-                         const LoopSplitConfig& config);
-  bool cancelActiveMediaTask();
-  void applyMediaProcessingState(
-      const std::filesystem::path& sourceFile,
-      playback_media_actions::Context& context) const;
-  std::optional<playback_media_processing::ActionResult>
-  executeMediaProcessingAction(playback_media_actions::Action action,
-                               const std::filesystem::path& sourceFile);
-  std::optional<MediaTaskCardModel> activeMediaTaskCard() const;
-  std::optional<MediaTaskStatusModel> latestMediaTaskStatus() const;
+  bool pump();
+  void handleMediaTaskCompletion(
+      const media_processing::TaskCompletion& completion,
+      std::string presentationStatus);
 
   bool videoActive() const;
   PlaybackShellTerminalRole terminalRole() const;
   PresentationSnapshot presentationSnapshot() const;
-  std::vector<NativeWaitHandle> activityWaitHandles() const;
+  std::vector<NativeWaitHandle> waitHandles() const;
   wake_schedule::Deadline nextWakeDeadline() const;
   bool capturesBrowserInput() const;
 

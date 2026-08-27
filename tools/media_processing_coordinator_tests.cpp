@@ -109,6 +109,7 @@ int main() {
   processing::Coordinator coordinator(std::move(operations));
 
   playback_media_processing::Actions playbackActions(coordinator);
+  MediaTaskPresenter presenter(coordinator);
   const std::optional<playback_media_processing::ActionResult>
       unsupportedAction =
       playbackActions.execute(playback_media_actions::Action::EditVideo,
@@ -116,6 +117,8 @@ int main() {
 
   ok &= expect(coordinator.waitHandles().size() == 3,
                "all worker families must expose wake handles through one owner");
+  ok &= expect(!presenter.activeCard() && !presenter.latestStatus(),
+               "the presenter must not invent inactive task state");
   ok &= expect(!unsupportedAction,
                "surface-specific actions must remain outside processing");
   ok &= expect(!coordinator.tryStartMelodyAnalysis({}, 0, "clip.melody") &&
@@ -136,18 +139,22 @@ int main() {
                "melody analysis must start through the coordinator");
   const std::optional<processing::TaskActivity> melody =
       coordinator.activity();
+  const std::optional<MediaTaskCardModel> melodyCard =
+      presenter.activeCard();
   ok &= expect(melody &&
                    melody->kind == processing::TaskKind::MelodyAnalysis &&
                    melody->progress == 0.4f && !melody->cancellable &&
-                   mediaTaskCardModel(*melody).title == "Analyzing melody" &&
+                   melodyCard && melodyCard->title == "Analyzing melody" &&
                    !coordinator.tryStartLoopSplit(
                        "other.flac", "other_stinger.wav", "other_loop.wav",
                        {}),
                "one generic activity must enforce mutual exclusion");
   releaseMelody.store(true, std::memory_order_release);
   const auto melodyCompletion = waitForCompletion(coordinator);
+  const std::optional<MediaTaskStatusModel> melodyStatus =
+      presenter.latestStatus();
   ok &= expect(melodyCompletion && melodyCompletion->succeeded() &&
-                   mediaTaskStatusModel(*melodyCompletion).text ==
+                   melodyStatus && melodyStatus->text ==
                        "Analyze: Saved clip.melody and clip.mid",
                "melody completion must use the shared result contract");
 
