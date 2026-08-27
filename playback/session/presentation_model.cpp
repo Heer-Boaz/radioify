@@ -10,24 +10,16 @@ namespace playback_session {
 namespace {
 
 struct PublishedState {
-  playback_framebuffer_presenter::PlaybackFramebufferUiSnapshot ui;
-  PlaybackSessionState playbackState = PlaybackSessionState::Active;
-  bool audioOk = false;
-  bool audioStarting = false;
-  bool hasSubtitles = false;
-  bool debugOverlay = false;
-  playback_screen_renderer::PlaybackScreenRenderInputs textGridInputs;
-  bool hasTextGridInputs = false;
+  PresentationModel::Revision revision;
+  bool available = false;
 };
 
 }  // namespace
 
 struct PresentationModel::Impl {
-  Impl(Dependencies dependencies, FixedState fixedState)
-      : dependencies(dependencies), fixedState(std::move(fixedState)) {}
+  explicit Impl(Dependencies dependencies) : dependencies(dependencies) {}
 
   Dependencies dependencies;
-  const FixedState fixedState;
   std::mutex publishedMutex;
   PublishedState published;
 
@@ -44,43 +36,31 @@ struct PresentationModel::Impl {
   }
 };
 
-PresentationModel::PresentationModel(Dependencies dependencies,
-                                     FixedState fixedState)
-    : impl_(std::make_unique<Impl>(dependencies, std::move(fixedState))) {}
+PresentationModel::PresentationModel(Dependencies dependencies)
+    : impl_(std::make_unique<Impl>(dependencies)) {}
 
 PresentationModel::~PresentationModel() = default;
 
-void PresentationModel::publishWindowState(
-    playback_framebuffer_presenter::PlaybackFramebufferUiSnapshot ui,
-    PlaybackSessionState playbackState, bool audioOk, bool audioStarting,
-    bool hasSubtitles, bool debugOverlay) {
+void PresentationModel::publish(Revision revision) {
   std::lock_guard<std::mutex> lock(impl_->publishedMutex);
-  impl_->published.ui = std::move(ui);
-  impl_->published.playbackState = playbackState;
-  impl_->published.audioOk = audioOk;
-  impl_->published.audioStarting = audioStarting;
-  impl_->published.hasSubtitles = hasSubtitles;
-  impl_->published.debugOverlay = debugOverlay;
-}
-
-void PresentationModel::publishTextGridInputs(
-    const playback_screen_renderer::PlaybackScreenRenderInputs& inputs) {
-  std::lock_guard<std::mutex> lock(impl_->publishedMutex);
-  impl_->published.textGridInputs = inputs;
-  impl_->published.hasTextGridInputs = true;
+  impl_->published.revision = std::move(revision);
+  impl_->published.available = true;
 }
 
 WindowUiState PresentationModel::buildWindowUiState(
     VideoWindow& videoWindow) {
   const PublishedState state = impl_->snapshot();
+  if (!state.available) return {};
+  const auto& model = state.revision.textGrid;
+  const auto& renderer = impl_->dependencies.renderer;
   std::lock_guard<std::mutex> subtitleLock(
       impl_->dependencies.subtitleMutex);
   return playback_framebuffer_presenter::buildPlaybackFramebufferUiState(
-      impl_->fixedState.windowTitle, videoWindow, impl_->dependencies.player,
-      impl_->dependencies.subtitleManager, state.playbackState, state.audioOk,
-      impl_->fixedState.canPlayPrevious, impl_->fixedState.canPlayNext,
-      state.hasSubtitles, impl_->dependencies.subtitlesEnabled,
-      impl_->dependencies.controlHover, state.ui, state.debugOverlay);
+      renderer.windowTitle, videoWindow, renderer.player,
+      renderer.subtitleManager, model.playbackState, model.audioOk,
+      model.canPlayPrevious, model.canPlayNext, model.hasSubtitles,
+      renderer.subtitlesEnabled, renderer.controlHover,
+      state.revision.window, model.debugOverlay);
 }
 
 bool PresentationModel::renderTextGrid(
@@ -88,7 +68,7 @@ bool PresentationModel::renderTextGrid(
         request,
     playback_framebuffer_presenter::TextGridPresentationTarget target) {
   const PublishedState state = impl_->snapshot();
-  if (!state.hasTextGridInputs) return false;
+  if (!state.available) return false;
 
   std::lock_guard<std::mutex> subtitleLock(
       impl_->dependencies.subtitleMutex);
@@ -109,51 +89,45 @@ bool PresentationModel::renderTextGrid(
     impl_->textGridFrame = VideoFrame{};
   }
 
-  playback_screen_renderer::PlaybackScreenRenderInputs inputs =
-      state.textGridInputs;
-  inputs.screen = &impl_->textGridScreen;
-  inputs.videoWindow = &request.videoWindow;
-  inputs.frame = &impl_->textGridFrame;
-  inputs.frameCache = &impl_->textGridFrameCache;
-  inputs.art = &impl_->textGridArt;
-  inputs.timelinePreviewCache = &impl_->timelinePreviewArt;
-  inputs.visualMode = PlaybackVisualMode::AsciiGrid;
-  inputs.debugOverlay = state.debugOverlay;
-  inputs.playbackState = state.playbackState;
-  inputs.audioOk = state.audioOk;
-  inputs.audioStarting = state.audioStarting;
-  inputs.hasSubtitles = state.hasSubtitles;
-  inputs.nativeWindowActive = false;
-  const bool audioOnlyPlayback = impl_->dependencies.player.sourceWidth() <= 0 ||
-                                 impl_->dependencies.player.sourceHeight() <= 0;
-  inputs.osd = state.ui.osd;
-  inputs.timelinePreview = state.ui.timelinePreview;
-  inputs.videoEdit = state.ui.videoEdit;
-  if (inputs.videoEdit.active) {
-    inputs.videoEdit.playheadTimelineUs =
-        impl_->dependencies.player.timelineSnapshot().positionUs;
+  playback_screen_renderer::PlaybackScreenModel model =
+      state.revision.textGrid;
+  model.visualMode = PlaybackVisualMode::AsciiGrid;
+  model.nativeWindowActive = false;
+  const auto& renderer = impl_->dependencies.renderer;
+  const bool audioOnlyPlayback = renderer.player.sourceWidth() <= 0 ||
+                                 renderer.player.sourceHeight() <= 0;
+  model.osd = state.revision.window.osd;
+  model.timelinePreview = state.revision.window.timelinePreview;
+  model.videoEdit = state.revision.window.videoEdit;
+  if (model.videoEdit.active) {
+    model.videoEdit.playheadTimelineUs =
+        renderer.player.timelineSnapshot().positionUs;
   }
-  inputs.videoEditExport = state.ui.videoEditExport;
-  inputs.videoEditPrompt = state.ui.videoEditPrompt;
-  inputs.contextMenu = state.ui.contextMenu;
-  inputs.osd.controlsVisible = inputs.osd.controlsVisible || audioOnlyPlayback;
-  inputs.clearHistory = false;
-  inputs.frameChanged = request.frameChanged;
-  inputs.cellPixelWidth = request.cellPixelWidth;
-  inputs.cellPixelHeight = request.cellPixelHeight;
-  inputs.cellPixelSourceLabel = "text-grid-presentation";
-  inputs.allowAsciiCpuFallback = false;
-  inputs.debugLines.clear();
-  if (state.debugOverlay) {
-    inputs.debugLines.push_back(request.videoWindow.OutputColorDebugLine());
+  model.videoEditExport = state.revision.window.videoEditExport;
+  model.videoEditPrompt = state.revision.window.videoEditPrompt;
+  model.contextMenu = state.revision.window.contextMenu;
+  model.osd.controlsVisible = model.osd.controlsVisible || audioOnlyPlayback;
+  model.clearHistory = false;
+  model.frameChanged = request.frameChanged;
+  model.cellPixelWidth = request.cellPixelWidth;
+  model.cellPixelHeight = request.cellPixelHeight;
+  model.cellPixelSourceLabel = "text-grid-presentation";
+  model.allowAsciiCpuFallback = false;
+  model.debugLines.clear();
+  if (model.debugOverlay) {
+    model.debugLines.push_back(request.videoWindow.OutputColorDebugLine());
     if (!request.enhancementDebugLine.empty()) {
-      inputs.debugLines.push_back(request.enhancementDebugLine);
+      model.debugLines.push_back(request.enhancementDebugLine);
     }
   }
-  inputs.frameOutputState = &outputState;
-  inputs.frameAvailable = outputState.haveFrame;
+  model.frameAvailable = outputState.haveFrame;
 
-  playback_screen_renderer::renderPlaybackScreen(inputs);
+  playback_screen_renderer::PlaybackScreenTarget renderTarget{
+      impl_->textGridScreen, request.videoWindow, impl_->textGridFrameCache,
+      impl_->textGridArt, impl_->timelinePreviewArt, impl_->textGridFrame,
+      outputState};
+  playback_screen_renderer::renderPlaybackScreen(renderer, renderTarget,
+                                                 model);
   if (outputState.renderFailed) return false;
 
   target.interactions = outputState.overlayInteractions;

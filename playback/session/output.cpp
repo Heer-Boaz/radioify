@@ -6,7 +6,6 @@
 #include "playback/video/player.h"
 #include "playback/video/framebuffer/frame_clipboard.h"
 #include "playback/video/gpu/videoprocessor.h"
-#include "playback/ascii/screen_renderer.h"
 #include "playback/framebuffer/window_presenter.h"
 
 struct PlaybackOutputController::Impl {
@@ -80,11 +79,6 @@ void PlaybackOutputController::updateWindowCursor(
     return;
   }
   impl_->windowPresenter.setCursorVisible(true);
-}
-
-void PlaybackOutputController::renderTerminal(
-    playback_screen_renderer::PlaybackScreenRenderInputs& inputs) {
-  playback_screen_renderer::renderPlaybackScreen(inputs);
 }
 
 bool PlaybackOutputController::applyWindowPresentation(

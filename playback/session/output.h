@@ -14,10 +14,6 @@ class GpuVideoFrameCache;
 struct InputEvent;
 struct WindowUiState;
 
-namespace playback_screen_renderer {
-struct PlaybackScreenRenderInputs;
-}
-
 class PlaybackOutputController {
  public:
   PlaybackOutputController(
@@ -43,8 +39,6 @@ class PlaybackOutputController {
   bool pollWindowInput(InputEvent& event);
   void updateWindowCursor(Player& player, PlaybackSessionState playbackState,
                           bool overlayVisible);
-  void renderTerminal(
-      playback_screen_renderer::PlaybackScreenRenderInputs& inputs);
 
   bool applyWindowPresentation(WindowPresentationRequest request);
   bool restoreWindowPresentation(

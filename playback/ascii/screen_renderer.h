@@ -27,24 +27,39 @@ struct TimelinePreviewAsciiCache {
   AsciiArtRenderer renderer;
 };
 
-struct PlaybackScreenRenderInputs {
-  ConsoleScreen* screen = nullptr;
-  VideoWindow* videoWindow = nullptr;
-  Player* player = nullptr;
-  SubtitleManager* subtitleManager = nullptr;
-  GpuAsciiRenderer* gpuRenderer = nullptr;
-  GpuVideoFrameCache* frameCache = nullptr;
-  AsciiArt* art = nullptr;
-  TimelinePreviewAsciiCache* timelinePreviewCache = nullptr;
-  VideoFrame* frame = nullptr;
-  const std::string* windowTitle = nullptr;
-  const Style* baseStyle = nullptr;
-  const Style* accentStyle = nullptr;
-  const Style* dimStyle = nullptr;
-  const Style* progressEmptyStyle = nullptr;
-  const Style* progressFrameStyle = nullptr;
-  const Color* progressStart = nullptr;
-  const Color* progressEnd = nullptr;
+struct PlaybackScreenResources {
+  Player& player;
+  SubtitleManager& subtitleManager;
+  GpuAsciiRenderer& gpuRenderer;
+  const std::string& windowTitle;
+  const Style& baseStyle;
+  const Style& accentStyle;
+  const Style& dimStyle;
+  const Style& progressEmptyStyle;
+  const Style& progressFrameStyle;
+  const Color& progressStart;
+  const Color& progressEnd;
+  std::atomic<bool>& subtitlesEnabled;
+  std::atomic<int>& controlHover;
+  playback_frame_output::LogLineWriter warningSink;
+  playback_frame_output::LogLineWriter timingSink;
+};
+
+// Mutable caches belong to one concrete presentation surface and are never
+// shared between the terminal and the native-window presenter.
+struct PlaybackScreenTarget {
+  ConsoleScreen& screen;
+  VideoWindow& videoWindow;
+  GpuVideoFrameCache& frameCache;
+  AsciiArt& art;
+  TimelinePreviewAsciiCache& timelinePreviewCache;
+  VideoFrame& frame;
+  playback_frame_output::FrameOutputState& frameOutput;
+};
+
+// Copyable, immutable-by-convention read model published by the playback
+// loop. It contains no borrowed pointers and no renderer-owned cache state.
+struct PlaybackScreenModel {
   bool debugOverlay = false;
   std::vector<std::string> debugLines;
   PlaybackVisualMode visualMode = PlaybackVisualMode::Framebuffer;
@@ -70,13 +85,10 @@ struct PlaybackScreenRenderInputs {
   double cellPixelWidth = 0.0;
   double cellPixelHeight = 0.0;
   std::string cellPixelSourceLabel;
-  std::atomic<bool>* enableSubtitlesShared = nullptr;
-  std::atomic<int>* overlayControlHover = nullptr;
-  playback_frame_output::FrameOutputState* frameOutputState = nullptr;
-  playback_frame_output::LogLineWriter warningSink;
-  playback_frame_output::LogLineWriter timingSink;
 };
 
-void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs);
+void renderPlaybackScreen(const PlaybackScreenResources& resources,
+                          PlaybackScreenTarget& target,
+                          const PlaybackScreenModel& model);
 
 }  // namespace playback_screen_renderer

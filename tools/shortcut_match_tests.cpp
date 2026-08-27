@@ -1,6 +1,7 @@
 #include <type_traits>
 
 #include "playback/ascii/frame_output.h"
+#include "playback/ascii/screen_renderer.h"
 #include "playback/input/shortcuts.h"
 #include "playback/overlay/overlay.h"
 #include "playback/video/audio/clock_reacquire.h"
@@ -80,6 +81,16 @@ int main() {
       !std::is_default_constructible_v<
           playback_session_input::PlaybackInputView>,
       "playback input dependencies must be supplied explicitly");
+  static_assert(
+      !std::is_default_constructible_v<
+          playback_screen_renderer::PlaybackScreenResources> &&
+          !std::is_default_constructible_v<
+              playback_screen_renderer::PlaybackScreenTarget>,
+      "render resources and surface state must have explicit owners");
+  static_assert(
+      std::is_copy_constructible_v<
+          playback_screen_renderer::PlaybackScreenModel>,
+      "the playback presentation read model must be publishable by value");
   static_assert(
       std::is_abstract_v<playback_session_input::CommandTarget>,
       "playback input must dispatch intent through its typed command port");

@@ -9,7 +9,6 @@
 #include "playback/frame/refresh.h"
 #include "playback/video/player.h"
 #include "playback/ascii/frame_output.h"
-#include "playback/ascii/screen_renderer.h"
 #include "log.h"
 
 namespace {
@@ -62,22 +61,6 @@ struct PlaybackSessionCore::Impl {
                         screen.height(), screen.cellPixelWidth(),
                         screen.cellPixelHeight());
     }
-  }
-
-  void bindRenderInputs(
-      playback_screen_renderer::PlaybackScreenRenderInputs& renderInputs) {
-    renderInputs.player = &player;
-    renderInputs.frame = &frameRefresh.frame;
-  }
-
-  void updateRenderInputs(
-      playback_screen_renderer::PlaybackScreenRenderInputs& renderInputs) const {
-    renderInputs.playbackState = playbackState;
-    renderInputs.audioOk = audioOk;
-    renderInputs.audioStarting = audioStarting;
-    renderInputs.frameAvailable =
-        frameRefresh.frameAvailable ||
-        (renderInputs.nativeWindowActive && player.hasVideoFrame());
   }
 
   bool finalizeAudioStart() {
@@ -199,6 +182,13 @@ struct PlaybackSessionCore::Impl {
     player.requestResize(sourceW, sourceH);
   }
 
+  PlaybackSessionPresentationSnapshot presentationSnapshot(
+      bool nativeWindowActive) const {
+    return {playbackState, audioOk, audioStarting,
+            frameRefresh.frameAvailable ||
+                (nativeWindowActive && player.hasVideoFrame())};
+  }
+
   void markPendingResize() { pendingResize = true; }
 
   void handlePendingResize(ConsoleScreen& screen,
@@ -272,16 +262,6 @@ void PlaybackSessionCore::initialize(ConsoleScreen& screen) {
   impl_->initialize(screen);
 }
 
-void PlaybackSessionCore::bindRenderInputs(
-    playback_screen_renderer::PlaybackScreenRenderInputs& renderInputs) {
-  impl_->bindRenderInputs(renderInputs);
-}
-
-void PlaybackSessionCore::updateRenderInputs(
-    playback_screen_renderer::PlaybackScreenRenderInputs& renderInputs) const {
-  impl_->updateRenderInputs(renderInputs);
-}
-
 bool PlaybackSessionCore::finalizeAudioStart() {
   return impl_->finalizeAudioStart();
 }
@@ -327,6 +307,15 @@ PlaybackSessionRefreshResult PlaybackSessionCore::refresh(
 void PlaybackSessionCore::setAsciiPresentation(ConsoleScreen& screen,
                                                bool enabled) {
   impl_->setAsciiPresentation(screen, enabled);
+}
+
+PlaybackSessionPresentationSnapshot PlaybackSessionCore::presentationSnapshot(
+    bool nativeWindowActive) const {
+  return impl_->presentationSnapshot(nativeWindowActive);
+}
+
+VideoFrame& PlaybackSessionCore::presentationFrame() {
+  return impl_->frameRefresh.frame;
 }
 
 uint64_t PlaybackSessionCore::videoFrameCounter() const {

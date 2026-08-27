@@ -124,47 +124,48 @@ void renderTimelinePreview(
 
 }  // namespace
 
-void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
-  auto& screen = *inputs.screen;
-  auto& videoWindow = *inputs.videoWindow;
-  auto& player = *inputs.player;
-  auto& subtitleManager = *inputs.subtitleManager;
-  auto& gpuRenderer = *inputs.gpuRenderer;
-  auto& frameCache = *inputs.frameCache;
-  auto& art = *inputs.art;
-  VideoFrame* frame = inputs.frame;
-  const std::string& windowTitle = *inputs.windowTitle;
-  const Style& baseStyle = *inputs.baseStyle;
-  const Style& accentStyle = *inputs.accentStyle;
-  const Style& dimStyle = *inputs.dimStyle;
-  const Style& progressEmptyStyle = *inputs.progressEmptyStyle;
-  const Style& progressFrameStyle = *inputs.progressFrameStyle;
-  const Color& progressStart = *inputs.progressStart;
-  const Color& progressEnd = *inputs.progressEnd;
-  bool debugOverlay = inputs.debugOverlay;
-  const PlaybackVisualMode visualMode = inputs.visualMode;
-  PlaybackSessionState playbackState = inputs.playbackState;
-  bool enableAudio = inputs.enableAudio;
-  bool audioOk = inputs.audioOk;
-  bool audioStarting = inputs.audioStarting;
-  bool canPlayPrevious = inputs.canPlayPrevious;
-  bool canPlayNext = inputs.canPlayNext;
-  const bool nativeWindowActive = inputs.nativeWindowActive;
-  bool hasSubtitles = inputs.hasSubtitles;
-  bool allowAsciiCpuFallback = inputs.allowAsciiCpuFallback;
-  const bool overlayVisibleNow = inputs.osd.controlsVisible;
-  bool clearHistory = inputs.clearHistory;
-  bool frameChanged = inputs.frameChanged;
-  bool frameAvailable = inputs.frameAvailable;
-  double cellPixelWidth = inputs.cellPixelWidth;
-  double cellPixelHeight = inputs.cellPixelHeight;
-  const std::string& cellPixelSourceLabel = inputs.cellPixelSourceLabel;
-  auto& enableSubtitlesShared = *inputs.enableSubtitlesShared;
-  auto& overlayControlHover = *inputs.overlayControlHover;
-  playback_frame_output::FrameOutputState& frameOutput =
-      *inputs.frameOutputState;
-  const auto& warningSink = inputs.warningSink;
-  const auto& timingSink = inputs.timingSink;
+void renderPlaybackScreen(const PlaybackScreenResources& resources,
+                          PlaybackScreenTarget& target,
+                          const PlaybackScreenModel& model) {
+  auto& screen = target.screen;
+  auto& videoWindow = target.videoWindow;
+  auto& player = resources.player;
+  auto& subtitleManager = resources.subtitleManager;
+  auto& gpuRenderer = resources.gpuRenderer;
+  auto& frameCache = target.frameCache;
+  auto& art = target.art;
+  VideoFrame* frame = &target.frame;
+  const std::string& windowTitle = resources.windowTitle;
+  const Style& baseStyle = resources.baseStyle;
+  const Style& accentStyle = resources.accentStyle;
+  const Style& dimStyle = resources.dimStyle;
+  const Style& progressEmptyStyle = resources.progressEmptyStyle;
+  const Style& progressFrameStyle = resources.progressFrameStyle;
+  const Color& progressStart = resources.progressStart;
+  const Color& progressEnd = resources.progressEnd;
+  const bool debugOverlay = model.debugOverlay;
+  const PlaybackVisualMode visualMode = model.visualMode;
+  const PlaybackSessionState playbackState = model.playbackState;
+  const bool enableAudio = model.enableAudio;
+  const bool audioOk = model.audioOk;
+  const bool audioStarting = model.audioStarting;
+  const bool canPlayPrevious = model.canPlayPrevious;
+  const bool canPlayNext = model.canPlayNext;
+  const bool nativeWindowActive = model.nativeWindowActive;
+  const bool hasSubtitles = model.hasSubtitles;
+  const bool allowAsciiCpuFallback = model.allowAsciiCpuFallback;
+  const bool overlayVisibleNow = model.osd.controlsVisible;
+  const bool clearHistory = model.clearHistory;
+  const bool frameChanged = model.frameChanged;
+  const bool frameAvailable = model.frameAvailable;
+  const double cellPixelWidth = model.cellPixelWidth;
+  const double cellPixelHeight = model.cellPixelHeight;
+  const std::string& cellPixelSourceLabel = model.cellPixelSourceLabel;
+  auto& subtitlesEnabled = resources.subtitlesEnabled;
+  auto& controlHover = resources.controlHover;
+  playback_frame_output::FrameOutputState& frameOutput = target.frameOutput;
+  const auto& warningSink = resources.warningSink;
+  const auto& timingSink = resources.timingSink;
   screen.updateSize();
   int width = screen.width();
   int height = screen.height();
@@ -187,8 +188,8 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   }
   std::vector<std::string> debugLines;
   if (debugOverlay) {
-    debugLines.insert(debugLines.end(), inputs.debugLines.begin(),
-                      inputs.debugLines.end());
+    debugLines.insert(debugLines.end(), model.debugLines.begin(),
+                      model.debugLines.end());
   }
   if (debugOverlay && visualMode == PlaybackVisualMode::AsciiGrid) {
     debugLines.push_back(
@@ -282,7 +283,7 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   double displaySec = currentSec;
   const bool seekingOverlay = timeline.seekPending();
   const bool subtitlesEnabledNow =
-      enableSubtitlesShared.load(std::memory_order_relaxed);
+      subtitlesEnabled.load(std::memory_order_relaxed);
   const bool hasVideoStream =
       player.sourceWidth() > 0 && player.sourceHeight() > 0;
   bool waitingForAudio = audioOk && !audioStreamClockReady() && !audioIsFinished();
@@ -381,28 +382,28 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
   overlayInputs.displaySec = displaySec;
   overlayInputs.totalSec = totalSec;
   overlayInputs.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
-  overlayInputs.osd = inputs.osd;
+  overlayInputs.osd = model.osd;
   overlayInputs.paused = pausedNow;
   overlayInputs.pictureInPictureAvailable = true;
   overlayInputs.pictureInPictureActive =
       videoWindow.IsOpen() && videoWindow.IsPictureInPicture();
   overlayInputs.subtitleRenderError = videoWindow.GetSubtitleRenderError();
   overlayInputs.debugLines = debugLines;
-  overlayInputs.contextMenu = inputs.contextMenu;
-  overlayInputs.videoEdit = inputs.videoEdit;
-  overlayInputs.videoEditExport = inputs.videoEditExport;
-  overlayInputs.videoEditPrompt = inputs.videoEditPrompt;
+  overlayInputs.contextMenu = model.contextMenu;
+  overlayInputs.videoEdit = model.videoEdit;
+  overlayInputs.videoEditExport = model.videoEditExport;
+  overlayInputs.videoEditPrompt = model.videoEditPrompt;
   playback_overlay::PlaybackOverlayState overlayState =
       playback_overlay::buildPlaybackOverlayState(overlayInputs);
   const int hoverIndex =
-      overlayControlHover.load(std::memory_order_relaxed);
+      controlHover.load(std::memory_order_relaxed);
   playback_overlay::OverlayCellLayout overlayLayout;
   playback_overlay::ContextMenuCellLayout contextMenuLayout;
   const bool showPlaybackChrome =
-      overlayState.chromeVisible || inputs.timelinePreview.hoverActive;
+      overlayState.chromeVisible || model.timelinePreview.hoverActive;
   const bool showContextMenu = overlayState.contextMenu.visible;
   if (!showPlaybackChrome && !showContextMenu) {
-    overlayControlHover.store(-1, std::memory_order_relaxed);
+    controlHover.store(-1, std::memory_order_relaxed);
   }
   int overlayReservedLines = showPlaybackChrome ? 5 : 0;
   if (showPlaybackChrome || showContextMenu) {
@@ -482,36 +483,36 @@ void renderPlaybackScreen(PlaybackScreenRenderInputs& inputs) {
     }
   }
 
-  if (inputs.timelinePreview.hoverActive) {
+  if (model.timelinePreview.hoverActive) {
     const playback_video_image::RgbaImage* previewSurface =
-        inputs.timelinePreview.hasImage()
-            ? &inputs.timelinePreview.image->surface
+        model.timelinePreview.hasImage()
+            ? &model.timelinePreview.image->surface
             : nullptr;
     const int previewSourceWidth =
         previewSurface
             ? static_cast<int>(previewSurface->width)
-            : std::max(16, inputs.timelinePreview.sourceWidth > 0
-                               ? inputs.timelinePreview.sourceWidth
+            : std::max(16, model.timelinePreview.sourceWidth > 0
+                               ? model.timelinePreview.sourceWidth
                                : layoutSourceW);
     const int previewSourceHeight =
         previewSurface
             ? static_cast<int>(previewSurface->height)
-            : std::max(9, inputs.timelinePreview.sourceHeight > 0
-                              ? inputs.timelinePreview.sourceHeight
+            : std::max(9, model.timelinePreview.sourceHeight > 0
+                              ? model.timelinePreview.sourceHeight
                               : layoutSourceH);
     const auto previewLayout =
         playback_video_timeline_preview::layoutCells(
             width, height, overlayLayout.progressBarY,
             overlayLayout.progressBarX, overlayLayout.progressBarWidth,
-            inputs.timelinePreview.anchorRatio, previewSourceWidth,
+            model.timelinePreview.anchorRatio, previewSourceWidth,
             previewSourceHeight, cellPixelWidth, cellPixelHeight,
             playback_video_timeline_preview::formatTimestamp(
-                inputs.timelinePreview.targetUs));
+                model.timelinePreview.targetUs));
     playback_overlay::OverlayRenderStyles previewStyles;
     previewStyles.baseStyle = baseStyle;
     previewStyles.accentStyle = accentStyle;
-    renderTimelinePreview(screen, inputs.timelinePreview, previewLayout,
-                          inputs.timelinePreviewCache, previewStyles);
+    renderTimelinePreview(screen, model.timelinePreview, previewLayout,
+                          &target.timelinePreviewCache, previewStyles);
   }
 
   if (overlayState.transientMessage) {

@@ -109,8 +109,9 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
 
   PlaybackPresentationController presentationController;
   PlaybackSessionCore core;
-  std::shared_ptr<playback_session::PresentationModel> presentationModel;
   GpuAsciiRenderer& gpuRenderer;
+  playback_screen_renderer::PlaybackScreenResources screenResources;
+  std::shared_ptr<playback_session::PresentationModel> presentationModel;
   AsciiArt art;
   playback_screen_renderer::TimelinePreviewAsciiCache timelinePreviewArt;
   bool copiedFrameNeedsRender = false;
@@ -137,7 +138,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
   playback_session_input::PlaybackInputSignals inputSignals;
   pointer_input::MouseDoubleClickTracker mouseDoubleClickTracker;
   playback_session_input::PlaybackSeekGestureState seekState;
-  playback_screen_renderer::PlaybackScreenRenderInputs renderInputs;
   // Constructed last and therefore stopped first. The presenter cannot outlive
   // any session-owned state referenced by its published presentation model.
   PlaybackOutputController output;
@@ -170,14 +170,25 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
         core({args.player, args.perfLog, args.enableAudio,
               initialPlaybackPresentation(config, args.continuityState)
                   .usesAsciiGrid()}),
+        gpuRenderer(sharedGpuRenderer()),
+        screenResources{core.player(),
+                        subtitleManager,
+                        gpuRenderer,
+                        windowTitle,
+                        baseStyle,
+                        accentStyle,
+                        dimStyle,
+                        progressEmptyStyle,
+                        progressFrameStyle,
+                        progressStart,
+                        progressEnd,
+                        enableSubtitlesShared,
+                        overlayControlHover,
+                        warningSink,
+                        timingSink},
         presentationModel(std::make_shared<playback_session::PresentationModel>(
             playback_session::PresentationModel::Dependencies{
-                args.player, args.subtitleManager, subtitleMutex,
-                args.enableSubtitlesShared, overlayControlHover},
-            playback_session::PresentationModel::FixedState{
-                windowTitle, args.capabilities.transportHandoff,
-                args.capabilities.transportHandoff})),
-        gpuRenderer(sharedGpuRenderer()),
+                screenResources, subtitleMutex})),
         videoEditWorkspace(file, core.player(), timelinePreviewModel,
                            timelinePreviewProvider),
         inputSignals(*this, overlayControlHover, osd, loopStopRequested,
@@ -194,7 +205,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
                                previewSource.sourceHeight);
     timelinePreviewStarted = timelinePreviewProvider.start(previewSource);
     if (!timelinePreviewStarted) timelinePreviewModel.stop();
-    bindRenderInputs();
     syncVideoEditPresentation(false);
     if (sessionIntent == PlaybackSessionIntent::EditVideo) {
       executeVideoEditCommand(playback_video_edit::Command::Open, false);
@@ -362,21 +372,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
   }
 
   void publishWindowUiState() {
-    // Publish terminal/text-grid inputs and window overlays from the same
-    // loop-thread revision. The presenter never samples mutable loop state.
-    updateRenderInputs(false, false);
-    playback_framebuffer_presenter::PlaybackFramebufferUiSnapshot next;
-    next.osd = osdSnapshot();
-    next.timelinePreview = timelinePreviewModel.snapshotFor(
-        playback_video_timeline_preview::PresentationSurface::VideoWindow);
-    next.videoEdit = videoEditWorkspace.edit();
-    next.videoEditExport = videoEditWorkspace.exportProgress();
-    next.videoEditPrompt = videoEditPrompt();
-    next.contextMenu = contextMenuController.snapshotFor(
-        playback_session::ContextMenuSurface::VideoWindow);
-    presentationModel->publishWindowState(
-        std::move(next), renderInputs.playbackState, renderInputs.audioOk,
-        renderInputs.audioStarting, hasSubtitles, config.debugOverlay);
+    publishPresentation(buildScreenModel(false, false));
   }
 
   void syncVideoEditPresentation(bool requestPresent = true) {
@@ -764,35 +760,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
             timingSink};
   }
 
-  void bindRenderInputs() {
-    renderInputs.screen = &screen;
-    renderInputs.videoWindow = &output.window();
-    renderInputs.subtitleManager = &subtitleManager;
-    renderInputs.gpuRenderer = &gpuRenderer;
-    renderInputs.frameCache = &output.frameCache();
-    renderInputs.art = &art;
-    renderInputs.timelinePreviewCache = &timelinePreviewArt;
-    renderInputs.windowTitle = &windowTitle;
-    renderInputs.baseStyle = &baseStyle;
-    renderInputs.accentStyle = &accentStyle;
-    renderInputs.dimStyle = &dimStyle;
-    renderInputs.progressEmptyStyle = &progressEmptyStyle;
-    renderInputs.progressFrameStyle = &progressFrameStyle;
-    renderInputs.progressStart = &progressStart;
-    renderInputs.progressEnd = &progressEnd;
-    renderInputs.enableSubtitlesShared = &enableSubtitlesShared;
-    renderInputs.overlayControlHover = &overlayControlHover;
-    renderInputs.frameOutputState = &frameOutputState;
-    renderInputs.warningSink = warningSink;
-    renderInputs.timingSink = timingSink;
-    renderInputs.videoEdit = videoEditWorkspace.edit();
-    renderInputs.videoEditExport = videoEditWorkspace.exportProgress();
-    renderInputs.videoEditPrompt = videoEditPrompt();
-    renderInputs.contextMenu = contextMenuController.snapshotFor(
-        playback_session::ContextMenuSurface::Terminal);
-    core.bindRenderInputs(renderInputs);
-  }
-
   bool overlayVisible() const {
     const playback_video_edit::EditSnapshot edit =
         videoEditWorkspace.edit();
@@ -897,30 +864,61 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     }
   }
 
-  void updateRenderInputs(bool clearHistory, bool frameChanged) {
-    renderInputs.debugOverlay = config.debugOverlay;
-    renderInputs.visualMode = presentationController.state().visual();
-    renderInputs.enableAudio = enableAudio;
-    renderInputs.canPlayPrevious = capabilities.transportHandoff;
-    renderInputs.canPlayNext = capabilities.transportHandoff;
-    renderInputs.nativeWindowActive = output.windowOpen();
-    renderInputs.hasSubtitles = hasSubtitles;
-    renderInputs.allowAsciiCpuFallback = false;
-    renderInputs.osd = osdSnapshot();
-    renderInputs.timelinePreview = timelinePreviewModel.snapshotFor(
+  playback_screen_renderer::PlaybackScreenModel buildScreenModel(
+      bool clearHistory, bool frameChanged) {
+    playback_screen_renderer::PlaybackScreenModel model;
+    model.debugOverlay = config.debugOverlay;
+    model.visualMode = presentationController.state().visual();
+    model.enableAudio = enableAudio;
+    model.canPlayPrevious = capabilities.transportHandoff;
+    model.canPlayNext = capabilities.transportHandoff;
+    model.nativeWindowActive = output.windowOpen();
+    model.hasSubtitles = hasSubtitles;
+    model.allowAsciiCpuFallback = false;
+    model.osd = osdSnapshot();
+    model.timelinePreview = timelinePreviewModel.snapshotFor(
         playback_video_timeline_preview::PresentationSurface::Terminal);
-    renderInputs.videoEdit = videoEditWorkspace.edit();
-    renderInputs.videoEditExport = videoEditWorkspace.exportProgress();
-    renderInputs.videoEditPrompt = videoEditPrompt();
-    renderInputs.contextMenu = contextMenuController.snapshotFor(
+    model.videoEdit = videoEditWorkspace.edit();
+    model.videoEditExport = videoEditWorkspace.exportProgress();
+    model.videoEditPrompt = videoEditPrompt();
+    model.contextMenu = contextMenuController.snapshotFor(
         playback_session::ContextMenuSurface::Terminal);
-    renderInputs.cellPixelWidth = screen.cellPixelWidth();
-    renderInputs.cellPixelHeight = screen.cellPixelHeight();
-    renderInputs.cellPixelSourceLabel = screen.cellPixelSourceLabel();
-    renderInputs.clearHistory = clearHistory;
-    renderInputs.frameChanged = frameChanged;
-    core.updateRenderInputs(renderInputs);
-    presentationModel->publishTextGridInputs(renderInputs);
+    model.cellPixelWidth = screen.cellPixelWidth();
+    model.cellPixelHeight = screen.cellPixelHeight();
+    model.cellPixelSourceLabel = screen.cellPixelSourceLabel();
+    model.clearHistory = clearHistory;
+    model.frameChanged = frameChanged;
+    const PlaybackSessionPresentationSnapshot corePresentation =
+        core.presentationSnapshot(model.nativeWindowActive);
+    model.playbackState = corePresentation.playbackState;
+    model.audioOk = corePresentation.audioOk;
+    model.audioStarting = corePresentation.audioStarting;
+    model.frameAvailable = corePresentation.frameAvailable;
+    return model;
+  }
+
+  void publishPresentation(
+      const playback_screen_renderer::PlaybackScreenModel& model) {
+    playback_session::PresentationModel::Revision revision;
+    revision.textGrid = model;
+    revision.window.osd = osdSnapshot();
+    revision.window.timelinePreview = timelinePreviewModel.snapshotFor(
+        playback_video_timeline_preview::PresentationSurface::VideoWindow);
+    revision.window.videoEdit = videoEditWorkspace.edit();
+    revision.window.videoEditExport = videoEditWorkspace.exportProgress();
+    revision.window.videoEditPrompt = videoEditPrompt();
+    revision.window.contextMenu = contextMenuController.snapshotFor(
+        playback_session::ContextMenuSurface::VideoWindow);
+    presentationModel->publish(std::move(revision));
+  }
+
+  void renderTerminal(
+      const playback_screen_renderer::PlaybackScreenModel& model) {
+    playback_screen_renderer::PlaybackScreenTarget target{
+        screen, output.window(), output.frameCache(), art, timelinePreviewArt,
+        core.presentationFrame(), frameOutputState};
+    playback_screen_renderer::renderPlaybackScreen(screenResources, target,
+                                                   model);
   }
 
   void renderPlaybackFrame(bool presented, PlaybackLoopState& loopState) {
@@ -933,11 +931,13 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     }
     auto t0 = std::chrono::steady_clock::now();
     const bool renderCopiedFrame = copiedFrameNeedsRender;
-    updateRenderInputs(forceRefreshArt || renderCopiedFrame,
-                       presented || renderCopiedFrame);
+    const playback_screen_renderer::PlaybackScreenModel model =
+        buildScreenModel(forceRefreshArt || renderCopiedFrame,
+                         presented || renderCopiedFrame);
+    publishPresentation(model);
     {
       std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
-      output.renderTerminal(renderInputs);
+      renderTerminal(model);
     }
     auto t1 = std::chrono::steady_clock::now();
     lastDebugRefresh = t1;
@@ -961,9 +961,11 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     const auto now = std::chrono::steady_clock::now();
     lastDebugRefresh = now;
     if (!nativeWindowActive) {
-      updateRenderInputs(true, true);
+      const playback_screen_renderer::PlaybackScreenModel model =
+          buildScreenModel(true, true);
+      publishPresentation(model);
       std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
-      output.renderTerminal(renderInputs);
+      renderTerminal(model);
     } else {
       redraw = false;
       forceRefreshArt = false;
@@ -1153,9 +1155,11 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
   }
 
   void renderFailureScreen() {
-    updateRenderInputs(true, true);
+    const playback_screen_renderer::PlaybackScreenModel model =
+        buildScreenModel(true, true);
+    publishPresentation(model);
     std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
-    output.renderTerminal(renderInputs);
+    renderTerminal(model);
   }
 
   bool pump() {
