@@ -6,7 +6,6 @@
 #include <cstdio>
 #include <string>
 
-#include "audioplayback.h"
 #include "core/thread_dispatch_queue.h"
 #include "core/windows_message_pump.h"
 #include "playback/debug/lines.h"
@@ -60,8 +59,9 @@ void waitForPresenterActivity(NativeWaitHandle wakeEvent,
 
 WindowUiState buildPlaybackFramebufferUiState(
     const std::string& windowTitle, VideoWindow& videoWindow, Player& player,
-    SubtitleManager& subtitleManager, PlaybackSessionState playbackState,
-    bool audioOk, bool canPlayPrevious, bool canPlayNext, bool hasSubtitles,
+    SubtitleManager& subtitleManager, const AudioPlaybackSnapshot& audio,
+    PlaybackSessionState playbackState, bool audioOk,
+    bool canPlayPrevious, bool canPlayNext, bool hasSubtitles,
     std::atomic<bool>& enableSubtitlesShared,
     std::atomic<int>& overlayControlHover,
     const PlaybackFramebufferUiSnapshot& snapshot, bool debugOverlay) {
@@ -76,7 +76,7 @@ WindowUiState buildPlaybackFramebufferUiState(
   if (durUs > 0) {
     totalSec = static_cast<double>(durUs) / 1000000.0;
   } else if (audioOk) {
-    totalSec = audioGetTotalSec();
+    totalSec = audio.durationSec;
   }
   if (totalSec > 0.0) {
     displaySec = std::clamp(displaySec, 0.0, totalSec);
@@ -99,12 +99,13 @@ WindowUiState buildPlaybackFramebufferUiState(
       playbackState == PlaybackSessionState::Active ||
       playbackState == PlaybackSessionState::Paused ||
       playbackState == PlaybackSessionState::Ended;
-  overlayInputs.audioSupports50HzToggle = audioOk && audioSupports50HzToggle();
+  overlayInputs.audioSupports50HzToggle =
+      audioOk && audio.supports50HzToggle;
   overlayInputs.canPlayPrevious = canPlayPrevious;
   overlayInputs.canPlayNext = canPlayNext;
-  overlayInputs.radioEnabled = audioIsRadioEnabled();
-  overlayInputs.radioLabel = std::string(audioGetRadioFilterLabel());
-  overlayInputs.hz50Enabled = audioIs50HzEnabled();
+  overlayInputs.radioEnabled = audio.radioEnabled;
+  overlayInputs.radioLabel = std::string(audio.radioFilterLabel);
+  overlayInputs.hz50Enabled = audio.hz50Enabled;
   overlayInputs.canCycleAudioTracks = audioOk && player.canCycleAudioTracks();
   overlayInputs.activeAudioTrackLabel =
       audioOk ? player.activeAudioTrackLabel() : "N/A";
@@ -115,7 +116,8 @@ WindowUiState buildPlaybackFramebufferUiState(
   overlayInputs.seekingOverlay = seekingOverlay;
   overlayInputs.displaySec = displaySec;
   overlayInputs.totalSec = totalSec;
-  overlayInputs.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
+  overlayInputs.volPct =
+      static_cast<int>(std::round(audio.volume * 100.0f));
   overlayInputs.osd = snapshot.osd;
   overlayInputs.paused = pausedNow;
   overlayInputs.pictureInPictureAvailable = videoWindow.IsOpen();

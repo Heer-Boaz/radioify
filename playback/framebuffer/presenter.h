@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "audio/playback_snapshot.h"
 #include "core/native_wait_handle.h"
 #include "consolescreen.h"
 #include "playback/video/gpu/gpu_shared.h"
@@ -68,8 +69,9 @@ class PresentationSource {
 
 WindowUiState buildPlaybackFramebufferUiState(
     const std::string& windowTitle, VideoWindow& videoWindow, Player& player,
-    SubtitleManager& subtitleManager, PlaybackSessionState playbackState,
-    bool audioOk, bool canPlayPrevious, bool canPlayNext, bool hasSubtitles,
+    SubtitleManager& subtitleManager, const AudioPlaybackSnapshot& audio,
+    PlaybackSessionState playbackState, bool audioOk,
+    bool canPlayPrevious, bool canPlayNext, bool hasSubtitles,
     std::atomic<bool>& enableSubtitlesShared,
     std::atomic<int>& overlayControlHover,
     const PlaybackFramebufferUiSnapshot& snapshot, bool debugOverlay);

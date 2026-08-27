@@ -2,6 +2,7 @@
 
 #include <utility>
 
+#include "audio/audioplayback.h"
 #include "playback/ascii/screen_renderer.h"
 #include "playback/video/player.h"
 #include "playback/video/subtitle/manager.h"
@@ -53,11 +54,12 @@ WindowUiState PresentationModel::buildWindowUiState(
   if (!state.available) return {};
   const auto& model = state.revision.textGrid;
   const auto& renderer = impl_->dependencies.renderer;
+  const AudioPlaybackSnapshot audio = renderer.audioPlayback.snapshot();
   std::lock_guard<std::mutex> subtitleLock(
       impl_->dependencies.subtitleMutex);
   return playback_framebuffer_presenter::buildPlaybackFramebufferUiState(
       renderer.windowTitle, videoWindow, renderer.player,
-      renderer.subtitleManager, model.playbackState, model.audioOk,
+      renderer.subtitleManager, audio, model.playbackState, model.audioOk,
       model.canPlayPrevious, model.canPlayNext, model.hasSubtitles,
       renderer.subtitlesEnabled, renderer.controlHover,
       state.revision.window, model.debugOverlay);
