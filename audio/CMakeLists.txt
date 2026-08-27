@@ -3,13 +3,20 @@ add_subdirectory(audiofilter)
 add_subdirectory(loopsplit)
 add_subdirectory(separation)
 
+radioify_add_module_object_library(radioify_audio_file
+  ${CMAKE_CURRENT_SOURCE_DIR}/flac_writer.cpp
+)
+
+radioify_add_module_object_library(radioify_audio_export
+  ${CMAKE_CURRENT_SOURCE_DIR}/audio_export.cpp
+)
+
 radioify_add_module_object_library(radioify_audio
   ${CMAKE_CURRENT_SOURCE_DIR}/audio_stream.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/audio_format_options.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/audition_worker.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/audioplayback.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ffmpegaudio.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/flac_writer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/gmeaudio.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/gsfaudio.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/kssaudio.cpp

@@ -154,7 +154,8 @@ bool FlacWriter::open(const std::filesystem::path& path,
                       std::uint32_t sampleRate, std::uint32_t channels,
                       std::string* error) {
   if (error) error->clear();
-  if (path.empty() || sampleRate == 0 || channels == 0) {
+  if (path.empty() || sampleRate == 0 || sampleRate > 655350 ||
+      channels == 0 || channels > 8) {
     setError(error, "The FLAC output configuration is invalid.");
     return false;
   }

@@ -75,6 +75,40 @@ int findUsableAudioStream(AVFormatContext* fmt, const AVCodec** codec) {
   return streamIndex;
 }
 
+bool openUsableAudioInput(const std::filesystem::path& path,
+                          AVFormatContext** format, const AVCodec** codec,
+                          int* streamIndex, std::string* error) {
+  if (!format || !codec || !streamIndex) return false;
+  *format = nullptr;
+  *codec = nullptr;
+  *streamIndex = -1;
+  if (!openAudioInput(path, kAnalyzeDurationFastUs, format, error)) {
+    return false;
+  }
+  int infoError = avformat_find_stream_info(*format, nullptr);
+  if (infoError < 0) {
+    avformat_close_input(format);
+    if (!openAudioInput(path, kAnalyzeDurationFallbackUs, format, error)) {
+      return false;
+    }
+    infoError = avformat_find_stream_info(*format, nullptr);
+    if (infoError < 0) {
+      const std::string message =
+          "Failed to read audio stream info: " + ffmpegError(infoError);
+      avformat_close_input(format);
+      setError(error, message.c_str());
+      return false;
+    }
+  }
+  *streamIndex = findUsableAudioStream(*format, codec);
+  if (*streamIndex < 0 || !*codec) {
+    avformat_close_input(format);
+    setError(error, "No audio stream found.");
+    return false;
+  }
+  return true;
+}
+
 int64_t rescaleToFrames(int64_t value, AVRational src, uint32_t sampleRate) {
   if (value <= 0 || sampleRate == 0) return 0;
   AVRational dst{1, static_cast<int>(sampleRate)};
@@ -146,6 +180,36 @@ uint64_t scanPacketDurationFrames(const std::filesystem::path& path,
 }
 }  // namespace
 
+bool probeFfmpegAudioStream(const std::filesystem::path& path,
+                            FfmpegAudioStreamFormat* format,
+                            std::string* error) {
+  if (error) error->clear();
+  if (!format) {
+    setError(error, "The audio format destination is empty.");
+    return false;
+  }
+  *format = {};
+  AVFormatContext* input = nullptr;
+  const AVCodec* codec = nullptr;
+  int streamIndex = -1;
+  if (!openUsableAudioInput(path, &input, &codec, &streamIndex, error)) {
+    return false;
+  }
+  const AVCodecParameters* parameters =
+      input->streams[streamIndex]->codecpar;
+  if (!parameters || parameters->sample_rate <= 0 ||
+      parameters->ch_layout.nb_channels <= 0) {
+    avformat_close_input(&input);
+    setError(error, "The audio stream has no usable format.");
+    return false;
+  }
+  format->sampleRate = static_cast<uint32_t>(parameters->sample_rate);
+  format->channels =
+      static_cast<uint32_t>(parameters->ch_layout.nb_channels);
+  avformat_close_input(&input);
+  return true;
+}
+
 struct FfmpegAudioDecoder::Impl {
   AVFormatContext* fmt = nullptr;
   AVCodecContext* codec = nullptr;
@@ -180,32 +244,9 @@ bool FfmpegAudioDecoder::init(const std::filesystem::path& path,
   uninit();
 
   AVFormatContext* fmt = nullptr;
-  if (!openAudioInput(path, kAnalyzeDurationFastUs, &fmt, error)) {
-    return false;
-  }
-
-  int infoErr = avformat_find_stream_info(fmt, nullptr);
-  if (infoErr < 0) {
-    avformat_close_input(&fmt);
-    if (!openAudioInput(path, kAnalyzeDurationFallbackUs, &fmt, error)) {
-      return false;
-    }
-    infoErr = avformat_find_stream_info(fmt, nullptr);
-    if (infoErr < 0) {
-      std::string msg = "Failed to read audio stream info: " +
-                        ffmpegError(infoErr);
-      avformat_close_input(&fmt);
-      setError(error, msg.c_str());
-      return false;
-    }
-  }
-
   const AVCodec* codec = nullptr;
-  const int streamIndex = findUsableAudioStream(fmt, &codec);
-
-  if (streamIndex < 0 || !codec) {
-    avformat_close_input(&fmt);
-    setError(error, "No audio stream found.");
+  int streamIndex = -1;
+  if (!openUsableAudioInput(path, &fmt, &codec, &streamIndex, error)) {
     return false;
   }
 

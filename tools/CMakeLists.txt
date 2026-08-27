@@ -233,6 +233,10 @@ radioify_add_module_object_library(radioify_tool_file_output_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/file_output_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_media_export_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/media_export_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_whisper_gpu_contract_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/whisper_gpu_contract_tests.cpp
 )

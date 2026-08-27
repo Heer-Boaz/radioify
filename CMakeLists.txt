@@ -406,6 +406,7 @@ target_sources(radioify PRIVATE
   $<TARGET_OBJECTS:radioify_video_sidecar_identity>
   $<TARGET_OBJECTS:radioify_transcript_artifact>
   $<TARGET_OBJECTS:radioify_transcript_document>
+  $<TARGET_OBJECTS:radioify_transcript_text_export>
   $<TARGET_OBJECTS:radioify_transcript_cue_semantics>
   $<TARGET_OBJECTS:radioify_transcript_device_policy>
   $<TARGET_OBJECTS:radioify_transcript_job>
@@ -414,6 +415,8 @@ target_sources(radioify PRIVATE
   $<TARGET_OBJECTS:radioify_image_codec>
   $<TARGET_OBJECTS:radioify_video>
   $<TARGET_OBJECTS:radioify_audio>
+  $<TARGET_OBJECTS:radioify_audio_file>
+  $<TARGET_OBJECTS:radioify_audio_export>
   $<TARGET_OBJECTS:radioify_audio_separation>
   $<TARGET_OBJECTS:radioify_analysis>
   $<TARGET_OBJECTS:radioify_ui>
@@ -1137,6 +1140,25 @@ target_sources(file_output_tests PRIVATE
 )
 radioify_link_repo_target(file_output_tests)
 add_test(NAME file_output_tests COMMAND $<TARGET_FILE:file_output_tests>)
+
+add_executable(media_export_tests)
+target_sources(media_export_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_media_export_tests>
+  $<TARGET_OBJECTS:radioify_video_sidecar_identity>
+  $<TARGET_OBJECTS:radioify_transcript_artifact>
+  $<TARGET_OBJECTS:radioify_transcript_document>
+  $<TARGET_OBJECTS:radioify_transcript_text_export>
+  $<TARGET_OBJECTS:radioify_transcript_cue_semantics>
+  ${CMAKE_SOURCE_DIR}/audio/audio_export.cpp
+  ${CMAKE_SOURCE_DIR}/audio/ffmpegaudio.cpp
+  ${CMAKE_SOURCE_DIR}/audio/flac_writer.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+  ${CMAKE_SOURCE_DIR}/core/file_output.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/core/utf8.cpp
+)
+radioify_link_repo_target(media_export_tests)
+add_test(NAME media_export_tests COMMAND $<TARGET_FILE:media_export_tests>)
 
 add_executable(whisper_gpu_contract_tests)
 target_sources(whisper_gpu_contract_tests PRIVATE
@@ -1893,6 +1915,7 @@ radioify_add_external_include_dirs(${FFMPEG_INCLUDE_DIRS})
 if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(radioify PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(ffmpeg_audio_decoder_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
+  target_link_directories(media_export_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
@@ -1910,6 +1933,7 @@ endif()
 
 target_link_libraries(radioify PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(ffmpeg_audio_decoder_tests PRIVATE ${FFMPEG_LIBRARIES})
+target_link_libraries(media_export_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARIES})

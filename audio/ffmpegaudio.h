@@ -5,6 +5,18 @@
 #include <filesystem>
 #include <string>
 
+struct FfmpegAudioStreamFormat {
+  uint32_t channels = 0;
+  uint32_t sampleRate = 0;
+};
+
+// Reads the format of the best audio stream without decoding it. Exporters use
+// this to preserve the source sample rate and channel layout where FLAC can
+// represent them directly.
+bool probeFfmpegAudioStream(const std::filesystem::path& path,
+                            FfmpegAudioStreamFormat* format,
+                            std::string* error);
+
 class FfmpegAudioDecoder {
  public:
   FfmpegAudioDecoder();
