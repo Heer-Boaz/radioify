@@ -11,6 +11,7 @@
 #include "core/path_identity.h"
 #include "core/runtime_helpers.h"
 #include "core/wake_event.h"
+#include "playback/video/transcript/artifact.h"
 
 namespace media_processing {
 namespace {
@@ -459,6 +460,9 @@ playback_media_processing::SourceState Coordinator::sourceStateFor(
   playback_media_processing::SourceState state;
   const std::optional<TaskActivity> currentActivity = activity();
   state.backgroundTaskRunning = currentActivity.has_value();
+  state.hasGeneratedSubtitles =
+      !playback_video_transcript::activeTranscriptPathForVideo(sourceFile)
+           .empty();
   if (currentActivity &&
       samePath(currentActivity->sourceFile, sourceFile)) {
     state.subtitleGenerationRunning =

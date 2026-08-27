@@ -23,8 +23,8 @@ class Actions {
   std::optional<ActionResult> execute(
       playback_media_actions::Action action,
       const std::filesystem::path& sourceFile) const;
-  void applySourceState(const std::filesystem::path& sourceFile,
-                        playback_media_actions::Context& context) const;
+  playback_media_actions::Context contextForSource(
+      const std::filesystem::path& sourceFile) const;
 
  private:
   Service& service_;

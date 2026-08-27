@@ -33,8 +33,8 @@ class Controller {
 
   std::optional<playback_media_processing::ActionResult> execute(
       const media_processing::ActionRequest& request);
-  void applySourceState(const std::filesystem::path& sourceFile,
-                        playback_media_actions::Context& context) const;
+  playback_media_actions::Context contextForSource(
+      const std::filesystem::path& sourceFile) const;
 
   Update poll();
   bool cancelActive();

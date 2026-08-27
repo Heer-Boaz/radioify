@@ -29,6 +29,7 @@ struct Completion {
 struct SourceState {
   bool backgroundTaskRunning = false;
   bool subtitleGenerationRunning = false;
+  bool hasGeneratedSubtitles = false;
   bool audioSeparationAvailable = false;
   bool audioSeparationRunning = false;
   bool separatedAudioExists = false;

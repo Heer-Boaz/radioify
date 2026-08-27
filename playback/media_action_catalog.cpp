@@ -1,6 +1,14 @@
 #include "playback/media_action_catalog.h"
 
+#include "audio/media_formats.h"
+
 namespace playback_media_actions {
+
+MediaKind mediaKindForSource(const std::filesystem::path& sourceFile) {
+  if (isSupportedVideoExt(sourceFile)) return MediaKind::Video;
+  if (isSupportedAudioExt(sourceFile)) return MediaKind::Audio;
+  return MediaKind::Unsupported;
+}
 
 std::vector<Item> build(const Context& context) {
   std::vector<Item> items;

@@ -22,10 +22,9 @@ std::optional<playback_media_processing::ActionResult> Controller::execute(
   return result;
 }
 
-void Controller::applySourceState(
-    const std::filesystem::path& sourceFile,
-    playback_media_actions::Context& context) const {
-  actions_.applySourceState(sourceFile, context);
+playback_media_actions::Context Controller::contextForSource(
+    const std::filesystem::path& sourceFile) const {
+  return actions_.contextForSource(sourceFile);
 }
 
 Update Controller::poll() {

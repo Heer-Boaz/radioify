@@ -76,10 +76,9 @@ std::optional<playback_media_processing::ActionResult> Actions::execute(
   return std::nullopt;
 }
 
-void Actions::applySourceState(
-    const std::filesystem::path& sourceFile,
-    playback_media_actions::Context& context) const {
-  sourceActions_.applySourceState(sourceFile, context);
+playback_media_actions::Context Actions::contextForSource(
+    const std::filesystem::path& sourceFile) const {
+  return sourceActions_.contextForSource(sourceFile);
 }
 
 }  // namespace media_processing

@@ -40,7 +40,6 @@
 #include "state.h"
 #include "mouse_double_click_tracker.h"
 #include "playback/video/subtitle/manager.h"
-#include "playback/video/transcript/artifact.h"
 
 namespace {
 
@@ -105,7 +104,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   bool quitApplicationRequested = false;
   const bool enableAudio;
   bool hasSubtitles;
-  bool hasGeneratedSubtitles = false;
   int overlayControlHover = -1;
 
   PlaybackPresentationController presentationController;
@@ -189,8 +187,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         videoEditWorkspace(file, core.player(), timelinePreviewModel,
                            timelinePreviewProvider),
         output(args.player, gpu, windowTitle, presentationModel) {
-    hasGeneratedSubtitles =
-        !playback_video_transcript::activeTranscriptPathForVideo(file).empty();
     core.initialize(screen);
     const playback_video_timeline_preview::Source previewSource{
         file, core.player().videoStreamIndex(), core.player().durationUs(),
@@ -368,11 +364,9 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   void syncVideoEditPresentation(bool requestPresent = true) {
-    playback_media_actions::Context sourceContext;
-    sourceContext.mediaKind = playback_media_actions::MediaKind::Video;
+    playback_media_actions::Context sourceContext =
+        mediaProcessingActions.contextForSource(file);
     sourceContext.currentPlayback = true;
-    sourceContext.hasGeneratedSubtitles = hasGeneratedSubtitles;
-    mediaProcessingActions.applySourceState(file, sourceContext);
     contextMenuController.refresh(videoEditWorkspace.edit(),
                                   videoEditWorkspace.exportProgress(),
                                   std::move(sourceContext));
@@ -1491,9 +1485,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     selectedPreferred =
         hasSubtitles && subtitleManager.selectTrackForFile(preferredTrack);
     subtitlesEnabled = selectedPreferred || hasSubtitles;
-    hasGeneratedSubtitles =
-        !playback_video_transcript::activeTranscriptPathForVideo(file)
-             .empty();
     redraw = true;
     forceRefreshArt = true;
     copiedFrameNeedsRender = true;

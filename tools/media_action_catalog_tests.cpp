@@ -85,6 +85,14 @@ int main() {
   unsupported.canAnalyzeAudio = true;
   ok &= expect(actions::build(unsupported).empty(),
                "capabilities must not bypass the media-kind discriminator");
+  ok &= expect(actions::mediaKindForSource("movie.mp4") ==
+                       actions::MediaKind::Video &&
+                   actions::mediaKindForSource("album.flac") ==
+                       actions::MediaKind::Audio &&
+                   actions::mediaKindForSource("notes.txt") ==
+                       actions::MediaKind::Unsupported,
+               "every surface must share source classification with video "
+               "taking precedence for media containers");
 
   actions::Context video;
   video.mediaKind = actions::MediaKind::Video;
@@ -201,14 +209,17 @@ int main() {
   FakeMediaProcessingService processingService;
   processingService.state.backgroundTaskRunning = true;
   processingService.state.subtitleGenerationRunning = true;
+  processingService.state.hasGeneratedSubtitles = true;
   processingService.state.audioSeparationAvailable = true;
   processingService.state.audioSeparationRunning = true;
   processingService.state.separatedAudioExists = true;
   playback_media_processing::Actions processingActions(processingService);
-  actions::Context projected;
-  processingActions.applySourceState("source.mp4", projected);
-  ok &= expect(projected.backgroundTaskRunning &&
+  const actions::Context projected =
+      processingActions.contextForSource("source.mp4");
+  ok &= expect(projected.mediaKind == actions::MediaKind::Video &&
+                   projected.backgroundTaskRunning &&
                    projected.subtitleGenerationRunningForSource &&
+                   projected.hasGeneratedSubtitles &&
                    projected.canSeparateAudio &&
                    projected.audioSeparationRunningForSource &&
                    projected.hasSeparatedAudio,

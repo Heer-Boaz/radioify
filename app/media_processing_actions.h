@@ -40,8 +40,8 @@ class Actions {
 
   std::optional<playback_media_processing::ActionResult> execute(
       const ActionRequest& request) const;
-  void applySourceState(const std::filesystem::path& sourceFile,
-                        playback_media_actions::Context& context) const;
+  playback_media_actions::Context contextForSource(
+      const std::filesystem::path& sourceFile) const;
   playback_media_processing::Actions playbackActions() const {
     return sourceActions_;
   }

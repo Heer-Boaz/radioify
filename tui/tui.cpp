@@ -93,7 +93,6 @@
 #include "melody_visualization.h"
 #include "melody_visualization_renderer.h"
 #include "playback/video/playback.h"
-#include "playback/video/transcript/artifact.h"
 #include "playback/video/framebuffer/window/window.h"
 #include "windows_file_drop_apartment.h"
 #include "media_formats.h"
@@ -797,22 +796,14 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     if (!o.play || !entry.isMedia()) {
       return;
     }
-    playback_media_actions::Context context;
-    if (isVideoExt(entry.path)) {
-      context.mediaKind = playback_media_actions::MediaKind::Video;
-    } else if (isSupportedAudioExt(entry.path)) {
-      context.mediaKind = playback_media_actions::MediaKind::Audio;
-    }
+    playback_media_actions::Context context =
+        mediaTasks.contextForSource(entry.path);
     const bool audio =
         context.mediaKind == playback_media_actions::MediaKind::Audio;
     context.canBrowseTracks =
         audio && supportsPlaybackTrackCatalog(entry.path);
     context.canAnalyzeAudio =
         audio && audioPlayback.canAnalyzeFile(entry.path);
-    context.hasGeneratedSubtitles =
-        !playback_video_transcript::activeTranscriptPathForVideo(entry.path)
-             .empty();
-    mediaTasks.applySourceState(entry.path, context);
     std::vector<playback_media_actions::Item> items =
         playback_media_actions::build(context);
     if (items.empty()) return;

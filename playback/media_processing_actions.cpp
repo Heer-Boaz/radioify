@@ -43,16 +43,19 @@ std::optional<ActionResult> Actions::execute(
   return std::nullopt;
 }
 
-void Actions::applySourceState(
-    const std::filesystem::path& sourceFile,
-    playback_media_actions::Context& context) const {
+playback_media_actions::Context Actions::contextForSource(
+    const std::filesystem::path& sourceFile) const {
+  playback_media_actions::Context context;
+  context.mediaKind = playback_media_actions::mediaKindForSource(sourceFile);
   const SourceState state = service_.sourceStateFor(sourceFile);
   context.backgroundTaskRunning = state.backgroundTaskRunning;
   context.subtitleGenerationRunningForSource =
       state.subtitleGenerationRunning;
+  context.hasGeneratedSubtitles = state.hasGeneratedSubtitles;
   context.canSeparateAudio = state.audioSeparationAvailable;
   context.audioSeparationRunningForSource = state.audioSeparationRunning;
   context.hasSeparatedAudio = state.separatedAudioExists;
+  return context;
 }
 
 }  // namespace playback_media_processing
