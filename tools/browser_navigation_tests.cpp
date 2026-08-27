@@ -614,9 +614,8 @@ int main() {
   revealBrowser.location = browserDirectoryLocation("C:/Media");
   revealBrowser.entries = {fileEntry("B.flac", songB)};
   revealBrowser.filter = "B";
-  revealBrowser.filterActive = true;
   revealBrowser.pathSearch = "stale path query";
-  revealBrowser.pathSearchActive = true;
+  revealBrowser.searchFocus = BrowserSearchFocus::PathSearch;
   BrowserPreparationId revealPreparationId = 0;
   std::optional<BrowserContentRequest> revealRequest;
   FakeBrowserPreparationService revealPreparation;
@@ -631,20 +630,21 @@ int main() {
   const BrowserState::EntryIdentity revealIdentity =
       browserEntryIdentity(files.front());
   ok &= expect(
-      revealNavigator.reveal(revealBrowser.location, "A.flac",
+          revealNavigator.reveal(revealBrowser.location, "A.flac",
                              revealIdentity) &&
           revealRequest && revealRequest->filter.empty() &&
-          revealBrowser.filter == "B" && revealBrowser.filterActive &&
-          revealBrowser.pathSearchActive,
+          revealBrowser.filter == "B" &&
+          revealBrowser.searchFocus == BrowserSearchFocus::PathSearch,
       "reveal preparation must reset search in its candidate, not live state");
   PreparedBrowserContent revealPrepared;
   revealPrepared.entries = files;
   ok &= expect(
       revealNavigator.completePreparation(revealPreparationId,
                                           std::move(revealPrepared)) &&
-          revealBrowser.filter.empty() && !revealBrowser.filterActive &&
+          revealBrowser.filter.empty() &&
           revealBrowser.pathSearch.empty() &&
-          !revealBrowser.pathSearchActive && revealBrowser.selected == 0,
+          revealBrowser.searchFocus == BrowserSearchFocus::None &&
+          revealBrowser.selected == 0,
       "reveal must atomically commit unfiltered content and its selection");
 
   {

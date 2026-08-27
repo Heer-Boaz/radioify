@@ -7,11 +7,14 @@
 
 #include "browser_navigation.h"
 #include "browser_grid_index.h"
+#include "browser_keymap.h"
+#include "browser_search.h"
 #include "consolescreen.h"
 #include "optionsbrowser.h"
 #include "playback/input/shortcuts.h"
 #include "playback/overlay/interaction.h"
 #include "runtime_helpers.h"
+#include "single_line_text_input.h"
 #include "track_browser_state.h"
 #include "ui_helpers.h"
 
@@ -244,40 +247,6 @@ int browserEntryIndexAt(const BrowserState& browser, const GridLayout& layout,
 }
 }  // namespace
 
-void setBrowserSearchFocus(BrowserState& browser, BrowserSearchFocus focus,
-                          bool& dirty) {
-  if (focus == BrowserSearchFocus::None) {
-    if (!browser.filterActive && !browser.pathSearchActive) return;
-    browser.filterActive = false;
-    browser.pathSearchActive = false;
-    browser.pathSearch.clear();
-    dirty = true;
-    return;
-  }
-
-  if (focus == BrowserSearchFocus::Filter) {
-    const bool previouslyFocused = browser.filterActive;
-    const bool previouslyPathSearching = browser.pathSearchActive;
-    browser.filterActive = true;
-    if (browser.pathSearchActive) {
-      browser.pathSearchActive = false;
-      browser.pathSearch.clear();
-    }
-    if (!previouslyFocused || previouslyPathSearching) {
-      dirty = true;
-    }
-    return;
-  }
-
-  const bool previouslyFocused = browser.filterActive;
-  const bool previouslyPathSearching = browser.pathSearchActive;
-  browser.pathSearchActive = true;
-  browser.filterActive = false;
-  if (!previouslyPathSearching || previouslyFocused) {
-    dirty = true;
-  }
-}
-
 namespace {
 
 class BrowserInputController {
@@ -391,186 +360,173 @@ class BrowserInputController {
 
   void handleKey(const InputEvent& ev) {
     const KeyEvent& key = ev.key;
-    bool backspaceKey = key.vk == VK_BACK;
-    const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
-    const DWORD altMask = LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED;
-    bool ctrl = (key.control & ctrlMask) != 0;
-    bool alt = (key.control & altMask) != 0;
-
-    if (ctrl && (key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q')) {
-      publishPlaybackCommand(result.commands, PlaybackAction::Quit);
+    if (const std::optional<PlaybackInputMatch> global =
+            matchPlaybackInput(ev, kPlaybackShortcutContextGlobal)) {
+      publishPlaybackCommand(result.commands, global->command);
       result.dirty = true;
       return;
     }
 
-    if (capabilities.interactionEnabled && browser.pathSearchActive) {
-      if (key.vk == VK_ESCAPE) {
-        setBrowserSearchFocus(browser, BrowserSearchFocus::None, result.dirty);
-        result.dirty = true;
-        return;
-      }
-      if (key.vk == VK_RETURN) {
-        commitPathSearch();
-        return;
-      }
-      if (backspaceKey) {
-        if (!browser.pathSearch.empty()) {
-          browser.pathSearch.pop_back();
-          result.dirty = true;
-        }
-        return;
-      }
-      if (key.ch >= 32) {
-        browser.pathSearch.push_back(key.ch);
-        result.dirty = true;
-        return;
-      }
+    if (capabilities.interactionEnabled && browserSearchFocused(browser)) {
+      handleFocusedSearchKey(key);
       return;
     }
 
-    if (capabilities.interactionEnabled && browser.filterActive) {
-      if (key.vk == VK_ESCAPE) {
-        browser.filter = browser.filterBackup;
-        setBrowserSearchFocus(browser, BrowserSearchFocus::None, result.dirty);
-        navigator.reload();
+    if (capabilities.interactionEnabled) {
+      const auto searchAction = browser_input::resolveKeyAction(
+          key, browser_input::shortcutContext(
+                   browser_input::ShortcutContext::SearchActivation));
+      if (searchAction) {
+        executeKeyAction(*searchAction);
         return;
       }
-      if (key.vk == VK_RETURN) {
-        setBrowserSearchFocus(browser, BrowserSearchFocus::None, result.dirty);
-        navigator.reload();
-        return;
-      }
-      if (backspaceKey) {
-        if (!browser.filter.empty()) {
-          browser.filter.pop_back();
-          result.dirty = true;
-        }
-        return;
-      }
-      if (key.ch >= 32) {
-        browser.filter += key.ch;
-        result.dirty = true;
-        return;
-      }
-      return;
-    }
-
-    if (capabilities.interactionEnabled && ctrl &&
-        (key.vk == 'G' || key.ch == 'g' || key.ch == 'G')) {
-      setBrowserSearchFocus(browser, BrowserSearchFocus::PathSearch,
-                            result.dirty);
-      browser.pathSearch.clear();
-      result.dirty = true;
-      return;
-    }
-    if (capabilities.interactionEnabled && ctrl &&
-        (key.vk == 'F' || key.ch == 'f' || key.ch == 'F')) {
-      browser.filterBackup = browser.filter;
-      setBrowserSearchFocus(browser, BrowserSearchFocus::Filter, result.dirty);
-      browser.pathSearch.clear();
-      result.dirty = true;
-      return;
-    }
-    if (capabilities.interactionEnabled &&
-        (key.vk == VK_DIVIDE || key.ch == '/')) {
-      browser.filterBackup = browser.filter;
-      setBrowserSearchFocus(browser, BrowserSearchFocus::Filter, result.dirty);
-      browser.pathSearch.clear();
-      result.dirty = true;
-      return;
     }
 
     if (const std::optional<PlaybackInputMatch> match =
             (capabilities.playMode || capabilities.decoderReady)
-                ? matchPlaybackInput(ev, kPlaybackShortcutContextShared |
-                                             kPlaybackShortcutContextGlobal)
+                ? matchPlaybackInput(ev, kPlaybackShortcutContextShared)
                 : std::nullopt) {
       publishPlaybackCommand(result.commands, match->command);
       result.dirty = true;
       return;
     }
-    if (!ctrl && !alt && (key.vk == 'M' || key.ch == 'm' || key.ch == 'M')) {
-      publishPlaybackCommand(result.commands,
-                             PlaybackAction::TogglePitchMonitor);
-      result.dirty = true;
+
+    const auto applicationAction = browser_input::resolveKeyAction(
+        key, browser_input::shortcutContext(
+                 browser_input::ShortcutContext::Application));
+    if (applicationAction) {
+      executeKeyAction(*applicationAction);
       return;
     }
     if (!capabilities.interactionEnabled) {
       return;
     }
-    if (key.vk == 'S' || key.ch == 's' || key.ch == 'S') {
-      const DWORD sortAltMask = LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED;
-      bool sortAlt = (key.control & sortAltMask) != 0;
-      if (sortAlt) {
-        browser.sortDescending = !browser.sortDescending;
+
+    const auto navigationAction = browser_input::resolveKeyAction(
+        key, browser_input::shortcutContext(
+                 browser_input::ShortcutContext::Navigation));
+    if (navigationAction) {
+      executeKeyAction(*navigationAction);
+    }
+  }
+
+  void handleFocusedSearchKey(const KeyEvent& key) {
+    const BrowserSearchFocus focus = browser.searchFocus;
+    std::string& text = browserPathSearchFocused(browser)
+                            ? browser.pathSearch
+                            : browser.filter;
+    const single_line_text_input::EditResult edit =
+        single_line_text_input::edit(text, key);
+    result.dirty = edit.changed || result.dirty;
+
+    if (edit.intent == single_line_text_input::Intent::Cancel) {
+      if (focus == BrowserSearchFocus::Filter) {
+        browser.filter = browser.filterBackup;
+        navigator.reload();
+      }
+      focusSearch(BrowserSearchFocus::None);
+      return;
+    }
+    if (edit.intent == single_line_text_input::Intent::Commit) {
+      if (focus == BrowserSearchFocus::PathSearch) {
+        commitPathSearch();
       } else {
+        focusSearch(BrowserSearchFocus::None);
+        navigator.reload();
+      }
+    }
+    // A focused text field owns every key even when it is not an editing key.
+  }
+
+  void executeKeyAction(browser_input::KeyAction action) {
+    using browser_input::KeyAction;
+    switch (action) {
+      case KeyAction::BeginPathSearch:
+        focusSearch(BrowserSearchFocus::PathSearch);
+        browser.pathSearch.clear();
+        result.dirty = true;
+        return;
+      case KeyAction::BeginFilter:
+        browser.filterBackup = browser.filter;
+        focusSearch(BrowserSearchFocus::Filter);
+        browser.pathSearch.clear();
+        result.dirty = true;
+        return;
+      case KeyAction::TogglePitchMonitor:
+        publishPlaybackCommand(result.commands,
+                               PlaybackAction::TogglePitchMonitor);
+        result.dirty = true;
+        return;
+      case KeyAction::ToggleSortDirection:
+        browser.sortDescending = !browser.sortDescending;
+        navigator.reload();
+        result.dirty = true;
+        return;
+      case KeyAction::CycleSort: {
         int next = static_cast<int>(browser.sortMode) + 1;
         if (next > static_cast<int>(BrowserState::SortMode::Size)) next = 0;
         browser.sortMode = static_cast<BrowserState::SortMode>(next);
+        browser.sortDescending =
+            browser.sortMode != BrowserState::SortMode::Name;
+        navigator.reload();
+        result.dirty = true;
+        return;
+      }
+      case KeyAction::Stop:
+        publishPlaybackCommand(result.commands, PlaybackAction::Stop);
+        result.dirty = true;
+        return;
+      case KeyAction::NavigateUp:
+        navigateUp();
+        return;
+      case KeyAction::ActivateSelection:
+        activateSelected(false);
+        return;
+      case KeyAction::OpenSelectionMenu:
+        activateSelected(true);
+        return;
+      case KeyAction::CycleView:
+        browser.viewMode = nextViewMode(browser.viewMode);
+        result.dirty = true;
+        return;
+      case KeyAction::MoveLeft:
+        moveSelection(browser, inputLayout.entries, -1, 0, result.dirty);
+        return;
+      case KeyAction::MoveRight:
+        moveSelection(browser, inputLayout.entries, 1, 0, result.dirty);
+        return;
+      case KeyAction::MoveUp:
+        moveSelection(browser, inputLayout.entries, 0, -1, result.dirty);
+        return;
+      case KeyAction::MoveDown:
+        moveSelection(browser, inputLayout.entries, 0, 1, result.dirty);
+        return;
+      case KeyAction::PageUp:
+        pageSelection(browser, inputLayout.entries, -1, result.dirty);
+        return;
+      case KeyAction::PageDown:
+        pageSelection(browser, inputLayout.entries, 1, result.dirty);
+        return;
+    }
+  }
 
-        if (browser.sortMode == BrowserState::SortMode::Name)
-          browser.sortDescending = false;
-        else
-          browser.sortDescending = true;
-      }
-      navigator.reload();
+  void activateSelected(bool requestContextMenu) {
+    if (browser.entries.empty()) return;
+    const int index = std::clamp(browser.selected, 0,
+                                 static_cast<int>(browser.entries.size()) - 1);
+    const BrowserEntry& entry = browser.entries[static_cast<size_t>(index)];
+    if (!entry.isSelectable()) return;
+    if (requestContextMenu && capabilities.playMode && entry.isMedia()) {
+      result.commands.emplace_back(
+          tui_input::OpenFileContextMenu{entry, -1, -1});
       result.dirty = true;
       return;
     }
-    if (key.vk == VK_ESCAPE) {
-      publishPlaybackCommand(result.commands, PlaybackAction::Stop);
-      result.dirty = true;
-      return;
-    }
-    if (backspaceKey) {
-      navigateUp();
-      return;
-    }
-    if (key.vk == VK_RETURN) {
-      int count = static_cast<int>(browser.entries.size());
-      if (count > 0) {
-        const auto& pick =
-            browser.entries[static_cast<size_t>(browser.selected)];
-        if (!pick.isSelectable()) return;
-        if (ctrl && capabilities.playMode && pick.isMedia()) {
-          result.commands.emplace_back(
-              tui_input::OpenFileContextMenu{pick, -1, -1});
-          result.dirty = true;
-          return;
-        }
-        activateEntry(pick);
-      }
-      return;
-    }
-    if (key.vk == 'T' || key.ch == 't' || key.ch == 'T') {
-      browser.viewMode = nextViewMode(browser.viewMode);
-      result.dirty = true;
-      return;
-    }
-    if (key.vk == VK_LEFT) {
-      moveSelection(browser, inputLayout.entries, -1, 0, result.dirty);
-      return;
-    }
-    if (key.vk == VK_RIGHT) {
-      moveSelection(browser, inputLayout.entries, 1, 0, result.dirty);
-      return;
-    }
-    if (key.vk == VK_UP) {
-      moveSelection(browser, inputLayout.entries, 0, -1, result.dirty);
-      return;
-    }
-    if (key.vk == VK_DOWN) {
-      moveSelection(browser, inputLayout.entries, 0, 1, result.dirty);
-      return;
-    }
-    if (key.vk == VK_PRIOR) {
-      pageSelection(browser, inputLayout.entries, -1, result.dirty);
-      return;
-    }
-    if (key.vk == VK_NEXT) {
-      pageSelection(browser, inputLayout.entries, 1, result.dirty);
-      return;
-    }
+    activateEntry(entry);
+  }
+
+  void focusSearch(BrowserSearchFocus focus) {
+    result.dirty = setBrowserSearchFocus(browser, focus) || result.dirty;
   }
 
   void handleMouse(
@@ -600,14 +556,14 @@ class BrowserInputController {
     const bool hoveredSearch = capabilities.interactionEnabled &&
                                isMouseInSearchBar(mouse, inputLayout.searchBarY,
                                                   inputLayout.searchBarWidth);
-    if ((browser.filterActive || browser.pathSearchActive) &&
+    if (browserSearchFocused(browser) &&
         capabilities.interactionEnabled &&
         (mouse.kind == MouseEventKind::Press ||
          mouse.kind == MouseEventKind::VerticalWheel) &&
         !hoveredSearch &&
         (leftPressed || rightPressed ||
          mouse.kind == MouseEventKind::VerticalWheel)) {
-      setBrowserSearchFocus(browser, BrowserSearchFocus::None, result.dirty);
+      focusSearch(BrowserSearchFocus::None);
     }
     if (interaction.searchBarHover != hoveredSearch) {
       interaction.searchBarHover = hoveredSearch;
@@ -684,7 +640,7 @@ class BrowserInputController {
     if (capabilities.interactionEnabled && leftPressed &&
         mouse.kind == MouseEventKind::Press && hoveredSearch) {
       browser.filterBackup = browser.filter;
-      setBrowserSearchFocus(browser, BrowserSearchFocus::Filter, result.dirty);
+      focusSearch(BrowserSearchFocus::Filter);
       result.dirty = true;
       return true;
     }
@@ -984,7 +940,7 @@ class BrowserInputController {
     std::filesystem::path target;
     if (!resolvePathSearchTarget(browser.pathSearch, target)) return false;
     if (navigator.navigate(browserDirectoryLocation(target))) {
-      setBrowserSearchFocus(browser, BrowserSearchFocus::None, result.dirty);
+      focusSearch(BrowserSearchFocus::None);
       interaction.breadcrumbHover = -1;
       result.dirty = true;
       return true;

@@ -4,6 +4,8 @@
 #include <cctype>
 #include <utility>
 
+#include "single_line_text_input.h"
+
 namespace tui_command_palette {
 namespace {
 
@@ -110,33 +112,25 @@ Interaction Model::handle(const InputEvent& event,
 
   if (event.type == InputEvent::Type::Key) {
     result.consumed = true;
-    const DWORD controlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
-    const DWORD altMask = LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED;
-    const bool control = (event.key.control & controlMask) != 0;
-    const bool alt = (event.key.control & altMask) != 0;
-    if (event.key.vk == VK_ESCAPE) {
-      result.changed = dismiss();
-      result.dismissed = true;
-    } else if (event.key.vk == VK_RETURN) {
-      return activateSelected();
-    } else if (event.key.vk == VK_UP) {
+    if (event.key.vk == VK_UP) {
       moveSelection(-1, currentLayout.visibleRows);
       result.changed = true;
     } else if (event.key.vk == VK_DOWN) {
       moveSelection(1, currentLayout.visibleRows);
       result.changed = true;
-    } else if (event.key.vk == VK_BACK) {
-      if (!query_.empty()) {
-        query_.pop_back();
+    } else {
+      const single_line_text_input::EditResult edit =
+          single_line_text_input::edit(query_, event.key);
+      if (edit.intent == single_line_text_input::Intent::Cancel) {
+        result.changed = dismiss();
+        result.dismissed = true;
+      } else if (edit.intent == single_line_text_input::Intent::Commit) {
+        return activateSelected();
+      } else if (edit.changed) {
         resetSelection();
         refreshFilter(commands);
         result.changed = true;
       }
-    } else if (!control && !alt && event.key.ch >= 32) {
-      query_.push_back(event.key.ch);
-      resetSelection();
-      refreshFilter(commands);
-      result.changed = true;
     }
     return result;
   }

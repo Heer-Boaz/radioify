@@ -870,7 +870,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
     const bool active = melodyVisualization.toggle();
     if (active) {
-      setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
+      dirty = setBrowserSearchFocus(browser, BrowserSearchFocus::None) || dirty;
       browserInteraction.breadcrumbHover = -1;
       browserInteraction.actionHover = -1;
     }
@@ -1490,22 +1490,27 @@ int runTui(Options o, ApplicationRuntime& runtime) {
             commandPalette.open();
             dismissFileContextMenu();
           }
-          setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
+          dirty =
+              setBrowserSearchFocus(browser, BrowserSearchFocus::None) || dirty;
           markDirty();
           return;
         }
       }
       if (ev.type == InputEvent::Type::Mouse && clearBtnHover && isLeftClick) {
-        if (browser.filterActive) {
+        if (browserFilterFocused(browser)) {
           browser.filter.clear();
-          setBrowserSearchFocus(browser, BrowserSearchFocus::Filter, dirty);
-        } else if (browser.pathSearchActive) {
+          dirty = setBrowserSearchFocus(browser, BrowserSearchFocus::Filter) ||
+                  dirty;
+        } else if (browserPathSearchFocused(browser)) {
           browser.pathSearch.clear();
-          setBrowserSearchFocus(browser, BrowserSearchFocus::PathSearch, dirty);
+          dirty =
+              setBrowserSearchFocus(browser, BrowserSearchFocus::PathSearch) ||
+              dirty;
         } else {
           browser.filterBackup = browser.filter;
           browser.filter.clear();
-          setBrowserSearchFocus(browser, BrowserSearchFocus::Filter, dirty);
+          dirty = setBrowserSearchFocus(browser, BrowserSearchFocus::Filter) ||
+                  dirty;
         }
         browserNavigator.reload();
         markDirty();
@@ -1563,8 +1568,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           return;
         }
       }
-      if (mediaCoordinator.videoActive() && !browser.filterActive &&
-          !browser.pathSearchActive &&
+      if (mediaCoordinator.videoActive() && !browserSearchFocused(browser) &&
           (ev.type == InputEvent::Type::Key ||
            ev.type == InputEvent::Type::Action)) {
         const std::optional<PlaybackAction> action =
@@ -1672,7 +1676,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       browser_wake_schedule::Activity activity;
       activity.searchCaretVisible =
           viewport.browserInteractionEnabled &&
-          (browser.filterActive || browser.pathSearchActive);
+          browserSearchFocused(browser);
       activity.melodyMonitorVisible = melodyVisualization.active();
       activity.transportProgressVisible =
           o.play &&
@@ -1765,17 +1769,16 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       }
       breadcrumbLine = buildBreadcrumbLine(browser.location, width);
       if (browserInteractionEnabled) {
-        const bool browserSearchFocused =
-            browser.filterActive || browser.pathSearchActive;
+        const bool searchFocused = browserSearchFocused(browser);
         Style searchStyle =
-            browserSearchFocused
+            searchFocused
                 ? theme.searchBarActive
                 : (browserInteraction.searchBarHover ? theme.searchBarGlow
                                                      : theme.searchBar);
         screen.writeRun(0, searchBarY, width, L' ', searchStyle);
         const bool showSearchCursor =
-            browserSearchFocused && browser_wake_schedule::searchCaretOn(now);
-        const bool usingPathSearch = browser.pathSearchActive;
+            searchFocused && browser_wake_schedule::searchCaretOn(now);
+        const bool usingPathSearch = browserPathSearchFocused(browser);
         const std::string searchText =
             usingPathSearch
                 ? browser.pathSearch

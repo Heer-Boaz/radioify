@@ -21,6 +21,12 @@ enum class VgmOptionId : std::uint8_t;
 struct OptionsBrowserContent;
 struct TrackBrowserContent;
 
+enum class BrowserSearchFocus : std::uint8_t {
+  None,
+  Filter,
+  PathSearch,
+};
+
 using BrowserContent =
     std::variant<std::monostate,
                  std::shared_ptr<const TrackBrowserContent>,
@@ -168,10 +174,9 @@ struct BrowserState {
   SortMode sortMode = SortMode::Name;
   bool sortDescending = false;
   std::string filter;
-  bool filterActive = false;
   std::string filterBackup;
   std::string pathSearch;
-  bool pathSearchActive = false;
+  BrowserSearchFocus searchFocus = BrowserSearchFocus::None;
   std::optional<NavigationContext> navigationContext;
   std::vector<NavigationHistoryEntry> backHistory;
   std::vector<NavigationHistoryEntry> forwardHistory;

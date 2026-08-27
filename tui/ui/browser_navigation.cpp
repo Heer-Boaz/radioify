@@ -223,9 +223,8 @@ void BrowserNavigator::commit(const BrowserLocation& target,
   browser_.location = target;
   if (resetSearch) {
     browser_.filter.clear();
-    browser_.filterActive = false;
     browser_.pathSearch.clear();
-    browser_.pathSearchActive = false;
+    browser_.searchFocus = BrowserSearchFocus::None;
   }
   browser_.entries = std::move(prepared.entries);
   browser_.content = std::move(prepared.content);

@@ -8,6 +8,7 @@
 
 #include "browser_action_strip.h"
 #include "browser_model.h"
+#include "browser_search.h"
 #include "input_event.h"
 #include "playback/input/command.h"
 #include "playback/input/shortcuts.h"
@@ -90,15 +91,6 @@ inline std::optional<PlaybackInputMatch> matchPlaybackInput(
   }
   return PlaybackInputMatch{playback_input::Command{*action}, result};
 }
-
-enum class BrowserSearchFocus {
-  None,
-  Filter,
-  PathSearch,
-};
-
-void setBrowserSearchFocus(BrowserState& browser, BrowserSearchFocus focus,
-                           bool& dirty);
 
 class BrowserPointerState {
  public:

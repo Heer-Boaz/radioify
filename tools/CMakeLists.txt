@@ -140,6 +140,10 @@ radioify_add_module_object_library(radioify_tool_browser_navigation_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_navigation_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_browser_key_input_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/browser_key_input_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_browser_directory_listing_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_directory_listing_tests.cpp
 )

@@ -847,6 +847,16 @@ radioify_link_repo_target(browser_navigation_tests)
 add_test(NAME browser_navigation_tests
          COMMAND $<TARGET_FILE:browser_navigation_tests>)
 
+add_executable(browser_key_input_tests)
+target_sources(browser_key_input_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_browser_key_input_tests>
+  ${CMAKE_SOURCE_DIR}/tui/ui/browser_search.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/single_line_text_input.cpp
+)
+radioify_link_repo_target(browser_key_input_tests)
+add_test(NAME browser_key_input_tests
+         COMMAND $<TARGET_FILE:browser_key_input_tests>)
+
 add_executable(browser_directory_listing_tests)
 target_sources(browser_directory_listing_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_browser_directory_listing_tests>
@@ -899,6 +909,7 @@ add_executable(command_palette_tests)
 target_sources(command_palette_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_command_palette_tests>
   ${CMAKE_SOURCE_DIR}/tui/ui/command_palette.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/single_line_text_input.cpp
 )
 radioify_link_repo_target(command_palette_tests)
 add_test(NAME command_palette_tests
