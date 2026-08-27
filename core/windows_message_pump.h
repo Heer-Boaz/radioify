@@ -10,8 +10,14 @@
 
 #include "native_wait_handle.h"
 
+inline constexpr DWORD kMaximumThreadMessageWaitHandles =
+    MAXIMUM_WAIT_OBJECTS - 1;
+
 bool pumpPendingThreadWindowMessages();
 
+// Waits for unique, valid handles while continuing to dispatch messages for
+// windows owned by the calling thread. Throws when the input contract cannot
+// be represented by MsgWaitForMultipleObjectsEx; handles are never dropped.
 DWORD waitForHandlesAndPumpThreadWindowMessages(DWORD handleCount,
                                                 const NativeWaitHandle* handles,
                                                 DWORD timeoutMs);
