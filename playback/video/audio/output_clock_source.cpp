@@ -35,38 +35,43 @@ int64_t computeAudioClockFreshnessUs(const AudioPerfStats& stats) {
 
 }  // namespace
 
-playback_video_main_clock::AudioClockStatus sample(bool audioActive, int64_t nowUs,
-                                             bool audioMayDriveMaster) {
+playback_video_main_clock::AudioClockStatus sample(
+    const AudioPlaybackRuntime& audioPlayback, bool audioActive,
+    int64_t nowUs, bool audioMayDriveMaster) {
   playback_video_main_clock::AudioClockStatus status;
   status.active = audioActive;
   status.mayDriveMaster = audioMayDriveMaster;
 
-  AudioPerfStats stats = audioGetPerfStats();
-  status.lastUpdatedUs = audioStreamClockLastUpdatedUs();
-  status.ready = audioStreamClockReady();
+  const AudioPerfStats stats = audioPlayback.perfStats();
+  status.lastUpdatedUs = audioPlayback.streamClockLastUpdatedUs();
+  status.ready = audioPlayback.streamClockReady();
   status.fresh = status.lastUpdatedUs > 0 &&
                  (nowUs - status.lastUpdatedUs) <=
                      computeAudioClockFreshnessUs(stats);
-  status.starved = audioStreamStarved();
-  status.bufferedFrames = audioStreamBufferedFrames();
+  status.starved = audioPlayback.streamStarved();
+  status.bufferedFrames = audioPlayback.streamBufferedFrames();
   status.deviceBufferFrames = stats.bufferFrames;
   if (status.deviceBufferFrames == 0 && stats.periodFrames > 0) {
     status.deviceBufferFrames = static_cast<size_t>(stats.periodFrames) * 2ULL;
   }
   status.sampleRate = stats.sampleRate;
-  status.serial = audioStreamSerial();
-  status.us = audioStreamClockUs(nowUs);
+  status.serial = audioPlayback.streamSerial();
+  status.us = audioPlayback.streamClockUs(nowUs);
   return status;
 }
 
-void prime(int serial, int64_t targetPtsUs) {
-  audioStreamPrimeClock(serial, targetPtsUs);
+void prime(AudioPlaybackRuntime& audioPlayback, int serial,
+           int64_t targetPtsUs) {
+  audioPlayback.primeStreamClock(serial, targetPtsUs);
 }
 
-uint64_t updateCounter() { return audioStreamUpdateCounter(); }
+uint64_t updateCounter(const AudioPlaybackRuntime& audioPlayback) {
+  return audioPlayback.streamUpdateCounter();
+}
 
-uint64_t waitForUpdate(uint64_t lastCounter, int timeoutMs) {
-  return audioStreamWaitForUpdate(lastCounter, timeoutMs);
+uint64_t waitForUpdate(const AudioPlaybackRuntime& audioPlayback,
+                       uint64_t lastCounter, int timeoutMs) {
+  return audioPlayback.waitForStreamUpdate(lastCounter, timeoutMs);
 }
 
 }  // namespace playback_audio_output_clock_source

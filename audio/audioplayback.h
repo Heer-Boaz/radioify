@@ -77,6 +77,23 @@ class AudioPlaybackRuntime {
   void stop();
   AudioPlaybackSnapshot snapshot() const;
   AudioPerfStats perfStats() const;
+  bool startStream(uint64_t totalFrames);
+  void stopStream();
+  size_t streamBufferedFrames() const;
+  int64_t streamOldestPtsUs() const;
+  bool writeStreamSamples(const float* interleaved, uint64_t frames,
+                          int64_t ptsUs, int serial, bool allowBlock,
+                          uint64_t* writtenFrames);
+  void primeStreamClock(int serial, int64_t targetPtsUs);
+  void setStreamEnd(bool atEnd);
+  int streamSerial() const;
+  int64_t streamClockUs(int64_t nowUs) const;
+  int64_t streamClockLastUpdatedUs() const;
+  bool streamClockReady() const;
+  bool streamStarved() const;
+  uint64_t streamUpdateCounter() const;
+  uint64_t waitForStreamUpdate(uint64_t lastCounter, int timeoutMs) const;
+  void setHold(bool hold);
   void play();
   void pause();
   void togglePause();

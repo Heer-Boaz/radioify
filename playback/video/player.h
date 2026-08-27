@@ -13,6 +13,8 @@
 #include "playback/video/timing/clock_source.h"
 #include "playback/video/sequence.h"
 
+class AudioPlaybackRuntime;
+
 struct PlayerConfig {
   std::filesystem::path file;
   std::filesystem::path logPath;
@@ -76,7 +78,7 @@ struct PlayerTimelineSnapshot {
 
 class Player {
  public:
-  Player();
+  explicit Player(AudioPlaybackRuntime& audioPlayback);
   ~Player();
 
   bool open(const PlayerConfig& config, std::string* error);

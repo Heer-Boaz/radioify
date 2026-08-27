@@ -523,13 +523,13 @@ int main(int argc, char** argv) {
   audioConfig.dry = true;
   AudioPlaybackRuntime audioRuntime(audioConfig);
   if (audioEnabled) {
-    audioAdjustVolume(-audioGetVolume());
+    audioRuntime.adjustVolume(-audioRuntime.snapshot().volume);
   }
-  if (audioEnabled && audioGetVolume() != 0.0f) {
+  if (audioEnabled && audioRuntime.snapshot().volume != 0.0f) {
     std::cerr << "video_frame_step_smoke: failed to mute audio output\n";
     return 1;
   }
-  Player player;
+  Player player(audioRuntime);
   PlayerConfig config;
   config.file = std::filesystem::path(argv[1]);
   config.logPath =

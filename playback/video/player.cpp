@@ -1557,6 +1557,7 @@ struct Player::Impl {
     uint64_t displayIndex = 0;
   };
 
+  AudioPlaybackRuntime& audioPlayback;
   PlayerConfig config;
   std::atomic<bool> running{false};
   std::atomic<bool> ctrlRunning{false};
@@ -1655,8 +1656,9 @@ struct Player::Impl {
 
   std::filesystem::path logPath;
 
-  Impl()
-      : frameReadyEvent(CreateEventW(nullptr, FALSE, FALSE, nullptr)),
+  explicit Impl(AudioPlaybackRuntime& audioPlaybackIn)
+      : audioPlayback(audioPlaybackIn),
+        frameReadyEvent(CreateEventW(nullptr, FALSE, FALSE, nullptr)),
         statusChangedEvent(CreateEventW(nullptr, FALSE, FALSE, nullptr)) {
     if (!frameReadyEvent || !statusChangedEvent) {
       throw std::runtime_error("Failed to create Player wait events");
@@ -1949,7 +1951,7 @@ struct Player::Impl {
                     playerStateName(change.previous),
                     playerStateName(change.current));
     playback_video_state_machine::StateEffects effects = change.projection.effects;
-    audioSetHold(effects.holdAudioOutput);
+    audioPlayback.setHold(effects.holdAudioOutput);
     mainClock.changePause(effects.pauseMainClock, nowUs());
     SetEvent(statusChangedEvent.get());
   }
@@ -2425,7 +2427,9 @@ struct Player::Impl {
     request.currentSerial = currentSerial;
     request.nowUs = nowUs;
     request.audio = playback_audio_output_clock_source::sample(
-        audioStartOk.load(std::memory_order_relaxed) && !audioIsFinished(),
+        audioPlayback,
+        audioStartOk.load(std::memory_order_relaxed) &&
+            !audioPlayback.snapshot().finished,
         nowUs, reacquire.audioMayDriveMaster);
     request.video = mainClock.videoStatus(currentSerial, nowUs);
     return mainClock.sample(request);
@@ -2438,7 +2442,7 @@ struct Player::Impl {
     snapshot.initOk = initOk.load(std::memory_order_relaxed);
     snapshot.audioPaused = audioPaused;
     snapshot.audioStartedOk = audioStartOk.load(std::memory_order_relaxed);
-    snapshot.audioFinished = audioIsFinished();
+    snapshot.audioFinished = audioPlayback.snapshot().finished;
     snapshot.audioDecodeEnded = audioDecodeEnded.load(std::memory_order_relaxed);
     snapshot.decodeEnded = decodeEnded.load(std::memory_order_relaxed);
     snapshot.demuxEnded = demuxEnded.load(std::memory_order_relaxed);
@@ -2447,10 +2451,11 @@ struct Player::Impl {
     snapshot.currentSerial = serialControl.currentSerial();
     snapshot.videoReplayPending =
         frameCursor.replayPendingForSerial(snapshot.currentSerial);
-    snapshot.audioBufferedFrames = audioStreamBufferedFrames();
-    AudioPerfStats audioStats = audioGetPerfStats();
+    snapshot.audioBufferedFrames = audioPlayback.streamBufferedFrames();
+    AudioPerfStats audioStats = audioPlayback.perfStats();
     snapshot.audioSampleRate = audioStats.sampleRate;
-    snapshot.audioSyncPointReady = audioStreamOldestPtsUs() != AV_NOPTS_VALUE;
+    snapshot.audioSyncPointReady =
+        audioPlayback.streamOldestPtsUs() != AV_NOPTS_VALUE;
     snapshot.lastPresentedSerial = presentedFrameSnapshot().serial;
     snapshot.pendingSeekSerial = serialControl.pendingSeekSerial();
     snapshot.seekInFlightSerial = serialControl.seekInFlightSerial();
@@ -2459,8 +2464,9 @@ struct Player::Impl {
   }
 
   void observePlaybackPipeline() {
-    const bool audioPaused =
-        audioStartOk.load() ? audioIsPaused() : pauseRequested.load();
+    const bool audioPaused = audioStartOk.load()
+                                 ? audioPlayback.snapshot().paused
+                                 : pauseRequested.load();
     playback_video_state_machine::Evaluation evaluation =
         playbackState.observe(pipelineSnapshot(audioPaused), kVideoPrefillFrames);
     if (evaluation.clearSeekFailure) {
@@ -2517,8 +2523,8 @@ struct Player::Impl {
     audioPackets.abortQueue();
     videoFrames.abort();
     if (audioStreamStarted.exchange(false, std::memory_order_relaxed)) {
-      audioSetHold(false);
-      audioStopStream();
+      audioPlayback.setHold(false);
+      audioPlayback.stopStream();
     }
     if (demuxThread.joinable()) {
       appendTimingFmt("stop_threads demux_join_begin");
@@ -2779,7 +2785,7 @@ struct Player::Impl {
       case playback_video_control::EventType::FrameStepRequest: {
         pauseRequested.store(true, std::memory_order_relaxed);
         if (audioStartOk.load(std::memory_order_relaxed)) {
-          audioPause();
+          audioPlayback.pause();
         }
         applyStateChange(playbackState.requestFrameStep(
             ev.frameStepDirection, serialControl.currentSerial()));
@@ -2795,7 +2801,7 @@ struct Player::Impl {
         const bool paused = ev.arg1 != 0;
         pauseRequested.store(paused, std::memory_order_relaxed);
         if (paused && audioStartOk.load(std::memory_order_relaxed)) {
-          audioPause();
+          audioPlayback.pause();
         }
         bool resumedFrameStepWork = false;
         if (!paused) {
@@ -2806,7 +2812,7 @@ struct Player::Impl {
           }
         }
         if (!paused && audioStartOk.load(std::memory_order_relaxed)) {
-          audioPlay();
+          audioPlayback.play();
         }
         observePlaybackPipeline();
         if (resumedFrameStepWork) {
@@ -2950,7 +2956,7 @@ struct Player::Impl {
       case playback_video_control::EventType::FirstFramePresented: {
         if (ev.serial == serialControl.currentSerial()) {
           if (playbackState.current() == PlayerState::Priming) {
-            int64_t audioOldestPts = audioStreamOldestPtsUs();
+            int64_t audioOldestPts = audioPlayback.streamOldestPtsUs();
             int64_t videoPts = presentedFrameSnapshot().ptsUs;
 
             playback_video_sync::PrimingAnchor anchor =
@@ -2959,8 +2965,8 @@ struct Player::Impl {
             if (anchor.valid) {
               int64_t now = nowUs();
 
-              playback_audio_output_clock_source::prime(ev.serial,
-                                                        anchor.ptsUs);
+              playback_audio_output_clock_source::prime(
+                  audioPlayback, ev.serial, anchor.ptsUs);
               mainClock.updateVideo(ev.serial, anchor.ptsUs, now);
 
               appendTimingFmt(
@@ -3837,12 +3843,12 @@ struct Player::Impl {
             rescaleToFrames(demux.durationUs, AVRational{1, AV_TIME_BASE},
                             48000));
       }
-        if (audioStartStream(totalFrames)) {
+        if (audioPlayback.startStream(totalFrames)) {
           audioStreamStarted.store(true, std::memory_order_relaxed);
           resetAudioOutputForSerial(
               static_cast<uint64_t>(serialControl.currentSerial()), false,
               "audio_start");
-          AudioPerfStats stats = audioGetPerfStats();
+          AudioPerfStats stats = audioPlayback.perfStats();
           outRate = stats.sampleRate ? stats.sampleRate : 48000;
           outChannels = stats.channels ? stats.channels : 2;
           std::string error;
@@ -3851,7 +3857,7 @@ struct Player::Impl {
             audioReady = true;
           } else {
             appendTimingFmt("audio_init_failed msg=%s", error.c_str());
-            audioStopStream();
+            audioPlayback.stopStream();
             audioStreamStarted.store(false, std::memory_order_relaxed);
           }
       } else {
@@ -4026,13 +4032,13 @@ struct Player::Impl {
             break;
           }
           if (inputEof) {
-            audioStreamSetEnd(true);
+            audioPlayback.setStreamEnd(true);
             audioDecodeEnded.store(true);
           }
           break;
         }
         if (recv < 0) {
-          audioStreamSetEnd(true);
+          audioPlayback.setStreamEnd(true);
           audioDecodeEnded.store(true);
           break;
         }
@@ -4150,7 +4156,7 @@ struct Player::Impl {
                 static_cast<uint64_t>(audioDec.outRate));
           }
           
-          if (!audioStreamWriteSamples(
+          if (!audioPlayback.writeStreamSamples(
                   audioDec.convertBuffer.data() +
                       (sourceOffsetFrames + totalWritten) *
                           audioDec.outChannels,
@@ -4183,7 +4189,7 @@ struct Player::Impl {
         }
       }
     }
-    audioStreamSetEnd(true);
+    audioPlayback.setStreamEnd(true);
     audioDecodeEnded.store(true);
   }
 
@@ -4393,7 +4399,7 @@ struct Player::Impl {
         }
         const bool pausedForPreview =
             audioStartOk.load(std::memory_order_relaxed)
-                ? audioIsPaused()
+                ? audioPlayback.snapshot().paused
                 : pauseRequested.load(std::memory_order_relaxed);
         if (!pausedForPreview ||
             serialControl.pendingSeekSerial() != static_cast<int>(serial)) {
@@ -4577,10 +4583,12 @@ struct Player::Impl {
         int64_t sleepUs = targetUs - now;
         if (sleepUs > 0) {
           if (master.source == PlayerClockSource::Audio && sleepUs > 1000) {
-              uint64_t lastCounter =
-                  playback_audio_output_clock_source::updateCounter();
+              const uint64_t lastCounter =
+                  playback_audio_output_clock_source::updateCounter(
+                      audioPlayback);
               playback_audio_output_clock_source::waitForUpdate(
-                  lastCounter, static_cast<int>(sleepUs / 1000));
+                  audioPlayback, lastCounter,
+                  static_cast<int>(sleepUs / 1000));
           } else {
               // Limit sleep to 10ms to keep the UI/commands responsive.
               int64_t actualSleep = (std::min)(sleepUs, static_cast<int64_t>(10000));
@@ -4637,7 +4645,8 @@ struct Player::Impl {
   ~Impl() = default;
 };
 
-Player::Player() : impl_(std::make_unique<Impl>()) {}
+Player::Player(AudioPlaybackRuntime& audioPlayback)
+    : impl_(std::make_unique<Impl>(audioPlayback)) {}
 
 Player::~Player() { close(); }
 
@@ -4823,7 +4832,8 @@ bool Player::audioOk() const {
 }
 
 bool Player::audioFinished() const {
-  return impl_->audioStartOk.load() && audioIsFinished();
+  return impl_->audioStartOk.load() &&
+         impl_->audioPlayback.snapshot().finished;
 }
 
 bool Player::seekPending() const {

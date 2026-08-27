@@ -29,7 +29,8 @@ struct PlaybackSession::Impl {
         host({request.file, dependencies.input, dependencies.screen,
               dependencies.appearance.baseStyle,
               dependencies.appearance.accentStyle,
-              dependencies.appearance.dimStyle, enableAscii}) {}
+              dependencies.appearance.dimStyle, enableAscii}),
+        player(dependencies.audioPlayback) {}
 
   ~Impl() { shutdownLoop(); }
 

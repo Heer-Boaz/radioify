@@ -380,6 +380,65 @@ AudioPerfStats AudioPlaybackRuntime::perfStats() const {
   return audioGetPerfStats();
 }
 
+bool AudioPlaybackRuntime::startStream(uint64_t totalFrames) {
+  return audioStartStream(totalFrames);
+}
+
+void AudioPlaybackRuntime::stopStream() { audioStopStream(); }
+
+size_t AudioPlaybackRuntime::streamBufferedFrames() const {
+  return audioStreamBufferedFrames();
+}
+
+int64_t AudioPlaybackRuntime::streamOldestPtsUs() const {
+  return audioStreamOldestPtsUs();
+}
+
+bool AudioPlaybackRuntime::writeStreamSamples(
+    const float* interleaved, uint64_t frames, int64_t ptsUs, int serial,
+    bool allowBlock, uint64_t* writtenFrames) {
+  return audioStreamWriteSamples(interleaved, frames, ptsUs, serial,
+                                 allowBlock, writtenFrames);
+}
+
+void AudioPlaybackRuntime::primeStreamClock(int serial,
+                                            int64_t targetPtsUs) {
+  audioStreamPrimeClock(serial, targetPtsUs);
+}
+
+void AudioPlaybackRuntime::setStreamEnd(bool atEnd) {
+  audioStreamSetEnd(atEnd);
+}
+
+int AudioPlaybackRuntime::streamSerial() const { return audioStreamSerial(); }
+
+int64_t AudioPlaybackRuntime::streamClockUs(int64_t nowUs) const {
+  return audioStreamClockUs(nowUs);
+}
+
+int64_t AudioPlaybackRuntime::streamClockLastUpdatedUs() const {
+  return audioStreamClockLastUpdatedUs();
+}
+
+bool AudioPlaybackRuntime::streamClockReady() const {
+  return audioStreamClockReady();
+}
+
+bool AudioPlaybackRuntime::streamStarved() const {
+  return audioStreamStarved();
+}
+
+uint64_t AudioPlaybackRuntime::streamUpdateCounter() const {
+  return audioStreamUpdateCounter();
+}
+
+uint64_t AudioPlaybackRuntime::waitForStreamUpdate(uint64_t lastCounter,
+                                                   int timeoutMs) const {
+  return audioStreamWaitForUpdate(lastCounter, timeoutMs);
+}
+
+void AudioPlaybackRuntime::setHold(bool hold) { audioSetHold(hold); }
+
 void AudioPlaybackRuntime::play() { audioPlay(); }
 
 void AudioPlaybackRuntime::pause() { audioPause(); }
