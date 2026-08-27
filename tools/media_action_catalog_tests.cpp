@@ -1,4 +1,5 @@
 #include "playback/media_action_catalog.h"
+#include "playback/media_action_context.h"
 #include "playback/media_processing_actions.h"
 
 #include <algorithm>

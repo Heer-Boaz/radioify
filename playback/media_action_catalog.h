@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -47,10 +46,6 @@ struct Item {
   Action action = Action::Play;
   std::string label;
 };
-
-// Classifies a source once for every surface that projects this catalog.
-// Video wins for container extensions that can also carry audio-only media.
-MediaKind mediaKindForSource(const std::filesystem::path& sourceFile);
 
 std::vector<Item> build(const Context& context);
 

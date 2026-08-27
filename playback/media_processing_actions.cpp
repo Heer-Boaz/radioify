@@ -1,5 +1,7 @@
 #include "playback/media_processing_actions.h"
 
+#include "playback/media_action_context.h"
+
 namespace playback_media_processing {
 
 namespace {
