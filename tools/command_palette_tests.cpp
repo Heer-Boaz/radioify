@@ -33,12 +33,11 @@ InputEvent mousePress(int x, int y) {
   return event;
 }
 
-std::vector<tui_command_palette::Command> commands(int* invoked) {
+std::vector<tui_command_palette::Command> commands() {
   std::vector<tui_command_palette::Command> result;
-  result.emplace_back("Play/Pause", "Space", [invoked] { *invoked = 1; });
-  result.emplace_back("Picture-in-Picture", "Ctrl+P",
-                      [invoked] { *invoked = 2; });
-  result.emplace_back("Quit", "Q", [invoked] { *invoked = 3; });
+  result.emplace_back("Play/Pause", "Space");
+  result.emplace_back("Picture-in-Picture", "Ctrl+P");
+  result.emplace_back("Quit", "Q");
   return result;
 }
 
@@ -46,9 +45,8 @@ std::vector<tui_command_palette::Command> commands(int* invoked) {
 
 int main() {
   bool ok = true;
-  int invoked = 0;
   const std::vector<tui_command_palette::Command> availableCommands =
-      commands(&invoked);
+      commands();
   tui_command_palette::Bounds bounds;
   bounds.width = 24;
   bounds.height = 8;
@@ -75,11 +73,10 @@ int main() {
   ok &= expect(interaction.activatedCommand == 0 && interaction.dismissed &&
                    !palette.active(),
                "Enter must return the selected command and close the palette");
-  if (interaction.activatedCommand) {
-    availableCommands[*interaction.activatedCommand].run();
-  }
-  ok &= expect(invoked == 1,
-               "the returned command index must address the original catalog");
+  ok &= expect(interaction.activatedCommand &&
+                   availableCommands[*interaction.activatedCommand].label() ==
+                       "Play/Pause",
+               "the returned index must address the original catalog");
 
   palette.open();
   interaction = palette.handle(keyEvent('P', 'p', LEFT_CTRL_PRESSED),

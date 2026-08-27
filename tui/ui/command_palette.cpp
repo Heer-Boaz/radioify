@@ -32,16 +32,9 @@ bool fuzzyMatch(const std::string& text, const std::string& query) {
 
 }  // namespace
 
-Command::Command(std::string label, std::string hotkey, Action action)
+Command::Command(std::string label, std::string hotkey)
     : label_(std::move(label)),
-      hotkey_(std::move(hotkey)),
-      action_(std::move(action)) {}
-
-void Command::run() const {
-  if (action_) {
-    action_();
-  }
-}
+      hotkey_(std::move(hotkey)) {}
 
 void Model::open() {
   query_.clear();

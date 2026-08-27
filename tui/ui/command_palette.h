@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstddef>
-#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -12,18 +11,14 @@ namespace tui_command_palette {
 
 class Command {
  public:
-  using Action = std::function<void()>;
-
-  Command(std::string label, std::string hotkey, Action action);
+  Command(std::string label, std::string hotkey);
 
   const std::string& label() const { return label_; }
   const std::string& hotkey() const { return hotkey_; }
-  void run() const;
 
  private:
   std::string label_;
   std::string hotkey_;
-  Action action_;
 };
 
 struct Bounds {
