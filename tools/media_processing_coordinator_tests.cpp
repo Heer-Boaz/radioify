@@ -67,6 +67,8 @@ int main() {
 
   std::atomic<bool> melodyStarted{false};
   std::atomic<bool> releaseMelody{false};
+  std::atomic<bool> loopStarted{false};
+  std::atomic<bool> releaseLoop{false};
   std::atomic<bool> subtitlesStarted{false};
   std::atomic<bool> releaseSubtitles{false};
   std::atomic<bool> separationStarted{false};
@@ -86,9 +88,13 @@ int main() {
         return true;
       };
   operations.splitLoop =
-      [](const std::filesystem::path&, const std::filesystem::path&,
-         const std::filesystem::path&, const LoopSplitConfig&,
-         LoopSplitResult* result, std::string*) {
+      [&](const std::filesystem::path&, const std::filesystem::path&,
+          const std::filesystem::path&, const LoopSplitConfig&,
+          LoopSplitResult* result, std::string*) {
+        loopStarted.store(true, std::memory_order_release);
+        while (!releaseLoop.load(std::memory_order_acquire)) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
         if (result) result->hasStinger = true;
         return true;
       };
@@ -160,7 +166,8 @@ int main() {
       presenter.activeCard();
   ok &= expect(melody &&
                    melody->kind == processing::TaskKind::MelodyAnalysis &&
-                   melody->progress == 0.4f && !melody->cancellable &&
+                   melody->progress && *melody->progress == 0.4f &&
+                   !melody->cancellable &&
                    melodyCard && melodyCard->title == "Analyzing melody" &&
                    !coordinator.tryStartLoopSplit(
                        "other.flac", "other_stinger.wav", "other_loop.wav",
@@ -178,8 +185,16 @@ int main() {
 
   ok &= expect(coordinator.tryStartLoopSplit(
                    "loop.flac", "loop_stinger.wav", "loop_loop.wav", {}) &&
-                   !coordinator.latestCompletion(),
+                   !coordinator.latestCompletion() &&
+                   waitUntil([&]() {
+                     return loopStarted.load(std::memory_order_acquire);
+                   }),
                "starting new work must retire the previous footer result");
+  const std::optional<MediaTaskCardModel> loopCard = presenter.activeCard();
+  ok &= expect(loopCard && !loopCard->progress &&
+                   loopCard->title == "Splitting loop",
+               "tasks without measurable progress must stay indeterminate");
+  releaseLoop.store(true, std::memory_order_release);
   const auto loopCompletion = waitForCompletion(coordinator);
   ok &= expect(loopCompletion && loopCompletion->succeeded() &&
                    mediaTaskStatusModel(*loopCompletion).text ==
@@ -202,7 +217,7 @@ int main() {
       coordinator.activity();
   const playback_media_processing::SourceState subtitleSourceState =
       coordinator.sourceStateFor("movie.mp4");
-  ok &= expect(subtitles && subtitles->cancellable &&
+  ok &= expect(subtitles && subtitles->cancellable && subtitles->progress &&
                    subtitleSourceState.backgroundTaskRunning &&
                    subtitleSourceState.subtitleGenerationRunning &&
                    !subtitleSourceState.audioSeparationRunning &&
@@ -256,6 +271,7 @@ int main() {
   const playback_media_processing::SourceState separationSourceState =
       coordinator.sourceStateFor("movie.mp4");
   ok &= expect(cancelling && cancelling->cancelling &&
+                   !cancelling->cancellable &&
                    separationSourceState.backgroundTaskRunning &&
                    !separationSourceState.subtitleGenerationRunning &&
                    separationSourceState.audioSeparationRunning &&

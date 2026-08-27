@@ -29,22 +29,26 @@ void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth,
     lines.push_back({model.detail, styles.secondary});
   }
 
-  const int percent =
-      static_cast<int>(std::round(std::clamp(model.progress, 0.0f, 1.0f) *
-                                  100.0f));
-  const std::string percentText = std::to_string(percent) + "%";
-  const int barCells =
-      std::max(0, innerWidth - utf8DisplayWidth(percentText) - 4);
   std::string progressLine;
-  if (barCells >= 4) {
-    const int filled = std::clamp(
-        static_cast<int>(std::round(barCells * model.progress)), 0, barCells);
-    progressLine = "[";
-    progressLine.append(static_cast<size_t>(filled), '#');
-    progressLine.append(static_cast<size_t>(barCells - filled), '.');
-    progressLine += "] " + percentText;
+  if (model.progress) {
+    const float progress = std::clamp(*model.progress, 0.0f, 1.0f);
+    const int percent =
+        static_cast<int>(std::round(progress * 100.0f));
+    const std::string percentText = std::to_string(percent) + "%";
+    const int barCells =
+        std::max(0, innerWidth - utf8DisplayWidth(percentText) - 4);
+    if (barCells >= 4) {
+      const int filled = std::clamp(
+          static_cast<int>(std::round(barCells * progress)), 0, barCells);
+      progressLine = "[";
+      progressLine.append(static_cast<size_t>(filled), '#');
+      progressLine.append(static_cast<size_t>(barCells - filled), '.');
+      progressLine += "] " + percentText;
+    } else {
+      progressLine = percentText;
+    }
   } else {
-    progressLine = percentText;
+    progressLine = "Working...";
   }
   lines.push_back({std::move(progressLine), styles.progress});
   if (model.cancellable) {

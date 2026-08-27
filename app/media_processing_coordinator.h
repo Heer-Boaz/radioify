@@ -34,7 +34,9 @@ enum class TaskOutcome {
 struct TaskActivity {
   TaskKind kind = TaskKind::MelodyAnalysis;
   std::filesystem::path sourceFile;
-  float progress = 0.0f;
+  // Empty means that the backend cannot measure completion yet. UI surfaces
+  // must render an indeterminate state instead of inventing a percentage.
+  std::optional<float> progress;
   std::string phase;
   bool cancelling = false;
   bool cancellable = false;

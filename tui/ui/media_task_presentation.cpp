@@ -86,7 +86,9 @@ MediaTaskCardModel mediaTaskCardModel(
                          ? std::string("(unknown)")
                          : toUtf8String(activity.sourceFile.filename());
   model.detail = activity.phase;
-  model.progress = std::clamp(activity.progress, 0.0f, 1.0f);
+  if (activity.progress) {
+    model.progress = std::clamp(*activity.progress, 0.0f, 1.0f);
+  }
   model.cancellable = activity.cancellable;
   return model;
 }

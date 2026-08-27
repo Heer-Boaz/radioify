@@ -57,7 +57,9 @@ class WorkerTask {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (!operation || activity_ || completion_) return false;
-      activity.progress = std::clamp(activity.progress, 0.0f, 1.0f);
+      if (activity.progress) {
+        activity.progress = std::clamp(*activity.progress, 0.0f, 1.0f);
+      }
       activity_ = std::move(activity);
       try {
         worker_ = std::thread([this, operation = std::move(operation)]() {
@@ -141,8 +143,10 @@ class WorkerTask {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (!activity_) return;
-      activity_->progress =
-          std::max(activity_->progress, std::clamp(progress, 0.0f, 1.0f));
+      const float clamped = std::clamp(progress, 0.0f, 1.0f);
+      activity_->progress = activity_->progress
+                                ? std::max(*activity_->progress, clamped)
+                                : clamped;
     }
     notifyChanged();
   }
@@ -293,7 +297,7 @@ std::optional<TaskActivity> Coordinator::activity() const {
       activity.progress = std::clamp(snapshot.progress, 0.0f, 1.0f);
       activity.phase = snapshot.phase;
       activity.cancelling = snapshot.cancelling();
-      activity.cancellable = true;
+      activity.cancellable = !activity.cancelling;
       return activity;
     }
   }
@@ -306,7 +310,7 @@ std::optional<TaskActivity> Coordinator::activity() const {
       activity.progress = std::clamp(snapshot.progress, 0.0f, 1.0f);
       activity.phase = snapshot.phase;
       activity.cancelling = snapshot.cancelling();
-      activity.cancellable = true;
+      activity.cancellable = !activity.cancelling;
       return activity;
     }
   }
@@ -330,6 +334,7 @@ bool Coordinator::tryStartMelodyAnalysis(
   TaskActivity activity;
   activity.kind = TaskKind::MelodyAnalysis;
   activity.sourceFile = sourceFile;
+  activity.progress = 0.0f;
   const bool started = impl_->workerTask.tryStart(
       std::move(activity),
       [operation, sourceFile, trackIndex,
