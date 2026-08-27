@@ -37,6 +37,7 @@
 #include "audioplayback.h"
 #include "browser_action_strip.h"
 #include "browser_chrome.h"
+#include "browser_wake_schedule.h"
 #include "browser_media_menu.h"
 #include "browser_media_menu_renderer.h"
 #include "browser_playback_reveal.h"
@@ -140,7 +141,7 @@ static DWORD waitForBrowserWake(ConsoleInput& input,
                                     audioPictureInPicture,
                                 const std::vector<NativeWaitHandle>&
                                     playbackActivityHandles,
-                                DWORD timeoutMs) {
+                                wake_schedule::Deadline deadline) {
   std::vector<NativeWaitHandle> handles;
   handles.reserve(10 + playbackActivityHandles.size());
   const auto append = [&](NativeWaitHandle handle) {
@@ -163,7 +164,7 @@ static DWORD waitForBrowserWake(ConsoleInput& input,
   for (NativeWaitHandle handle : playbackActivityHandles) append(handle);
   return waitForHandlesAndPumpThreadWindowMessages(
       static_cast<DWORD>(handles.size()),
-      handles.empty() ? nullptr : handles.data(), timeoutMs);
+      handles.empty() ? nullptr : handles.data(), deadline);
 }
 
 struct WindowClientSize {
@@ -1360,15 +1361,13 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       forceFullRedraw = false;
       const std::vector<NativeWaitHandle> playbackActivityHandles =
           mediaCoordinator.activityWaitHandles();
-      const int playbackTimeoutMs =
-          std::max(0, mediaCoordinator.nextWakeTimeoutMs());
       waitForBrowserWake(
           input, openFileRequests, browserThumbnailWakeHandle(),
           browserContentWorker.nativeWaitHandle(),
           browserSelectionMetadata.nativeWaitHandle(),
           notificationAreaControls.nativeWaitHandle(), tuiWindow,
           audioPictureInPicture, playbackActivityHandles,
-          static_cast<DWORD>(playbackTimeoutMs));
+          mediaCoordinator.nextWakeDeadline());
       continue;
     }
 
@@ -1622,48 +1621,29 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
 
     auto now = std::chrono::steady_clock::now();
-    auto computeWakeTimeout = [&](std::chrono::steady_clock::time_point nowTime) {
-      DWORD timeout = INFINITE;
-      auto reduceTimeout = [&](std::chrono::milliseconds interval) {
-        if (interval.count() <= 0) {
-          timeout = 0;
-          return;
-        }
-        auto elapsed =
-            std::chrono::duration_cast<std::chrono::milliseconds>(nowTime -
-                                                                  lastDraw);
-        long long remaining = interval.count() - elapsed.count();
-        DWORD candidate =
-            remaining <= 0 ? 0u : static_cast<DWORD>(remaining);
-        timeout = (timeout == INFINITE) ? candidate : std::min(timeout, candidate);
-      };
+    auto computeWakeDeadline = [&](wake_schedule::TimePoint nowTime) {
+      const TuiMediaCoordinator::PresentationSnapshot presentation =
+          mediaCoordinator.presentationSnapshot();
+      browser_wake_schedule::Activity activity;
+      activity.searchCaretVisible =
+          viewport.browserInteractionEnabled &&
+          (browser.filterActive || browser.pathSearchActive);
+      activity.melodyMonitorVisible = melodyVisualization.active();
+      activity.transportProgressVisible =
+          o.play &&
+          (presentation.audio.ready || presentation.currentTarget.has_value());
+      activity.audioPictureInPictureVisible =
+          audioPictureInPicture.isOpen();
 
-      if (viewport.browserInteractionEnabled &&
-          (browser.filterActive || browser.pathSearchActive)) {
-        reduceTimeout(std::chrono::milliseconds(250));
-      }
-      if (melodyVisualization.active()) {
-        reduceTimeout(std::chrono::milliseconds(50));
-      }
-      if (o.play &&
-          (audioIsReady() || !currentPlaybackFile().empty())) {
-        reduceTimeout(std::chrono::milliseconds(100));
-      }
-      if (audioPictureInPicture.isOpen()) {
-        reduceTimeout(std::chrono::milliseconds(100));
-      }
-      if (mediaCoordinator.videoActive()) {
-        const DWORD playbackTimeout = static_cast<DWORD>(
-            std::max(0, mediaCoordinator.nextWakeTimeoutMs()));
-        timeout = timeout == INFINITE
-                      ? playbackTimeout
-                      : std::min(timeout, playbackTimeout);
-      }
-      return timeout;
+      wake_schedule::Deadline deadline = browser_wake_schedule::nextDeadline(
+          nowTime, lastDraw, activity);
+      wake_schedule::include(deadline,
+                             mediaCoordinator.nextWakeDeadline());
+      return deadline;
     };
 
     if (!dirty) {
-      DWORD waitTimeout = computeWakeTimeout(now);
+      const wake_schedule::Deadline wakeDeadline = computeWakeDeadline(now);
       const std::vector<NativeWaitHandle> playbackActivityHandles =
           mediaCoordinator.activityWaitHandles();
       DWORD waitResult = waitForBrowserWake(
@@ -1671,7 +1651,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           browserContentWorker.nativeWaitHandle(),
           browserSelectionMetadata.nativeWaitHandle(),
           notificationAreaControls.nativeWaitHandle(), tuiWindow,
-          audioPictureInPicture, playbackActivityHandles, waitTimeout);
+          audioPictureInPicture, playbackActivityHandles, wakeDeadline);
       if (consumeBrowserThumbnailWake()) {
         markDirty(UiDirtyFlags::Async);
       } else if (waitResult == WAIT_TIMEOUT) {
@@ -1748,13 +1728,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
                 ? theme.searchBarActive
                 : (searchBarHover ? theme.searchBarGlow : theme.searchBar);
         screen.writeRun(0, searchBarY, width, L' ', searchStyle);
-        bool showSearchCursor =
-            browserSearchFocused &&
-            ((std::chrono::duration_cast<std::chrono::milliseconds>(
-                  now.time_since_epoch())
-                  .count() /
-              500) %
-             2) == 0;
+        const bool showSearchCursor =
+            browserSearchFocused && browser_wake_schedule::searchCaretOn(now);
         const bool usingPathSearch = browser.pathSearchActive;
         const std::string searchText =
             usingPathSearch ? browser.pathSearch

@@ -921,6 +921,15 @@ radioify_link_repo_target(browser_chrome_tests)
 add_test(NAME browser_chrome_tests
          COMMAND $<TARGET_FILE:browser_chrome_tests>)
 
+add_executable(browser_wake_schedule_tests)
+target_sources(browser_wake_schedule_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_browser_wake_schedule_tests>
+  ${CMAKE_SOURCE_DIR}/tui/ui/browser_wake_schedule.cpp
+)
+radioify_link_repo_target(browser_wake_schedule_tests)
+add_test(NAME browser_wake_schedule_tests
+         COMMAND $<TARGET_FILE:browser_wake_schedule_tests>)
+
 add_executable(melody_visualization_tests)
 target_sources(melody_visualization_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_melody_visualization_tests>

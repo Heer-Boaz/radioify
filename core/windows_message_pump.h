@@ -9,6 +9,7 @@
 #include <windows.h>
 
 #include "native_wait_handle.h"
+#include "wake_deadline.h"
 
 inline constexpr DWORD kMaximumThreadMessageWaitHandles =
     MAXIMUM_WAIT_OBJECTS - 1;
@@ -20,4 +21,4 @@ bool pumpPendingThreadWindowMessages();
 // be represented by MsgWaitForMultipleObjectsEx; handles are never dropped.
 DWORD waitForHandlesAndPumpThreadWindowMessages(DWORD handleCount,
                                                 const NativeWaitHandle* handles,
-                                                DWORD timeoutMs);
+                                                wake_schedule::Deadline deadline);

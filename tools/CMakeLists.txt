@@ -164,6 +164,10 @@ radioify_add_module_object_library(radioify_tool_browser_chrome_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_chrome_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_browser_wake_schedule_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/browser_wake_schedule_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_melody_visualization_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/melody_visualization_tests.cpp
 )

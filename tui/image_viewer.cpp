@@ -235,7 +235,7 @@ Exit run(image_viewer_sequence::Sequence sequence, ConsoleInput& input,
       handles[handleCount++] = openFilesHandle;
     }
     waitForHandlesAndPumpThreadWindowMessages(
-        handleCount, handleCount > 0 ? handles : nullptr, 10);
+        handleCount, handleCount > 0 ? handles : nullptr, std::nullopt);
   }
 }
 

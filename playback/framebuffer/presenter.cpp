@@ -34,13 +34,13 @@ void waitForPresenterWake(NativeWaitHandle wakeEvent,
     handles[handleCount++] = dispatchEvent;
   }
   waitForHandlesAndPumpThreadWindowMessages(
-      handleCount, handleCount > 0 ? handles : nullptr,
-      handleCount > 0 ? INFINITE : 50);
+      handleCount, handleCount > 0 ? handles : nullptr, std::nullopt);
 }
 
 void waitForPresenterActivity(NativeWaitHandle wakeEvent,
                               NativeWaitHandle frameEvent,
-                              NativeWaitHandle dispatchEvent, int timeoutMs) {
+                              NativeWaitHandle dispatchEvent,
+                              wake_schedule::Deadline deadline) {
   NativeWaitHandle handles[3];
   DWORD handleCount = 0;
   if (wakeEvent) {
@@ -52,16 +52,8 @@ void waitForPresenterActivity(NativeWaitHandle wakeEvent,
   if (dispatchEvent) {
     handles[handleCount++] = dispatchEvent;
   }
-  if (handleCount == 0) {
-    const DWORD waitMs = timeoutMs < 0
-                             ? INFINITE
-                             : static_cast<DWORD>(std::max(0, timeoutMs));
-    waitForHandlesAndPumpThreadWindowMessages(0, nullptr, waitMs);
-    return;
-  }
-  const DWORD waitMs =
-      timeoutMs < 0 ? INFINITE : static_cast<DWORD>(std::max(0, timeoutMs));
-  waitForHandlesAndPumpThreadWindowMessages(handleCount, handles, waitMs);
+  waitForHandlesAndPumpThreadWindowMessages(
+      handleCount, handleCount > 0 ? handles : nullptr, deadline);
 }
 
 }  // namespace
@@ -202,45 +194,29 @@ void runFramebufferPresenterLoop(
     const bool textGridPresentationRequested =
         videoWindow.IsTextGridPresentationEnabled();
     if (!forcePresentRequested) {
-      int waitTimeoutMs = -1;
-      auto tightenWaitTimeout = [&](int candidateMs) {
-        if (candidateMs < 0) return;
-        waitTimeoutMs = waitTimeoutMs < 0
-                            ? candidateMs
-                            : std::min(waitTimeoutMs, candidateMs);
-      };
+      wake_schedule::Deadline waitDeadline;
+      const auto now = wake_schedule::Clock::now();
       if (seekingRequested || lastWindowSeeking) {
-        const auto now = std::chrono::steady_clock::now();
         if (lastSeekingPresent ==
             std::chrono::steady_clock::time_point::min()) {
-          tightenWaitTimeout(0);
+          wake_schedule::include(waitDeadline, now);
         } else {
-          tightenWaitTimeout(std::max(
-              0, static_cast<int>(std::chrono::duration_cast<
-                                       std::chrono::milliseconds>(
-                                       (lastSeekingPresent +
-                                        kSeekingRefreshInterval) -
-                                       now)
-                                       .count())));
+          wake_schedule::include(waitDeadline,
+                                 lastSeekingPresent + kSeekingRefreshInterval);
         }
       }
       if (textGridPresentationRequested) {
-        const auto now = std::chrono::steady_clock::now();
         if (lastTextGridPresentationPresent ==
             std::chrono::steady_clock::time_point::min()) {
-          tightenWaitTimeout(0);
+          wake_schedule::include(waitDeadline, now);
         } else {
-          tightenWaitTimeout(std::max(
-              0, static_cast<int>(std::chrono::duration_cast<
-                                       std::chrono::milliseconds>(
-                                       (lastTextGridPresentationPresent +
-                                        kTextGridPresentationRefreshInterval) -
-                                       now)
-                                       .count())));
+          wake_schedule::include(
+              waitDeadline, lastTextGridPresentationPresent +
+                                kTextGridPresentationRefreshInterval);
         }
       }
       waitForPresenterActivity(wakeEvent, frameEvent, dispatchEvent,
-                               waitTimeoutMs);
+                               waitDeadline);
       videoWindow.PollEvents();
       dispatch.processPending();
     }

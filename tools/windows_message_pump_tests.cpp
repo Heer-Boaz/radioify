@@ -30,13 +30,14 @@ int main() {
   UniqueWindowsHandle signaled = makeEvent(true);
   NativeWaitHandle signaledHandle(signaled.get());
   ok &= expect(
-      waitForHandlesAndPumpThreadWindowMessages(1, &signaledHandle, 0) ==
-          WAIT_OBJECT_0,
+      waitForHandlesAndPumpThreadWindowMessages(
+          1, &signaledHandle, wake_schedule::Clock::now()) == WAIT_OBJECT_0,
       "a zero-duration wait must still observe an already-signaled handle");
 
   bool rejectedMissingArray = false;
   try {
-    (void)waitForHandlesAndPumpThreadWindowMessages(1, nullptr, 0);
+    (void)waitForHandlesAndPumpThreadWindowMessages(
+        1, nullptr, wake_schedule::Clock::now());
   } catch (const std::invalid_argument&) {
     rejectedMissingArray = true;
   }
@@ -56,14 +57,15 @@ int main() {
   }
 
   ok &= expect(waitForHandlesAndPumpThreadWindowMessages(
-                   kMaximumThreadMessageWaitHandles, uniqueHandles.data(), 0) ==
-                   WAIT_TIMEOUT,
+                   kMaximumThreadMessageWaitHandles, uniqueHandles.data(),
+                   wake_schedule::Clock::now()) == WAIT_TIMEOUT,
                "the documented maximum unique wait set must be accepted");
 
   bool rejectedOverflow = false;
   try {
     (void)waitForHandlesAndPumpThreadWindowMessages(
-        static_cast<DWORD>(uniqueHandles.size()), uniqueHandles.data(), 0);
+        static_cast<DWORD>(uniqueHandles.size()), uniqueHandles.data(),
+        wake_schedule::Clock::now());
   } catch (const std::length_error&) {
     rejectedOverflow = true;
   }
@@ -74,7 +76,7 @@ int main() {
       kMaximumThreadMessageWaitHandles + 1, signaledHandle);
   ok &= expect(waitForHandlesAndPumpThreadWindowMessages(
                    static_cast<DWORD>(duplicates.size()), duplicates.data(),
-                   0) == WAIT_OBJECT_0,
+                   wake_schedule::Clock::now()) == WAIT_OBJECT_0,
                "duplicate handles must be coalesced before enforcing capacity");
 
   return ok ? 0 : 1;

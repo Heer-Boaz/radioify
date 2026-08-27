@@ -204,9 +204,9 @@ std::vector<NativeWaitHandle> PlaybackSession::activityWaitHandles() const {
   return impl_->loop->activityWaitHandles();
 }
 
-int PlaybackSession::nextWakeTimeoutMs() const {
+wake_schedule::Deadline PlaybackSession::nextWakeDeadline() const {
   assert(impl_->canControl());
-  return impl_->loop->nextWakeTimeoutMs();
+  return impl_->loop->nextWakeDeadline();
 }
 
 PlaybackControlState PlaybackSession::controlState() const {

@@ -1,5 +1,7 @@
 #include "windows_message_pump.h"
 
+#include <algorithm>
+#include <chrono>
 #include <stdexcept>
 #include <system_error>
 
@@ -19,7 +21,8 @@ bool pumpPendingThreadWindowMessages() {
 }
 
 DWORD waitForHandlesAndPumpThreadWindowMessages(
-    DWORD handleCount, const NativeWaitHandle* handles, DWORD timeoutMs) {
+    DWORD handleCount, const NativeWaitHandle* handles,
+    wake_schedule::Deadline deadline) {
   if (handleCount > 0 && !handles) {
     throw std::invalid_argument(
         "A non-empty Windows wait set requires a handle array.");
@@ -45,17 +48,18 @@ DWORD waitForHandlesAndPumpThreadWindowMessages(
     waitHandles[waitHandleCount++] = candidate;
   }
 
-  const bool infiniteTimeout = timeoutMs == INFINITE;
-  const ULONGLONG deadlineTick =
-      infiniteTimeout ? 0 : (GetTickCount64() + static_cast<ULONGLONG>(timeoutMs));
-
   for (;;) {
     DWORD waitMs = INFINITE;
-    if (!infiniteTimeout) {
-      const ULONGLONG nowTick = GetTickCount64();
-      waitMs = nowTick >= deadlineTick
-                   ? 0
-                   : static_cast<DWORD>(deadlineTick - nowTick);
+    if (deadline) {
+      const auto remaining = *deadline - wake_schedule::Clock::now();
+      if (remaining <= wake_schedule::Clock::duration::zero()) {
+        waitMs = 0;
+      } else {
+        const auto remainingMs =
+            std::chrono::ceil<std::chrono::milliseconds>(remaining).count();
+        waitMs = static_cast<DWORD>((std::min)(
+            remainingMs, static_cast<decltype(remainingMs)>(INFINITE - 1)));
+      }
     }
 
     const DWORD result =

@@ -12,6 +12,7 @@
 #include "audio/playback_snapshot.h"
 #include "core/native_wait_handle.h"
 #include "core/open_file_requests.h"
+#include "core/wake_deadline.h"
 #include "playback/control/command.h"
 #include "playback/control/system_control_state.h"
 #include "playback/media_processing_actions.h"
@@ -99,7 +100,7 @@ class TuiMediaCoordinator {
   PlaybackShellTerminalRole terminalRole() const;
   PresentationSnapshot presentationSnapshot() const;
   std::vector<NativeWaitHandle> activityWaitHandles() const;
-  int nextWakeTimeoutMs() const;
+  wake_schedule::Deadline nextWakeDeadline() const;
   bool capturesBrowserInput() const;
 
   bool handleVideoInputEvent(const InputEvent& event);

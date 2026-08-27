@@ -2156,13 +2156,12 @@ void VideoWindow::WaitForFramePacing(std::chrono::milliseconds timeout) const {
         waitHandle = NativeWaitHandle(m_frameLatencyWaitableObject.get());
     }
     if (waitHandle) {
-        const auto timeoutCount = timeout.count();
-        const DWORD timeoutMs =
-            timeoutCount < 0
-                ? INFINITE
-                : static_cast<DWORD>(std::min<int64_t>(
-                      timeoutCount, static_cast<int64_t>(INFINITE - 1)));
-        waitForHandlesAndPumpThreadWindowMessages(1, &waitHandle, timeoutMs);
+      const auto timeoutCount = timeout.count();
+      const wake_schedule::Deadline deadline =
+          timeoutCount < 0
+              ? std::nullopt
+              : wake_schedule::Deadline(wake_schedule::Clock::now() + timeout);
+      waitForHandlesAndPumpThreadWindowMessages(1, &waitHandle, deadline);
     }
 }
 

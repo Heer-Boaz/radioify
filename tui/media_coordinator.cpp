@@ -261,8 +261,8 @@ struct TuiMediaCoordinator::Impl {
     return handles;
   }
 
-  int nextWakeTimeoutMs() const {
-    return videoSession_ ? videoSession_->nextWakeTimeoutMs() : 250;
+  wake_schedule::Deadline nextWakeDeadline() const {
+    return videoSession_ ? videoSession_->nextWakeDeadline() : std::nullopt;
   }
 
   bool capturesBrowserInput() const {
@@ -813,8 +813,8 @@ TuiMediaCoordinator::activityWaitHandles() const {
   return impl_->activityWaitHandles();
 }
 
-int TuiMediaCoordinator::nextWakeTimeoutMs() const {
-  return impl_->nextWakeTimeoutMs();
+wake_schedule::Deadline TuiMediaCoordinator::nextWakeDeadline() const {
+  return impl_->nextWakeDeadline();
 }
 
 bool TuiMediaCoordinator::capturesBrowserInput() const {

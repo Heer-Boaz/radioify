@@ -42,6 +42,12 @@
 
 namespace {
 
+using namespace std::chrono_literals;
+
+constexpr auto kTerminalPlaybackRefreshInterval = 16ms;
+constexpr auto kTerminalDebugRefreshInterval = 250ms;
+constexpr auto kTimingLogHeartbeatInterval = 1s;
+
 enum class PlaybackLoopState : uint8_t {
   Running,
   Stopped,
@@ -1086,8 +1092,9 @@ struct PlaybackLoopRunner::Impl {
   }
 
   void emitHeartbeat() {
+    if (!perfLog.enabled) return;
     auto nowUi = std::chrono::steady_clock::now();
-    if (nowUi - lastUiHeartbeat < std::chrono::seconds(1)) {
+    if (nowUi - lastUiHeartbeat < kTimingLogHeartbeatInterval) {
       return;
     }
     const bool isPaused =
@@ -1206,35 +1213,37 @@ struct PlaybackLoopRunner::Impl {
     bool debugRefreshDue = false;
   };
 
-  int computeWaitTimeoutMs(const RefreshState& refresh) const {
-    int timeoutMs = 250;
-    const auto now = std::chrono::steady_clock::now();
-    const auto tightenToDeadline =
-        [&](playback_session::PlaybackOsdTimeline::TimePoint deadline) {
-      const auto remaining = deadline - now;
-      const int candidateMs =
-          remaining <= std::chrono::steady_clock::duration::zero()
-              ? 0
-              : static_cast<int>(
-                    std::chrono::ceil<std::chrono::milliseconds>(remaining)
-                        .count());
-      timeoutMs = std::min(timeoutMs, candidateMs);
-    };
-
+  wake_schedule::Deadline computeWakeDeadline(
+      const RefreshState& refresh) const {
+    const auto now = wake_schedule::Clock::now();
+    wake_schedule::Deadline deadline;
     if (const auto osdDeadline = osd.nextDeadline()) {
-      tightenToDeadline(*osdDeadline);
+      wake_schedule::include(deadline, *osdDeadline);
     }
     if (!refresh.nativeWindowActive && config.debugOverlay) {
-      tightenToDeadline(lastDebugRefresh + std::chrono::milliseconds(250));
+      wake_schedule::include(
+          deadline,
+          lastDebugRefresh == wake_schedule::TimePoint::min()
+              ? now
+              : lastDebugRefresh + kTerminalDebugRefreshInterval);
     }
     if (seekState.seekQueued) {
-      tightenToDeadline(seekState.lastSeekSentTime + kSeekThrottleInterval);
+      wake_schedule::include(
+          deadline,
+          seekState.lastSeekSentTime == wake_schedule::TimePoint::min()
+              ? now
+              : seekState.lastSeekSentTime + kSeekThrottleInterval);
     }
     if (!refresh.nativeWindowActive &&
         core.playbackState() == PlaybackSessionState::Active) {
-      timeoutMs = std::min(timeoutMs, 16);
+      wake_schedule::include(deadline,
+                             now + kTerminalPlaybackRefreshInterval);
     }
-    return std::max(0, timeoutMs);
+    if (perfLog.enabled) {
+      wake_schedule::include(deadline,
+                             lastUiHeartbeat + kTimingLogHeartbeatInterval);
+    }
+    return deadline;
   }
 
   RefreshState refreshState() {
@@ -1245,7 +1254,7 @@ struct PlaybackLoopRunner::Impl {
     state.debugRefreshDue =
         !state.nativeWindowActive && config.debugOverlay &&
         (lastDebugRefresh == std::chrono::steady_clock::time_point::min() ||
-         nowForRefresh - lastDebugRefresh >= std::chrono::milliseconds(250));
+         nowForRefresh - lastDebugRefresh >= kTerminalDebugRefreshInterval);
     return state;
   }
 
@@ -1349,11 +1358,11 @@ struct PlaybackLoopRunner::Impl {
     return handles;
   }
 
-  int nextWakeTimeoutMs() const {
-    if (loopStopRequested || redraw) return 0;
+  wake_schedule::Deadline nextWakeDeadline() const {
+    if (loopStopRequested || redraw) return wake_schedule::Clock::now();
     RefreshState state;
     state.nativeWindowActive = output.windowOpen();
-    return computeWaitTimeoutMs(state);
+    return computeWakeDeadline(state);
   }
 
   PlaybackControlState controlState() const {
@@ -1511,8 +1520,8 @@ std::vector<NativeWaitHandle> PlaybackLoopRunner::activityWaitHandles() const {
   return impl_->activityWaitHandles();
 }
 
-int PlaybackLoopRunner::nextWakeTimeoutMs() const {
-  return impl_->nextWakeTimeoutMs();
+wake_schedule::Deadline PlaybackLoopRunner::nextWakeDeadline() const {
+  return impl_->nextWakeDeadline();
 }
 
 PlaybackControlState PlaybackLoopRunner::controlState() const {

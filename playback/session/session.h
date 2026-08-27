@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "core/native_wait_handle.h"
+#include "core/wake_deadline.h"
 #include "playback/control/command.h"
 #include "playback/control/system_control_state.h"
 #include "playback/control/transport.h"
@@ -83,7 +84,7 @@ class PlaybackSession {
   std::optional<PlaybackSessionCompletion> pump();
   PlaybackShellTerminalRole terminalRole() const;
   std::vector<NativeWaitHandle> activityWaitHandles() const;
-  int nextWakeTimeoutMs() const;
+  wake_schedule::Deadline nextWakeDeadline() const;
   PlaybackControlState controlState() const;
   PlaybackPresentationState presentationState() const;
   bool capturesBrowserInput() const;
