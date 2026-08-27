@@ -18,6 +18,7 @@
 
 class SubtitleManager;
 class VideoWindow;
+class AudioPlaybackRuntime;
 namespace playback_session {
 class PlaybackOsdTimeline;
 }
@@ -31,6 +32,7 @@ inline bool isPlaybackFullscreenGesture(const MouseEvent& mouse) {
 
 struct PlaybackInputView {
   Transport& transport;
+  AudioPlaybackRuntime& audioPlayback;
   VideoWindow& videoWindow;
   SubtitleManager& subtitleManager;
   std::mutex& subtitleMutex;

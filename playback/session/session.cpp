@@ -24,7 +24,8 @@ struct PlaybackSession::Impl {
       : request(std::move(startRequest)),
         dependencies(std::move(sessionDependencies)),
         enableAscii(request.config.enableAscii),
-        enableAudio(request.config.enableAudio && audioIsEnabled()),
+        enableAudio(request.config.enableAudio &&
+                    dependencies.audioPlayback.enabled()),
         host({request.file, dependencies.input, dependencies.screen,
               dependencies.appearance.baseStyle,
               dependencies.appearance.accentStyle,
@@ -60,6 +61,7 @@ struct PlaybackSession::Impl {
   void createLoop() {
     loop = std::make_unique<PlaybackLoopRunner>(PlaybackLoopRunner::Args{
         dependencies.screen,
+        dependencies.audioPlayback,
         std::move(request.config),
         player,
         subtitleManager,

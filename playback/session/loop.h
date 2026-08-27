@@ -20,6 +20,7 @@
 #include "playback/video/playback.h"
 
 class ConsoleScreen;
+class AudioPlaybackRuntime;
 class Player;
 class SubtitleManager;
 struct Color;
@@ -30,6 +31,7 @@ class PlaybackLoopRunner {
  public:
   struct Args {
     ConsoleScreen& screen;
+    AudioPlaybackRuntime& audioPlayback;
     VideoPlaybackConfig config;
     Player& player;
     SubtitleManager& subtitleManager;

@@ -76,6 +76,7 @@ class AudioPlaybackRuntime {
   bool startFile(const std::filesystem::path& file, int trackIndex = 0);
   void stop();
   AudioPlaybackSnapshot snapshot() const;
+  AudioPerfStats perfStats() const;
   void play();
   void pause();
   void togglePause();

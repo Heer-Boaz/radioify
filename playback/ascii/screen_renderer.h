@@ -17,6 +17,8 @@
 #include "playback/video/subtitle/manager.h"
 #include "playback/video/framebuffer/window/window.h"
 
+class AudioPlaybackRuntime;
+
 namespace playback_screen_renderer {
 
 struct TimelinePreviewAsciiCache {
@@ -29,6 +31,7 @@ struct TimelinePreviewAsciiCache {
 
 struct PlaybackScreenResources {
   Player& player;
+  const AudioPlaybackRuntime& audioPlayback;
   SubtitleManager& subtitleManager;
   GpuAsciiRenderer& gpuRenderer;
   const std::string& windowTitle;

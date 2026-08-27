@@ -67,6 +67,10 @@ class MediaCommandResult {
 struct TuiMediaCoordinator::Impl {
   explicit Impl(Services services) : services_(std::move(services)) {}
 
+  AudioPlaybackRuntime& audioPlayback() const {
+    return services_.sessionDependencies.audioPlayback;
+  }
+
   MediaCommandResult startPlayback(playback_route::Route route,
                                    playback_queue::Source source) {
     std::optional<playback_queue::Queue::PreparedActivation> activation =
@@ -193,25 +197,25 @@ struct TuiMediaCoordinator::Impl {
       return handled;
     }
 
-    const AudioPlaybackSnapshot audio = services_.audioPlayback.snapshot();
+    const AudioPlaybackSnapshot audio = audioPlayback().snapshot();
     const bool hasAudioTarget =
         playbackTargetForAudio(audio.source).has_value();
     switch (command) {
       case PlaybackControlCommand::Play:
         if (!hasAudioTarget) return false;
-        services_.audioPlayback.play();
+        audioPlayback().play();
         return true;
       case PlaybackControlCommand::Pause:
         if (!hasAudioTarget) return false;
-        services_.audioPlayback.pause();
+        audioPlayback().pause();
         return true;
       case PlaybackControlCommand::TogglePause:
         if (!hasAudioTarget) return false;
-        services_.audioPlayback.togglePause();
+        audioPlayback().togglePause();
         return true;
       case PlaybackControlCommand::Stop:
         if (!audio.ready) return false;
-        services_.audioPlayback.stop();
+        audioPlayback().stop();
         return true;
       case PlaybackControlCommand::Previous:
         if (!hasAudioTarget) return false;
@@ -225,8 +229,8 @@ struct TuiMediaCoordinator::Impl {
 
   bool seekToRatio(double ratio) {
     if (videoSession_) return videoSession_->seekToRatio(ratio);
-    if (!services_.audioPlayback.snapshot().ready) return false;
-    services_.audioPlayback.seekToRatio(ratio);
+    if (!audioPlayback().snapshot().ready) return false;
+    audioPlayback().seekToRatio(ratio);
     return true;
   }
 
@@ -513,7 +517,7 @@ struct TuiMediaCoordinator::Impl {
     const std::filesystem::path& targetFile = playbackTargetFile(target);
     if (const std::optional<int> trackIndex =
             playbackTargetTrackIndex(target)) {
-      if (!services_.audioPlayback.startFile(targetFile, *trackIndex)) {
+      if (!audioPlayback().startFile(targetFile, *trackIndex)) {
         publishEvent(AudioPlaybackFailed{targetFile});
         return MediaCommandResult::rejected(
             {MediaCommandFailureKind::PlaybackFailed, {}});
@@ -527,7 +531,7 @@ struct TuiMediaCoordinator::Impl {
            "The image request did not contain an image sequence."});
     }
     if (!isSupportedVideoExt(targetFile)) {
-      if (!services_.audioPlayback.startFile(targetFile, 0)) {
+      if (!audioPlayback().startFile(targetFile, 0)) {
         publishEvent(AudioPlaybackFailed{targetFile});
         return MediaCommandResult::rejected(
             {MediaCommandFailureKind::PlaybackFailed, {}});
@@ -558,7 +562,7 @@ struct TuiMediaCoordinator::Impl {
     }
     if (openOutcome == PlaybackSessionOpenOutcome::AudioFallbackRequested) {
       videoSession_.reset();
-      if (!services_.audioPlayback.startFile(targetFile, 0)) {
+      if (!audioPlayback().startFile(targetFile, 0)) {
         publishEvent(AudioPlaybackFailed{targetFile});
         return MediaCommandResult::rejected(
             {MediaCommandFailureKind::PlaybackFailed, {}});

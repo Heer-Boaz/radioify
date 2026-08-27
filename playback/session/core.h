@@ -8,6 +8,7 @@
 #include "state.h"
 
 class ConsoleScreen;
+class AudioPlaybackRuntime;
 class Player;
 struct PerfLog;
 struct VideoFrame;
@@ -28,6 +29,7 @@ class PlaybackSessionCore final : public playback_session_input::Transport {
  public:
   struct Args {
     Player& player;
+    AudioPlaybackRuntime& audioPlayback;
     PerfLog& perfLog;
     bool enableAudio;
     bool enableAscii;

@@ -33,6 +33,7 @@ bool syncPlaybackEndedState(Player& player,
 struct PlaybackSessionCore::Impl {
   explicit Impl(Args args)
       : player(args.player),
+        audioPlayback(args.audioPlayback),
         perfLog(args.perfLog),
         enableAudio(args.enableAudio),
         enableAscii(args.enableAscii),
@@ -71,7 +72,7 @@ struct PlaybackSessionCore::Impl {
     audioStarting = false;
     perfLogAppendf(&perfLog, "audio_start ok=%d", audioOk ? 1 : 0);
     if (audioOk) {
-      AudioPerfStats stats = audioGetPerfStats();
+      AudioPerfStats stats = audioPlayback.perfStats();
       if (stats.periodFrames > 0 && stats.periods > 0) {
         perfLogAppendf(
             &perfLog,
@@ -220,7 +221,7 @@ struct PlaybackSessionCore::Impl {
       return;
     }
     if (audioOk || audioStarting) {
-      audioStop();
+      audioPlayback.stop();
     }
     audioOk = false;
     audioStarting = false;
@@ -233,6 +234,7 @@ struct PlaybackSessionCore::Impl {
   }
 
   Player& player;
+  AudioPlaybackRuntime& audioPlayback;
   PerfLog& perfLog;
   const bool enableAudio;
   const bool enableAscii;

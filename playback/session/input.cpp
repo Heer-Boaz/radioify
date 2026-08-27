@@ -49,7 +49,7 @@ double playbackDurationSec(const PlaybackInputView& view) {
   if (durationUs > 0) {
     return static_cast<double>(durationUs) / 1000000.0;
   }
-  return audioGetTotalSec();
+  return view.audioPlayback.snapshot().durationSec;
 }
 
 double clampPlaybackSeekTarget(const PlaybackInputView& view,
@@ -238,16 +238,16 @@ bool cycleRadioFilter(const PlaybackInputView& view) {
   if (!view.transport.snapshot().audioAvailable) {
     return false;
   }
-  audioCycleRadioFilter();
+  view.audioPlayback.cycleRadioFilter();
   return true;
 }
 
 bool toggle50Hz(const PlaybackInputView& view) {
   if (!view.transport.snapshot().audioAvailable ||
-      !audioSupports50HzToggle()) {
+      !view.audioPlayback.snapshot().supports50HzToggle) {
     return false;
   }
-  audioToggle50Hz();
+  view.audioPlayback.toggle50Hz();
   return true;
 }
 
@@ -365,7 +365,7 @@ void dispatchPlaybackInputCommand(
   if (!action) {
     if (const auto* volume =
             std::get_if<playback_input::AdjustVolume>(&command)) {
-      audioAdjustVolume(volume->delta);
+      view.audioPlayback.adjustVolume(volume->delta);
     }
     return;
   }
@@ -435,10 +435,10 @@ void dispatchPlaybackInputCommand(
       signals.commands.dispatch(CommandAction::CopyCurrentVideoFrame);
       break;
     case PlaybackAction::VolumeUp:
-      audioAdjustVolume(0.10f);
+      view.audioPlayback.adjustVolume(0.10f);
       break;
     case PlaybackAction::VolumeDown:
-      audioAdjustVolume(-0.10f);
+      view.audioPlayback.adjustVolume(-0.10f);
       break;
     case PlaybackAction::NavigateBackInVideoEditor:
       signals.commands.dispatch(CommandAction::NavigateBack);

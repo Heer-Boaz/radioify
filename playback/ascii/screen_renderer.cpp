@@ -130,6 +130,7 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
   auto& screen = target.screen;
   auto& videoWindow = target.videoWindow;
   auto& player = resources.player;
+  const AudioPlaybackSnapshot audio = resources.audioPlayback.snapshot();
   auto& subtitleManager = resources.subtitleManager;
   auto& gpuRenderer = resources.gpuRenderer;
   auto& frameCache = target.frameCache;
@@ -275,7 +276,7 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
   if (durUs > 0) {
     totalSec = static_cast<double>(durUs) / 1000000.0;
   } else if (audioOk) {
-    totalSec = audioGetTotalSec();
+    totalSec = audio.durationSec;
   }
   if (totalSec > 0.0) {
     currentSec = std::clamp(currentSec, 0.0, totalSec);
@@ -286,8 +287,9 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
       subtitlesEnabled.load(std::memory_order_relaxed);
   const bool hasVideoStream =
       player.sourceWidth() > 0 && player.sourceHeight() > 0;
-  bool waitingForAudio = audioOk && !audioStreamClockReady() && !audioIsFinished();
-  bool audioStarved = audioOk && audioStreamStarved();
+  const bool waitingForAudio =
+      audioOk && !audio.streamClockReady && !audio.finished;
+  const bool audioStarved = audioOk && audio.streamStarved;
   bool waitingForVideo = hasVideoStream && !player.hasVideoFrame();
   const bool playerTransportPaused =
       playback_video_state_machine::project(player.state()).transport ==
@@ -365,12 +367,13 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
   overlayInputs.playPauseAvailable =
       playbackState == PlaybackSessionState::Active ||
       playbackState == PlaybackSessionState::Paused;
-  overlayInputs.audioSupports50HzToggle = audioOk && audioSupports50HzToggle();
+  overlayInputs.audioSupports50HzToggle =
+      audioOk && audio.supports50HzToggle;
   overlayInputs.canPlayPrevious = canPlayPrevious;
   overlayInputs.canPlayNext = canPlayNext;
-  overlayInputs.radioEnabled = audioIsRadioEnabled();
-  overlayInputs.radioLabel = std::string(audioGetRadioFilterLabel());
-  overlayInputs.hz50Enabled = audioIs50HzEnabled();
+  overlayInputs.radioEnabled = audio.radioEnabled;
+  overlayInputs.radioLabel = std::string(audio.radioFilterLabel);
+  overlayInputs.hz50Enabled = audio.hz50Enabled;
   overlayInputs.canCycleAudioTracks = audioOk && player.canCycleAudioTracks();
   overlayInputs.activeAudioTrackLabel =
       audioOk ? player.activeAudioTrackLabel() : "N/A";
@@ -381,7 +384,8 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
   overlayInputs.seekingOverlay = seekingOverlay;
   overlayInputs.displaySec = displaySec;
   overlayInputs.totalSec = totalSec;
-  overlayInputs.volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
+  overlayInputs.volPct =
+      static_cast<int>(std::round(audio.volume * 100.0f));
   overlayInputs.osd = model.osd;
   overlayInputs.paused = pausedNow;
   overlayInputs.pictureInPictureAvailable = true;

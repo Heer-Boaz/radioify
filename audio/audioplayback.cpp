@@ -376,6 +376,10 @@ AudioPlaybackSnapshot AudioPlaybackRuntime::snapshot() const {
   return audioGetPlaybackSnapshot();
 }
 
+AudioPerfStats AudioPlaybackRuntime::perfStats() const {
+  return audioGetPerfStats();
+}
+
 void AudioPlaybackRuntime::play() { audioPlay(); }
 
 void AudioPlaybackRuntime::pause() { audioPause(); }
@@ -543,6 +547,8 @@ AudioPlaybackSnapshot audioGetPlaybackSnapshot() {
   snapshot.seeking = audioIsSeeking();
   snapshot.paused = audioIsPaused();
   snapshot.finished = audioIsFinished();
+  snapshot.streamClockReady = audioStreamClockReady();
+  snapshot.streamStarved = audioStreamStarved();
   snapshot.holding = audioIsHolding();
   snapshot.radioEnabled = audioIsRadioEnabled();
   snapshot.hz50Enabled = audioIs50HzEnabled();

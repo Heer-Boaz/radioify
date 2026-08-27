@@ -20,6 +20,7 @@
 
 class ConsoleInput;
 class ConsoleScreen;
+class AudioPlaybackRuntime;
 struct InputEvent;
 
 enum class PlaybackSessionOpenOutcome {
@@ -65,9 +66,11 @@ class PlaybackSession {
     playback_media_processing::Actions mediaProcessingActions;
   };
 
-  // Input and screen are borrowed and must outlive the session. Appearance is
-  // copied so presentation state has no separate lifetime contract.
+  // The process audio owner, input, and screen are borrowed and must outlive
+  // the session. Appearance is copied so presentation state has no separate
+  // lifetime contract.
   struct Dependencies {
+    AudioPlaybackRuntime& audioPlayback;
     ConsoleInput& input;
     ConsoleScreen& screen;
     Appearance appearance;

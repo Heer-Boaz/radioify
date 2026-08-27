@@ -81,6 +81,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
   static constexpr auto kEditMessageDuration = std::chrono::milliseconds(2200);
 
   ConsoleScreen& screen;
+  AudioPlaybackRuntime& audioPlayback;
   const VideoPlaybackConfig config;
   SubtitleManager& subtitleManager;
   PerfLog& perfLog;
@@ -144,6 +145,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
 
   explicit Impl(PlaybackLoopRunner::Args args)
       : screen(args.screen),
+        audioPlayback(args.audioPlayback),
         config(std::move(args.config)),
         subtitleManager(args.subtitleManager),
         perfLog(args.perfLog),
@@ -167,11 +169,12 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
         presentationController(
             initialPlaybackPresentation(config, args.continuityState),
             args.continuityState.windowPlacement),
-        core({args.player, args.perfLog, args.enableAudio,
+        core({args.player, audioPlayback, args.perfLog, args.enableAudio,
               initialPlaybackPresentation(config, args.continuityState)
                   .usesAsciiGrid()}),
         gpuRenderer(sharedGpuRenderer()),
         screenResources{core.player(),
+                        audioPlayback,
                         subtitleManager,
                         gpuRenderer,
                         windowTitle,
@@ -751,6 +754,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
 
   playback_session_input::PlaybackInputView inputView() {
     return {core,
+            audioPlayback,
             output.window(),
             subtitleManager,
             subtitleMutex,
@@ -987,8 +991,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     if (nowUi - lastUiHeartbeat < kTimingLogHeartbeatInterval) {
       return;
     }
-    const bool isPaused =
-        core.playbackState() == PlaybackSessionState::Paused || audioIsPaused();
+    const bool isPaused = core.playbackState() == PlaybackSessionState::Paused ||
+                          audioPlayback.snapshot().paused;
     const bool seeking =
         seekState.seekQueued || core.player().timelineSnapshot().seekPending();
     perfLogAppendf(&perfLog,

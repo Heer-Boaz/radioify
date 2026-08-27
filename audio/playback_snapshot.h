@@ -18,6 +18,8 @@ struct AudioPlaybackSnapshot {
   bool seeking = false;
   bool paused = false;
   bool finished = false;
+  bool streamClockReady = false;
+  bool streamStarved = false;
   bool holding = false;
   bool radioEnabled = false;
   bool hz50Enabled = false;

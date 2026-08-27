@@ -598,14 +598,14 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   std::string mediaCommandError;
 
   PlaybackSession::Dependencies mediaSessionDependencies{
-      input, screen, theme.playbackSessionAppearance()};
+      audioPlayback, input, screen, theme.playbackSessionAppearance()};
   playback_queue::Queue& playbackQueue = runtime.playbackQueue();
   media_processing::Coordinator& mediaProcessing = runtime.mediaProcessing();
   playback_media_processing::Actions mediaProcessingActions(mediaProcessing);
   MediaTaskPresenter mediaTaskPresenter(mediaProcessing);
   TuiMediaCoordinator mediaCoordinator(
-      {audioPlayback, playbackQueue, mediaProcessingActions,
-       mediaSessionDependencies, videoConfig});
+      {playbackQueue, mediaProcessingActions, mediaSessionDependencies,
+       videoConfig});
   TuiPlaybackPresenter playbackPresenter(mediaCoordinator, audioPlayback);
   auto handleMediaCoordinatorEvent =
       [&](TuiMediaCoordinator::Event event) {
