@@ -23,6 +23,7 @@ using LogLineWriter = std::function<void(const std::string&)>;
 
 struct FrameOutputState {
   bool renderFailed = false;
+  bool rendererStartupLogged = false;
   std::string renderFailMessage;
   std::string renderFailDetail;
   std::string lastRenderPath;

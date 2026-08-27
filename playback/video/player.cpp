@@ -1637,6 +1637,7 @@ struct Player::Impl {
   VideoFrame currentFrame;
   PresentedFrameState presentedFrame;
   std::atomic<uint64_t> frameCounter{0};
+  std::atomic<uint64_t> videoLogEventCounter{0};
   UniqueWindowsHandle frameReadyEvent;
   UniqueWindowsHandle statusChangedEvent;
   std::mutex lastInfoMutex;
@@ -1975,8 +1976,10 @@ struct Player::Impl {
         std::strcmp(tag, "queue_low") == 0 ||
         std::strcmp(tag, "drop_serial") == 0 ||
         std::strcmp(tag, "drop_backwards") == 0) {
-      static int eventCounter = 0;
-      bool heartbeat = (++eventCounter % 30 == 0);
+      const bool heartbeat =
+          (videoLogEventCounter.fetch_add(1, std::memory_order_relaxed) + 1) %
+              30 ==
+          0;
       bool syncIssue = std::abs(diffUs) > 100000;
       if (!heartbeat && !syncIssue &&
           (std::strcmp(tag, "present") == 0 ||
@@ -3191,6 +3194,7 @@ struct Player::Impl {
     bool audioReachedClipEnd = false;
     AVPacket pkt{};
     bool demuxAtEof = false;
+    int lastReadError = 0;
     
     // Packet queue backpressure monitoring
     int64_t lastQueueWarnTimeUs = nowUs();
@@ -3433,10 +3437,9 @@ struct Player::Impl {
           }
         } else {
           // Non-EOF error (e.g. corruption, network timeout, bitstream error)
-          static int lastErr = 0;
-          if (read != lastErr) {
+          if (read != lastReadError) {
             appendTimingFmt("demux_read_error err=%d", read);
-            lastErr = read;
+            lastReadError = read;
           }
           // Just wait a bit and retry. If it's a real gap, the output thread stall logic will jump us over it.
           // This prevents "demux_read_end" from stopping the demuxer on transient errors.
@@ -3565,6 +3568,7 @@ struct Player::Impl {
     QueuedPacket pendingPacket{};
     bool hasPendingPacket = false;
     std::optional<size_t> drainNextClipIndex;
+    int64_t lastDecoderHeartbeatUs = 0;
 
     while (running.load()) {
       uint64_t newResizeEpoch = resizeEpoch.load();
@@ -3672,12 +3676,11 @@ struct Player::Impl {
         }
 
         // HEARTBEAT DECODER
-        static int64_t lastDecTickUs = 0;
         int64_t nowDec = nowUs();
-        if (nowDec - lastDecTickUs > 1000000) {
+        if (nowDec - lastDecoderHeartbeatUs > 1000000) {
           appendTimingFmt("video_heartbeat_decoder q=%zu has_pkt=%d eof=%d", 
                           videoFrames.size(), hasPendingPacket ? 1 : 0, inputEof ? 1 : 0);
-          lastDecTickUs = nowDec;
+          lastDecoderHeartbeatUs = nowDec;
         }
 
         int recv = avcodec_receive_frame(videoDec.codec, videoDec.frame);
@@ -4208,6 +4211,7 @@ struct Player::Impl {
         sequenceForSerial(initialSerial);
     playback_video_frame_step::Direction prefetchDirection =
         playback_video_frame_step::Direction::Next;
+    int64_t lastOutputHeartbeatUs = 0;
 
     while (running.load()) {
       if (clearFrameRequested.exchange(false)) {
@@ -4424,10 +4428,9 @@ struct Player::Impl {
       playback_video_main_clock::Snapshot master = masterClockSnapshot(now);
       int64_t masterUs = master.us;
 
-      static int64_t lastHeartbeatUs = 0;
-      if (now - lastHeartbeatUs > 1000000) {
+      if (now - lastOutputHeartbeatUs > 1000000) {
         logVideo("heartbeat_output", nullptr, masterUs, master.source, 0, 0);
-        lastHeartbeatUs = now;
+        lastOutputHeartbeatUs = now;
       }
 
       lastMasterUs.store(masterUs, std::memory_order_relaxed);

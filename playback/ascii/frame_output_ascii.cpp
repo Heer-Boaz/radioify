@@ -41,17 +41,9 @@ void setFailure(playback_frame_output::AsciiModePrepareInput& input,
   input.state->haveFrame = false;
 }
 
-bool logAsciiRendererStartup(const VideoFrame& frame,
-                            const AsciiArt& art,
-                            const std::function<void(const std::string&)>&
-                                timingSink) {
-  static bool logged = false;
-  if (logged) {
-    return false;
-  }
-  logged = true;
-  if (!timingSink) return false;
-
+void logAsciiRendererStartup(const VideoFrame& frame, const AsciiArt& art,
+                             const std::function<void(const std::string&)>&
+                                 timingSink) {
   const char* formatName = "";
   switch (frame.format) {
     case VideoPixelFormat::HWTexture:
@@ -78,7 +70,6 @@ bool logAsciiRendererStartup(const VideoFrame& frame,
                 "video_renderer_input format=%s in=%dx%d out=%dx%d",
                 formatName, frame.width, frame.height, art.width, art.height);
   timingSink(std::string(inputBuf));
-  return true;
 }
 
 bool cpuRenderFallback(const playback_frame_output::AsciiModePrepareInput& input) {
@@ -280,8 +271,9 @@ bool prepareAsciiModeFrame(GpuRuntime& gpu, AsciiModePrepareInput& input) {
     if (renderFromCache) {
       asciiOk = true;
       state.lastRenderPath = "gpu";
-      if (input.timingSink && logAsciiRendererStartup(*input.frame, *input.art,
-                                                     input.timingSink)) {
+      if (input.timingSink && !state.rendererStartupLogged) {
+        state.rendererStartupLogged = true;
+        logAsciiRendererStartup(*input.frame, *input.art, input.timingSink);
         char buf[256];
         std::string details = input.gpuRenderer->lastNv12TextureDetail();
         if (details.empty()) {
