@@ -344,7 +344,7 @@ bool audioStartKssInstrumentAudition(const KssInstrumentProfile& profile) {
   if (!ok) return false;
 
   if (gAudio.audition.active.load()) {
-    stopAuditionWorker();
+    stopAuditionWorker(gAudio);
     if (gAudio.state.externalStream.load()) {
       audioStreamReset(0);
     }
@@ -373,13 +373,13 @@ bool audioStartKssInstrumentAudition(const KssInstrumentProfile& profile) {
 
   gAudio.audition.device = profile.device;
   gAudio.audition.hash = profile.hash;
-  startAuditionWorker(std::move(tone));
+  startAuditionWorker(gAudio, std::move(tone));
   return true;
 }
 
 bool audioStopKssInstrumentAudition() {
   if (!gAudio.audition.active.load()) return false;
-  stopAuditionWorker();
+  stopAuditionWorker(gAudio);
   gAudio.audition.device = KssInstrumentDevice::None;
   gAudio.audition.hash = 0;
 

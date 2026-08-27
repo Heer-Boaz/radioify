@@ -186,7 +186,7 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
   melodyOfflineStop();
   gAudio.state.audioLeadSilenceFrames.store(0);
   if (gAudio.audition.active.load()) {
-    stopAuditionWorker();
+    stopAuditionWorker(gAudio);
     gAudio.audition.resumeValid = false;
   }
 
@@ -297,7 +297,7 @@ bool ensureChannels(uint32_t newChannels) {
 
 void stopPlayback() {
   if (gAudio.audition.active.load()) {
-    stopAuditionWorker();
+    stopAuditionWorker(gAudio);
     gAudio.audition.resumeValid = false;
   }
   drainPlaybackPipelineForReplacement(gAudio.state);

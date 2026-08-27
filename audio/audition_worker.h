@@ -39,5 +39,7 @@ struct AuditionState {
   bool resumeValid = false;
 };
 
-void startAuditionWorker(AuditionTone tone);
-void stopAuditionWorker();
+struct AudioPlaybackState;
+
+void startAuditionWorker(AudioPlaybackState& audio, AuditionTone tone);
+void stopAuditionWorker(AudioPlaybackState& audio);
