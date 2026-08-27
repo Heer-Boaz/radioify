@@ -1658,6 +1658,7 @@ struct Player::Impl {
 
   explicit Impl(AudioPlaybackRuntime& audioPlaybackIn)
       : audioPlayback(audioPlaybackIn),
+        audioOutputTimeline(audioPlaybackIn),
         frameReadyEvent(CreateEventW(nullptr, FALSE, FALSE, nullptr)),
         statusChangedEvent(CreateEventW(nullptr, FALSE, FALSE, nullptr)) {
     if (!frameReadyEvent || !statusChangedEvent) {

@@ -6,6 +6,9 @@
 
 namespace playback_audio_output_timeline {
 
+Controller::Controller(AudioPlaybackRuntime& audioPlayback)
+    : audioPlayback_(audioPlayback) {}
+
 void Controller::reset() { clockReacquire_.reset(); }
 
 ResetResult Controller::resetForSerial(int serial, int64_t targetUs,
@@ -18,7 +21,7 @@ ResetResult Controller::resetForSerial(int serial, int64_t targetUs,
   result.applied = true;
   result.serial = serial;
   result.targetUs = (std::max)(int64_t{0}, targetUs);
-  audioStreamFlushSerial(serial, result.targetUs);
+  audioPlayback_.flushStreamSerial(serial, result.targetUs);
 
   if (reacquireClock) {
     clockReacquire_.require(serial, result.targetUs);

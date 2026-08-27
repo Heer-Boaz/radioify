@@ -4,6 +4,8 @@
 
 #include "clock_reacquire.h"
 
+class AudioPlaybackRuntime;
+
 namespace playback_audio_output_timeline {
 
 struct ResetResult {
@@ -15,6 +17,8 @@ struct ResetResult {
 
 class Controller {
  public:
+  explicit Controller(AudioPlaybackRuntime& audioPlayback);
+
   void reset();
   ResetResult resetForSerial(int serial, int64_t targetUs,
                              bool reacquireClock);
@@ -24,6 +28,7 @@ class Controller {
   void noteQueuedAudio(int serial, int64_t ptsUs, uint64_t writtenFrames);
 
  private:
+  AudioPlaybackRuntime& audioPlayback_;
   playback_audio_clock_reacquire::Gate clockReacquire_;
 };
 

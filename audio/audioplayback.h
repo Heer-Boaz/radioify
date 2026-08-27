@@ -85,6 +85,7 @@ class AudioPlaybackRuntime {
                           int64_t ptsUs, int serial, bool allowBlock,
                           uint64_t* writtenFrames);
   void primeStreamClock(int serial, int64_t targetPtsUs);
+  void flushStreamSerial(int serial, int64_t discardUntilUs);
   void setStreamEnd(bool atEnd);
   int streamSerial() const;
   int64_t streamClockUs(int64_t nowUs) const;

@@ -406,6 +406,11 @@ void AudioPlaybackRuntime::primeStreamClock(int serial,
   audioStreamPrimeClock(serial, targetPtsUs);
 }
 
+void AudioPlaybackRuntime::flushStreamSerial(int serial,
+                                             int64_t discardUntilUs) {
+  audioStreamFlushSerial(serial, discardUntilUs);
+}
+
 void AudioPlaybackRuntime::setStreamEnd(bool atEnd) {
   audioStreamSetEnd(atEnd);
 }
