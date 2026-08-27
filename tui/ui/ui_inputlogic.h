@@ -112,19 +112,43 @@ class BrowserPointerState {
   std::optional<ActionStripItem> pressedAction_;
 };
 
+struct BrowserInteractionState {
+  browser_input::EntryClickTracker entryClicks;
+  BrowserPointerState pointer;
+  int breadcrumbHover = -1;
+  int actionHover = -1;
+  bool searchBarHover = false;
+};
+
+struct BrowserInputLayout {
+  const GridLayout& entries;
+  const BreadcrumbLine& breadcrumbs;
+  int breadcrumbY = -1;
+  int searchBarY = -1;
+  int searchBarWidth = 0;
+  int listTop = 0;
+  int listHeight = 0;
+  int progressBarX = -1;
+  int progressBarY = -1;
+  int progressBarWidth = 0;
+  const ActionStripLayout& actionStrip;
+};
+
+struct BrowserInputCapabilities {
+  bool interactionEnabled = true;
+  bool playMode = true;
+  bool decoderReady = false;
+};
+
+struct BrowserInputResult {
+  bool dirty = false;
+  bool quitRequested = false;
+  std::vector<tui_input::Command> commands;
+};
+
 bool setBrowserHoveredEntry(BrowserState& browser, int entryIndex);
 
-void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
-                      browser_input::EntryClickTracker& entryClickTracker,
-                      BrowserPointerState& pointerState,
-                      const GridLayout& layout,
-                      const BreadcrumbLine& breadcrumbLine, int breadcrumbY,
-                      int searchBarY, int searchBarWidth, int listTop,
-                      int listHeight, int progressBarX, int progressBarY,
-                      int progressBarWidth,
-                      const ActionStripLayout& actionStrip,
-                      bool browserInteractionEnabled, bool playMode,
-                      bool decoderReady, int& breadcrumbHover,
-                      int& actionHover, bool& searchBarHover, bool& dirty,
-                      bool& running,
-                      std::vector<tui_input::Command>& commands);
+BrowserInputResult handleInputEvent(
+    const InputEvent& event, BrowserNavigator& navigator,
+    BrowserInteractionState& interaction, const BrowserInputLayout& layout,
+    const BrowserInputCapabilities& capabilities);

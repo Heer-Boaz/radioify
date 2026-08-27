@@ -521,9 +521,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   int progressBarY = -1;
   int progressBarWidth = 0;
   ActionStripLayout actionStrip;
-  int actionHover = -1;
-  int breadcrumbHover = -1;
-  bool searchBarHover = false;
+  BrowserInteractionState browserInteraction;
   bool searchBarClearHover = false;
   const int searchBarClearButtonWidth = 5;
   int headerLines = 0;
@@ -546,19 +544,18 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   AudioPictureInPictureWindow audioPictureInPicture(gpu);
   ConsoleInputPump consoleInputPump;
   pointer_input::MouseDoubleClickTracker browserDoubleClickTracker;
-  browser_input::EntryClickTracker browserEntryClickTracker;
-  BrowserPointerState browserPointerState;
   BrowserViewport viewport;
   browser_chrome::Model browserChrome;
   auto showAudioPictureInPictureOpenError = [&]() {
-    const std::string detail = audioPictureInPicture.lastError().empty()
-                                   ? "The picture-in-picture window did not open."
-                                   : audioPictureInPicture.lastError();
-    playback_dialog::showInfoDialog(
-        input, screen, theme.normal, theme.accent, theme.dim,
-        "Picture-in-Picture Error",
-        RADIOIFY_APP_NAME " could not open picture-in-picture.",
-        detail, "Enter/Space/Esc: close");
+    const std::string detail =
+        audioPictureInPicture.lastError().empty()
+            ? "The picture-in-picture window did not open."
+            : audioPictureInPicture.lastError();
+    playback_dialog::showInfoDialog(input, screen, theme.normal, theme.accent,
+                                    theme.dim, "Picture-in-Picture Error",
+                                    RADIOIFY_APP_NAME
+                                    " could not open picture-in-picture.",
+                                    detail, "Enter/Space/Esc: close");
   };
   auto applyAudioPictureInPicturePlan =
       [&](playback_route::AudioPictureInPicturePlan plan) {
@@ -797,9 +794,10 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     applyBrowserViewportRestore(browser, layout);
     breadcrumbLine = buildBreadcrumbLine(browser.location, width);
     if (!browserInteractionEnabled) {
-      breadcrumbHover = -1;
-    } else if (breadcrumbHover >= static_cast<int>(breadcrumbLine.crumbs.size())) {
-      breadcrumbHover = -1;
+      browserInteraction.breadcrumbHover = -1;
+    } else if (browserInteraction.breadcrumbHover >=
+               static_cast<int>(breadcrumbLine.crumbs.size())) {
+      browserInteraction.breadcrumbHover = -1;
     }
     layoutDirty = false;
   };
@@ -873,8 +871,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     const bool active = melodyVisualization.toggle();
     if (active) {
       setBrowserSearchFocus(browser, BrowserSearchFocus::None, dirty);
-      breadcrumbHover = -1;
-      actionHover = -1;
+      browserInteraction.breadcrumbHover = -1;
+      browserInteraction.actionHover = -1;
     }
     dismissFileContextMenu();
     markLayoutDirty();
@@ -1565,8 +1563,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           return;
         }
       }
-      if (mediaCoordinator.videoActive() &&
-          !browser.filterActive && !browser.pathSearchActive &&
+      if (mediaCoordinator.videoActive() && !browser.filterActive &&
+          !browser.pathSearchActive &&
           (ev.type == InputEvent::Type::Key ||
            ev.type == InputEvent::Type::Action)) {
         const std::optional<PlaybackAction> action =
@@ -1576,16 +1574,16 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           return;
         }
       }
-      std::vector<tui_input::Command> inputCommands;
-      handleInputEvent(
-          ev, browserNavigator, browserEntryClickTracker, browserPointerState,
-          layout,
-          breadcrumbLine, breadcrumbY, searchBarY, searchBarWidth, listTop,
-          listHeight, progressBarX, progressBarY, progressBarWidth, actionStrip,
-          browserInteractionEnabled, o.play, audioPlayback.ready(),
-          breadcrumbHover,
-          actionHover, searchBarHover, dirty, running, inputCommands);
-      for (tui_input::Command& command : inputCommands) {
+      BrowserInputResult inputResult = handleInputEvent(
+          ev, browserNavigator, browserInteraction,
+          BrowserInputLayout{layout, breadcrumbLine, breadcrumbY, searchBarY,
+                             searchBarWidth, listTop, listHeight, progressBarX,
+                             progressBarY, progressBarWidth, actionStrip},
+          BrowserInputCapabilities{browserInteractionEnabled, o.play,
+                                   audioPlayback.ready()});
+      if (inputResult.dirty) markDirty();
+      if (inputResult.quitRequested) running = false;
+      for (tui_input::Command& command : inputResult.commands) {
         handleTuiInputCommand(std::move(command));
       }
     };
@@ -1772,18 +1770,19 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         Style searchStyle =
             browserSearchFocused
                 ? theme.searchBarActive
-                : (searchBarHover ? theme.searchBarGlow : theme.searchBar);
+                : (browserInteraction.searchBarHover ? theme.searchBarGlow
+                                                     : theme.searchBar);
         screen.writeRun(0, searchBarY, width, L' ', searchStyle);
         const bool showSearchCursor =
             browserSearchFocused && browser_wake_schedule::searchCaretOn(now);
         const bool usingPathSearch = browser.pathSearchActive;
         const std::string searchText =
-            usingPathSearch ? browser.pathSearch
-                            : (browser.filter.empty() ? "type to filter"
-                                                     : browser.filter);
-        const std::string searchLine = std::string(usingPathSearch ? " Path: " : " Search: ") + searchText;
-        int searchTextWidth = std::max(
-            1, width - searchBarClearButtonWidth);
+            usingPathSearch
+                ? browser.pathSearch
+                : (browser.filter.empty() ? "type to filter" : browser.filter);
+        const std::string searchLine =
+            std::string(usingPathSearch ? " Path: " : " Search: ") + searchText;
+        int searchTextWidth = std::max(1, width - searchBarClearButtonWidth);
         std::string shownSearchLine = fitLine(searchLine, searchTextWidth);
         screen.writeText(0, searchBarY, shownSearchLine, searchStyle);
         if (showSearchCursor && searchTextWidth > 0) {
@@ -1791,28 +1790,31 @@ int runTui(Options o, ApplicationRuntime& runtime) {
               std::min(searchTextWidth - 1, utf8DisplayWidth(shownSearchLine));
           screen.writeChar(cursorX, searchBarY, L'\u2588', searchStyle);
         }
-        if (searchBarClearStart >= 0 && searchBarClearEnd > searchBarClearStart) {
+        if (searchBarClearStart >= 0 &&
+            searchBarClearEnd > searchBarClearStart) {
           Style clearStyle =
               searchBarClearHover ? theme.searchBarActive : searchStyle;
-          screen.writeText(searchBarClearStart, searchBarY,
-                           fitLine(" [x] ", searchBarClearEnd - searchBarClearStart),
-                           clearStyle);
+          screen.writeText(
+              searchBarClearStart, searchBarY,
+              fitLine(" [x] ", searchBarClearEnd - searchBarClearStart),
+              clearStyle);
         }
 
-        if (breadcrumbHover >= static_cast<int>(breadcrumbLine.crumbs.size())) {
-          breadcrumbHover = -1;
+        if (browserInteraction.breadcrumbHover >=
+            static_cast<int>(breadcrumbLine.crumbs.size())) {
+          browserInteraction.breadcrumbHover = -1;
         }
         screen.writeText(0, breadcrumbY, breadcrumbLine.text, theme.accent);
-        if (breadcrumbHover >= 0) {
-          const auto& crumb =
-              breadcrumbLine.crumbs[static_cast<size_t>(breadcrumbHover)];
+        if (browserInteraction.breadcrumbHover >= 0) {
+          const auto& crumb = breadcrumbLine.crumbs[static_cast<size_t>(
+              browserInteraction.breadcrumbHover)];
           std::string hoverText = utf8SliceDisplayWidth(
               breadcrumbLine.text, crumb.startX, crumb.endX - crumb.startX);
           screen.writeText(crumb.startX, breadcrumbY, hoverText,
                            theme.breadcrumbHover);
         }
       } else {
-        breadcrumbHover = -1;
+        browserInteraction.breadcrumbHover = -1;
       }
       const std::optional<PlaybackTarget>& nowPlayingTarget =
           presentation.currentTarget;
@@ -1939,8 +1941,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         const int gapWidth = 2;
         int x = 0;
         int itemLine = line;
-        for (const browser_action_strip::Item& item :
-             browserChrome.actions) {
+        for (const browser_action_strip::Item& item : browserChrome.actions) {
           int widthUsed = std::min(std::max(1, item.width), width);
           const int gap = x > 0 ? gapWidth : 0;
           if (x > 0 && x + gap + widthUsed > width) {
@@ -1950,8 +1951,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
             x += gap;
           }
           if (itemLine >= height) break;
-          bool hovered =
-              (actionHover == static_cast<int>(actionStrip.buttons.size()));
+          bool hovered = (browserInteraction.actionHover ==
+                          static_cast<int>(actionStrip.buttons.size()));
           std::string text = hovered ? item.hoverLabel : item.label;
           int textWidth = utf8DisplayWidth(text);
           widthUsed = std::min(widthUsed, width - x);
@@ -1971,12 +1972,13 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           screen.writeText(x, itemLine, text, style);
           x += widthUsed;
         }
-        if (actionHover >= static_cast<int>(actionStrip.buttons.size())) {
-          actionHover = -1;
+        if (browserInteraction.actionHover >=
+            static_cast<int>(actionStrip.buttons.size())) {
+          browserInteraction.actionHover = -1;
         }
         line += std::max(1, browserChrome.footer.actionStripLines);
       } else {
-        actionHover = -1;
+        browserInteraction.actionHover = -1;
       }
 
       int peakMeterY = -1;
