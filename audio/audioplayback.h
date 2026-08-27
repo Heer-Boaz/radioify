@@ -165,7 +165,6 @@ void audioSeekBy(int direction);
 void audioSeekToRatio(double ratio);
 void audioSeekToSec(double sec);
 void audioCycleRadioFilter();
-void audioToggle50Hz();
 void audioSetHold(bool hold);
 void audioAdjustVolume(float delta);
 float audioGetVolume();
@@ -179,35 +178,15 @@ bool audioAnalyzeFileToMelodyFile(const std::filesystem::path& file,
                                   std::string* error);
 bool audioCanAnalyzeFileToMelodyFile(const std::filesystem::path& file);
 std::string audioGetWarning();
-bool audioIs50HzEnabled();
-bool audioSupports50HzToggle();
-KssPlaybackOptions audioGetKssOptionState();
-bool audioAdjustKssOption(KssOptionId id, int direction = 1);
-bool audioGetKssInstrumentRegs(KssInstrumentDevice device,
-                               std::vector<uint8_t>* out);
-bool audioSetKssInstrumentPreview(KssInstrumentDevice device, int channel);
-bool audioGetKssInstrumentAuditionState(KssInstrumentDevice* device,
-                                        uint32_t* hash);
-bool audioStartKssInstrumentAudition(const KssInstrumentProfile& profile);
-bool audioStopKssInstrumentAudition();
 bool audioScanKssInstruments(const std::filesystem::path& file, int trackIndex,
                              uint32_t sampleRate,
                              KssPlaybackOptions options,
                              const std::function<bool()>& cancellationRequested,
                              std::vector<KssInstrumentProfile>* out,
                              std::string* error);
-NsfPlaybackOptions audioGetNsfOptionState();
-bool audioAdjustNsfOption(NsfOptionId id, int direction = 1);
-VgmPlaybackOptions audioGetVgmOptionState();
-bool audioAdjustVgmOption(VgmOptionId id, int direction = 1);
 bool audioScanVgmMetadata(const std::filesystem::path& file,
                           std::vector<VgmMetadataEntry>* out,
                           std::string* error);
 bool audioScanVgmDevices(const std::filesystem::path& file, uint32_t channels,
                          uint32_t sampleRate, VgmDeviceCatalog* out,
                          std::string* error);
-bool audioGetVgmDeviceOptions(uint32_t deviceId, VgmDeviceOptions* out);
-bool audioAdjustVgmDeviceOption(const VgmDeviceInfo& device,
-                                const VgmDeviceOptions& baseline,
-                                VgmDeviceOptionId id,
-                                int direction = 1);

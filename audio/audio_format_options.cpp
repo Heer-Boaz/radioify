@@ -1,5 +1,6 @@
+#include "audio_format_options.h"
+
 #include "audioplayback_internal.h"
-#include "audioplayback.h"
 #include "audio_stream.h"
 
 #include "media_formats.h"
@@ -180,75 +181,75 @@ bool buildSccAuditionTone(const KssInstrumentProfile& profile,
   return true;
 }
 
-static void reloadKssWithOptions() {
-  if (!gAudio.decoderReady || !isAudioMode(gAudio, AudioMode::Kss)) return;
-  uint64_t resumeFrame = gAudio.state.framesPlayed.load();
-  bool wasPaused = gAudio.state.paused.load();
-  if (loadFileAt(gAudio.nowPlaying, resumeFrame, gAudio.trackIndex)) {
+static void reloadKssWithOptions(AudioPlaybackState& audio) {
+  if (!audio.decoderReady || !isAudioMode(audio, AudioMode::Kss)) return;
+  uint64_t resumeFrame = audio.state.framesPlayed.load();
+  bool wasPaused = audio.state.paused.load();
+  if (loadFileAt(audio, audio.nowPlaying, resumeFrame, audio.trackIndex)) {
     if (wasPaused) {
-      gAudio.state.paused.store(true);
+      audio.state.paused.store(true);
     }
   }
 }
 
-static void reloadNsfWithOptions();
+static void reloadNsfWithOptions(AudioPlaybackState& audio);
 
-void audioToggle50Hz() {
-  if (!audioSupports50HzToggle()) {
+void audioToggle50Hz(AudioPlaybackState& audio) {
+  if (!audioSupports50HzToggle(audio)) {
     return;
   }
-  switch (currentAudioMode(gAudio)) {
+  switch (currentAudioMode(audio)) {
     case AudioMode::Vgm: {
-      gAudio.vgmOptions.playbackHz =
-          (gAudio.vgmOptions.playbackHz == VgmPlaybackHz::Hz50)
+      audio.vgmOptions.playbackHz =
+          (audio.vgmOptions.playbackHz == VgmPlaybackHz::Hz50)
               ? VgmPlaybackHz::Hz60
               : VgmPlaybackHz::Hz50;
-      gAudio.state.vgm.applyOptions(gAudio.vgmOptions);
+      audio.state.vgm.applyOptions(audio.vgmOptions);
       uint64_t totalFrames = 0;
-      if (gAudio.state.vgm.getTotalFrames(&totalFrames)) {
-        gAudio.state.totalFrames.store(totalFrames);
+      if (audio.state.vgm.getTotalFrames(&totalFrames)) {
+        audio.state.totalFrames.store(totalFrames);
       } else {
-        gAudio.state.totalFrames.store(0);
+        audio.state.totalFrames.store(0);
       }
       return;
     }
     case AudioMode::Gme:
-      gAudio.nsfOptions.tempoMode =
-          (gAudio.nsfOptions.tempoMode == NsfTempoMode::Pal50)
+      audio.nsfOptions.tempoMode =
+          (audio.nsfOptions.tempoMode == NsfTempoMode::Pal50)
               ? NsfTempoMode::Normal
               : NsfTempoMode::Pal50;
-      reloadNsfWithOptions();
+      reloadNsfWithOptions(audio);
       return;
     case AudioMode::Kss:
-      gAudio.kssOptions.force50Hz = !gAudio.kssOptions.force50Hz;
-      reloadKssWithOptions();
+      audio.kssOptions.force50Hz = !audio.kssOptions.force50Hz;
+      reloadKssWithOptions(audio);
       return;
     default:
       return;
   }
 }
 
-bool audioIs50HzEnabled() {
-  switch (currentAudioMode(gAudio)) {
+bool audioIs50HzEnabled(const AudioPlaybackState& audio) {
+  switch (currentAudioMode(audio)) {
     case AudioMode::Vgm:
-      return gAudio.vgmOptions.playbackHz == VgmPlaybackHz::Hz50;
+      return audio.vgmOptions.playbackHz == VgmPlaybackHz::Hz50;
     case AudioMode::Gme:
-      return gAudio.nsfOptions.tempoMode == NsfTempoMode::Pal50;
+      return audio.nsfOptions.tempoMode == NsfTempoMode::Pal50;
     case AudioMode::Kss:
-      return gAudio.kssOptions.force50Hz;
+      return audio.kssOptions.force50Hz;
     default:
       return false;
   }
 }
 
-bool audioSupports50HzToggle() {
-  const AudioMode mode = currentAudioMode(gAudio);
+bool audioSupports50HzToggle(const AudioPlaybackState& audio) {
+  const AudioMode mode = currentAudioMode(audio);
   return mode == AudioMode::Kss || mode == AudioMode::Gme ||
          mode == AudioMode::Vgm;
 }
 
-KssPlaybackOptions audioGetKssOptionState() {
-  return gAudio.kssOptions;
+KssPlaybackOptions audioGetKssOptionState(const AudioPlaybackState& audio) {
+  return audio.kssOptions;
 }
 
 static bool toKssDevice(KssInstrumentDevice device, KSS_DEVICE* out) {
@@ -270,17 +271,19 @@ static bool toKssDevice(KssInstrumentDevice device, KSS_DEVICE* out) {
   return false;
 }
 
-bool audioGetKssInstrumentRegs(KssInstrumentDevice device,
+bool audioGetKssInstrumentRegs(AudioPlaybackState& audio,
+                               KssInstrumentDevice device,
                                std::vector<uint8_t>* out) {
   if (!out) return false;
-  if (!isAudioMode(gAudio, AudioMode::Kss)) return false;
-  if (!gAudio.state.kss.active()) return false;
+  if (!isAudioMode(audio, AudioMode::Kss)) return false;
+  if (!audio.state.kss.active()) return false;
   KSS_DEVICE kssDevice{};
   if (!toKssDevice(device, &kssDevice)) return false;
-  return gAudio.state.kss.readDeviceRegs(kssDevice, out);
+  return audio.state.kss.readDeviceRegs(kssDevice, out);
 }
 
-bool audioSetKssInstrumentPreview(KssInstrumentDevice device, int channel) {
+bool audioSetKssInstrumentPreview(AudioPlaybackState& audio,
+                                  KssInstrumentDevice device, int channel) {
   bool changed = false;
   int maxChannels = 0;
   switch (device) {
@@ -300,33 +303,35 @@ bool audioSetKssInstrumentPreview(KssInstrumentDevice device, int channel) {
 
   if (device == KssInstrumentDevice::None || channel < 0 ||
       (maxChannels > 0 && channel >= maxChannels)) {
-    if (gAudio.kssOptions.instrumentDevice != KssInstrumentDevice::None ||
-        gAudio.kssOptions.instrumentChannel != -1) {
-      gAudio.kssOptions.instrumentDevice = KssInstrumentDevice::None;
-      gAudio.kssOptions.instrumentChannel = -1;
+    if (audio.kssOptions.instrumentDevice != KssInstrumentDevice::None ||
+        audio.kssOptions.instrumentChannel != -1) {
+      audio.kssOptions.instrumentDevice = KssInstrumentDevice::None;
+      audio.kssOptions.instrumentChannel = -1;
       changed = true;
     }
-  } else if (gAudio.kssOptions.instrumentDevice != device ||
-             gAudio.kssOptions.instrumentChannel != channel) {
-    gAudio.kssOptions.instrumentDevice = device;
-    gAudio.kssOptions.instrumentChannel = channel;
+  } else if (audio.kssOptions.instrumentDevice != device ||
+             audio.kssOptions.instrumentChannel != channel) {
+    audio.kssOptions.instrumentDevice = device;
+    audio.kssOptions.instrumentChannel = channel;
     changed = true;
   }
 
   if (changed) {
-    reloadKssWithOptions();
+    reloadKssWithOptions(audio);
   }
   return changed;
 }
 
-bool audioGetKssInstrumentAuditionState(KssInstrumentDevice* device,
+bool audioGetKssInstrumentAuditionState(const AudioPlaybackState& audio,
+                                        KssInstrumentDevice* device,
                                         uint32_t* hash) {
-  if (device) *device = gAudio.audition.device;
-  if (hash) *hash = gAudio.audition.hash;
-  return gAudio.audition.active.load();
+  if (device) *device = audio.audition.device;
+  if (hash) *hash = audio.audition.hash;
+  return audio.audition.active.load();
 }
 
-bool audioStartKssInstrumentAudition(const KssInstrumentProfile& profile) {
+bool audioStartKssInstrumentAudition(
+    AudioPlaybackState& audio, const KssInstrumentProfile& profile) {
   if (profile.device != KssInstrumentDevice::Psg &&
       profile.device != KssInstrumentDevice::Scc) {
     return false;
@@ -335,67 +340,68 @@ bool audioStartKssInstrumentAudition(const KssInstrumentProfile& profile) {
   AuditionTone tone;
   bool ok = false;
   if (profile.device == KssInstrumentDevice::Psg) {
-    ok = buildPsgAuditionTone(profile, gAudio.sampleRate,
-                              gAudio.kssOptions.psgType, &tone);
+    ok = buildPsgAuditionTone(profile, audio.sampleRate,
+                              audio.kssOptions.psgType, &tone);
   } else if (profile.device == KssInstrumentDevice::Scc) {
-    ok = buildSccAuditionTone(profile, gAudio.sampleRate,
-                              gAudio.kssOptions.sccType,
-                              gAudio.kssOptions.sccQuality, &tone);
+    ok = buildSccAuditionTone(profile, audio.sampleRate,
+                              audio.kssOptions.sccType,
+                              audio.kssOptions.sccQuality, &tone);
   }
   if (!ok) return false;
 
-  if (gAudio.audition.active.load()) {
-    stopAuditionWorker(gAudio);
-    if (gAudio.state.externalStream.load()) {
-      audioStreamReset(gAudio, 0);
+  if (audio.audition.active.load()) {
+    stopAuditionWorker(audio);
+    if (audio.state.externalStream.load()) {
+      audioStreamReset(audio, 0);
     }
   } else {
-    gAudio.audition.resumeValid =
-        gAudio.decoderReady && !gAudio.nowPlaying.empty() &&
-        !gAudio.state.externalStream.load();
-    if (gAudio.audition.resumeValid) {
-      gAudio.audition.resumeFile = gAudio.nowPlaying;
-      gAudio.audition.resumeFrame = gAudio.state.framesPlayed.load();
-      gAudio.audition.resumePaused = gAudio.state.paused.load();
-      gAudio.audition.resumeTrackIndex = gAudio.trackIndex;
+    audio.audition.resumeValid =
+        audio.decoderReady && !audio.nowPlaying.empty() &&
+        !audio.state.externalStream.load();
+    if (audio.audition.resumeValid) {
+      audio.audition.resumeFile = audio.nowPlaying;
+      audio.audition.resumeFrame = audio.state.framesPlayed.load();
+      audio.audition.resumePaused = audio.state.paused.load();
+      audio.audition.resumeTrackIndex = audio.trackIndex;
     }
-    if (!audioStartStream(gAudio, 0)) {
-      if (gAudio.audition.resumeValid) {
-        loadFileAt(gAudio.audition.resumeFile, gAudio.audition.resumeFrame,
-                   gAudio.audition.resumeTrackIndex);
-        if (gAudio.audition.resumePaused) {
-          gAudio.state.paused.store(true);
+    if (!audioStartStream(audio, 0)) {
+      if (audio.audition.resumeValid) {
+        loadFileAt(audio, audio.audition.resumeFile,
+                   audio.audition.resumeFrame,
+                   audio.audition.resumeTrackIndex);
+        if (audio.audition.resumePaused) {
+          audio.state.paused.store(true);
         }
       }
-      gAudio.audition.resumeValid = false;
+      audio.audition.resumeValid = false;
       return false;
     }
   }
 
-  gAudio.audition.device = profile.device;
-  gAudio.audition.hash = profile.hash;
-  startAuditionWorker(gAudio, std::move(tone));
+  audio.audition.device = profile.device;
+  audio.audition.hash = profile.hash;
+  startAuditionWorker(audio, std::move(tone));
   return true;
 }
 
-bool audioStopKssInstrumentAudition() {
-  if (!gAudio.audition.active.load()) return false;
-  stopAuditionWorker(gAudio);
-  gAudio.audition.device = KssInstrumentDevice::None;
-  gAudio.audition.hash = 0;
+bool audioStopKssInstrumentAudition(AudioPlaybackState& audio) {
+  if (!audio.audition.active.load()) return false;
+  stopAuditionWorker(audio);
+  audio.audition.device = KssInstrumentDevice::None;
+  audio.audition.hash = 0;
 
-  if (gAudio.audition.resumeValid) {
-    bool resumed = loadFileAt(gAudio.audition.resumeFile,
-                              gAudio.audition.resumeFrame,
-                              gAudio.audition.resumeTrackIndex);
-    if (resumed && gAudio.audition.resumePaused) {
-      gAudio.state.paused.store(true);
+  if (audio.audition.resumeValid) {
+    bool resumed = loadFileAt(audio, audio.audition.resumeFile,
+                              audio.audition.resumeFrame,
+                              audio.audition.resumeTrackIndex);
+    if (resumed && audio.audition.resumePaused) {
+      audio.state.paused.store(true);
     }
-    gAudio.audition.resumeValid = false;
+    audio.audition.resumeValid = false;
     return resumed;
   }
-  audioStopStream(gAudio);
-  gAudio.audition.resumeValid = false;
+  audioStopStream(audio);
+  audio.audition.resumeValid = false;
   return true;
 }
 
@@ -618,129 +624,131 @@ bool audioScanVgmDevices(const std::filesystem::path& file, uint32_t channels,
   return true;
 }
 
-bool audioAdjustKssOption(KssOptionId id, int direction) {
+bool audioAdjustKssOption(AudioPlaybackState& audio, KssOptionId id,
+                          int direction) {
   if (direction == 0) return false;
   bool changed = false;
   switch (id) {
     case KssOptionId::Force50Hz:
-      gAudio.kssOptions.force50Hz = !gAudio.kssOptions.force50Hz;
+      audio.kssOptions.force50Hz = !audio.kssOptions.force50Hz;
       changed = true;
       break;
     case KssOptionId::SccType: {
-      int next = static_cast<int>(gAudio.kssOptions.sccType) +
+      int next = static_cast<int>(audio.kssOptions.sccType) +
                  (direction > 0 ? 1 : -1);
       if (next < 0) next = 2;
       if (next > 2) next = 0;
-      gAudio.kssOptions.sccType = static_cast<KssSccType>(next);
+      audio.kssOptions.sccType = static_cast<KssSccType>(next);
       changed = true;
       break;
     }
     case KssOptionId::PsgType: {
-      int next = static_cast<int>(gAudio.kssOptions.psgType) +
+      int next = static_cast<int>(audio.kssOptions.psgType) +
                  (direction > 0 ? 1 : -1);
       if (next < 0) next = 2;
       if (next > 2) next = 0;
-      gAudio.kssOptions.psgType = static_cast<KssPsgType>(next);
+      audio.kssOptions.psgType = static_cast<KssPsgType>(next);
       changed = true;
       break;
     }
     case KssOptionId::OpllType: {
-      int next = static_cast<int>(gAudio.kssOptions.opllType) +
+      int next = static_cast<int>(audio.kssOptions.opllType) +
                  (direction > 0 ? 1 : -1);
       if (next < 0) next = 2;
       if (next > 2) next = 0;
-      gAudio.kssOptions.opllType = static_cast<KssOpllType>(next);
+      audio.kssOptions.opllType = static_cast<KssOpllType>(next);
       changed = true;
       break;
     }
     case KssOptionId::PsgQuality: {
-      int next = static_cast<int>(gAudio.kssOptions.psgQuality) +
+      int next = static_cast<int>(audio.kssOptions.psgQuality) +
                  (direction > 0 ? 1 : -1);
       if (next < 0) next = 2;
       if (next > 2) next = 0;
-      gAudio.kssOptions.psgQuality = static_cast<KssQuality>(next);
+      audio.kssOptions.psgQuality = static_cast<KssQuality>(next);
       changed = true;
       break;
     }
     case KssOptionId::SccQuality: {
-      int next = static_cast<int>(gAudio.kssOptions.sccQuality) +
+      int next = static_cast<int>(audio.kssOptions.sccQuality) +
                  (direction > 0 ? 1 : -1);
       if (next < 0) next = 2;
       if (next > 2) next = 0;
-      gAudio.kssOptions.sccQuality = static_cast<KssQuality>(next);
+      audio.kssOptions.sccQuality = static_cast<KssQuality>(next);
       changed = true;
       break;
     }
     case KssOptionId::OpllStereo:
-      gAudio.kssOptions.opllStereo = !gAudio.kssOptions.opllStereo;
+      audio.kssOptions.opllStereo = !audio.kssOptions.opllStereo;
       changed = true;
       break;
     case KssOptionId::MutePsg:
-      gAudio.kssOptions.mutePsg = !gAudio.kssOptions.mutePsg;
+      audio.kssOptions.mutePsg = !audio.kssOptions.mutePsg;
       changed = true;
       break;
     case KssOptionId::MuteScc:
-      gAudio.kssOptions.muteScc = !gAudio.kssOptions.muteScc;
+      audio.kssOptions.muteScc = !audio.kssOptions.muteScc;
       changed = true;
       break;
     case KssOptionId::MuteOpll:
-      gAudio.kssOptions.muteOpll = !gAudio.kssOptions.muteOpll;
+      audio.kssOptions.muteOpll = !audio.kssOptions.muteOpll;
       changed = true;
       break;
     default:
       break;
   }
   if (changed) {
-    reloadKssWithOptions();
+    reloadKssWithOptions(audio);
   }
   return changed;
 }
 
-NsfPlaybackOptions audioGetNsfOptionState() {
-  return gAudio.nsfOptions;
+NsfPlaybackOptions audioGetNsfOptionState(const AudioPlaybackState& audio) {
+  return audio.nsfOptions;
 }
 
-static void reloadNsfWithOptions() {
-  if (!gAudio.decoderReady || !isAudioMode(gAudio, AudioMode::Gme)) return;
-  if (!isGmeExt(gAudio.nowPlaying)) return;
-  uint64_t resumeFrame = gAudio.state.framesPlayed.load();
-  bool wasPaused = gAudio.state.paused.load();
-  if (loadFileAt(gAudio.nowPlaying, resumeFrame, gAudio.trackIndex)) {
+static void reloadNsfWithOptions(AudioPlaybackState& audio) {
+  if (!audio.decoderReady || !isAudioMode(audio, AudioMode::Gme)) return;
+  if (!isGmeExt(audio.nowPlaying)) return;
+  uint64_t resumeFrame = audio.state.framesPlayed.load();
+  bool wasPaused = audio.state.paused.load();
+  if (loadFileAt(audio, audio.nowPlaying, resumeFrame, audio.trackIndex)) {
     if (wasPaused) {
-      gAudio.state.paused.store(true);
+      audio.state.paused.store(true);
     }
   }
 }
 
-bool audioAdjustNsfOption(NsfOptionId id, int direction) {
+bool audioAdjustNsfOption(AudioPlaybackState& audio, NsfOptionId id,
+                          int direction) {
   if (direction == 0) return false;
   bool changed = false;
   switch (id) {
     case NsfOptionId::EqPreset: {
-      int next = static_cast<int>(gAudio.nsfOptions.eqPreset) +
+      int next = static_cast<int>(audio.nsfOptions.eqPreset) +
                  (direction > 0 ? 1 : -1);
       if (next < 0) next = 1;
       if (next > 1) next = 0;
-      gAudio.nsfOptions.eqPreset = static_cast<NsfEqPreset>(next);
+      audio.nsfOptions.eqPreset = static_cast<NsfEqPreset>(next);
       changed = true;
       break;
     }
     case NsfOptionId::StereoDepth: {
-      int next = static_cast<int>(gAudio.nsfOptions.stereoDepth) +
+      int next = static_cast<int>(audio.nsfOptions.stereoDepth) +
                  (direction > 0 ? 1 : -1);
       if (next < 0) next = 2;
       if (next > 2) next = 0;
-      gAudio.nsfOptions.stereoDepth = static_cast<NsfStereoDepth>(next);
+      audio.nsfOptions.stereoDepth = static_cast<NsfStereoDepth>(next);
       changed = true;
       break;
     }
     case NsfOptionId::IgnoreSilence:
-      gAudio.nsfOptions.ignoreSilence = !gAudio.nsfOptions.ignoreSilence;
+      audio.nsfOptions.ignoreSilence = !audio.nsfOptions.ignoreSilence;
       changed = true;
       break;
     case NsfOptionId::TempoMode:
-      gAudio.nsfOptions.tempoMode =
-          (gAudio.nsfOptions.tempoMode == NsfTempoMode::Pal50)
+      audio.nsfOptions.tempoMode =
+          (audio.nsfOptions.tempoMode == NsfTempoMode::Pal50)
               ? NsfTempoMode::Normal
               : NsfTempoMode::Pal50;
       changed = true;
@@ -749,72 +757,74 @@ bool audioAdjustNsfOption(NsfOptionId id, int direction) {
       break;
   }
   if (changed) {
-    reloadNsfWithOptions();
+    reloadNsfWithOptions(audio);
   }
   return changed;
 }
 
-VgmPlaybackOptions audioGetVgmOptionState() {
-  return gAudio.vgmOptions;
+VgmPlaybackOptions audioGetVgmOptionState(const AudioPlaybackState& audio) {
+  return audio.vgmOptions;
 }
 
-bool audioGetVgmDeviceOptions(uint32_t deviceId, VgmDeviceOptions* out) {
+bool audioGetVgmDeviceOptions(const AudioPlaybackState& audio,
+                              uint32_t deviceId, VgmDeviceOptions* out) {
   if (!out) return false;
-  if (isAudioMode(gAudio, AudioMode::Vgm)) {
-    if (gAudio.state.vgm.getDeviceOptions(deviceId, out)) {
+  if (isAudioMode(audio, AudioMode::Vgm)) {
+    if (audio.state.vgm.getDeviceOptions(deviceId, out)) {
       return true;
     }
   }
-  auto overrideIt = gAudio.vgmDeviceOverrides.find(deviceId);
-  if (overrideIt == gAudio.vgmDeviceOverrides.end()) {
+  auto overrideIt = audio.vgmDeviceOverrides.find(deviceId);
+  if (overrideIt == audio.vgmDeviceOverrides.end()) {
     return false;
   }
   *out = overrideIt->second;
   return true;
 }
 
-static void reloadVgmWithOptions() {
-  if (!gAudio.decoderReady || !isAudioMode(gAudio, AudioMode::Vgm)) return;
-  if (!isVgmExt(gAudio.nowPlaying)) return;
-  uint64_t resumeFrame = gAudio.state.framesPlayed.load();
-  bool wasPaused = gAudio.state.paused.load();
-  if (loadFileAt(gAudio.nowPlaying, resumeFrame, gAudio.trackIndex)) {
+static void reloadVgmWithOptions(AudioPlaybackState& audio) {
+  if (!audio.decoderReady || !isAudioMode(audio, AudioMode::Vgm)) return;
+  if (!isVgmExt(audio.nowPlaying)) return;
+  uint64_t resumeFrame = audio.state.framesPlayed.load();
+  bool wasPaused = audio.state.paused.load();
+  if (loadFileAt(audio, audio.nowPlaying, resumeFrame, audio.trackIndex)) {
     if (wasPaused) {
-      gAudio.state.paused.store(true);
+      audio.state.paused.store(true);
     }
   }
 }
 
-bool audioAdjustVgmOption(VgmOptionId id, int direction) {
+bool audioAdjustVgmOption(AudioPlaybackState& audio, VgmOptionId id,
+                          int direction) {
   if (direction == 0) return false;
   bool changed = false;
   switch (id) {
     case VgmOptionId::PlaybackHz: {
-      int next = static_cast<int>(gAudio.vgmOptions.playbackHz) +
+      int next = static_cast<int>(audio.vgmOptions.playbackHz) +
                  (direction > 0 ? 1 : -1);
       if (next < 0) next = 2;
       if (next > 2) next = 0;
-      gAudio.vgmOptions.playbackHz = static_cast<VgmPlaybackHz>(next);
+      audio.vgmOptions.playbackHz = static_cast<VgmPlaybackHz>(next);
       changed = true;
       break;
     }
     case VgmOptionId::Speed: {
-      int next = gAudio.vgmOptions.speedStep + (direction > 0 ? 1 : -1);
+      int next = audio.vgmOptions.speedStep + (direction > 0 ? 1 : -1);
       if (next < 0) next = kVgmSpeedStepCount - 1;
       if (next >= kVgmSpeedStepCount) next = 0;
-      gAudio.vgmOptions.speedStep = next;
+      audio.vgmOptions.speedStep = next;
       changed = true;
       break;
     }
     case VgmOptionId::LoopCount: {
       int idx = findIndex(kVgmLoopSteps,
                           sizeof(kVgmLoopSteps) / sizeof(kVgmLoopSteps[0]),
-                          gAudio.vgmOptions.loopCount);
+                          audio.vgmOptions.loopCount);
       idx = advanceIndex(
           idx,
           static_cast<int>(sizeof(kVgmLoopSteps) / sizeof(kVgmLoopSteps[0])),
           direction);
-      gAudio.vgmOptions.loopCount = kVgmLoopSteps[idx];
+      audio.vgmOptions.loopCount = kVgmLoopSteps[idx];
       changed = true;
       break;
     }
@@ -822,12 +832,12 @@ bool audioAdjustVgmOption(VgmOptionId id, int direction) {
       int idx = findIndex(
           kVgmFadeStepsMs,
           sizeof(kVgmFadeStepsMs) / sizeof(kVgmFadeStepsMs[0]),
-          gAudio.vgmOptions.fadeMs);
+          audio.vgmOptions.fadeMs);
       idx = advanceIndex(
           idx,
           static_cast<int>(sizeof(kVgmFadeStepsMs) / sizeof(kVgmFadeStepsMs[0])),
           direction);
-      gAudio.vgmOptions.fadeMs = kVgmFadeStepsMs[idx];
+      audio.vgmOptions.fadeMs = kVgmFadeStepsMs[idx];
       changed = true;
       break;
     }
@@ -835,72 +845,73 @@ bool audioAdjustVgmOption(VgmOptionId id, int direction) {
       int idx = findIndex(
           kVgmEndSilenceStepsMs,
           sizeof(kVgmEndSilenceStepsMs) / sizeof(kVgmEndSilenceStepsMs[0]),
-          gAudio.vgmOptions.endSilenceMs);
+          audio.vgmOptions.endSilenceMs);
       idx = advanceIndex(
           idx,
           static_cast<int>(sizeof(kVgmEndSilenceStepsMs) /
                            sizeof(kVgmEndSilenceStepsMs[0])),
           direction);
-      gAudio.vgmOptions.endSilenceMs = kVgmEndSilenceStepsMs[idx];
+      audio.vgmOptions.endSilenceMs = kVgmEndSilenceStepsMs[idx];
       changed = true;
       break;
     }
     case VgmOptionId::HardStopOld:
-      gAudio.vgmOptions.hardStopOld = !gAudio.vgmOptions.hardStopOld;
+      audio.vgmOptions.hardStopOld = !audio.vgmOptions.hardStopOld;
       changed = true;
       break;
     case VgmOptionId::IgnoreVolGain:
-      gAudio.vgmOptions.ignoreVolGain = !gAudio.vgmOptions.ignoreVolGain;
+      audio.vgmOptions.ignoreVolGain = !audio.vgmOptions.ignoreVolGain;
       changed = true;
       break;
     case VgmOptionId::MasterVolume: {
-      int next = gAudio.vgmOptions.masterVolumeStep +
+      int next = audio.vgmOptions.masterVolumeStep +
                  (direction > 0 ? 1 : -1);
       if (next < 0) next = kVgmVolumeStepCount - 1;
       if (next >= kVgmVolumeStepCount) next = 0;
-      gAudio.vgmOptions.masterVolumeStep = next;
+      audio.vgmOptions.masterVolumeStep = next;
       changed = true;
       break;
     }
     case VgmOptionId::PhaseInvert: {
-      int next = static_cast<int>(gAudio.vgmOptions.phaseInvert) +
+      int next = static_cast<int>(audio.vgmOptions.phaseInvert) +
                  (direction > 0 ? 1 : -1);
       if (next < 0) next = 3;
       if (next > 3) next = 0;
-      gAudio.vgmOptions.phaseInvert = static_cast<VgmPhaseInvert>(next);
+      audio.vgmOptions.phaseInvert = static_cast<VgmPhaseInvert>(next);
       changed = true;
       break;
     }
     default:
       break;
   }
-  if (changed && isAudioMode(gAudio, AudioMode::Vgm)) {
-    gAudio.state.vgm.applyOptions(gAudio.vgmOptions);
+  if (changed && isAudioMode(audio, AudioMode::Vgm)) {
+    audio.state.vgm.applyOptions(audio.vgmOptions);
     uint64_t totalFrames = 0;
-    if (gAudio.state.vgm.getTotalFrames(&totalFrames)) {
-      gAudio.state.totalFrames.store(totalFrames);
+    if (audio.state.vgm.getTotalFrames(&totalFrames)) {
+      audio.state.totalFrames.store(totalFrames);
     } else {
-      gAudio.state.totalFrames.store(0);
+      audio.state.totalFrames.store(0);
     }
   }
   return changed;
 }
 
-bool audioAdjustVgmDeviceOption(const VgmDeviceInfo& device,
+bool audioAdjustVgmDeviceOption(AudioPlaybackState& audio,
+                                const VgmDeviceInfo& device,
                                 const VgmDeviceOptions& baseline,
                                 VgmDeviceOptionId id,
                                 int direction) {
   if (direction == 0) return false;
 
   VgmDeviceOptions options = baseline;
-  if (isAudioMode(gAudio, AudioMode::Vgm)) {
+  if (isAudioMode(audio, AudioMode::Vgm)) {
     VgmDeviceOptions activeOptions{};
-    if (gAudio.state.vgm.getDeviceOptions(device.id, &activeOptions)) {
+    if (audio.state.vgm.getDeviceOptions(device.id, &activeOptions)) {
       options = activeOptions;
     }
   } else {
-    auto overrideIt = gAudio.vgmDeviceOverrides.find(device.id);
-    if (overrideIt != gAudio.vgmDeviceOverrides.end()) {
+    auto overrideIt = audio.vgmDeviceOverrides.find(device.id);
+    if (overrideIt != audio.vgmDeviceOverrides.end()) {
       options = overrideIt->second;
     }
   }
@@ -971,12 +982,12 @@ bool audioAdjustVgmDeviceOption(const VgmDeviceInfo& device,
 
   if (!changed) return false;
 
-  gAudio.vgmDeviceOverrides[device.id] = options;
-  if (isAudioMode(gAudio, AudioMode::Vgm)) {
+  audio.vgmDeviceOverrides[device.id] = options;
+  if (isAudioMode(audio, AudioMode::Vgm)) {
     if (id == VgmDeviceOptionId::Mute) {
-      gAudio.state.vgm.setDeviceOptions(device.id, options);
+      audio.state.vgm.setDeviceOptions(device.id, options);
     } else {
-      reloadVgmWithOptions();
+      reloadVgmWithOptions(audio);
     }
   }
   return true;

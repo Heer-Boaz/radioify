@@ -143,11 +143,11 @@ struct AudioPlaybackState {
 extern AudioPlaybackState gAudio;
 
 void appendAudioTimingLogLine(const char* line);
-void drainPlaybackPipelineForReplacement(AudioState& state);
+void drainPlaybackPipelineForReplacement(AudioPlaybackState& audio);
 bool audioPlaybackFinishSeekPipelineTransition(AudioState& state);
 void dataCallback(ma_device* device, void* output, const void* input,
                   ma_uint32 frameCount);
 void stopAndUninitActiveDecoder(AudioPlaybackState& audio);
 void stopPlayback(AudioPlaybackState& audio);
-bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
-               int trackIndex);
+bool loadFileAt(AudioPlaybackState& audio, const std::filesystem::path& file,
+                uint64_t startFrame, int trackIndex);

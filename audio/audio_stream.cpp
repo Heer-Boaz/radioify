@@ -27,7 +27,7 @@ bool audioStartStream(AudioPlaybackState& audio, uint64_t totalFrames) {
   audio.gsfWarning.clear();
   audio.vgmWarning.clear();
   audio.trackIndex = 0;
-  drainPlaybackPipelineForReplacement(audio.state);
+  drainPlaybackPipelineForReplacement(audio);
   audio.state.sourcePreparing.store(true, std::memory_order_release);
   stopAndUninitActiveDecoder(audio);
 
