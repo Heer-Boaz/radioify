@@ -171,6 +171,10 @@ using WhisperContextPtr =
 
 struct WhisperEngine::Impl {
   WhisperContextPtr context;
+  // The transcriber feeds one media file in overlapping chunks. Once a chunk
+  // contains recognized speech, retain its detected language so later music,
+  // effects, or short utterances cannot make auto-detection switch scripts.
+  std::string sourceLanguage;
 };
 
 WhisperEngine::WhisperEngine() = default;
@@ -254,7 +258,9 @@ bool WhisperEngine::transcribe(
       whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
   parameters.n_threads = inferenceThreadCount();
   parameters.translate = false;
-  parameters.language = "auto";
+  parameters.language = impl_->sourceLanguage.empty()
+                            ? "auto"
+                            : impl_->sourceLanguage.c_str();
   // "auto" detects a language and then transcribes it. In whisper.cpp,
   // detect_language=true is a detection-only mode that returns no segments.
   parameters.detect_language = false;
@@ -329,6 +335,12 @@ bool WhisperEngine::transcribe(
       segment.tokens.push_back(std::move(token));
     }
     segments->push_back(std::move(segment));
+  }
+  if (impl_->sourceLanguage.empty() && !segments->empty()) {
+    const int languageId = whisper_full_lang_id(impl_->context.get());
+    if (const char* language = whisper_lang_str(languageId)) {
+      impl_->sourceLanguage = language;
+    }
   }
   return true;
 }
