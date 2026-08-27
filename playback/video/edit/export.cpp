@@ -57,18 +57,25 @@ std::filesystem::path uniqueEditedOutputPath(
 }
 
 struct Exporter::Impl {
-  explicit Impl(Operation exportOperation)
-      : operation(std::move(exportOperation)) {}
+  Impl(Operation exportOperation, WakeNotifier ownerWakeNotifier)
+      : operation(std::move(exportOperation)),
+        ownerWake(std::move(ownerWakeNotifier)) {}
 
   mutable std::mutex mutex;
   WaitableSignal changed;
   std::thread worker;
   std::atomic<bool> cancelled{false};
   Operation operation;
+  WakeNotifier ownerWake;
   ExportSnapshot state;
   std::optional<ExportSnapshot> completion;
   std::chrono::steady_clock::time_point lastProgressNotification =
       std::chrono::steady_clock::time_point::min();
+
+  void notifyChanged() {
+    changed.signal();
+    ownerWake.notify();
+  }
 
   void updateProgress(double progress) {
     const auto now = std::chrono::steady_clock::now();
@@ -86,7 +93,7 @@ struct Exporter::Impl {
         notify = true;
       }
     }
-    if (notify) changed.signal();
+    if (notify) notifyChanged();
   }
 
   void run(ExportRequest request) {
@@ -124,12 +131,16 @@ struct Exporter::Impl {
       state.error = std::move(completed.error);
       completion = state;
     }
-    changed.signal();
+    notifyChanged();
   }
 };
 
 Exporter::Exporter(Operation operation)
-    : impl_(std::make_unique<Impl>(std::move(operation))) {}
+    : Exporter(std::move(operation), WakeNotifier{}) {}
+
+Exporter::Exporter(Operation operation, WakeNotifier ownerWake)
+    : impl_(std::make_unique<Impl>(std::move(operation),
+                                  std::move(ownerWake))) {}
 
 Exporter::~Exporter() { stop(); }
 
@@ -167,11 +178,11 @@ bool Exporter::start(ExportRequest request) {
       impl_->state.state = ExportState::Failed;
       impl_->state.error = "Could not start the export worker.";
       impl_->completion = impl_->state;
-      impl_->changed.signal();
+      impl_->notifyChanged();
       return false;
     }
   }
-  impl_->changed.signal();
+  impl_->notifyChanged();
   return true;
 }
 
@@ -182,7 +193,7 @@ bool Exporter::cancel() {
       impl_->cancelled.exchange(true, std::memory_order_relaxed)) {
     return false;
   }
-  impl_->changed.signal();
+  impl_->notifyChanged();
   return true;
 }
 

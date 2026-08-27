@@ -23,18 +23,25 @@
 namespace playback_video_analysis {
 
 struct SceneAnalysisJob::Impl {
-  explicit Impl(Operation analysisOperation)
-      : operation(std::move(analysisOperation)) {}
+  Impl(Operation analysisOperation, WakeNotifier ownerWakeNotifier)
+      : operation(std::move(analysisOperation)),
+        ownerWake(std::move(ownerWakeNotifier)) {}
 
   mutable std::mutex mutex;
   WaitableSignal changed;
   std::thread worker;
   std::atomic<bool> cancelled{false};
   Operation operation;
+  WakeNotifier ownerWake;
   JobSnapshot state;
   std::optional<JobSnapshot> completion;
   std::chrono::steady_clock::time_point lastProgressNotification =
       std::chrono::steady_clock::time_point::min();
+
+  void notifyChanged() {
+    changed.signal();
+    ownerWake.notify();
+  }
 
   void updateProgress(double progress, const std::string& phase) {
     const auto now = std::chrono::steady_clock::now();
@@ -54,7 +61,7 @@ struct SceneAnalysisJob::Impl {
         notify = true;
       }
     }
-    if (notify) changed.signal();
+    if (notify) notifyChanged();
   }
 
   void run(JobRequest request) {
@@ -99,12 +106,17 @@ struct SceneAnalysisJob::Impl {
       }
       completion = state;
     }
-    changed.signal();
+    notifyChanged();
   }
 };
 
 SceneAnalysisJob::SceneAnalysisJob(Operation operation)
-    : impl_(std::make_unique<Impl>(std::move(operation))) {}
+    : SceneAnalysisJob(std::move(operation), WakeNotifier{}) {}
+
+SceneAnalysisJob::SceneAnalysisJob(Operation operation,
+                                   WakeNotifier ownerWake)
+    : impl_(std::make_unique<Impl>(std::move(operation),
+                                  std::move(ownerWake))) {}
 
 SceneAnalysisJob::~SceneAnalysisJob() { stop(); }
 
@@ -140,11 +152,11 @@ bool SceneAnalysisJob::start(JobRequest request) {
       impl_->state.phase = "Segment detection failed";
       impl_->state.error = "Could not start the segment-detection worker.";
       impl_->completion = impl_->state;
-      impl_->changed.signal();
+      impl_->notifyChanged();
       return false;
     }
   }
-  impl_->changed.signal();
+  impl_->notifyChanged();
   return true;
 }
 
@@ -155,7 +167,7 @@ bool SceneAnalysisJob::cancel() {
       impl_->cancelled.exchange(true, std::memory_order_relaxed)) {
     return false;
   }
-  impl_->changed.signal();
+  impl_->notifyChanged();
   return true;
 }
 

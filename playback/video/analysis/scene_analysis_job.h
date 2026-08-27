@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "core/native_wait_handle.h"
+#include "core/wake_event.h"
 #include "playback/video/analysis/scene_analysis.h"
 
 namespace playback_video_analysis {
@@ -60,7 +61,9 @@ class SceneAnalysisJob {
       AnalysisResult*, std::string*)>;
 
   SceneAnalysisJob();
+  explicit SceneAnalysisJob(WakeNotifier ownerWake);
   explicit SceneAnalysisJob(Operation operation);
+  SceneAnalysisJob(Operation operation, WakeNotifier ownerWake);
   ~SceneAnalysisJob();
 
   SceneAnalysisJob(const SceneAnalysisJob&) = delete;

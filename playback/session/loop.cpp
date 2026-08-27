@@ -1352,9 +1352,7 @@ struct PlaybackLoopRunner::Impl {
     if (timelinePreviewStarted) {
       append(timelinePreviewProvider.changedWaitHandle());
     }
-    for (NativeWaitHandle handle : videoEditWorkspace.waitHandles()) {
-      append(handle);
-    }
+    append(videoEditWorkspace.waitHandle());
     return handles;
   }
 

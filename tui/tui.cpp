@@ -661,9 +661,9 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   TuiPlaybackPresenter playbackPresenter(mediaCoordinator);
   auto mediaWaitHandles = [&]() {
     std::vector<NativeWaitHandle> handles = mediaCoordinator.waitHandles();
-    std::vector<NativeWaitHandle> taskHandles = mediaProcessing.waitHandles();
-    handles.reserve(handles.size() + taskHandles.size());
-    handles.insert(handles.end(), taskHandles.begin(), taskHandles.end());
+    if (NativeWaitHandle taskWake = mediaProcessing.waitHandle()) {
+      handles.push_back(taskWake);
+    }
     return handles;
   };
   auto cancelActiveMediaTask = [&]() {

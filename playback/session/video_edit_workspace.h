@@ -4,7 +4,6 @@
 #include <filesystem>
 #include <memory>
 #include <string>
-#include <vector>
 
 #include "core/native_wait_handle.h"
 #include "playback/video/edit/command.h"
@@ -67,7 +66,8 @@ class VideoEditWorkspace {
   bool moveBoundary(playback_video_edit::EditBoundary boundary,
                     int64_t timelineUs);
   VideoEditPollResult poll();
-  std::vector<NativeWaitHandle> waitHandles() const;
+  // Export and scene-analysis changes share one workspace-owned wake event.
+  NativeWaitHandle waitHandle() const;
   void stop();
 
   playback_video_edit::EditSnapshot edit() const;

@@ -118,15 +118,17 @@ class Coordinator final : public playback_media_processing::Service {
   bool cancelActive();
 
   PollResult poll();
-  std::vector<NativeWaitHandle> waitHandles() const;
+  // One owner event fans in every worker family; UI loops never depend on the
+  // number of concrete processing backends.
+  NativeWaitHandle waitHandle() const;
   void shutdown();
 
  private:
   struct Backends {
     MelodyOperation analyzeMelody;
     LoopSplitOperation splitLoop;
-    std::unique_ptr<playback_video_transcript::GenerationJob> subtitles;
-    std::unique_ptr<audio_separation::Job> audioSeparation;
+    playback_video_transcript::GenerationJob::Operation generateSubtitles;
+    audio_separation::Job::Operation separateAudio;
     bool audioSeparationAvailable = false;
   };
   explicit Coordinator(Backends backends);

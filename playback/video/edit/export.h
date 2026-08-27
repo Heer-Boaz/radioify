@@ -9,6 +9,7 @@
 #include <string>
 
 #include "core/native_wait_handle.h"
+#include "core/wake_event.h"
 #include "playback/video/edit/decision_list.h"
 
 namespace playback_video_edit {
@@ -70,9 +71,11 @@ class Exporter {
 
   // Uses Radioify's FFmpeg export pipeline.
   Exporter();
+  explicit Exporter(WakeNotifier ownerWake);
   // The operation boundary keeps worker lifecycle and workspace coordination
   // independent from the concrete encoder pipeline.
   explicit Exporter(Operation operation);
+  Exporter(Operation operation, WakeNotifier ownerWake);
   ~Exporter();
 
   Exporter(const Exporter&) = delete;

@@ -118,6 +118,7 @@ int main() {
   namespace analysis = playback_video_analysis;
   bool ok = true;
   ControlledAnalysis controlled;
+  WakeEvent ownerWake;
   analysis::SceneAnalysisJob job(
       [&](const analysis::JobRequest& request,
           const analysis::SceneAnalysisJob::ProgressReporter& reportProgress,
@@ -125,10 +126,14 @@ int main() {
           analysis::AnalysisResult* result, std::string* error) {
         return controlled.run(request, reportProgress, cancelled, result,
                               error);
-      });
+      },
+      ownerWake.notifier());
 
   const NativeWaitHandle changeHandle = job.nativeWaitHandle();
-  ok &= expect(changeHandle && waitNow(changeHandle) == WAIT_TIMEOUT,
+  const NativeWaitHandle ownerWakeHandle = ownerWake.nativeWaitHandle();
+  ok &= expect(changeHandle && ownerWakeHandle &&
+                   waitNow(changeHandle) == WAIT_TIMEOUT &&
+                   waitNow(ownerWakeHandle) == WAIT_TIMEOUT,
                "a new analysis job must expose an unsignaled wake handle");
 
   analysis::JobRequest request;
@@ -140,9 +145,11 @@ int main() {
   ok &= expect(job.start(request) && controlled.waitUntilReported(1),
                "a valid request must start the injected analysis");
   ok &= expect(waitNow(changeHandle) == WAIT_OBJECT_0 &&
+                   waitNow(ownerWakeHandle) == WAIT_OBJECT_0 &&
                    job.consumeChanged() &&
+                   ownerWake.consume() &&
                    waitNow(changeHandle) == WAIT_TIMEOUT,
-               "starting or progressing analysis must wake and reset once");
+               "analysis changes must wake both the job and its owner once");
   const analysis::JobSnapshot running = job.snapshot();
   ok &= expect(running.running() && running.progress == 0.4 &&
                    running.phase == "Sampling video",

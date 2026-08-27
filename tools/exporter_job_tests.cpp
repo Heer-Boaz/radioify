@@ -116,15 +116,20 @@ int main() {
   namespace edit = playback_video_edit;
   bool ok = true;
   ControlledExport controlled;
+  WakeEvent ownerWake;
   edit::Exporter exporter(
       [&](const edit::ExportRequest& request,
           const std::atomic<bool>* cancelled,
           const edit::Exporter::ProgressReporter& reportProgress) {
         return controlled.run(request, cancelled, reportProgress);
-      });
+      },
+      ownerWake.notifier());
 
   const NativeWaitHandle changeHandle = exporter.nativeWaitHandle();
-  ok &= expect(changeHandle && waitNow(changeHandle) == WAIT_TIMEOUT,
+  const NativeWaitHandle ownerWakeHandle = ownerWake.nativeWaitHandle();
+  ok &= expect(changeHandle && ownerWakeHandle &&
+                   waitNow(changeHandle) == WAIT_TIMEOUT &&
+                   waitNow(ownerWakeHandle) == WAIT_TIMEOUT,
                "a new export job must expose an unsignaled wake handle");
 
   ok &= expect(!exporter.start({}),
@@ -134,9 +139,11 @@ int main() {
                    controlled.waitUntilReported(1),
                "a valid request must start the injected export");
   ok &= expect(waitNow(changeHandle) == WAIT_OBJECT_0 &&
+                   waitNow(ownerWakeHandle) == WAIT_OBJECT_0 &&
                    exporter.consumeChanged() &&
+                   ownerWake.consume() &&
                    waitNow(changeHandle) == WAIT_TIMEOUT,
-               "starting or progressing an export must wake and reset once");
+               "export changes must wake both the job and its owner once");
   const edit::ExportSnapshot running = exporter.snapshot();
   ok &= expect(running.running() && running.progress == 0.4 &&
                    running.destinationPath == firstRequest.destinationPath &&

@@ -1,3 +1,11 @@
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 #include "app/media_processing_coordinator.h"
 #include "playback/media_processing_actions.h"
 #include "tui/ui/media_task_presentation.h"
@@ -41,6 +49,13 @@ std::optional<media_processing::TaskCompletion> waitForCompletion(
     return false;
   });
   return completion;
+}
+
+bool wakeIsSignaled(const media_processing::Coordinator& coordinator) {
+  const NativeWaitHandle handle = coordinator.waitHandle();
+  return handle &&
+         WaitForSingleObject(static_cast<HANDLE>(handle.get()), 0) ==
+             WAIT_OBJECT_0;
 }
 
 }  // namespace
@@ -115,8 +130,8 @@ int main() {
       playbackActions.execute(playback_media_actions::Action::EditVideo,
                               "movie.mp4");
 
-  ok &= expect(coordinator.waitHandles().size() == 3,
-               "all worker families must expose wake handles through one owner");
+  ok &= expect(static_cast<bool>(coordinator.waitHandle()),
+               "all worker families must fan in through one owner wake event");
   ok &= expect(!presenter.activeCard() && !presenter.latestStatus(),
                "the presenter must not invent inactive task state");
   ok &= expect(!unsupportedAction,
@@ -133,6 +148,7 @@ int main() {
 
   ok &= expect(coordinator.tryStartMelodyAnalysis(
                    "clip.flac", 0, "clip.melody") &&
+                   wakeIsSignaled(coordinator) &&
                    waitUntil([&]() {
                      return melodyStarted.load(std::memory_order_acquire);
                    }),
@@ -174,6 +190,7 @@ int main() {
   ok &= expect(subtitleStart && subtitleStart->accepted &&
                    subtitleStart->feedback ==
                        "Generating subtitles (F8 to cancel)" &&
+                   wakeIsSignaled(coordinator) &&
                    waitUntil([&]() {
                      return subtitlesStarted.load(std::memory_order_acquire);
                    }) &&
@@ -208,6 +225,7 @@ int main() {
   ok &= expect(separationStart && separationStart->accepted &&
                    separationStart->feedback ==
                        "Separating audio (F8 to cancel)" &&
+                   wakeIsSignaled(coordinator) &&
                    waitUntil([&]() {
                      return separationStarted.load(std::memory_order_acquire);
                    }) &&

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "core/runtime_helpers.h"
+#include "core/wake_event.h"
 #include "playback/video/analysis/scene_analysis_job.h"
 #include "playback/video/edit/export.h"
 #include "playback/video/edit/scene_suggestion_review.h"
@@ -45,12 +46,16 @@ struct VideoEditWorkspace::Impl {
       : sourcePath(std::move(path)),
         player(playbackPlayer),
         timelinePreview(preview),
-        timelinePreviewProvider(previewProvider) {}
+        timelinePreviewProvider(previewProvider),
+        wakeEvent(),
+        exporter(wakeEvent.notifier()),
+        sceneAnalysis(wakeEvent.notifier()) {}
 
   std::filesystem::path sourcePath;
   Player& player;
   playback_video_timeline_preview::HoverModel& timelinePreview;
   playback_video_timeline_preview::Provider& timelinePreviewProvider;
+  WakeEvent wakeEvent;
   playback_video_edit::Document document;
   playback_video_edit::Selection selection;
   std::optional<SelectedCut> selectedCut;
@@ -836,6 +841,7 @@ bool VideoEditWorkspace::moveBoundary(
 VideoEditPollResult VideoEditWorkspace::poll() {
   VideoEditPollResult result;
   if (!impl_) return result;
+  result.changed = impl_->wakeEvent.consume();
   const auto appendMessage = [&](const std::string& message) {
     if (message.empty()) return;
     if (!result.message.empty()) result.message += " | ";
@@ -887,16 +893,8 @@ VideoEditPollResult VideoEditWorkspace::poll() {
   return result;
 }
 
-std::vector<NativeWaitHandle> VideoEditWorkspace::waitHandles() const {
-  std::vector<NativeWaitHandle> handles;
-  if (!impl_) return handles;
-  handles.reserve(2);
-  const auto append = [&handles](NativeWaitHandle handle) {
-    if (handle) handles.push_back(handle);
-  };
-  append(impl_->exporter.nativeWaitHandle());
-  append(impl_->sceneAnalysis.nativeWaitHandle());
-  return handles;
+NativeWaitHandle VideoEditWorkspace::waitHandle() const {
+  return impl_ ? impl_->wakeEvent.nativeWaitHandle() : NativeWaitHandle{};
 }
 
 bool VideoEditWorkspace::selectCutAt(int64_t timelineUs,

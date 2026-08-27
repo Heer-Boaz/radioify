@@ -11,18 +11,23 @@
 namespace audio_separation {
 
 struct Job::Impl {
-  explicit Impl(Operation separationOperation)
-      : operation(std::move(separationOperation)) {}
+  Impl(Operation separationOperation, WakeNotifier ownerWakeNotifier)
+      : operation(std::move(separationOperation)),
+        ownerWake(std::move(ownerWakeNotifier)) {}
 
   mutable std::mutex mutex;
   std::thread worker;
   std::atomic<bool> cancelRequested{false};
   WaitableSignal changed;
   Operation operation;
+  WakeNotifier ownerWake;
   JobSnapshot state;
   std::optional<JobSnapshot> completion;
 
-  void notifyChanged() { changed.signal(); }
+  void notifyChanged() {
+    changed.signal();
+    ownerWake.notify();
+  }
 
   void updateProgress(float fraction, std::string phase) {
     {
@@ -88,7 +93,11 @@ struct Job::Impl {
 };
 
 Job::Job(Operation operation)
-    : impl_(std::make_unique<Impl>(std::move(operation))) {}
+    : Job(std::move(operation), WakeNotifier{}) {}
+
+Job::Job(Operation operation, WakeNotifier ownerWake)
+    : impl_(std::make_unique<Impl>(std::move(operation),
+                                  std::move(ownerWake))) {}
 
 Job::~Job() { cancelAndJoin(); }
 

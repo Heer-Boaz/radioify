@@ -10,6 +10,7 @@
 
 #include "audio/separation/artifact.h"
 #include "core/native_wait_handle.h"
+#include "core/wake_event.h"
 
 namespace audio_separation {
 
@@ -54,6 +55,7 @@ class Job {
   // Uses Radioify's DirectML BandIt v2 operation.
   Job();
   explicit Job(Operation operation);
+  Job(Operation operation, WakeNotifier ownerWake);
   ~Job();
 
   Job(const Job&) = delete;

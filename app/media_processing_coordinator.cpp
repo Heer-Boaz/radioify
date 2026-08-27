@@ -10,7 +10,7 @@
 #include "audio/separation/artifact.h"
 #include "core/path_identity.h"
 #include "core/runtime_helpers.h"
-#include "core/waitable_signal.h"
+#include "core/wake_event.h"
 
 namespace media_processing {
 namespace {
@@ -34,6 +34,9 @@ class WorkerTask {
  public:
   using ProgressReporter = std::function<void(float)>;
   using Operation = std::function<TaskCompletion(const ProgressReporter&)>;
+
+  explicit WorkerTask(WakeNotifier ownerWake = {})
+      : ownerWake_(std::move(ownerWake)) {}
 
   ~WorkerTask() { join(); }
 
@@ -68,7 +71,7 @@ class WorkerTask {
         activity_.reset();
       }
     }
-    changed_.signal();
+    notifyChanged();
     return true;
   }
 
@@ -103,10 +106,8 @@ class WorkerTask {
     return completion;
   }
 
-  bool consumeChanged() { return changed_.consume(); }
-
-  NativeWaitHandle nativeWaitHandle() const {
-    return changed_.nativeWaitHandle();
+  bool consumeChanged() {
+    return changed_.exchange(false, std::memory_order_acq_rel);
   }
 
   void join() {
@@ -119,6 +120,11 @@ class WorkerTask {
   }
 
  private:
+  void notifyChanged() {
+    changed_.store(true, std::memory_order_release);
+    ownerWake_.notify();
+  }
+
   void updateProgress(float progress) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -126,7 +132,7 @@ class WorkerTask {
       activity_->progress =
           std::max(activity_->progress, std::clamp(progress, 0.0f, 1.0f));
     }
-    changed_.signal();
+    notifyChanged();
   }
 
   void run(const Operation& operation) {
@@ -158,7 +164,7 @@ class WorkerTask {
       completion_ = std::move(completion);
       activity_.reset();
     }
-    changed_.signal();
+    notifyChanged();
   }
 
   void joinFinished() {
@@ -174,7 +180,8 @@ class WorkerTask {
 
   mutable std::mutex mutex_;
   std::thread worker_;
-  WaitableSignal changed_;
+  std::atomic<bool> changed_{false};
+  WakeNotifier ownerWake_;
   std::optional<TaskActivity> activity_;
   std::optional<TaskCompletion> completion_;
 };
@@ -183,18 +190,24 @@ class WorkerTask {
 
 struct Coordinator::Impl {
   explicit Impl(Backends backends)
-      : analyzeMelody(std::move(backends.analyzeMelody)),
+      : wakeEvent(),
+        workerTask(wakeEvent.notifier()),
+        analyzeMelody(std::move(backends.analyzeMelody)),
         splitLoop(std::move(backends.splitLoop)),
-        subtitles(std::move(backends.subtitles)),
-        audioSeparation(std::move(backends.audioSeparation)),
+        subtitles(
+            std::make_unique<playback_video_transcript::GenerationJob>(
+                std::move(backends.generateSubtitles), wakeEvent.notifier())),
+        audioSeparation(std::make_unique<audio_separation::Job>(
+            std::move(backends.separateAudio), wakeEvent.notifier())),
         audioSeparationAvailable(backends.audioSeparationAvailable) {}
 
+  WakeEvent wakeEvent;
+  WorkerTask workerTask;
   MelodyOperation analyzeMelody;
   LoopSplitOperation splitLoop;
   std::unique_ptr<playback_video_transcript::GenerationJob> subtitles;
   std::unique_ptr<audio_separation::Job> audioSeparation;
   bool audioSeparationAvailable = false;
-  WorkerTask workerTask;
   bool subtitleCompletionPending = false;
   bool audioSeparationCompletionPending = false;
   std::optional<TaskCompletion> latestCompletion;
@@ -210,11 +223,9 @@ Coordinator::Coordinator(Operations operations)
         Backends backends;
         backends.analyzeMelody = std::move(operations.analyzeMelody);
         backends.splitLoop = std::move(operations.splitLoop);
-        backends.subtitles =
-            std::make_unique<playback_video_transcript::GenerationJob>(
-                std::move(operations.generateSubtitles));
-        backends.audioSeparation = std::make_unique<audio_separation::Job>(
-            std::move(operations.separateAudio));
+        backends.generateSubtitles =
+            std::move(operations.generateSubtitles);
+        backends.separateAudio = std::move(operations.separateAudio);
         backends.audioSeparationAvailable =
             operations.audioSeparationAvailable;
         return backends;
@@ -454,7 +465,8 @@ PollResult Coordinator::poll() {
   PollResult result;
   if (!impl_) return result;
 
-  result.changed = impl_->workerTask.consumeChanged();
+  result.changed = impl_->wakeEvent.consume();
+  result.changed = impl_->workerTask.consumeChanged() || result.changed;
   if (std::optional<TaskCompletion> completion =
           impl_->workerTask.takeCompletion()) {
     result.changed = true;
@@ -497,18 +509,8 @@ PollResult Coordinator::poll() {
   return result;
 }
 
-std::vector<NativeWaitHandle> Coordinator::waitHandles() const {
-  std::vector<NativeWaitHandle> handles;
-  if (!impl_) return handles;
-  const auto append = [&handles](NativeWaitHandle handle) {
-    if (handle) handles.push_back(handle);
-  };
-  append(impl_->workerTask.nativeWaitHandle());
-  if (impl_->subtitles) append(impl_->subtitles->nativeWaitHandle());
-  if (impl_->audioSeparation) {
-    append(impl_->audioSeparation->nativeWaitHandle());
-  }
-  return handles;
+NativeWaitHandle Coordinator::waitHandle() const {
+  return impl_ ? impl_->wakeEvent.nativeWaitHandle() : NativeWaitHandle{};
 }
 
 void Coordinator::shutdown() {

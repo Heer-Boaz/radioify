@@ -12,18 +12,23 @@
 namespace playback_video_transcript {
 
 struct GenerationJob::Impl {
-  explicit Impl(Operation generationOperation)
-      : operation(std::move(generationOperation)) {}
+  Impl(Operation generationOperation, WakeNotifier ownerWakeNotifier)
+      : operation(std::move(generationOperation)),
+        ownerWake(std::move(ownerWakeNotifier)) {}
 
   mutable std::mutex mutex;
   std::thread worker;
   std::atomic<bool> cancelRequested{false};
   WaitableSignal changed;
   Operation operation;
+  WakeNotifier ownerWake;
   GenerationJobSnapshot state;
   std::optional<GenerationJobSnapshot> completion;
 
-  void notifyChanged() { changed.signal(); }
+  void notifyChanged() {
+    changed.signal();
+    ownerWake.notify();
+  }
 
   void updateProgress(float fraction, std::string phase) {
     {
@@ -89,7 +94,11 @@ struct GenerationJob::Impl {
 };
 
 GenerationJob::GenerationJob(Operation operation)
-    : impl_(std::make_unique<Impl>(std::move(operation))) {}
+    : GenerationJob(std::move(operation), WakeNotifier{}) {}
+
+GenerationJob::GenerationJob(Operation operation, WakeNotifier ownerWake)
+    : impl_(std::make_unique<Impl>(std::move(operation),
+                                  std::move(ownerWake))) {}
 
 GenerationJob::~GenerationJob() { cancelAndJoin(); }
 

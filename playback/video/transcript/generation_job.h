@@ -9,6 +9,7 @@
 #include <string>
 
 #include "core/native_wait_handle.h"
+#include "core/wake_event.h"
 
 namespace playback_video_transcript {
 
@@ -61,6 +62,7 @@ class GenerationJob {
   // The operation boundary also permits another transcription backend without
   // changing lifecycle, cancellation, or UI coordination code.
   explicit GenerationJob(Operation operation);
+  GenerationJob(Operation operation, WakeNotifier ownerWake);
   ~GenerationJob();
 
   GenerationJob(const GenerationJob&) = delete;

@@ -4,6 +4,7 @@
 
 #include <cstdio>
 
+#include "core/wake_event.h"
 #include "core/waitable_signal.h"
 
 namespace {
@@ -44,6 +45,20 @@ int main() {
   ok &= expect(waitNow(signal) == WAIT_TIMEOUT,
                "clear must reset a signaled state");
   ok &= expect(!signal.consume(), "clear must clear the latched state");
+
+  WakeNotifier expiredNotifier;
+  {
+    WakeEvent event;
+    expiredNotifier = event.notifier();
+    expiredNotifier.notify();
+    ok &= expect(WaitForSingleObject(
+                     static_cast<HANDLE>(event.nativeWaitHandle().get()), 0) ==
+                     WAIT_OBJECT_0,
+                 "a producer token must wake its owner event");
+    ok &= expect(event.consume(),
+                 "only the event owner must consume a fanned-in wake");
+  }
+  expiredNotifier.notify();
 
   return ok ? 0 : 1;
 }
