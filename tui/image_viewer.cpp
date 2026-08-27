@@ -198,27 +198,27 @@ Exit run(image_viewer_sequence::Sequence sequence, ConsoleInput& input,
       }
       if (event.type == InputEvent::Type::Key ||
           event.type == InputEvent::Type::Action) {
-        if (auto shortcut = resolvePlaybackShortcutAction(
+        if (auto shortcut = resolvePlaybackAction(
                 event, kPlaybackShortcutContextGlobal |
                            kPlaybackShortcutContextShared |
                            kPlaybackShortcutContextImageViewer)) {
           switch (*shortcut) {
-            case PlaybackShortcutAction::Quit:
+            case PlaybackAction::Quit:
               return Exit::QuitRequested;
-            case PlaybackShortcutAction::CloseViewer:
+            case PlaybackAction::CloseViewer:
               return Exit::Closed;
-            case PlaybackShortcutAction::Previous:
+            case PlaybackAction::Previous:
               if (navigateImage(image_viewer_sequence::Direction::Previous)) {
                 renderFrame();
               }
               continue;
-            case PlaybackShortcutAction::Next:
+            case PlaybackAction::Next:
               if (navigateImage(image_viewer_sequence::Direction::Next)) {
                 renderFrame();
               }
               continue;
-            case PlaybackShortcutAction::SeekBackward:
-            case PlaybackShortcutAction::SeekForward:
+            case PlaybackAction::SeekBackward:
+            case PlaybackAction::SeekForward:
               continue;
             default:
               break;

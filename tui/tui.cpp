@@ -654,12 +654,6 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
     return accepted;
   };
-  auto currentPlaybackFile = [&]() {
-    const PlaybackPresentationModel presentation = playbackPresenter.model();
-    return presentation.currentTarget
-               ? playbackTargetFile(*presentation.currentTarget)
-               : std::filesystem::path{};
-  };
   auto buildPlaybackLabel =
       [&](const std::optional<PlaybackTarget>& target) {
     const std::filesystem::path nowPlaying =
@@ -803,7 +797,6 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       markDirty();
     }
   };
-  callbacks.onQuit = [&]() { mediaCoordinator.requestQuit(); };
   callbacks.onActivateEntry = [&](const BrowserEntry& entry) {
     OptionsBrowserResult optionsResult =
         optionsBrowserActivateEntry(browser, entry, audioPlayback);
@@ -854,36 +847,17 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     renderFile(file);
     didRender = true;
   };
-  callbacks.onPlay = [&]() {
-    handlePlaybackControlCommand(PlaybackControlCommand::Play);
-  };
-  callbacks.onPause = [&]() {
-    handlePlaybackControlCommand(PlaybackControlCommand::Pause);
-  };
-  callbacks.onTogglePause = [&]() {
-    handlePlaybackControlCommand(PlaybackControlCommand::TogglePause);
-  };
-  callbacks.onStopPlayback = [&]() {
-    handlePlaybackControlCommand(PlaybackControlCommand::Stop);
-  };
-  callbacks.onCurrentPlaybackFile = [&]() { return currentPlaybackFile(); };
-  callbacks.onPlayPrevious = [&]() {
-    handlePlaybackControlCommand(PlaybackControlCommand::Previous);
-  };
-  callbacks.onPlayNext = [&]() {
-    handlePlaybackControlCommand(PlaybackControlCommand::Next);
-  };
-  callbacks.onToggleRadio = [&]() {
+  auto toggleRadio = [&]() {
     audioPlayback.cycleRadioFilter();
     markDirty();
   };
-  callbacks.onToggle50Hz = [&]() {
+  auto toggle50Hz = [&]() {
     if (audioPlayback.supports50HzToggle()) {
       audioPlayback.toggle50Hz();
       markDirty();
     }
   };
-  callbacks.onTogglePitchMonitor = [&]() {
+  auto togglePitchMonitor = [&]() {
     const PlaybackPresentationModel presentation = playbackPresenter.model();
     const AudioPlaybackSnapshot& audio = presentation.audio;
     if (!melodyVisualization.active() && !audio.source && !audio.ready) {
@@ -898,7 +872,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     dismissFileContextMenu();
     markLayoutDirty();
   };
-  callbacks.onToggleOptions = [&]() {
+  auto toggleOptions = [&]() {
     if (optionsBrowserIsActive(browser)) {
       browserNavigator.closeContext();
       return;
@@ -907,18 +881,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       browserNavigator.navigate(optionsBrowserOpenLocation(*subject));
     }
   };
-  callbacks.onSeekBy = [&](int direction) {
-    audioPlayback.seekBy(direction);
-    markDirty();
-  };
-  callbacks.onSeekToRatio = [&](double ratio) {
-    if (mediaCoordinator.seekToRatio(ratio)) markDirty();
-  };
-  callbacks.onAdjustVolume = [&](float delta) {
-    audioPlayback.adjustVolume(delta);
-    markDirty();
-  };
-  callbacks.onToggleWindow = [&]() {
+  auto toggleWindowPresentation = [&]() {
     const PlaybackPresentationModel presentation = playbackPresenter.model();
     if (presentation.control && presentation.control->isVideo) {
       if (mediaCoordinator.toggleWindowPresentation()) markLayoutDirty();
@@ -935,26 +898,116 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     showAudioPictureInPictureOpenError();
     markDirty();
   };
-  callbacks.onTogglePictureInPicture = [&]() {
+  auto togglePictureInPicture = [&]() {
     const PlaybackPresentationModel presentation = playbackPresenter.model();
     if (presentation.control && presentation.control->isVideo) {
       if (mediaCoordinator.togglePictureInPicture()) markLayoutDirty();
       return;
     }
-    if (callbacks.onToggleWindow) callbacks.onToggleWindow();
+    toggleWindowPresentation();
   };
-  callbacks.onToggleFullscreen = [&]() {
-    if (mediaCoordinator.toggleFullscreen()) markLayoutDirty();
-  };
-  callbacks.onPlaybackContextShortcut = [&](PlaybackShortcutAction action) {
+  auto dispatchPlaybackShortcut = [&](PlaybackAction action) {
     switch (action) {
-      case PlaybackShortcutAction::DismissPictureInPicture:
-        if (callbacks.onTogglePictureInPicture) {
-          callbacks.onTogglePictureInPicture();
-        }
+      case PlaybackAction::Quit:
+        mediaCoordinator.requestQuit();
         break;
-      default:
+      case PlaybackAction::Play:
+        handlePlaybackControlCommand(PlaybackControlCommand::Play);
         break;
+      case PlaybackAction::Pause:
+        handlePlaybackControlCommand(PlaybackControlCommand::Pause);
+        break;
+      case PlaybackAction::TogglePause:
+        handlePlaybackControlCommand(PlaybackControlCommand::TogglePause);
+        break;
+      case PlaybackAction::Stop:
+        handlePlaybackControlCommand(PlaybackControlCommand::Stop);
+        break;
+      case PlaybackAction::Previous:
+        handlePlaybackControlCommand(PlaybackControlCommand::Previous);
+        break;
+      case PlaybackAction::Next:
+        handlePlaybackControlCommand(PlaybackControlCommand::Next);
+        break;
+      case PlaybackAction::ToggleWindow:
+        toggleWindowPresentation();
+        break;
+      case PlaybackAction::TogglePictureInPicture:
+      case PlaybackAction::DismissPictureInPicture:
+        togglePictureInPicture();
+        break;
+      case PlaybackAction::ToggleFullscreen:
+        if (mediaCoordinator.toggleFullscreen()) markLayoutDirty();
+        break;
+      case PlaybackAction::ToggleRadio:
+        toggleRadio();
+        break;
+      case PlaybackAction::Toggle50Hz:
+        toggle50Hz();
+        break;
+      case PlaybackAction::ToggleOptions:
+        toggleOptions();
+        break;
+      case PlaybackAction::TogglePitchMonitor:
+        togglePitchMonitor();
+        break;
+      case PlaybackAction::SeekBackward:
+        audioPlayback.seekBy(-1);
+        markDirty();
+        break;
+      case PlaybackAction::SeekForward:
+        audioPlayback.seekBy(1);
+        markDirty();
+        break;
+      case PlaybackAction::VolumeUp:
+        audioPlayback.adjustVolume(0.10f);
+        markDirty();
+        break;
+      case PlaybackAction::VolumeDown:
+        audioPlayback.adjustVolume(-0.10f);
+        markDirty();
+        break;
+      case PlaybackAction::ToggleSubtitles:
+      case PlaybackAction::ToggleAudioTrack:
+      case PlaybackAction::PreviousFrame:
+      case PlaybackAction::NextFrame:
+      case PlaybackAction::CopyVideoFrame:
+      case PlaybackAction::OpenVideoEditor:
+      case PlaybackAction::RequestCloseVideoEditor:
+      case PlaybackAction::NavigateBackInVideoEditor:
+      case PlaybackAction::ConfirmVideoEditPrompt:
+      case PlaybackAction::SetVideoEditIn:
+      case PlaybackAction::SetVideoEditOut:
+      case PlaybackAction::ClearVideoEditIn:
+      case PlaybackAction::ClearVideoEditOut:
+      case PlaybackAction::ClearVideoEditInAndOut:
+      case PlaybackAction::RippleDeleteVideoEditSelection:
+      case PlaybackAction::TrimVideoEditSelection:
+      case PlaybackAction::UndoVideoEdit:
+      case PlaybackAction::RedoVideoEdit:
+      case PlaybackAction::ResetVideoEdits:
+      case PlaybackAction::ExportVideoEdits:
+      case PlaybackAction::DiscardVideoEditsAndExit:
+      case PlaybackAction::CancelVideoEditPrompt:
+      case PlaybackAction::ExitPlaybackSession:
+      case PlaybackAction::CloseViewer:
+        break;
+    }
+  };
+  callbacks.dispatchPlaybackCommand = [&](playback_input::Command command) {
+    if (const auto* action = std::get_if<PlaybackAction>(&command)) {
+      dispatchPlaybackShortcut(*action);
+      return;
+    }
+    if (const auto* seek =
+            std::get_if<playback_input::SeekToRatio>(&command)) {
+      if (mediaCoordinator.seekToRatio(seek->ratio)) markDirty();
+      return;
+    }
+    const auto* volume = std::get_if<playback_input::AdjustVolume>(&command);
+    if (volume) {
+      audioPlayback.adjustVolume(volume->delta);
+      markDirty();
     }
   };
 
@@ -976,36 +1029,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
                                  buildAudioPictureInPictureContext());
   };
   AudioPictureInPictureWindow::Callbacks audioPictureInPictureCallbacks;
-  audioPictureInPictureCallbacks.onQuit = [&]() {
-    if (callbacks.onQuit) callbacks.onQuit();
-  };
-  audioPictureInPictureCallbacks.onTogglePause = [&]() {
-    if (callbacks.onTogglePause) callbacks.onTogglePause();
-  };
-  audioPictureInPictureCallbacks.onStopPlayback = [&]() {
-    if (callbacks.onStopPlayback) callbacks.onStopPlayback();
-  };
-  audioPictureInPictureCallbacks.onPlayPrevious = [&]() {
-    if (callbacks.onPlayPrevious) callbacks.onPlayPrevious();
-  };
-  audioPictureInPictureCallbacks.onPlayNext = [&]() {
-    if (callbacks.onPlayNext) callbacks.onPlayNext();
-  };
-  audioPictureInPictureCallbacks.onToggleRadio = [&]() {
-    if (callbacks.onToggleRadio) callbacks.onToggleRadio();
-  };
-  audioPictureInPictureCallbacks.onToggle50Hz = [&]() {
-    if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
-  };
-  audioPictureInPictureCallbacks.onSeekBy = [&](int direction) {
-    if (callbacks.onSeekBy) callbacks.onSeekBy(direction);
-  };
-  audioPictureInPictureCallbacks.onSeekToRatio = [&](double ratio) {
-    if (callbacks.onSeekToRatio) callbacks.onSeekToRatio(ratio);
-  };
-  audioPictureInPictureCallbacks.onAdjustVolume = [&](float delta) {
-    if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(delta);
-  };
+  audioPictureInPictureCallbacks.dispatchPlaybackCommand =
+      callbacks.dispatchPlaybackCommand;
   audioPictureInPictureCallbacks.onPlayFiles =
       [&](const std::vector<std::filesystem::path>& files) {
     WindowPlacementState sourcePlacement =
@@ -1058,7 +1083,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         handlePlaybackControlCommand(command.playbackCommand);
         break;
       case PlaybackNotificationAreaCommand::Kind::Quit:
-        if (callbacks.onQuit) callbacks.onQuit();
+        dispatchPlaybackShortcut(PlaybackAction::Quit);
         break;
     }
   };
@@ -1089,37 +1114,30 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         presentation.control && presentation.control->isVideo;
     std::vector<tui_command_palette::Command> commands;
     commands.emplace_back("Play/Pause", "Space", [&]() {
-      if (callbacks.onTogglePause) {
-        callbacks.onTogglePause();
-      }
+      dispatchPlaybackShortcut(PlaybackAction::TogglePause);
     });
     if (videoActive) {
       commands.emplace_back("Window mode (framebuffer)", "Ctrl+W", [&]() {
-        if (callbacks.onToggleWindow) callbacks.onToggleWindow();
+        dispatchPlaybackShortcut(PlaybackAction::ToggleWindow);
       });
       commands.emplace_back("Fullscreen", "Alt+Enter", [&]() {
-        if (callbacks.onToggleFullscreen) {
-          callbacks.onToggleFullscreen();
-        }
+        dispatchPlaybackShortcut(PlaybackAction::ToggleFullscreen);
       });
     }
     if (videoActive || audioPictureInPicture.isOpen() ||
         audio.source || audio.ready) {
       commands.emplace_back("Picture-in-Picture", "Ctrl+P", [&]() {
-        if (callbacks.onTogglePictureInPicture) {
-          callbacks.onTogglePictureInPicture();
-        }
+        dispatchPlaybackShortcut(
+            PlaybackAction::TogglePictureInPicture);
       });
     }
     commands.emplace_back("Cycle Radio Filter", "R", [&]() {
-      audioPlayback.cycleRadioFilter();
-      markDirty();
+      dispatchPlaybackShortcut(PlaybackAction::ToggleRadio);
     });
     const bool show50Hz = audio.supports50HzToggle;
     if (show50Hz) {
       commands.emplace_back("50Hz", "H", [&]() {
-        audioPlayback.toggle50Hz();
-        markDirty();
+        dispatchPlaybackShortcut(PlaybackAction::Toggle50Hz);
       });
     }
     if (melodyVisualization.active() || audio.source || audio.ready) {
@@ -1127,9 +1145,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           melodyVisualization.active() ? "Hide Pitch Monitor"
                                        : "Show Pitch Monitor",
           "M", [&]() {
-            if (callbacks.onTogglePitchMonitor) {
-              callbacks.onTogglePitchMonitor();
-            }
+            dispatchPlaybackShortcut(
+                PlaybackAction::TogglePitchMonitor);
           });
     }
     if (!melodyVisualization.active()) {
@@ -1149,9 +1166,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           selectedOptionsSubject().has_value();
       if (optionsBrowserIsActive(browser) || selectedEntryHasOptions) {
         commands.emplace_back("Options", "O", [&]() {
-          if (callbacks.onToggleOptions) {
-            callbacks.onToggleOptions();
-          }
+          dispatchPlaybackShortcut(PlaybackAction::ToggleOptions);
         });
       }
       if (presentation.currentTarget) {
@@ -1164,7 +1179,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       }
     }
     commands.emplace_back("Quit", "Q", [&]() {
-      if (callbacks.onQuit) callbacks.onQuit();
+      dispatchPlaybackShortcut(PlaybackAction::Quit);
     });
     return commands;
   };
@@ -1517,7 +1532,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           !browser.filterActive && !browser.pathSearchActive &&
           (ev.type == InputEvent::Type::Key ||
            ev.type == InputEvent::Type::Action)) {
-        const std::optional<PlaybackShortcutAction> action =
+        const std::optional<PlaybackAction> action =
             resolveLiveBrowserVideoShortcut(ev);
         if (action && mediaCoordinator.handleVideoInputEvent(ev)) {
           markDirty(UiDirtyFlags::Async);

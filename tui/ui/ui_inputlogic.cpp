@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <optional>
+#include <utility>
 
 #include "browser_navigation.h"
 #include "browser_grid_index.h"
@@ -15,6 +16,14 @@
 #include "ui_helpers.h"
 
 namespace {
+
+void dispatchPlaybackCommand(const InputCallbacks& callbacks,
+                             playback_input::Command command) {
+  if (callbacks.dispatchPlaybackCommand) {
+    callbacks.dispatchPlaybackCommand(std::move(command));
+  }
+}
+
 bool isSelectableEntry(const BrowserEntry& entry) {
   return entry.isSelectable();
 }
@@ -500,8 +509,11 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
     bool alt = (key.control & altMask) != 0;
 
     if (ctrl && (key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q')) {
-      if (callbacks.onQuit) callbacks.onQuit();
-      else running = false;
+      if (callbacks.dispatchPlaybackCommand) {
+        dispatchPlaybackCommand(callbacks, PlaybackAction::Quit);
+      } else {
+        running = false;
+      }
       dirty = true;
       return;
     }
@@ -590,9 +602,9 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       return;
     }
     if (!ctrl && !alt &&
-        (key.vk == 'M' || key.ch == 'm' || key.ch == 'M') &&
-        callbacks.onTogglePitchMonitor) {
-      callbacks.onTogglePitchMonitor();
+        (key.vk == 'M' || key.ch == 'm' || key.ch == 'M')) {
+      dispatchPlaybackCommand(callbacks,
+                              PlaybackAction::TogglePitchMonitor);
       dirty = true;
       return;
     }
@@ -619,8 +631,8 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       return;
     }
     if (key.vk == VK_ESCAPE) {
-      if (callbacks.onStopPlayback) {
-        callbacks.onStopPlayback();
+      if (callbacks.dispatchPlaybackCommand) {
+        dispatchPlaybackCommand(callbacks, PlaybackAction::Stop);
         dirty = true;
       }
       return;
@@ -788,35 +800,37 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
     auto invokeAction = [&](ActionStripItem action) {
       switch (action) {
         case ActionStripItem::Previous:
-          if (callbacks.onPlayPrevious) callbacks.onPlayPrevious();
+          dispatchPlaybackCommand(callbacks, PlaybackAction::Previous);
           break;
         case ActionStripItem::PlayPause:
-          if (callbacks.onTogglePause) callbacks.onTogglePause();
+          dispatchPlaybackCommand(callbacks,
+                                  PlaybackAction::TogglePause);
           break;
         case ActionStripItem::Next:
-          if (callbacks.onPlayNext) callbacks.onPlayNext();
+          dispatchPlaybackCommand(callbacks, PlaybackAction::Next);
           break;
         case ActionStripItem::Radio:
-          if (callbacks.onToggleRadio) callbacks.onToggleRadio();
+          dispatchPlaybackCommand(callbacks,
+                                  PlaybackAction::ToggleRadio);
           break;
         case ActionStripItem::Hz50:
-          if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
+          dispatchPlaybackCommand(callbacks,
+                                  PlaybackAction::Toggle50Hz);
           break;
         case ActionStripItem::PitchMonitor:
-          if (callbacks.onTogglePitchMonitor) {
-            callbacks.onTogglePitchMonitor();
-          }
+          dispatchPlaybackCommand(callbacks,
+                                  PlaybackAction::TogglePitchMonitor);
           break;
         case ActionStripItem::View:
           browser.viewMode = nextViewMode(browser.viewMode);
           break;
         case ActionStripItem::Options:
-          if (callbacks.onToggleOptions) callbacks.onToggleOptions();
+          dispatchPlaybackCommand(callbacks,
+                                  PlaybackAction::ToggleOptions);
           break;
         case ActionStripItem::PictureInPicture:
-          if (callbacks.onTogglePictureInPicture) {
-            callbacks.onTogglePictureInPicture();
-          }
+          dispatchPlaybackCommand(
+              callbacks, PlaybackAction::TogglePictureInPicture);
           break;
         }
       dirty = true;
@@ -866,7 +880,8 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
             mouse.hasPixelPosition ? mouse.pixelY : mouse.pos.Y;
         if (const auto hit = playback_overlay::progressBarHitAt(
                 progressRegion, pointerX, pointerY)) {
-          if (callbacks.onSeekToRatio) callbacks.onSeekToRatio(hit->ratio);
+          dispatchPlaybackCommand(callbacks,
+                                  playback_input::SeekToRatio{hit->ratio});
           dirty = true;
           return;
         }
@@ -923,105 +938,18 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
 PlaybackInputResult handlePlaybackInput(const InputEvent& ev,
                                         const InputCallbacks& callbacks,
                                         uint32_t shortcutContexts) {
-  if (auto action = resolvePlaybackShortcutAction(ev, shortcutContexts)) {
-    switch (*action) {
-      case PlaybackShortcutAction::Quit:
-        if (callbacks.onQuit) callbacks.onQuit();
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::Play:
-        if (callbacks.onPlay) callbacks.onPlay();
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::Pause:
-        if (callbacks.onPause) callbacks.onPause();
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::TogglePause:
-        if (callbacks.onTogglePause) callbacks.onTogglePause();
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::Stop:
-        if (callbacks.onStopPlayback) callbacks.onStopPlayback();
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::Previous:
-        if (callbacks.onPlayPrevious) callbacks.onPlayPrevious();
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::Next:
-        if (callbacks.onPlayNext) callbacks.onPlayNext();
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::ToggleWindow:
-        if (callbacks.onToggleWindow) callbacks.onToggleWindow();
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::TogglePictureInPicture:
-        if (callbacks.onTogglePictureInPicture) {
-          callbacks.onTogglePictureInPicture();
-        }
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::ToggleFullscreen:
-        if (callbacks.onToggleFullscreen) callbacks.onToggleFullscreen();
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::ToggleRadio:
-        if (callbacks.onToggleRadio) callbacks.onToggleRadio();
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::Toggle50Hz:
-        if (callbacks.onToggle50Hz) callbacks.onToggle50Hz();
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::ToggleSubtitles:
-        if (callbacks.onToggleSubtitles) callbacks.onToggleSubtitles();
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::ToggleAudioTrack:
-        if (callbacks.onToggleAudioTrack) callbacks.onToggleAudioTrack();
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::ToggleOptions:
-        if (callbacks.onToggleOptions) callbacks.onToggleOptions();
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::SeekBackward:
-        if (callbacks.onSeekBy) callbacks.onSeekBy(-1);
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::SeekForward:
-        if (callbacks.onSeekBy) callbacks.onSeekBy(1);
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::PreviousFrame:
-        if (callbacks.onPreviousFrame) callbacks.onPreviousFrame();
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::NextFrame:
-        if (callbacks.onNextFrame) callbacks.onNextFrame();
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::CopyVideoFrame:
-        if (callbacks.onCopyVideoFrame) callbacks.onCopyVideoFrame();
-        return PlaybackInputResult::HandledWithoutOverlayRefresh;
-      case PlaybackShortcutAction::VolumeUp:
-        if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(0.10f);
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::VolumeDown:
-        if (callbacks.onAdjustVolume) callbacks.onAdjustVolume(-0.10f);
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::OpenVideoEditor:
-      case PlaybackShortcutAction::RequestCloseVideoEditor:
-      case PlaybackShortcutAction::NavigateBackInVideoEditor:
-      case PlaybackShortcutAction::ConfirmVideoEditPrompt:
-      case PlaybackShortcutAction::SetVideoEditIn:
-      case PlaybackShortcutAction::SetVideoEditOut:
-      case PlaybackShortcutAction::ClearVideoEditIn:
-      case PlaybackShortcutAction::ClearVideoEditOut:
-      case PlaybackShortcutAction::ClearVideoEditInAndOut:
-      case PlaybackShortcutAction::RippleDeleteVideoEditSelection:
-      case PlaybackShortcutAction::TrimVideoEditSelection:
-      case PlaybackShortcutAction::UndoVideoEdit:
-      case PlaybackShortcutAction::RedoVideoEdit:
-      case PlaybackShortcutAction::ResetVideoEdits:
-      case PlaybackShortcutAction::ExportVideoEdits:
-      case PlaybackShortcutAction::DiscardVideoEditsAndExit:
-      case PlaybackShortcutAction::CancelVideoEditPrompt:
-        if (callbacks.onPlaybackContextShortcut) {
-          callbacks.onPlaybackContextShortcut(*action);
-        }
-        return PlaybackInputResult::Handled;
-      case PlaybackShortcutAction::ExitPlaybackSession:
-      case PlaybackShortcutAction::DismissPictureInPicture:
-      case PlaybackShortcutAction::CloseViewer:
-        if (callbacks.onPlaybackContextShortcut) {
-          callbacks.onPlaybackContextShortcut(*action);
-        }
-        return PlaybackInputResult::HandledWithoutOverlayRefresh;
-    }
+  const std::optional<PlaybackAction> action =
+      resolvePlaybackAction(ev, shortcutContexts);
+  if (!action) return PlaybackInputResult::Ignored;
+
+  dispatchPlaybackCommand(callbacks, *action);
+  switch (*action) {
+    case PlaybackAction::CopyVideoFrame:
+    case PlaybackAction::ExitPlaybackSession:
+    case PlaybackAction::DismissPictureInPicture:
+    case PlaybackAction::CloseViewer:
+      return PlaybackInputResult::HandledWithoutOverlayRefresh;
+    default:
+      return PlaybackInputResult::Handled;
   }
-  return PlaybackInputResult::Ignored;
 }

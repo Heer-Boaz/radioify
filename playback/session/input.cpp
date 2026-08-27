@@ -425,77 +425,114 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
     }
   }
   InputCallbacks cb;
-  cb.onQuit = [&]() { requestPlaybackExit(signals, true); };
-  cb.onPlay = [&]() {
-    setPlaybackPaused(view, signals, seekState, false);
-  };
-  cb.onPause = [&]() {
-    setPlaybackPaused(view, signals, seekState, true);
-  };
-  cb.onTogglePause = [&]() {
-    setPlaybackPaused(view, signals, seekState, pauseRequestedByToggle(view));
-  };
-  cb.onStopPlayback = [&]() { requestPlaybackExit(signals, false); };
-  cb.onPlayPrevious = [&]() {
-    playback_session_handoff::requestTransportHandoff(
-        view, signals, PlaybackTransportCommand::Previous);
-  };
-  cb.onPlayNext = [&]() {
-    playback_session_handoff::requestTransportHandoff(
-        view, signals, PlaybackTransportCommand::Next);
-  };
-  cb.onToggleWindow = [&]() { toggleRequestedLayout(view, signals); };
-  cb.onTogglePictureInPicture = [&]() {
-    togglePictureInPicture(view, signals);
-  };
-  cb.onToggleFullscreen = [&]() { signals.toggleFullscreen(); };
-  cb.onToggleRadio = [&]() { cycleRadioFilter(view); };
-  cb.onToggle50Hz = [&]() { toggle50Hz(view); };
-  cb.onToggleSubtitles = [&]() { toggleSubtitles(view); };
-  cb.onToggleAudioTrack = [&]() { toggleAudioTrack(view); };
-  cb.onPlaybackContextShortcut = [&](PlaybackShortcutAction action) {
-    if (const auto command = videoEditCommandForShortcut(action)) {
+  cb.dispatchPlaybackCommand = [&](playback_input::Command command) {
+    const auto* action = std::get_if<PlaybackAction>(&command);
+    if (!action) {
+      if (const auto* volume = std::get_if<playback_input::AdjustVolume>(
+              &command)) {
+        audioAdjustVolume(volume->delta);
+      }
+      return;
+    }
+    if (const auto command = videoEditCommandForShortcut(*action)) {
       if (signals.executeVideoEditCommand) {
         signals.executeVideoEditCommand(*command);
       }
       return;
     }
-    switch (action) {
-      case PlaybackShortcutAction::DismissPictureInPicture:
-        togglePictureInPicture(view, signals);
+    switch (*action) {
+      case PlaybackAction::Quit:
+        requestPlaybackExit(signals, true);
         break;
-      case PlaybackShortcutAction::NavigateBackInVideoEditor:
-        if (signals.navigateBack) signals.navigateBack();
+      case PlaybackAction::Play:
+        setPlaybackPaused(view, signals, seekState, false);
         break;
-      case PlaybackShortcutAction::ExitPlaybackSession:
+      case PlaybackAction::Pause:
+        setPlaybackPaused(view, signals, seekState, true);
+        break;
+      case PlaybackAction::TogglePause:
+        setPlaybackPaused(view, signals, seekState,
+                          pauseRequestedByToggle(view));
+        break;
+      case PlaybackAction::Stop:
         requestPlaybackExit(signals, false);
         break;
-      case PlaybackShortcutAction::DiscardVideoEditsAndExit:
+      case PlaybackAction::Previous:
+        playback_session_handoff::requestTransportHandoff(
+            view, signals, PlaybackTransportCommand::Previous);
+        break;
+      case PlaybackAction::Next:
+        playback_session_handoff::requestTransportHandoff(
+            view, signals, PlaybackTransportCommand::Next);
+        break;
+      case PlaybackAction::ToggleWindow:
+        toggleRequestedLayout(view, signals);
+        break;
+      case PlaybackAction::TogglePictureInPicture:
+      case PlaybackAction::DismissPictureInPicture:
+        togglePictureInPicture(view, signals);
+        break;
+      case PlaybackAction::ToggleFullscreen:
+        if (signals.toggleFullscreen) signals.toggleFullscreen();
+        break;
+      case PlaybackAction::ToggleRadio:
+        cycleRadioFilter(view);
+        break;
+      case PlaybackAction::Toggle50Hz:
+        toggle50Hz(view);
+        break;
+      case PlaybackAction::ToggleSubtitles:
+        toggleSubtitles(view);
+        break;
+      case PlaybackAction::ToggleAudioTrack:
+        toggleAudioTrack(view);
+        break;
+      case PlaybackAction::SeekBackward:
+        sendRelativeSeekRequest(view, signals, seekState, -5000000);
+        break;
+      case PlaybackAction::SeekForward:
+        sendRelativeSeekRequest(view, signals, seekState, 5000000);
+        break;
+      case PlaybackAction::PreviousFrame:
+        requestFrameStep(view, signals, seekState,
+                         playback_video_frame_step::Direction::Previous);
+        break;
+      case PlaybackAction::NextFrame:
+        requestFrameStep(view, signals, seekState,
+                         playback_video_frame_step::Direction::Next);
+        break;
+      case PlaybackAction::CopyVideoFrame:
+        if (signals.copyCurrentVideoFrameToClipboard) {
+          signals.copyCurrentVideoFrameToClipboard();
+        }
+        break;
+      case PlaybackAction::VolumeUp:
+        audioAdjustVolume(0.10f);
+        break;
+      case PlaybackAction::VolumeDown:
+        audioAdjustVolume(-0.10f);
+        break;
+      case PlaybackAction::NavigateBackInVideoEditor:
+        if (signals.navigateBack) signals.navigateBack();
+        break;
+      case PlaybackAction::ExitPlaybackSession:
+        requestPlaybackExit(signals, false);
+        break;
+      case PlaybackAction::DiscardVideoEditsAndExit:
         if (signals.confirmPendingExit) {
           signals.confirmPendingExit();
         }
         break;
-      case PlaybackShortcutAction::CancelVideoEditPrompt:
+      case PlaybackAction::CancelVideoEditPrompt:
         if (signals.navigateBack) signals.navigateBack();
         break;
+      case PlaybackAction::ToggleOptions:
+      case PlaybackAction::TogglePitchMonitor:
+      case PlaybackAction::CloseViewer:
       default:
         break;
     }
   };
-  cb.onSeekBy = [&](int dir) {
-    sendRelativeSeekRequest(view, signals, seekState,
-                            static_cast<int64_t>(dir) * 5000000);
-  };
-  cb.onPreviousFrame = [&]() {
-    requestFrameStep(view, signals, seekState,
-                     playback_video_frame_step::Direction::Previous);
-  };
-  cb.onNextFrame = [&]() {
-    requestFrameStep(view, signals, seekState,
-                     playback_video_frame_step::Direction::Next);
-  };
-  cb.onCopyVideoFrame = signals.copyCurrentVideoFrameToClipboard;
-  cb.onAdjustVolume = [&](float delta) { audioAdjustVolume(delta); };
 
   const playback_video_edit::Prompt editPrompt =
       signals.videoEditPrompt ? signals.videoEditPrompt()

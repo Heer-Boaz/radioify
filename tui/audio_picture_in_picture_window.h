@@ -12,6 +12,7 @@
 #include "consolescreen.h"
 #include "gpu_text_grid.h"
 #include "playback/framebuffer/window_presentation.h"
+#include "playback/input/command.h"
 #include "playback/overlay/overlay.h"
 #include "playback/target.h"
 #include "playback/video/framebuffer/window/window.h"
@@ -37,16 +38,7 @@ class AudioPictureInPictureWindow {
   };
 
   struct Callbacks {
-    std::function<void()> onQuit;
-    std::function<void()> onTogglePause;
-    std::function<void()> onStopPlayback;
-    std::function<void()> onPlayPrevious;
-    std::function<void()> onPlayNext;
-    std::function<void()> onToggleRadio;
-    std::function<void()> onToggle50Hz;
-    std::function<void(int)> onSeekBy;
-    std::function<void(double)> onSeekToRatio;
-    std::function<void(float)> onAdjustVolume;
+    std::function<void(playback_input::Command)> dispatchPlaybackCommand;
     std::function<bool(const std::vector<std::filesystem::path>&)> onPlayFiles;
     std::function<void()> onClose;
   };

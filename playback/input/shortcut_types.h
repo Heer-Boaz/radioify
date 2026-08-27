@@ -50,7 +50,7 @@ inline constexpr uint32_t kPlaybackShortcutContextAll =
      kPlaybackShortcutContextVideoEditLeaveConfirmation |
      kPlaybackShortcutContextVideoEditDiscardConfirmation;
 
-enum class PlaybackShortcutAction : uint8_t {
+enum class PlaybackAction : uint8_t {
   Quit,
   Play,
   Pause,
@@ -65,6 +65,7 @@ enum class PlaybackShortcutAction : uint8_t {
   ToggleSubtitles,
   ToggleAudioTrack,
   ToggleOptions,
+  TogglePitchMonitor,
   SeekBackward,
   SeekForward,
   PreviousFrame,

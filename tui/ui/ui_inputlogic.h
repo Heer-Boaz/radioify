@@ -9,6 +9,7 @@
 #include "browser_action_strip.h"
 #include "browser_model.h"
 #include "input_event.h"
+#include "playback/input/command.h"
 #include "playback/input/shortcut_types.h"
 
 namespace browser_input {
@@ -33,31 +34,8 @@ class EntryClickTracker {
 }  // namespace browser_input
 
 struct InputCallbacks {
-  std::function<void()> onQuit;
+  std::function<void(playback_input::Command)> dispatchPlaybackCommand;
   std::function<void()> onResize;
-  std::function<void()> onStopPlayback;
-  std::function<std::filesystem::path()> onCurrentPlaybackFile;
-  std::function<void()> onPlay;
-  std::function<void()> onPause;
-  std::function<void()> onTogglePause;
-  std::function<void()> onPlayPrevious;
-  std::function<void()> onPlayNext;
-  std::function<void()> onToggleWindow;
-  std::function<void()> onTogglePictureInPicture;
-  std::function<void()> onToggleFullscreen;
-  std::function<void()> onToggleRadio;
-  std::function<void()> onToggle50Hz;
-  std::function<void()> onTogglePitchMonitor;
-  std::function<void()> onToggleSubtitles;
-  std::function<void()> onToggleAudioTrack;
-  std::function<void()> onToggleOptions;
-  std::function<void(PlaybackShortcutAction)> onPlaybackContextShortcut;
-  std::function<void(int)> onSeekBy;
-  std::function<void()> onPreviousFrame;
-  std::function<void()> onNextFrame;
-  std::function<void()> onCopyVideoFrame;
-  std::function<void(double)> onSeekToRatio;
-  std::function<void(float)> onAdjustVolume;
   std::function<bool(const BrowserEntry&)> onActivateEntry;
   std::function<bool(const std::vector<std::filesystem::path>&)> onPlayFiles;
   std::function<void(const BrowserEntry&, int, int)> onOpenFileContextMenu;

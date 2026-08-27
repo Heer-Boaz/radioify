@@ -341,36 +341,21 @@ void AudioPictureInPictureWindow::handleInput(const InputEvent& ev,
 
   if (ev.type == InputEvent::Type::Key) {
     InputCallbacks playbackCallbacks;
-    playbackCallbacks.onQuit = callbacks.onQuit;
-    playbackCallbacks.onTogglePause = callbacks.onTogglePause;
-    playbackCallbacks.onStopPlayback = callbacks.onStopPlayback;
-    playbackCallbacks.onPlayPrevious = callbacks.onPlayPrevious;
-    playbackCallbacks.onPlayNext = callbacks.onPlayNext;
-    playbackCallbacks.onToggleWindow = [&]() {
-      close();
-      if (callbacks.onClose) callbacks.onClose();
-    };
-    playbackCallbacks.onTogglePictureInPicture =
-        playbackCallbacks.onToggleWindow;
-    playbackCallbacks.onToggleRadio = callbacks.onToggleRadio;
-    playbackCallbacks.onToggle50Hz = callbacks.onToggle50Hz;
-    playbackCallbacks.onSeekBy = [&](int direction) {
-      if (callbacks.onSeekBy) {
-        callbacks.onSeekBy(direction);
+    playbackCallbacks.dispatchPlaybackCommand =
+        [&](playback_input::Command command) {
+      if (const auto* action = std::get_if<PlaybackAction>(&command)) {
+        if (*action == PlaybackAction::ToggleWindow ||
+            *action == PlaybackAction::TogglePictureInPicture ||
+            *action == PlaybackAction::DismissPictureInPicture) {
+          close();
+          if (callbacks.onClose) callbacks.onClose();
+          return;
+        }
+      }
+      if (callbacks.dispatchPlaybackCommand) {
+        callbacks.dispatchPlaybackCommand(std::move(command));
       }
     };
-    playbackCallbacks.onAdjustVolume = callbacks.onAdjustVolume;
-    playbackCallbacks.onPlaybackContextShortcut =
-        [&](PlaybackShortcutAction action) {
-          switch (action) {
-            case PlaybackShortcutAction::DismissPictureInPicture:
-              close();
-              if (callbacks.onClose) callbacks.onClose();
-              break;
-            default:
-              break;
-          }
-        };
 
     const uint32_t shortcutContexts = kPlaybackShortcutContextShared |
                       kPlaybackShortcutContextGlobal |
@@ -403,8 +388,9 @@ void AudioPictureInPictureWindow::handleInput(const InputEvent& ev,
 
   if (mouse.kind == MouseEventKind::VerticalWheel) {
     const int delta = wheelDelta(mouse);
-    if (delta != 0 && callbacks.onAdjustVolume) {
-      callbacks.onAdjustVolume(delta > 0 ? 0.05f : -0.05f);
+    if (delta != 0 && callbacks.dispatchPlaybackCommand) {
+      callbacks.dispatchPlaybackCommand(
+          playback_input::AdjustVolume{delta > 0 ? 0.05f : -0.05f});
     }
     return;
   }
@@ -423,27 +409,29 @@ void AudioPictureInPictureWindow::handleInput(const InputEvent& ev,
   }
 
   const auto& progressHit = interactionHit.progressBar;
-  if (progressHit) {
-    if (callbacks.onSeekToRatio) {
-      callbacks.onSeekToRatio(progressHit->ratio);
-    }
+  if (progressHit && callbacks.dispatchPlaybackCommand) {
+    callbacks.dispatchPlaybackCommand(
+        playback_input::SeekToRatio{progressHit->ratio});
   }
 }
 
 bool AudioPictureInPictureWindow::clickControl(
     playback_overlay::OverlayControlId control, const Callbacks& callbacks) {
-  auto invoke = [](const std::function<void()>& action) {
-    if (!action) return false;
-    action();
+  auto dispatch = [&](PlaybackAction action) {
+    if (!callbacks.dispatchPlaybackCommand) return false;
+    callbacks.dispatchPlaybackCommand(action);
     return true;
   };
 
   playback_overlay::OverlayControlActions actions;
-  actions.previous = [&]() { return invoke(callbacks.onPlayPrevious); };
-  actions.playPause = [&]() { return invoke(callbacks.onTogglePause); };
-  actions.next = [&]() { return invoke(callbacks.onPlayNext); };
-  actions.radio = [&]() { return invoke(callbacks.onToggleRadio); };
-  actions.hz50 = [&]() { return invoke(callbacks.onToggle50Hz); };
+  actions.previous = [&]() { return dispatch(PlaybackAction::Previous); };
+  actions.playPause =
+      [&]() { return dispatch(PlaybackAction::TogglePause); };
+  actions.next = [&]() { return dispatch(PlaybackAction::Next); };
+  actions.radio =
+      [&]() { return dispatch(PlaybackAction::ToggleRadio); };
+  actions.hz50 =
+      [&]() { return dispatch(PlaybackAction::Toggle50Hz); };
   actions.pictureInPicture = [&]() {
     close();
     if (callbacks.onClose) callbacks.onClose();

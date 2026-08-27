@@ -116,20 +116,20 @@ int main() {
                "VK_F1 must not match VK_ESCAPE when no ASCII fallback exists");
   ok &= expect(!matchesShortcut(makeKey(VK_F1), VK_BACK, 0, 0),
                "VK_F1 must not match VK_BACK when no ASCII fallback exists");
-  ok &= expect(!resolvePlaybackShortcutAction(
+  ok &= expect(!resolvePlaybackAction(
                    makeKey(VK_F1), kPlaybackShortcutContextPlaybackSession)
                    .has_value(),
                "VK_F1 must not resolve to any playback-session shortcut");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey(VK_ESCAPE), kPlaybackShortcutContextPlaybackSession)
-                   .value() == PlaybackShortcutAction::ExitPlaybackSession,
+                   .value() == PlaybackAction::ExitPlaybackSession,
                "VK_ESCAPE must still exit playback session");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey(VK_ESCAPE), kPlaybackShortcutContextImageViewer)
-                   .value() == PlaybackShortcutAction::CloseViewer,
+                   .value() == PlaybackAction::CloseViewer,
                "VK_ESCAPE must still close the image viewer");
   ok &= expect(resolveLiveBrowserVideoShortcut(makeKeyEvent(VK_SPACE, ' ')) ==
-                   PlaybackShortcutAction::TogglePause,
+                   PlaybackAction::TogglePause,
                "Space must remain a playback shortcut in the live browser");
   ok &= expect(!resolveLiveBrowserVideoShortcut(makeKeyEvent(VK_RETURN)),
                "Plain Enter must remain browser-entry activation while video "
@@ -141,14 +141,14 @@ int main() {
                "double-click");
   ok &= expect(resolveLiveBrowserVideoShortcut(
                    makeKeyEvent(VK_RETURN, 0, kPlaybackShortcutAltMask)) ==
-                   PlaybackShortcutAction::ToggleFullscreen,
+                   PlaybackAction::ToggleFullscreen,
                "Alt+Enter must reach native video from the live browser");
   ok &= expect(resolveLiveBrowserVideoShortcut(
                    makeKeyEvent('P', 0, kPlaybackShortcutCtrlMask)) ==
-                   PlaybackShortcutAction::TogglePictureInPicture,
+                   PlaybackAction::TogglePictureInPicture,
                "Ctrl+P must reach native video from the live browser");
   ok &= expect(resolveLiveBrowserVideoShortcut(makeKeyEvent(VK_ESCAPE)) ==
-                   PlaybackShortcutAction::ExitPlaybackSession,
+                   PlaybackAction::ExitPlaybackSession,
                "Escape must close video while the live browser has focus");
   ok &= expect(!resolveLiveBrowserVideoShortcut(makeKeyEvent(VK_BACK)),
                "Backspace must remain browser-up while native video plays");
@@ -157,109 +157,109 @@ int main() {
                "browser Back must remain navigation while native video plays");
   ok &= expect(!resolveLiveBrowserVideoShortcut(makeKeyEvent('O', 'o')),
                "Options must remain owned by the live browser");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey('P', 0, kPlaybackShortcutCtrlMask),
                    kPlaybackShortcutContextShared)
-                   .value() == PlaybackShortcutAction::TogglePictureInPicture,
+                   .value() == PlaybackAction::TogglePictureInPicture,
                "Ctrl+P must toggle PiP from shared playback controls");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey('P', 0, kPlaybackShortcutCtrlMask),
                    kPlaybackShortcutContextPictureInPicture)
-                   .value() == PlaybackShortcutAction::TogglePictureInPicture,
+                   .value() == PlaybackAction::TogglePictureInPicture,
                "Ctrl+P must toggle PiP while the PiP window has focus");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey('P'), kPlaybackShortcutContextPictureInPicture)
-                   .value() == PlaybackShortcutAction::DismissPictureInPicture,
+                   .value() == PlaybackAction::DismissPictureInPicture,
                "Bare P must still dismiss the PiP window");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey(VK_LEFT), kPlaybackShortcutContextShared)
-                   .value() == PlaybackShortcutAction::SeekBackward,
+                   .value() == PlaybackAction::SeekBackward,
                "VK_LEFT must seek backward");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey(VK_RIGHT), kPlaybackShortcutContextShared)
-                   .value() == PlaybackShortcutAction::SeekForward,
+                   .value() == PlaybackAction::SeekForward,
                "VK_RIGHT must seek forward");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey(VK_LEFT),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared |
                        kPlaybackShortcutContextImageViewer)
-                   .value() == PlaybackShortcutAction::SeekBackward,
+                   .value() == PlaybackAction::SeekBackward,
                "Image viewer must inherit the shared bare-arrow seek layer");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey(VK_RIGHT),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared |
                        kPlaybackShortcutContextImageViewer)
-                   .value() == PlaybackShortcutAction::SeekForward,
+                   .value() == PlaybackAction::SeekForward,
                "Image viewer must inherit the shared bare-arrow seek layer");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey(VK_LEFT, 0, kPlaybackShortcutCtrlMask),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared |
                        kPlaybackShortcutContextImageViewer)
-                   .value() == PlaybackShortcutAction::Previous,
+                   .value() == PlaybackAction::Previous,
                "Ctrl+VK_LEFT must navigate to the previous item");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey(VK_RIGHT, 0, kPlaybackShortcutCtrlMask),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared |
                        kPlaybackShortcutContextImageViewer)
-                   .value() == PlaybackShortcutAction::Next,
+                   .value() == PlaybackAction::Next,
                "Ctrl+VK_RIGHT must navigate to the next item");
-  ok &= expect(!resolvePlaybackShortcutAction(
+  ok &= expect(!resolvePlaybackAction(
                    makeKey(VK_OEM_PERIOD, '.'),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared),
                "Frame-step shortcuts must stay scoped to video playback");
-  ok &= expect(!resolvePlaybackShortcutAction(
+  ok &= expect(!resolvePlaybackAction(
                    makeKey(VK_OEM_PERIOD, '.'),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared |
                        kPlaybackShortcutContextPictureInPicture),
                "Frame-step shortcuts must not leak into audio picture-in-picture");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey(VK_OEM_COMMA, ','),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared |
                        kPlaybackShortcutContextPlaybackSession |
                        kPlaybackShortcutContextVideoPlayback)
-                   .value() == PlaybackShortcutAction::PreviousFrame,
+                   .value() == PlaybackAction::PreviousFrame,
                "Comma must step to the previous video frame in video playback");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey(VK_OEM_PERIOD, '.'),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared |
                        kPlaybackShortcutContextPlaybackSession |
                        kPlaybackShortcutContextVideoPlayback)
-                   .value() == PlaybackShortcutAction::NextFrame,
+                   .value() == PlaybackAction::NextFrame,
                "Period must step to the next video frame in video playback");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey(0, '.'),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared |
                        kPlaybackShortcutContextPlaybackSession |
                        kPlaybackShortcutContextVideoPlayback)
-                   .value() == PlaybackShortcutAction::NextFrame,
+                   .value() == PlaybackAction::NextFrame,
                "Terminal text input must also resolve period as next-frame");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey('S', 's'), kPlaybackShortcutContextShared)
-                   .value() == PlaybackShortcutAction::ToggleSubtitles,
+                   .value() == PlaybackAction::ToggleSubtitles,
                "Bare S must continue to toggle subtitles");
-  ok &= expect(!resolvePlaybackShortcutAction(
+  ok &= expect(!resolvePlaybackAction(
                    makeKey('S', 'S', SHIFT_PRESSED),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared),
                "Frame-copy must stay scoped to video playback");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey('S', 'S', SHIFT_PRESSED),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared |
                        kPlaybackShortcutContextPlaybackSession |
                        kPlaybackShortcutContextVideoPlayback)
-                   .value() == PlaybackShortcutAction::CopyVideoFrame,
+                   .value() == PlaybackAction::CopyVideoFrame,
                "Shift+S must copy the current rendered video frame");
-  ok &= expect(!resolvePlaybackShortcutAction(
+  ok &= expect(!resolvePlaybackAction(
                    makeKey('S', 'S', SHIFT_PRESSED | LEFT_CTRL_PRESSED),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared |
@@ -281,178 +281,178 @@ int main() {
       kPlaybackShortcutContextVideoEditLeaveConfirmation;
   const uint32_t videoEditDiscardContexts =
       kPlaybackShortcutContextVideoEditDiscardConfirmation;
-  ok &= expect(resolvePlaybackShortcutAction(makeKey('E'),
+  ok &= expect(resolvePlaybackAction(makeKey('E'),
                                               videoPlaybackContexts)
-                   .value() == PlaybackShortcutAction::OpenVideoEditor,
+                   .value() == PlaybackAction::OpenVideoEditor,
                "Bare E must enter the video editor only during video playback");
   ok &= expect(videoEditCommandForShortcut(
-                   PlaybackShortcutAction::OpenVideoEditor) ==
+                   PlaybackAction::OpenVideoEditor) ==
                        playback_video_edit::Command::Open &&
                    videoEditCommandForShortcut(
-                       PlaybackShortcutAction::RequestCloseVideoEditor) ==
+                       PlaybackAction::RequestCloseVideoEditor) ==
                        playback_video_edit::Command::RequestClose &&
                    videoEditCommandForShortcut(
-                       PlaybackShortcutAction::ClearVideoEditInAndOut) ==
+                       PlaybackAction::ClearVideoEditInAndOut) ==
                        playback_video_edit::Command::ClearInAndOut &&
                    videoEditCommandForShortcut(
-                       PlaybackShortcutAction::ExportVideoEdits) ==
+                       PlaybackAction::ExportVideoEdits) ==
                        playback_video_edit::Command::StartExport &&
                    !videoEditCommandForShortcut(
-                       PlaybackShortcutAction::TogglePause),
+                       PlaybackAction::TogglePause),
                "shortcut translation must terminate at semantic edit commands");
-  ok &= expect(!resolvePlaybackShortcutAction(
+  ok &= expect(!resolvePlaybackAction(
                    makeKey('E'), kPlaybackShortcutContextGlobal |
                                      kPlaybackShortcutContextShared),
                "The editor shortcut must not leak into non-video playback");
-  ok &= expect(resolvePlaybackShortcutAction(makeKey(VK_ESCAPE),
+  ok &= expect(resolvePlaybackAction(makeKey(VK_ESCAPE),
                                                videoEditingContexts)
                     .value() ==
-                   PlaybackShortcutAction::NavigateBackInVideoEditor,
+                   PlaybackAction::NavigateBackInVideoEditor,
                "Escape must enter the editor's back hierarchy before playback");
-  ok &= expect(resolvePlaybackShortcutAction(makeKey('E'),
+  ok &= expect(resolvePlaybackAction(makeKey('E'),
                                               videoEditingContexts)
                    .value() ==
-                   PlaybackShortcutAction::RequestCloseVideoEditor,
+                   PlaybackAction::RequestCloseVideoEditor,
                "Bare E must request leaving an active editor");
-  ok &= expect(resolvePlaybackShortcutAction(makeKey('O'),
+  ok &= expect(resolvePlaybackAction(makeKey('O'),
                                               videoEditingContexts)
-                   .value() == PlaybackShortcutAction::SetVideoEditOut,
+                   .value() == PlaybackAction::SetVideoEditOut,
                "Bare O must set the edit Out point while editing");
-  ok &= expect(resolvePlaybackShortcutAction(makeKey('O'),
+  ok &= expect(resolvePlaybackAction(makeKey('O'),
                                               videoPlaybackContexts)
-                   .value() == PlaybackShortcutAction::ToggleOptions,
+                   .value() == PlaybackAction::ToggleOptions,
                "Bare O must regain its playback-options meaning outside editing");
-  ok &= expect(resolvePlaybackShortcutAction(makeKey('I'),
+  ok &= expect(resolvePlaybackAction(makeKey('I'),
                                               videoEditingContexts)
-                   .value() == PlaybackShortcutAction::SetVideoEditIn,
+                   .value() == PlaybackAction::SetVideoEditIn,
                "Bare I must set the edit In point");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey('I', 0, kPlaybackShortcutAltMask),
                    videoEditingContexts)
-                   .value() == PlaybackShortcutAction::ClearVideoEditIn &&
-                   resolvePlaybackShortcutAction(
+                   .value() == PlaybackAction::ClearVideoEditIn &&
+                   resolvePlaybackAction(
                        makeKey('O', 0, kPlaybackShortcutAltMask),
                        videoEditingContexts)
                            .value() ==
-                       PlaybackShortcutAction::ClearVideoEditOut &&
-                   resolvePlaybackShortcutAction(
+                       PlaybackAction::ClearVideoEditOut &&
+                   resolvePlaybackAction(
                        makeKey('X', 0, kPlaybackShortcutAltMask),
                        videoEditingContexts)
                            .value() ==
-                       PlaybackShortcutAction::ClearVideoEditInAndOut,
+                       PlaybackAction::ClearVideoEditInAndOut,
                "Alt+I/O/X must expose the standard explicit clear commands");
-  ok &= expect(resolvePlaybackShortcutAction(makeKey(VK_DELETE),
+  ok &= expect(resolvePlaybackAction(makeKey(VK_DELETE),
                                               videoEditingContexts)
                    .value() ==
-                   PlaybackShortcutAction::RippleDeleteVideoEditSelection,
+                   PlaybackAction::RippleDeleteVideoEditSelection,
                "Delete must perform the editor's ripple removal");
-  ok &= expect(resolvePlaybackShortcutAction(makeKey('T'),
+  ok &= expect(resolvePlaybackAction(makeKey('T'),
                                               videoEditingContexts)
-                   .value() == PlaybackShortcutAction::TrimVideoEditSelection,
+                   .value() == PlaybackAction::TrimVideoEditSelection,
                "Bare T must trim the sequence to the selected range");
-  ok &= expect(!resolvePlaybackShortcutAction(makeKey('P'),
+  ok &= expect(!resolvePlaybackAction(makeKey('P'),
                                                videoEditingContexts),
                "Bare P must remain unbound without a real timeline player");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey('P', 0, kPlaybackShortcutCtrlMask),
                    videoEditingContexts)
-                   .value() == PlaybackShortcutAction::TogglePictureInPicture,
+                   .value() == PlaybackAction::TogglePictureInPicture,
                "Ctrl+P must retain its PiP meaning while editing");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey('P'), videoEditingPictureInPictureContexts)
                    .value() ==
-                   PlaybackShortcutAction::DismissPictureInPicture,
+                   PlaybackAction::DismissPictureInPicture,
                "Bare P must remain able to close PiP while editing");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey(VK_ESCAPE),
                    videoEditingPictureInPictureContexts)
                    .value() ==
-                   PlaybackShortcutAction::NavigateBackInVideoEditor,
+                   PlaybackAction::NavigateBackInVideoEditor,
                "Escape in editor PiP must preserve the local selection and "
                "leave hierarchy");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey('E', 0, kPlaybackShortcutCtrlMask),
                    videoEditingContexts)
-                   .value() == PlaybackShortcutAction::ExportVideoEdits,
+                   .value() == PlaybackAction::ExportVideoEdits,
                "Ctrl+E must route to the editor-owned export task");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey('E', 0, kPlaybackShortcutCtrlMask),
                    videoPlaybackContexts)
-                   .value() == PlaybackShortcutAction::ExportVideoEdits,
+                   .value() == PlaybackAction::ExportVideoEdits,
                 "Ctrl+E must retain its start-export meaning after closing "
                 "the editor");
-  ok &= expect(resolvePlaybackShortcutAction(makeKey('D'),
+  ok &= expect(resolvePlaybackAction(makeKey('D'),
                                               videoEditExitContexts)
                    .value() ==
-                   PlaybackShortcutAction::DiscardVideoEditsAndExit,
+                   PlaybackAction::DiscardVideoEditsAndExit,
                "D must explicitly confirm discarding edits in the exit prompt");
-  ok &= expect(resolvePlaybackShortcutAction(makeKey(VK_ESCAPE),
+  ok &= expect(resolvePlaybackAction(makeKey(VK_ESCAPE),
                                                videoEditExitContexts)
-                    .value() == PlaybackShortcutAction::CancelVideoEditPrompt,
+                    .value() == PlaybackAction::CancelVideoEditPrompt,
                "Escape must cancel the modal edit-exit prompt");
-  ok &= expect(resolvePlaybackShortcutAction(makeKey(VK_ESCAPE),
+  ok &= expect(resolvePlaybackAction(makeKey(VK_ESCAPE),
                        videoEditLeaveContexts)
                        .value() ==
-                   PlaybackShortcutAction::CancelVideoEditPrompt,
+                   PlaybackAction::CancelVideoEditPrompt,
                "Escape must stay in the editor when its leave prompt is open");
-  ok &= expect(resolvePlaybackShortcutAction(makeKey(VK_RETURN),
+  ok &= expect(resolvePlaybackAction(makeKey(VK_RETURN),
                                                videoEditLeaveContexts)
                        .value() ==
-                   PlaybackShortcutAction::ConfirmVideoEditPrompt &&
+                   PlaybackAction::ConfirmVideoEditPrompt &&
                    videoEditCommandForShortcut(
-                       PlaybackShortcutAction::ConfirmVideoEditPrompt) ==
+                       PlaybackAction::ConfirmVideoEditPrompt) ==
                        playback_video_edit::Command::ConfirmPrompt,
                "Enter must explicitly confirm leaving only the editor");
-  ok &= expect(resolvePlaybackShortcutAction(InputAction::Back,
+  ok &= expect(resolvePlaybackAction(InputAction::Back,
                        videoEditLeaveContexts)
                        .value() ==
-                   PlaybackShortcutAction::CancelVideoEditPrompt,
+                   PlaybackAction::CancelVideoEditPrompt,
                "controller Back must follow the same close-prompt hierarchy");
-  ok &= expect(resolvePlaybackShortcutAction(makeKey('D'),
+  ok &= expect(resolvePlaybackAction(makeKey('D'),
                                               videoEditDiscardContexts)
                        .value() ==
-                   PlaybackShortcutAction::ConfirmVideoEditPrompt &&
-                   resolvePlaybackShortcutAction(makeKey(VK_RETURN),
+                   PlaybackAction::ConfirmVideoEditPrompt &&
+                   resolvePlaybackAction(makeKey(VK_RETURN),
                                                   videoEditDiscardContexts)
                            .value() ==
-                       PlaybackShortcutAction::CancelVideoEditPrompt &&
-                   resolvePlaybackShortcutAction(makeKey(VK_ESCAPE),
+                       PlaybackAction::CancelVideoEditPrompt &&
+                   resolvePlaybackAction(makeKey(VK_ESCAPE),
                                                   videoEditDiscardContexts)
                        .value() ==
-                   PlaybackShortcutAction::CancelVideoEditPrompt,
+                   PlaybackAction::CancelVideoEditPrompt,
                "discard confirmation must require an explicit destructive key");
-  ok &= expect(resolvePlaybackShortcutAction(makeKey(VK_RETURN),
+  ok &= expect(resolvePlaybackAction(makeKey(VK_RETURN),
                                               videoEditExitContexts)
                        .value() ==
-                   PlaybackShortcutAction::CancelVideoEditPrompt,
+                   PlaybackAction::CancelVideoEditPrompt,
                "Enter must choose the safe default in the playback-exit prompt");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey('E', 0, kPlaybackShortcutCtrlMask),
                    videoEditExitContexts)
-                   .value() == PlaybackShortcutAction::ExportVideoEdits &&
+                   .value() == PlaybackAction::ExportVideoEdits &&
                    videoEditCommandForShortcut(
-                       PlaybackShortcutAction::ExportVideoEdits) ==
+                       PlaybackAction::ExportVideoEdits) ==
                        playback_video_edit::Command::StartExport,
                "Ctrl+E must keep one start/retry meaning in the modal exit "
                "prompt instead of becoming wait or cancel");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey('Z', 0, kPlaybackShortcutCtrlMask),
                    videoEditingContexts)
-                   .value() == PlaybackShortcutAction::UndoVideoEdit,
+                   .value() == PlaybackAction::UndoVideoEdit,
                "Ctrl+Z must undo an edit decision");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey('Y', 0, kPlaybackShortcutCtrlMask),
                    videoEditingContexts)
-                   .value() == PlaybackShortcutAction::RedoVideoEdit,
+                   .value() == PlaybackAction::RedoVideoEdit,
                "Ctrl+Y must redo an edit decision");
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey('R', 0, kPlaybackShortcutCtrlMask),
                    videoEditingContexts)
-                   .value() == PlaybackShortcutAction::ResetVideoEdits,
+                   .value() == PlaybackAction::ResetVideoEdits,
                "Ctrl+R must reset edit decisions instead of toggling radio");
-  ok &= expect(resolvePlaybackShortcutAction(makeKey(VK_OEM_COMMA, ','),
+  ok &= expect(resolvePlaybackAction(makeKey(VK_OEM_COMMA, ','),
                                               videoEditingContexts)
-                   .value() == PlaybackShortcutAction::PreviousFrame,
+                   .value() == PlaybackAction::PreviousFrame,
                "Frame stepping must remain available for precise In/Out marks");
   ok &= expect(playback_video_control::shouldCoalesceQueuedEvent(
                    playback_video_control::EventType::SeekRequest,
@@ -1929,14 +1929,14 @@ int main() {
   ok &= expect(clampedRequest.targetUs == 0,
                "Relative transport seeks must clamp safely at timeline zero");
 
-  ok &= expect(resolvePlaybackShortcutAction(
+  ok &= expect(resolvePlaybackAction(
                    makeKey(VK_RETURN, 0, kPlaybackShortcutAltMask),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared |
                        kPlaybackShortcutContextPlaybackSession)
-                   .value() == PlaybackShortcutAction::ToggleFullscreen,
+                   .value() == PlaybackAction::ToggleFullscreen,
                "Alt+Enter must resolve to the fullscreen toggle");
-  ok &= expect(!resolvePlaybackShortcutAction(
+  ok &= expect(!resolvePlaybackAction(
                    makeKey(VK_RETURN, 0, kPlaybackShortcutAltMask),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared |

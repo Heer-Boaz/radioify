@@ -12,7 +12,7 @@
 #include "shortcut_match.h"
 
 struct PlaybackShortcutBinding {
-  PlaybackShortcutAction action = PlaybackShortcutAction::TogglePause;
+  PlaybackAction action = PlaybackAction::TogglePause;
   WORD vk = 0;
   char lower = 0;
   char upper = 0;
@@ -26,36 +26,36 @@ inline constexpr DWORD kPlaybackShortcutAltMask = kShortcutAltMask;
 inline constexpr DWORD kPlaybackShortcutShiftMask = kShortcutShiftMask;
 
 inline constexpr std::optional<playback_video_edit::Command>
-videoEditCommandForShortcut(PlaybackShortcutAction action) {
+videoEditCommandForShortcut(PlaybackAction action) {
   using Command = playback_video_edit::Command;
   switch (action) {
-    case PlaybackShortcutAction::OpenVideoEditor:
+    case PlaybackAction::OpenVideoEditor:
       return Command::Open;
-    case PlaybackShortcutAction::RequestCloseVideoEditor:
+    case PlaybackAction::RequestCloseVideoEditor:
       return Command::RequestClose;
-    case PlaybackShortcutAction::ConfirmVideoEditPrompt:
+    case PlaybackAction::ConfirmVideoEditPrompt:
       return Command::ConfirmPrompt;
-    case PlaybackShortcutAction::SetVideoEditIn:
+    case PlaybackAction::SetVideoEditIn:
       return Command::MarkIn;
-    case PlaybackShortcutAction::SetVideoEditOut:
+    case PlaybackAction::SetVideoEditOut:
       return Command::MarkOut;
-    case PlaybackShortcutAction::ClearVideoEditIn:
+    case PlaybackAction::ClearVideoEditIn:
       return Command::ClearIn;
-    case PlaybackShortcutAction::ClearVideoEditOut:
+    case PlaybackAction::ClearVideoEditOut:
       return Command::ClearOut;
-    case PlaybackShortcutAction::ClearVideoEditInAndOut:
+    case PlaybackAction::ClearVideoEditInAndOut:
       return Command::ClearInAndOut;
-    case PlaybackShortcutAction::RippleDeleteVideoEditSelection:
+    case PlaybackAction::RippleDeleteVideoEditSelection:
       return Command::RippleDelete;
-    case PlaybackShortcutAction::TrimVideoEditSelection:
+    case PlaybackAction::TrimVideoEditSelection:
       return Command::Trim;
-    case PlaybackShortcutAction::UndoVideoEdit:
+    case PlaybackAction::UndoVideoEdit:
       return Command::Undo;
-    case PlaybackShortcutAction::RedoVideoEdit:
+    case PlaybackAction::RedoVideoEdit:
       return Command::Redo;
-    case PlaybackShortcutAction::ResetVideoEdits:
+    case PlaybackAction::ResetVideoEdits:
       return Command::Reset;
-    case PlaybackShortcutAction::ExportVideoEdits:
+    case PlaybackAction::ExportVideoEdits:
       return Command::StartExport;
     default:
       return std::nullopt;
@@ -74,186 +74,186 @@ inline constexpr DWORD kPlaybackShortcutFrameStepForbiddenMask =
 // top of the shared map without owning separate per-mode tables.
 inline constexpr std::array<PlaybackShortcutBinding, 55>
     kPlaybackShortcutBindings = {{
-        {PlaybackShortcutAction::Quit, 'Q', 'q', 'Q', kPlaybackShortcutCtrlMask,
+        {PlaybackAction::Quit, 'Q', 'q', 'Q', kPlaybackShortcutCtrlMask,
          kPlaybackShortcutChordForbiddenMask, kPlaybackShortcutContextGlobal},
-        {PlaybackShortcutAction::TogglePictureInPicture, 'P', 'p', 'P',
+        {PlaybackAction::TogglePictureInPicture, 'P', 'p', 'P',
          kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
          kPlaybackShortcutContextShared |
              kPlaybackShortcutContextPlaybackSession |
               kPlaybackShortcutContextPictureInPicture},
-        {PlaybackShortcutAction::CancelVideoEditPrompt, VK_ESCAPE, 0, 0, 0,
+        {PlaybackAction::CancelVideoEditPrompt, VK_ESCAPE, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoEditExitConfirmation |
              kPlaybackShortcutContextVideoEditLeaveConfirmation |
              kPlaybackShortcutContextVideoEditDiscardConfirmation},
-        {PlaybackShortcutAction::CancelVideoEditPrompt, VK_BACK, 0, 0, 0,
+        {PlaybackAction::CancelVideoEditPrompt, VK_BACK, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoEditExitConfirmation |
              kPlaybackShortcutContextVideoEditLeaveConfirmation |
              kPlaybackShortcutContextVideoEditDiscardConfirmation},
-        {PlaybackShortcutAction::ConfirmVideoEditPrompt, VK_RETURN, 0, 0, 0,
+        {PlaybackAction::ConfirmVideoEditPrompt, VK_RETURN, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoEditLeaveConfirmation},
-        {PlaybackShortcutAction::CancelVideoEditPrompt, VK_RETURN, 0, 0, 0,
+        {PlaybackAction::CancelVideoEditPrompt, VK_RETURN, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoEditExitConfirmation |
              kPlaybackShortcutContextVideoEditDiscardConfirmation},
-        {PlaybackShortcutAction::ConfirmVideoEditPrompt, 'D', 'd', 'D', 0,
+        {PlaybackAction::ConfirmVideoEditPrompt, 'D', 'd', 'D', 0,
          kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
          kPlaybackShortcutContextVideoEditDiscardConfirmation},
-        {PlaybackShortcutAction::DiscardVideoEditsAndExit, 'D', 'd', 'D', 0,
+        {PlaybackAction::DiscardVideoEditsAndExit, 'D', 'd', 'D', 0,
          kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
          kPlaybackShortcutContextVideoEditExitConfirmation},
         // Editing is an explicit modal layer. Conflicting bindings precede
         // shared playback so O and Back regain their normal meanings as soon
         // as the editor is closed.
-        {PlaybackShortcutAction::NavigateBackInVideoEditor, VK_ESCAPE, 0, 0, 0,
+        {PlaybackAction::NavigateBackInVideoEditor, VK_ESCAPE, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoEditing},
-        {PlaybackShortcutAction::NavigateBackInVideoEditor, VK_BACK, 0, 0, 0,
+        {PlaybackAction::NavigateBackInVideoEditor, VK_BACK, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoEditing},
-        {PlaybackShortcutAction::RequestCloseVideoEditor, 'E', 'e', 'E', 0,
+        {PlaybackAction::RequestCloseVideoEditor, 'E', 'e', 'E', 0,
          kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
          kPlaybackShortcutContextVideoEditing},
-        {PlaybackShortcutAction::ExportVideoEdits, 'E', 'e', 'E',
+        {PlaybackAction::ExportVideoEdits, 'E', 'e', 'E',
          kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
          kPlaybackShortcutContextVideoEditing |
               kPlaybackShortcutContextVideoPlayback |
               kPlaybackShortcutContextVideoEditExitConfirmation},
-        {PlaybackShortcutAction::UndoVideoEdit, 'Z', 'z', 'Z',
+        {PlaybackAction::UndoVideoEdit, 'Z', 'z', 'Z',
          kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
          kPlaybackShortcutContextVideoEditing},
-        {PlaybackShortcutAction::RedoVideoEdit, 'Y', 'y', 'Y',
+        {PlaybackAction::RedoVideoEdit, 'Y', 'y', 'Y',
          kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
          kPlaybackShortcutContextVideoEditing},
-        {PlaybackShortcutAction::ResetVideoEdits, 'R', 'r', 'R',
+        {PlaybackAction::ResetVideoEdits, 'R', 'r', 'R',
          kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
          kPlaybackShortcutContextVideoEditing},
-        {PlaybackShortcutAction::SetVideoEditIn, 'I', 'i', 'I', 0,
+        {PlaybackAction::SetVideoEditIn, 'I', 'i', 'I', 0,
          kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
          kPlaybackShortcutContextVideoEditing},
-        {PlaybackShortcutAction::SetVideoEditOut, 'O', 'o', 'O', 0,
+        {PlaybackAction::SetVideoEditOut, 'O', 'o', 'O', 0,
          kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
          kPlaybackShortcutContextVideoEditing},
-        {PlaybackShortcutAction::ClearVideoEditIn, 'I', 'i', 'I',
+        {PlaybackAction::ClearVideoEditIn, 'I', 'i', 'I',
          kPlaybackShortcutAltMask,
          kPlaybackShortcutCtrlMask | kPlaybackShortcutShiftMask,
          kPlaybackShortcutContextVideoEditing},
-        {PlaybackShortcutAction::ClearVideoEditOut, 'O', 'o', 'O',
+        {PlaybackAction::ClearVideoEditOut, 'O', 'o', 'O',
          kPlaybackShortcutAltMask,
          kPlaybackShortcutCtrlMask | kPlaybackShortcutShiftMask,
          kPlaybackShortcutContextVideoEditing},
-        {PlaybackShortcutAction::ClearVideoEditInAndOut, 'X', 'x', 'X',
+        {PlaybackAction::ClearVideoEditInAndOut, 'X', 'x', 'X',
          kPlaybackShortcutAltMask,
          kPlaybackShortcutCtrlMask | kPlaybackShortcutShiftMask,
          kPlaybackShortcutContextVideoEditing},
-        {PlaybackShortcutAction::RippleDeleteVideoEditSelection, VK_DELETE, 0,
+        {PlaybackAction::RippleDeleteVideoEditSelection, VK_DELETE, 0,
          0, 0, kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoEditing},
-        {PlaybackShortcutAction::TrimVideoEditSelection, 'T', 't', 'T', 0,
+        {PlaybackAction::TrimVideoEditSelection, 'T', 't', 'T', 0,
          kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
          kPlaybackShortcutContextVideoEditing},
-        {PlaybackShortcutAction::ExitPlaybackSession, VK_ESCAPE, 0, 0, 0,
+        {PlaybackAction::ExitPlaybackSession, VK_ESCAPE, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextPlaybackSession},
-        {PlaybackShortcutAction::ExitPlaybackSession, VK_BACK, 0, 0, 0,
+        {PlaybackAction::ExitPlaybackSession, VK_BACK, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextPlaybackSession},
-        {PlaybackShortcutAction::DismissPictureInPicture, VK_ESCAPE, 0, 0, 0,
+        {PlaybackAction::DismissPictureInPicture, VK_ESCAPE, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextPictureInPicture},
-        {PlaybackShortcutAction::DismissPictureInPicture, VK_BACK, 0, 0, 0,
+        {PlaybackAction::DismissPictureInPicture, VK_BACK, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextPictureInPicture},
-        {PlaybackShortcutAction::DismissPictureInPicture, 'P', 'p', 'P', 0,
+        {PlaybackAction::DismissPictureInPicture, 'P', 'p', 'P', 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextPictureInPicture},
-        {PlaybackShortcutAction::CloseViewer, VK_ESCAPE, 0, 0, 0,
+        {PlaybackAction::CloseViewer, VK_ESCAPE, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextImageViewer},
-        {PlaybackShortcutAction::CloseViewer, VK_BACK, 0, 0, 0,
+        {PlaybackAction::CloseViewer, VK_BACK, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextImageViewer},
-        {PlaybackShortcutAction::Play, kPlaybackVkMediaPlay, 0, 0, 0, 0,
+        {PlaybackAction::Play, kPlaybackVkMediaPlay, 0, 0, 0, 0,
          kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::Pause, kPlaybackVkMediaPause, 0, 0, 0, 0,
+        {PlaybackAction::Pause, kPlaybackVkMediaPause, 0, 0, 0, 0,
          kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::TogglePause, VK_SPACE, ' ', ' ',
+        {PlaybackAction::TogglePause, VK_SPACE, ' ', ' ',
          0, kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::TogglePause, VK_MEDIA_PLAY_PAUSE, 0, 0, 0, 0,
+        {PlaybackAction::TogglePause, VK_MEDIA_PLAY_PAUSE, 0, 0, 0, 0,
          kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::Stop, VK_MEDIA_STOP, 0, 0, 0, 0,
+        {PlaybackAction::Stop, VK_MEDIA_STOP, 0, 0, 0, 0,
          kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::Previous, VK_MEDIA_PREV_TRACK, 0, 0, 0,
+        {PlaybackAction::Previous, VK_MEDIA_PREV_TRACK, 0, 0, 0,
          0, kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::Next, VK_MEDIA_NEXT_TRACK, 0, 0, 0, 0,
+        {PlaybackAction::Next, VK_MEDIA_NEXT_TRACK, 0, 0, 0, 0,
          kPlaybackShortcutContextShared},
         // Shared navigation layer:
         //   - Left/Right arrows seek within the current item.
         //   - Ctrl+Left/Right move to the previous/next item in the playlist.
-        {PlaybackShortcutAction::Previous, VK_LEFT, 0, 0,
+        {PlaybackAction::Previous, VK_LEFT, 0, 0,
          kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
          kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::Next, VK_RIGHT, 0, 0, kPlaybackShortcutCtrlMask,
+        {PlaybackAction::Next, VK_RIGHT, 0, 0, kPlaybackShortcutCtrlMask,
          kPlaybackShortcutChordForbiddenMask, kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::ToggleWindow, 'W', 'w', 'W',
+        {PlaybackAction::ToggleWindow, 'W', 'w', 'W',
          kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
          kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::ToggleFullscreen, VK_RETURN, 0, 0,
+        {PlaybackAction::ToggleFullscreen, VK_RETURN, 0, 0,
          kPlaybackShortcutAltMask,
          kPlaybackShortcutCtrlMask | kPlaybackShortcutShiftMask,
          kPlaybackShortcutContextPlaybackSession},
-        {PlaybackShortcutAction::ToggleRadio, 'R', 'r', 'R', 0,
+        {PlaybackAction::ToggleRadio, 'R', 'r', 'R', 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::Toggle50Hz, 'H', 'h', 'H', 0,
+        {PlaybackAction::Toggle50Hz, 'H', 'h', 'H', 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::ToggleSubtitles, 'S', 's', 'S', 0,
+        {PlaybackAction::ToggleSubtitles, 'S', 's', 'S', 0,
          kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
          kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::ToggleAudioTrack, 'A', 'a', 'A', 0,
+        {PlaybackAction::ToggleAudioTrack, 'A', 'a', 'A', 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::ToggleOptions, 'O', 'o', 'O', 0,
+        {PlaybackAction::ToggleOptions, 'O', 'o', 'O', 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::SeekBackward, VK_OEM_4, '[', '[', 0,
+        {PlaybackAction::SeekBackward, VK_OEM_4, '[', '[', 0,
          kPlaybackShortcutSeekForbiddenMask,
          kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::SeekForward, VK_OEM_6, ']', ']', 0,
+        {PlaybackAction::SeekForward, VK_OEM_6, ']', ']', 0,
          kPlaybackShortcutSeekForbiddenMask,
          kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::SeekBackward, VK_LEFT, 0, 0, 0,
+        {PlaybackAction::SeekBackward, VK_LEFT, 0, 0, 0,
          kPlaybackShortcutSeekForbiddenMask,
          kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::SeekForward, VK_RIGHT, 0, 0, 0,
+        {PlaybackAction::SeekForward, VK_RIGHT, 0, 0, 0,
          kPlaybackShortcutSeekForbiddenMask,
          kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::PreviousFrame, VK_OEM_COMMA, ',', ',', 0,
+        {PlaybackAction::PreviousFrame, VK_OEM_COMMA, ',', ',', 0,
          kPlaybackShortcutFrameStepForbiddenMask,
          kPlaybackShortcutContextVideoPlayback},
-        {PlaybackShortcutAction::NextFrame, VK_OEM_PERIOD, '.', '.', 0,
+        {PlaybackAction::NextFrame, VK_OEM_PERIOD, '.', '.', 0,
          kPlaybackShortcutFrameStepForbiddenMask,
          kPlaybackShortcutContextVideoPlayback},
-        {PlaybackShortcutAction::CopyVideoFrame, 'S', 's', 'S',
+        {PlaybackAction::CopyVideoFrame, 'S', 's', 'S',
          kPlaybackShortcutShiftMask, kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoPlayback},
-        {PlaybackShortcutAction::OpenVideoEditor, 'E', 'e', 'E', 0,
+        {PlaybackAction::OpenVideoEditor, 'E', 'e', 'E', 0,
          kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
          kPlaybackShortcutContextVideoPlayback},
-        {PlaybackShortcutAction::VolumeUp, VK_UP, 0, 0, kPlaybackShortcutShiftMask,
+        {PlaybackAction::VolumeUp, VK_UP, 0, 0, kPlaybackShortcutShiftMask,
          kPlaybackShortcutCtrlMask | kPlaybackShortcutAltMask,
          kPlaybackShortcutContextShared},
-        {PlaybackShortcutAction::VolumeDown, VK_DOWN, 0, 0,
+        {PlaybackAction::VolumeDown, VK_DOWN, 0, 0,
          kPlaybackShortcutShiftMask,
          kPlaybackShortcutCtrlMask | kPlaybackShortcutAltMask,
          kPlaybackShortcutContextShared},
     }};
 
-inline std::optional<PlaybackShortcutAction> resolvePlaybackShortcutAction(
+inline std::optional<PlaybackAction> resolvePlaybackAction(
     const KeyEvent& key,
     uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
                                 kPlaybackShortcutContextShared) {
@@ -270,7 +270,7 @@ inline std::optional<PlaybackShortcutAction> resolvePlaybackShortcutAction(
   return std::nullopt;
 }
 
-inline std::optional<PlaybackShortcutAction> resolvePlaybackShortcutAction(
+inline std::optional<PlaybackAction> resolvePlaybackAction(
     InputAction action, uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
                                                     kPlaybackShortcutContextShared) {
   switch (action) {
@@ -279,23 +279,23 @@ inline std::optional<PlaybackShortcutAction> resolvePlaybackShortcutAction(
            kPlaybackShortcutContextVideoEditLeaveConfirmation) != 0 ||
           (shortcutContexts &
            kPlaybackShortcutContextVideoEditDiscardConfirmation) != 0) {
-        return PlaybackShortcutAction::CancelVideoEditPrompt;
+        return PlaybackAction::CancelVideoEditPrompt;
       }
       if ((shortcutContexts &
            kPlaybackShortcutContextVideoEditExitConfirmation) != 0) {
-        return PlaybackShortcutAction::CancelVideoEditPrompt;
+        return PlaybackAction::CancelVideoEditPrompt;
       }
       if ((shortcutContexts & kPlaybackShortcutContextVideoEditing) != 0) {
-        return PlaybackShortcutAction::NavigateBackInVideoEditor;
+        return PlaybackAction::NavigateBackInVideoEditor;
       }
       if ((shortcutContexts & kPlaybackShortcutContextPlaybackSession) != 0) {
-        return PlaybackShortcutAction::ExitPlaybackSession;
+        return PlaybackAction::ExitPlaybackSession;
       }
       if ((shortcutContexts & kPlaybackShortcutContextPictureInPicture) != 0) {
-        return PlaybackShortcutAction::DismissPictureInPicture;
+        return PlaybackAction::DismissPictureInPicture;
       }
       if ((shortcutContexts & kPlaybackShortcutContextImageViewer) != 0) {
-        return PlaybackShortcutAction::CloseViewer;
+        return PlaybackAction::CloseViewer;
       }
       return std::nullopt;
     case InputAction::Forward:
@@ -304,80 +304,81 @@ inline std::optional<PlaybackShortcutAction> resolvePlaybackShortcutAction(
   return std::nullopt;
 }
 
-inline std::optional<PlaybackShortcutAction> resolvePlaybackShortcutAction(
+inline std::optional<PlaybackAction> resolvePlaybackAction(
     const InputEvent& ev,
     uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
                                 kPlaybackShortcutContextShared) {
   if (ev.type == InputEvent::Type::Action) {
-    return resolvePlaybackShortcutAction(ev.action, shortcutContexts);
+    return resolvePlaybackAction(ev.action, shortcutContexts);
   }
   if (ev.type != InputEvent::Type::Key) {
     return std::nullopt;
   }
-  return resolvePlaybackShortcutAction(ev.key, shortcutContexts);
+  return resolvePlaybackAction(ev.key, shortcutContexts);
 }
 
 // Playback keeps a deliberately small application-level shortcut layer while
 // the media browser owns the terminal. Text-entry modes can suppress this
 // layer; browser back/up remains browser navigation, while Escape still closes
 // the active video session.
-inline std::optional<PlaybackShortcutAction>
+inline std::optional<PlaybackAction>
 resolveLiveBrowserVideoShortcut(const InputEvent& event) {
   constexpr uint32_t kContexts =
       kPlaybackShortcutContextGlobal | kPlaybackShortcutContextShared |
       kPlaybackShortcutContextPlaybackSession |
       kPlaybackShortcutContextVideoPlayback;
-  const std::optional<PlaybackShortcutAction> action =
-      resolvePlaybackShortcutAction(event, kContexts);
+  const std::optional<PlaybackAction> action =
+      resolvePlaybackAction(event, kContexts);
   if (!action) return std::nullopt;
 
   switch (*action) {
-    case PlaybackShortcutAction::Quit:
-    case PlaybackShortcutAction::Play:
-    case PlaybackShortcutAction::Pause:
-    case PlaybackShortcutAction::TogglePause:
-    case PlaybackShortcutAction::Stop:
-    case PlaybackShortcutAction::Previous:
-    case PlaybackShortcutAction::Next:
-    case PlaybackShortcutAction::ToggleWindow:
-    case PlaybackShortcutAction::ToggleFullscreen:
-    case PlaybackShortcutAction::ToggleRadio:
-    case PlaybackShortcutAction::Toggle50Hz:
-    case PlaybackShortcutAction::ToggleSubtitles:
-    case PlaybackShortcutAction::ToggleAudioTrack:
-    case PlaybackShortcutAction::SeekBackward:
-    case PlaybackShortcutAction::SeekForward:
-    case PlaybackShortcutAction::PreviousFrame:
-    case PlaybackShortcutAction::NextFrame:
-    case PlaybackShortcutAction::CopyVideoFrame:
-    case PlaybackShortcutAction::OpenVideoEditor:
-    case PlaybackShortcutAction::VolumeUp:
-    case PlaybackShortcutAction::VolumeDown:
-    case PlaybackShortcutAction::TogglePictureInPicture:
+    case PlaybackAction::Quit:
+    case PlaybackAction::Play:
+    case PlaybackAction::Pause:
+    case PlaybackAction::TogglePause:
+    case PlaybackAction::Stop:
+    case PlaybackAction::Previous:
+    case PlaybackAction::Next:
+    case PlaybackAction::ToggleWindow:
+    case PlaybackAction::ToggleFullscreen:
+    case PlaybackAction::ToggleRadio:
+    case PlaybackAction::Toggle50Hz:
+    case PlaybackAction::ToggleSubtitles:
+    case PlaybackAction::ToggleAudioTrack:
+    case PlaybackAction::SeekBackward:
+    case PlaybackAction::SeekForward:
+    case PlaybackAction::PreviousFrame:
+    case PlaybackAction::NextFrame:
+    case PlaybackAction::CopyVideoFrame:
+    case PlaybackAction::OpenVideoEditor:
+    case PlaybackAction::VolumeUp:
+    case PlaybackAction::VolumeDown:
+    case PlaybackAction::TogglePictureInPicture:
       return action;
-    case PlaybackShortcutAction::ExitPlaybackSession:
+    case PlaybackAction::ExitPlaybackSession:
       return event.type == InputEvent::Type::Key && event.key.vk == VK_ESCAPE
                  ? action
                  : std::nullopt;
-    case PlaybackShortcutAction::ToggleOptions:
-    case PlaybackShortcutAction::RequestCloseVideoEditor:
-    case PlaybackShortcutAction::NavigateBackInVideoEditor:
-    case PlaybackShortcutAction::ConfirmVideoEditPrompt:
-    case PlaybackShortcutAction::SetVideoEditIn:
-    case PlaybackShortcutAction::SetVideoEditOut:
-    case PlaybackShortcutAction::ClearVideoEditIn:
-    case PlaybackShortcutAction::ClearVideoEditOut:
-    case PlaybackShortcutAction::ClearVideoEditInAndOut:
-    case PlaybackShortcutAction::RippleDeleteVideoEditSelection:
-    case PlaybackShortcutAction::TrimVideoEditSelection:
-    case PlaybackShortcutAction::UndoVideoEdit:
-    case PlaybackShortcutAction::RedoVideoEdit:
-    case PlaybackShortcutAction::ResetVideoEdits:
-    case PlaybackShortcutAction::ExportVideoEdits:
-    case PlaybackShortcutAction::DiscardVideoEditsAndExit:
-    case PlaybackShortcutAction::CancelVideoEditPrompt:
-    case PlaybackShortcutAction::DismissPictureInPicture:
-    case PlaybackShortcutAction::CloseViewer:
+    case PlaybackAction::ToggleOptions:
+    case PlaybackAction::TogglePitchMonitor:
+    case PlaybackAction::RequestCloseVideoEditor:
+    case PlaybackAction::NavigateBackInVideoEditor:
+    case PlaybackAction::ConfirmVideoEditPrompt:
+    case PlaybackAction::SetVideoEditIn:
+    case PlaybackAction::SetVideoEditOut:
+    case PlaybackAction::ClearVideoEditIn:
+    case PlaybackAction::ClearVideoEditOut:
+    case PlaybackAction::ClearVideoEditInAndOut:
+    case PlaybackAction::RippleDeleteVideoEditSelection:
+    case PlaybackAction::TrimVideoEditSelection:
+    case PlaybackAction::UndoVideoEdit:
+    case PlaybackAction::RedoVideoEdit:
+    case PlaybackAction::ResetVideoEdits:
+    case PlaybackAction::ExportVideoEdits:
+    case PlaybackAction::DiscardVideoEditsAndExit:
+    case PlaybackAction::CancelVideoEditPrompt:
+    case PlaybackAction::DismissPictureInPicture:
+    case PlaybackAction::CloseViewer:
       return std::nullopt;
   }
   return std::nullopt;
