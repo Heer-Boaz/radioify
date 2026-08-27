@@ -3,6 +3,8 @@
 #include "tui/ui/single_line_text_input.h"
 
 #include <cstdlib>
+#include <chrono>
+#include <filesystem>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -110,6 +112,56 @@ int main() {
                "leaving path search must clear only its transient query");
   ok &= expect(!setBrowserSearchFocus(browser, BrowserSearchFocus::Filter),
                "setting the current focus must be idempotent");
+
+  BrowserState filterSession;
+  filterSession.filter = "original";
+  ok &= expect(beginBrowserFilter(filterSession) &&
+                   filterSession.filterBackup == "original",
+               "entering filter search must capture one restore point");
+  auto searchUpdate =
+      handleBrowserSearchKey(filterSession, key('X', 'x'));
+  ok &= expect(searchUpdate.handled && searchUpdate.changed &&
+                   filterSession.filter == "originalx" &&
+                   !beginBrowserFilter(filterSession) &&
+                   filterSession.filterBackup == "original",
+               "refocusing an active filter must not overwrite Escape undo");
+  searchUpdate = handleBrowserSearchKey(filterSession, key(VK_ESCAPE));
+  ok &= expect(searchUpdate.effect == BrowserSearchEffect::Reload &&
+                   searchUpdate.changed &&
+                   !browserSearchFocused(filterSession) &&
+                   filterSession.filter == "original",
+               "Escape must restore and reload the complete filter session");
+
+  beginBrowserFilter(filterSession);
+  handleBrowserSearchKey(filterSession, key('Y', 'y'));
+  searchUpdate = blurBrowserSearch(filterSession);
+  ok &= expect(searchUpdate.effect == BrowserSearchEffect::Reload &&
+                   filterSession.filter == "originaly" &&
+                   !browserSearchFocused(filterSession),
+               "clicking away must commit the edited filter through Reload");
+
+  const auto stamp =
+      std::chrono::steady_clock::now().time_since_epoch().count();
+  const std::filesystem::path directory =
+      std::filesystem::temp_directory_path() /
+      ("radioify-browser-search-tests-" + std::to_string(stamp));
+  const std::filesystem::path child = directory / "child";
+  std::filesystem::create_directories(child);
+  BrowserState pathSession;
+  beginBrowserPathSearch(pathSession);
+  pathSession.pathSearch = child.string();
+  searchUpdate = handleBrowserSearchKey(pathSession, key(VK_RETURN));
+  ok &= expect(searchUpdate.handled &&
+                   searchUpdate.effect == BrowserSearchEffect::Navigate &&
+                   searchUpdate.navigationTarget == child &&
+                   browserPathSearchFocused(pathSession) &&
+                   completeBrowserPathNavigation(pathSession) &&
+                   !browserSearchFocused(pathSession) &&
+                   pathSession.pathSearch.empty(),
+               "path search must publish typed navigation before clearing "
+               "its query on accepted navigation");
+  std::error_code cleanupError;
+  std::filesystem::remove_all(directory, cleanupError);
 
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

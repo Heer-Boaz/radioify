@@ -14,7 +14,6 @@
 #include "playback/input/shortcuts.h"
 #include "playback/overlay/interaction.h"
 #include "runtime_helpers.h"
-#include "single_line_text_input.h"
 #include "track_browser_state.h"
 #include "ui_helpers.h"
 
@@ -411,46 +410,17 @@ class BrowserInputController {
   }
 
   void handleFocusedSearchKey(const KeyEvent& key) {
-    const BrowserSearchFocus focus = browser.searchFocus;
-    std::string& text = browserPathSearchFocused(browser)
-                            ? browser.pathSearch
-                            : browser.filter;
-    const single_line_text_input::EditResult edit =
-        single_line_text_input::edit(text, key);
-    result.dirty = edit.changed || result.dirty;
-
-    if (edit.intent == single_line_text_input::Intent::Cancel) {
-      if (focus == BrowserSearchFocus::Filter) {
-        browser.filter = browser.filterBackup;
-        navigator.reload();
-      }
-      focusSearch(BrowserSearchFocus::None);
-      return;
-    }
-    if (edit.intent == single_line_text_input::Intent::Commit) {
-      if (focus == BrowserSearchFocus::PathSearch) {
-        commitPathSearch();
-      } else {
-        focusSearch(BrowserSearchFocus::None);
-        navigator.reload();
-      }
-    }
-    // A focused text field owns every key even when it is not an editing key.
+    applySearchUpdate(handleBrowserSearchKey(browser, key));
   }
 
   void executeKeyAction(browser_input::KeyAction action) {
     using browser_input::KeyAction;
     switch (action) {
       case KeyAction::BeginPathSearch:
-        focusSearch(BrowserSearchFocus::PathSearch);
-        browser.pathSearch.clear();
-        result.dirty = true;
+        result.dirty = beginBrowserPathSearch(browser) || result.dirty;
         return;
       case KeyAction::BeginFilter:
-        browser.filterBackup = browser.filter;
-        focusSearch(BrowserSearchFocus::Filter);
-        browser.pathSearch.clear();
-        result.dirty = true;
+        result.dirty = beginBrowserFilter(browser) || result.dirty;
         return;
       case KeyAction::TogglePitchMonitor:
         publishPlaybackCommand(result.commands,
@@ -525,8 +495,23 @@ class BrowserInputController {
     activateEntry(entry);
   }
 
-  void focusSearch(BrowserSearchFocus focus) {
-    result.dirty = setBrowserSearchFocus(browser, focus) || result.dirty;
+  void applySearchUpdate(const BrowserSearchUpdate& update) {
+    result.dirty = update.changed || result.dirty;
+    switch (update.effect) {
+      case BrowserSearchEffect::None:
+        return;
+      case BrowserSearchEffect::Reload:
+        navigator.reload();
+        return;
+      case BrowserSearchEffect::Navigate:
+        if (navigator.navigate(
+                browserDirectoryLocation(update.navigationTarget))) {
+          result.dirty = completeBrowserPathNavigation(browser) ||
+                         result.dirty;
+          interaction.breadcrumbHover = -1;
+        }
+        return;
+    }
   }
 
   void handleMouse(
@@ -563,7 +548,7 @@ class BrowserInputController {
         !hoveredSearch &&
         (leftPressed || rightPressed ||
          mouse.kind == MouseEventKind::VerticalWheel)) {
-      focusSearch(BrowserSearchFocus::None);
+      applySearchUpdate(blurBrowserSearch(browser));
     }
     if (interaction.searchBarHover != hoveredSearch) {
       interaction.searchBarHover = hoveredSearch;
@@ -639,9 +624,7 @@ class BrowserInputController {
 
     if (capabilities.interactionEnabled && leftPressed &&
         mouse.kind == MouseEventKind::Press && hoveredSearch) {
-      browser.filterBackup = browser.filter;
-      focusSearch(BrowserSearchFocus::Filter);
-      result.dirty = true;
+      result.dirty = beginBrowserFilter(browser) || result.dirty;
       return true;
     }
 
@@ -875,77 +858,6 @@ class BrowserInputController {
       result.commands.emplace_back(tui_input::RenderFile{entry.path});
       result.quitRequested = true;
     }
-  }
-
-  bool resolvePathSearchTarget(const std::string& query,
-                               std::filesystem::path& out) const {
-    if (query.empty()) return false;
-    std::string text = query;
-    if (!text.empty() && text[0] == '~') {
-      std::string home;
-      if (const auto envProfile = getEnvString("USERPROFILE")) {
-        home = *envProfile;
-      }
-      if (home.empty()) {
-        const auto homeDrive = getEnvString("HOMEDRIVE");
-        const auto homePath = getEnvString("HOMEPATH");
-        if (homeDrive && !homeDrive->empty() && homePath &&
-            !homePath->empty()) {
-          home = *homeDrive + *homePath;
-        }
-      }
-      if (!home.empty()) {
-        if (text == "~") {
-          text = home;
-        } else if (text.size() > 1 && (text[1] == '/' || text[1] == '\\')) {
-          std::filesystem::path homePath(home);
-          homePath /= text.substr(2);
-          text = toUtf8String(homePath);
-        } else {
-          std::filesystem::path homePath(home);
-          homePath /= text.substr(1);
-          text = toUtf8String(homePath);
-        }
-      }
-    }
-
-    std::filesystem::path target(text);
-    if (target.has_root_name() && !target.has_root_directory() &&
-        target.relative_path().empty()) {
-      target = target.root_name();
-      target /= std::filesystem::path();
-    }
-    if (!target.is_absolute()) {
-      const std::filesystem::path base =
-          browser.location.kind() == BrowserLocationKind::Directory
-              ? browser.location.path()
-              : browser.location.path().parent_path();
-      target = base / target;
-    }
-
-    if (!target.has_root_name() && !target.has_root_directory() &&
-        target.relative_path().empty()) {
-      return false;
-    }
-
-    std::error_code existsEc;
-    if (!std::filesystem::exists(target, existsEc)) return false;
-    std::error_code dirEc;
-    if (!std::filesystem::is_directory(target, dirEc)) return false;
-    out = target;
-    return true;
-  }
-
-  bool commitPathSearch() {
-    std::filesystem::path target;
-    if (!resolvePathSearchTarget(browser.pathSearch, target)) return false;
-    if (navigator.navigate(browserDirectoryLocation(target))) {
-      focusSearch(BrowserSearchFocus::None);
-      interaction.breadcrumbHover = -1;
-      result.dirty = true;
-      return true;
-    }
-    return false;
   }
 
   BrowserNavigator& navigator;
