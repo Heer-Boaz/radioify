@@ -669,9 +669,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         mediaCoordinator.currentPlaybackTarget();
     return target ? playbackTargetFile(*target) : std::filesystem::path{};
   };
-  auto buildNowPlayingLabel = [&]() {
-    const std::optional<PlaybackTarget> target =
-        mediaCoordinator.currentPlaybackTarget();
+  auto buildPlaybackLabel =
+      [&](const std::optional<PlaybackTarget>& target) {
     const std::filesystem::path nowPlaying =
         target ? playbackTargetFile(*target) : std::filesystem::path{};
     std::string label =
@@ -693,6 +692,9 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
                       : formatTrackIndexLabel(*trackIndex, digits));
     }
     return label;
+  };
+  auto buildNowPlayingLabel = [&]() {
+    return buildPlaybackLabel(mediaCoordinator.currentPlaybackTarget());
   };
   auto mediaActivityWaitHandles = [&]() {
     std::vector<NativeWaitHandle> handles =
@@ -753,6 +755,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     const std::optional<PlaybackControlState> controlState =
         mediaCoordinator.playbackControlState();
     const bool videoActive = controlState && controlState->isVideo;
+    const bool audioTargetAvailable =
+        mediaCoordinator.audioPlaybackTarget().has_value();
     overlayInputs.audioOk = videoActive || audioIsReady();
     overlayInputs.playPauseAvailable = overlayInputs.audioOk;
     overlayInputs.audioSupports50HzToggle =
@@ -784,7 +788,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         playback_overlay::buildPlaybackOverlayState(overlayInputs);
     stripInput.pitchMonitorAvailable =
         !videoActive && (melodyVisualization.active() || audioIsReady() ||
-                         !audioGetNowPlaying().empty());
+                         audioTargetAvailable);
     stripInput.pitchMonitorActive = melodyVisualization.active();
     stripInput.browserControlsAvailable = browserInteractionEnabled;
     stripInput.viewMode = browser.viewMode;
@@ -956,7 +960,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
   };
   callbacks.onTogglePitchMonitor = [&]() {
-    if (!melodyVisualization.active() && audioGetNowPlaying().empty() &&
+    if (!melodyVisualization.active() &&
+        !mediaCoordinator.audioPlaybackTarget() &&
         !audioIsReady()) {
       return;
     }
@@ -994,7 +999,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       if (mediaCoordinator.toggleWindowPresentation()) markLayoutDirty();
       return;
     }
-    if (!audioPictureInPicture.isOpen() && audioGetNowPlaying().empty() &&
+    if (!audioPictureInPicture.isOpen() &&
+        !mediaCoordinator.audioPlaybackTarget() &&
         !audioIsReady()) {
       return;
     }
@@ -1031,15 +1037,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       theme.audioPictureInPictureStyles();
   auto buildAudioPictureInPictureContext = [&]() {
     AudioPictureInPictureWindow::Context context;
-    context.nowPlayingLabel = buildNowPlayingLabel();
-    const std::filesystem::path nowPlaying = audioGetNowPlaying();
-    if (!nowPlaying.empty()) {
-      context.nowPlayingTarget = playbackFileTarget(nowPlaying);
-      if (const std::optional<PlaybackTarget> trackTarget =
-              playbackTrackTarget(nowPlaying, audioGetTrackIndex())) {
-        context.nowPlayingTarget = *trackTarget;
-      }
-    }
+    context.nowPlayingTarget = mediaCoordinator.audioPlaybackTarget();
+    context.nowPlayingLabel = buildPlaybackLabel(context.nowPlayingTarget);
     return context;
   };
   auto renderAudioPictureInPicture = [&]() {
@@ -1175,7 +1174,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       });
     }
     if (mediaCoordinator.videoActive() || audioPictureInPicture.isOpen() ||
-        !audioGetNowPlaying().empty() || audioIsReady()) {
+        mediaCoordinator.audioPlaybackTarget() || audioIsReady()) {
       commands.emplace_back("Picture-in-Picture", "Ctrl+P", [&]() {
         if (callbacks.onTogglePictureInPicture) {
           callbacks.onTogglePictureInPicture();
@@ -1193,7 +1192,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         markDirty();
       });
     }
-    if (melodyVisualization.active() || !audioGetNowPlaying().empty() ||
+    if (melodyVisualization.active() ||
+        mediaCoordinator.audioPlaybackTarget() ||
         audioIsReady()) {
       commands.emplace_back(
           melodyVisualization.active() ? "Hide Pitch Monitor"

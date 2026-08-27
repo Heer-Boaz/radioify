@@ -404,13 +404,16 @@ static void requestAudioSeekFrame(int64_t target) {
   gAudio.state.radioDspCv.notify_all();
 }
 
-std::filesystem::path audioGetNowPlaying() { return gAudio.nowPlaying; }
+std::optional<AudioPlaybackSource> audioGetPlaybackSource() {
+  if (gAudio.nowPlaying.empty()) return std::nullopt;
 
-int audioGetTrackIndex() {
-  if (!gAudio.decoderReady) return -1;
+  AudioPlaybackSource source;
+  source.file = gAudio.nowPlaying;
   const AudioBackendHandlers* backend = gAudio.state.backend;
-  if (!backend || !backend->supportsTrackIndex) return -1;
-  return gAudio.trackIndex;
+  if (gAudio.decoderReady && backend && backend->supportsTrackIndex) {
+    source.trackIndex = gAudio.trackIndex;
+  }
+  return source;
 }
 
 double audioGetTimeSec() {

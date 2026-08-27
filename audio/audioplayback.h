@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -51,6 +52,11 @@ struct KssInstrumentProfile {
   uint32_t hash = 0;
   std::vector<uint8_t> data;
   uint8_t volume = 0;
+};
+
+struct AudioPlaybackSource {
+  std::filesystem::path file;
+  std::optional<int> trackIndex;
 };
 
 // Owns the process-wide audio playback state. Keep this object alive for every
@@ -101,8 +107,7 @@ bool audioStreamClockReady();
 uint64_t audioStreamWaitForUpdate(uint64_t lastCounter, int timeoutMs);
 uint64_t audioStreamUpdateCounter();
 
-std::filesystem::path audioGetNowPlaying();
-int audioGetTrackIndex();
+std::optional<AudioPlaybackSource> audioGetPlaybackSource();
 
 double audioGetTimeSec();
 double audioGetTotalSec();

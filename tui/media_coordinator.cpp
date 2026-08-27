@@ -138,16 +138,16 @@ struct TuiMediaCoordinator::Impl {
   }
 
   std::optional<PlaybackTarget> audioPlaybackTarget() const {
-    const std::filesystem::path file = audioGetNowPlaying();
-    if (file.empty()) return std::nullopt;
-    const int trackIndex = audioGetTrackIndex();
-    if (trackIndex >= 0) {
+    const std::optional<AudioPlaybackSource> source =
+        audioGetPlaybackSource();
+    if (!source) return std::nullopt;
+    if (source->trackIndex) {
       if (std::optional<PlaybackTarget> trackTarget =
-              playbackTrackTarget(file, trackIndex)) {
+              playbackTrackTarget(source->file, *source->trackIndex)) {
         return trackTarget;
       }
     }
-    return playbackFileTarget(file);
+    return playbackFileTarget(source->file);
   }
 
   std::optional<PlaybackTarget> currentPlaybackTarget() const {
@@ -685,6 +685,11 @@ bool TuiMediaCoordinator::videoActive() const { return impl_->videoActive(); }
 
 PlaybackShellTerminalRole TuiMediaCoordinator::terminalRole() const {
   return impl_->terminalRole();
+}
+
+std::optional<PlaybackTarget> TuiMediaCoordinator::audioPlaybackTarget()
+    const {
+  return impl_->audioPlaybackTarget();
 }
 
 std::optional<PlaybackTarget> TuiMediaCoordinator::currentPlaybackTarget()

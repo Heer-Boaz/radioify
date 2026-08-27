@@ -67,6 +67,7 @@ class TuiMediaCoordinator {
 
   bool videoActive() const;
   PlaybackShellTerminalRole terminalRole() const;
+  std::optional<PlaybackTarget> audioPlaybackTarget() const;
   std::optional<PlaybackTarget> currentPlaybackTarget() const;
   std::vector<NativeWaitHandle> activityWaitHandles() const;
   int nextWakeTimeoutMs() const;
