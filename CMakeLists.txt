@@ -510,6 +510,17 @@ radioify_link_repo_target(audio_media_format_tests)
 add_test(NAME audio_media_format_tests
          COMMAND $<TARGET_FILE:audio_media_format_tests>)
 
+add_executable(loop_split_output_paths_tests)
+target_sources(loop_split_output_paths_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_loop_split_output_paths_tests>
+  ${CMAKE_SOURCE_DIR}/audio/loopsplit/output_paths.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+)
+radioify_link_repo_target(loop_split_output_paths_tests)
+add_test(NAME loop_split_output_paths_tests
+         COMMAND $<TARGET_FILE:loop_split_output_paths_tests>)
+
 add_executable(ffmpeg_audio_decoder_tests)
 target_sources(ffmpeg_audio_decoder_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_ffmpeg_audio_decoder_tests>

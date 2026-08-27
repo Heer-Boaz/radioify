@@ -6,38 +6,8 @@
 
 #include "loopsplit.h"
 #include "media_formats.h"
+#include "output_paths.h"
 #include "runtime_helpers.h"
-
-std::pair<std::filesystem::path, std::filesystem::path> resolveSplitOutputPaths(
-    const std::filesystem::path& input, const std::string& outArg) {
-  const std::string base = toUtf8String(input.stem());
-  const std::string stingerSuffix = "_stinger.wav";
-  const std::string loopSuffix = "_loop.wav";
-
-  if (outArg.empty()) {
-    return {input.parent_path() / (base + stingerSuffix),
-            input.parent_path() / (base + loopSuffix)};
-  }
-
-  std::filesystem::path outPath = pathFromUtf8String(outArg);
-  bool directoryHint =
-      !outArg.empty() &&
-      (outArg.back() == '/' || outArg.back() == '\\');
-  if (directoryHint ||
-      (std::filesystem::exists(outPath) && std::filesystem::is_directory(outPath))) {
-    return {outPath / (base + stingerSuffix), outPath / (base + loopSuffix)};
-  }
-
-  std::filesystem::path outDir = outPath.parent_path();
-  if (outDir.empty()) {
-    outDir = input.parent_path();
-  }
-  std::string stem = toUtf8String(outPath.stem());
-  if (stem.empty()) {
-    stem = base;
-  }
-  return {outDir / (stem + stingerSuffix), outDir / (stem + loopSuffix)};
-}
 
 int runSplitLoopCli(const Options& o) {
   if (o.input.empty()) {
@@ -47,7 +17,8 @@ int runSplitLoopCli(const Options& o) {
   std::filesystem::path inputPath = pathFromUtf8String(o.input);
   requireSupportedAudioInputFile(inputPath);
 
-  auto [stingerOutput, loopOutput] = resolveSplitOutputPaths(inputPath, o.output);
+  const LoopSplitOutputPaths outputPaths =
+      resolveLoopSplitOutputPaths(inputPath, o.output);
   LoopSplitConfig config;
   config.channels = o.mono ? 1 : 2;
   config.sampleRate = 48000;
@@ -60,16 +31,16 @@ int runSplitLoopCli(const Options& o) {
   LoopSplitResult result;
   std::string error;
 
-  bool ok = splitAudioIntoLoopFiles(inputPath, stingerOutput, loopOutput, config,
-                                   &result, &error);
+  bool ok = splitAudioIntoLoopFiles(inputPath, outputPaths.stinger,
+                                    outputPaths.loop, config, &result, &error);
   if (!ok) {
     die(error.empty() ? "Failed to split loop." : error);
   }
 
   logLine("Loop split complete.");
   logLine("  Input:     " + toUtf8String(inputPath));
-  logLine("  Stinger:   " + toUtf8String(stingerOutput));
-  logLine("  Main-loop: " + toUtf8String(loopOutput));
+  logLine("  Stinger:   " + toUtf8String(outputPaths.stinger));
+  logLine("  Main-loop: " + toUtf8String(outputPaths.loop));
   if (result.hasLoop) {
     logLine("  Loop start: " + std::to_string(result.loopStartFrame) +
             " frames");
@@ -85,8 +56,8 @@ int runSplitLoopCli(const Options& o) {
   }
   logLine("  Output:");
   if (result.hasStinger) {
-    logLine("    Stinger: " + toUtf8String(stingerOutput));
+    logLine("    Stinger: " + toUtf8String(outputPaths.stinger));
   }
-  logLine("    Main-loop: " + toUtf8String(loopOutput));
+  logLine("    Main-loop: " + toUtf8String(outputPaths.loop));
   return 0;
 }

@@ -82,6 +82,7 @@
 #include "tracklist.h"
 #include "track_browser_state.h"
 #include "loopsplit_cli.h"
+#include "audio/loopsplit/output_paths.h"
 #include "tui_export.h"
 #include "tui_theme.h"
 #include "ui_footer_layout.h"
@@ -1419,17 +1420,15 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           return;
         }
         LoopSplitConfig splitConfig;
-        splitConfig.channels = 2;
-        splitConfig.sampleRate = 48000;
         const auto* track = entry.actionAs<browser_entry::PlayTrack>();
         splitConfig.trackIndex = track ? track->trackIndex : 0;
         splitConfig.kssOptions = audioGetKssOptionState();
         splitConfig.nsfOptions = audioGetNsfOptionState();
         splitConfig.vgmOptions = audioGetVgmOptionState();
-        const auto outputPaths =
-            resolveSplitOutputPaths(entry.path, o.output);
+        const LoopSplitOutputPaths outputPaths =
+            resolveLoopSplitOutputPaths(entry.path, o.output);
         if (mediaTasks.tryStartLoopSplit(
-                entry.path, outputPaths.first, outputPaths.second,
+                entry.path, outputPaths.stinger, outputPaths.loop,
                 splitConfig)) {
           markLayoutDirty();
           markDirty(UiDirtyFlags::Async);
