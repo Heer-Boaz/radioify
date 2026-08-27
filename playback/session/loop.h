@@ -1,6 +1,5 @@
 #pragma once
 
-#include <atomic>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -45,7 +44,7 @@ class PlaybackLoopRunner {
     const Color& progressEnd;
     playback_frame_output::LogLineWriter timingSink;
     playback_frame_output::LogLineWriter warningSink;
-    std::atomic<bool>& enableSubtitlesShared;
+    bool subtitlesEnabled = false;
     std::string windowTitle;
     std::filesystem::path file;
     bool enableAudio;

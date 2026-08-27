@@ -1,14 +1,12 @@
 #include "loop.h"
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
@@ -26,6 +24,7 @@
 #include "playback/ascii/screen_renderer.h"
 #include "core/wakeable_mailbox.h"
 #include "playback/framebuffer/presenter.h"
+#include "playback/debug/lines.h"
 #include "playback/session/osd_timeline.h"
 #include "playback/session/context_menu_controller.h"
 #include "playback/session/video_edit_workspace.h"
@@ -37,6 +36,7 @@
 #include "output.h"
 #include "presentation_controller.h"
 #include "presentation_model.h"
+#include "presentation_projector.h"
 #include "state.h"
 #include "mouse_double_click_tracker.h"
 #include "playback/video/subtitle/manager.h"
@@ -94,7 +94,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   const Color& progressEnd;
   playback_frame_output::LogLineWriter timingSink;
   playback_frame_output::LogLineWriter warningSink;
-  std::atomic<bool>& enableSubtitlesShared;
+  bool subtitlesEnabled;
   const std::string windowTitle;
   const std::filesystem::path file;
   const playback_session::Capabilities capabilities;
@@ -105,8 +105,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   const bool enableAudio;
   bool hasSubtitles;
   bool hasGeneratedSubtitles = false;
-  mutable std::mutex subtitleMutex;
-  std::atomic<int> overlayControlHover{-1};
+  int overlayControlHover = -1;
 
   PlaybackPresentationController presentationController;
   PlaybackSessionCore core;
@@ -157,7 +156,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         progressEnd(args.progressEnd),
         timingSink(std::move(args.timingSink)),
         warningSink(std::move(args.warningSink)),
-        enableSubtitlesShared(args.enableSubtitlesShared),
+        subtitlesEnabled(args.subtitlesEnabled),
         windowTitle(std::move(args.windowTitle)),
         file(std::move(args.file)),
         capabilities(args.capabilities),
@@ -172,25 +171,18 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
               initialPlaybackPresentation(config, args.continuityState)
                   .usesAsciiGrid()}),
         gpuRenderer(sharedGpuRenderer()),
-        screenResources{core.player(),
-                        audioPlayback,
-                        subtitleManager,
-                        gpuRenderer,
-                        windowTitle,
+        screenResources{gpuRenderer,
                         baseStyle,
                         accentStyle,
                         dimStyle,
                         progressEmptyStyle,
                         progressFrameStyle,
                         progressStart,
-                        progressEnd,
-                        enableSubtitlesShared,
-                        overlayControlHover,
-                        warningSink,
+                        progressEnd, warningSink,
                         timingSink},
         presentationModel(std::make_shared<playback_session::PresentationModel>(
             playback_session::PresentationModel::Dependencies{
-                screenResources, subtitleMutex})),
+                screenResources})),
         videoEditWorkspace(file, core.player(), timelinePreviewModel,
                            timelinePreviewProvider),
         output(args.player, windowTitle, presentationModel) {
@@ -277,7 +269,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         std::move(intent), confirmationRequired, playbackActive);
     if (transition.handled && exitCoordinator.confirmationVisible()) {
       exitWhenExportSucceeds = false;
-      overlayControlHover.store(-1, std::memory_order_relaxed);
+      overlayControlHover = -1;
       playback_session_input::setPlaybackPaused(*this, seekState, true);
       syncVideoEditPresentation();
     }
@@ -310,7 +302,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       return false;
     }
     exitWhenExportSucceeds = false;
-    overlayControlHover.store(-1, std::memory_order_relaxed);
+    overlayControlHover = -1;
     const playback_session_exit::Transition transition =
         exitCoordinator.confirm();
     const bool handled = applyExitTransition(transition);
@@ -325,7 +317,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         exitCoordinator.cancel();
     if (!transition.handled) return false;
     exitWhenExportSucceeds = false;
-    overlayControlHover.store(-1, std::memory_order_relaxed);
+    overlayControlHover = -1;
     applyExitTransition(transition);
     syncVideoEditPresentation();
     showEditMessage("Exit cancelled; edits retained");
@@ -344,7 +336,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         exitCoordinator.resolve(requestId, accepted);
     if (!transition.handled) return false;
     exitWhenExportSucceeds = false;
-    overlayControlHover.store(-1, std::memory_order_relaxed);
+    overlayControlHover = -1;
     applyExitTransition(transition);
     if (!accepted) {
       syncVideoEditPresentation();
@@ -364,7 +356,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       requestPlaybackExit(false);
       return;
     }
-    overlayControlHover.store(-1, std::memory_order_relaxed);
+    overlayControlHover = -1;
     syncVideoEditPresentation();
     if (!result.message.empty()) showEditMessage(result.message);
   }
@@ -400,7 +392,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     const playback_session::VideoEditPollResult result =
         videoEditWorkspace.poll();
     if (!result.changed) return;
-    overlayControlHover.store(-1, std::memory_order_relaxed);
+    overlayControlHover = -1;
     syncVideoEditPresentation();
     if (!result.message.empty()) showEditMessage(result.message);
     if (exitCoordinator.confirmationVisible() && exitWhenExportSucceeds &&
@@ -462,7 +454,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     if (result.pausePlayback) {
       playback_session_input::setPlaybackPaused(*this, seekState, true);
     }
-    overlayControlHover.store(-1, std::memory_order_relaxed);
+    overlayControlHover = -1;
     std::string message = result.message;
     syncVideoEditPresentation();
     if (startForPendingExit) {
@@ -663,17 +655,14 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
 
   bool toggleSubtitles() {
     if (!hasSubtitles) return false;
-    std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
-    const bool enabled =
-        enableSubtitlesShared.load(std::memory_order_relaxed);
-    if (!enabled) {
+    if (!subtitlesEnabled) {
       subtitleManager.selectFirstTrackWithCues();
-      enableSubtitlesShared.store(true, std::memory_order_relaxed);
+      subtitlesEnabled = true;
       return true;
     }
     const size_t count = subtitleManager.selectableTrackCount();
     if (count <= 1 || subtitleManager.isActiveLastCueTrack()) {
-      enableSubtitlesShared.store(false, std::memory_order_relaxed);
+      subtitlesEnabled = false;
       return true;
     }
     return subtitleManager.cycleLanguage();
@@ -822,9 +811,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
 
   bool executeInputCommand(
       playback_session_input::SetOverlayControlHover request) {
-    const int previous = overlayControlHover.exchange(
-        request.token, std::memory_order_relaxed);
-    if (previous == request.token) return false;
+    if (overlayControlHover == request.token) return false;
+    overlayControlHover = request.token;
     redraw = true;
     publishWindowUiState();
     output.requestWindowPresent();
@@ -900,7 +888,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   void applyPresenterSync(const PlaybackPresentationSyncResult& syncResult) {
     if (syncResult.switchedAwayFromWindow() || syncResult.transitionFailed) {
       osd.clearControls();
-      overlayControlHover.store(-1, std::memory_order_relaxed);
+      overlayControlHover = -1;
     }
     if (syncResult.transitionFailed) {
       osd.showMessage(
@@ -980,36 +968,82 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     }
   }
 
+  playback_screen_renderer::PlaybackMediaPresentation
+  captureMediaPresentation() const {
+    const Player& player = core.player();
+    const AudioPlaybackSnapshot audio = audioPlayback.snapshot();
+    PlayerTimelineSnapshot timeline = player.timelineSnapshot();
+    playback_overlay::SubtitlePresentation subtitle =
+        playback_overlay::projectSubtitlePresentation(
+            subtitleManager, subtitlesEnabled, timeline.seekPending(),
+            timeline.sourcePositionUs, hasSubtitles);
+    return playback_session::capturePlaybackMedia(
+        player, audio, std::move(timeline), windowTitle, core.audioOk(),
+        hasSubtitles, subtitlesEnabled, std::move(subtitle));
+  }
+
+  playback_overlay::PlaybackOverlayState buildOverlayState(
+      const playback_screen_renderer::PlaybackMediaPresentation& media,
+      PlaybackSessionState playbackState,
+      playback_video_timeline_preview::PresentationSurface surface) const {
+    playback_session::OverlayProjection projection{media};
+    projection.playbackState = playbackState;
+    projection.audioOk = core.audioOk();
+    projection.canPlayPrevious = capabilities.transportHandoff;
+    projection.canPlayNext = capabilities.transportHandoff;
+    projection.osd = osdSnapshot();
+    projection.pictureInPictureAvailable = true;
+    projection.pictureInPictureActive =
+        output.windowOpen() && output.window().IsPictureInPicture();
+    projection.subtitleRenderError =
+        output.window().GetSubtitleRenderError();
+    projection.contextMenu = contextMenuController.snapshotFor(
+        surface == playback_video_timeline_preview::PresentationSurface::Terminal
+            ? playback_session::ContextMenuSurface::Terminal
+            : playback_session::ContextMenuSurface::VideoWindow);
+    projection.videoEdit = videoEditWorkspace.edit();
+    projection.videoEditExport = videoEditWorkspace.exportProgress();
+    projection.videoEditPrompt = videoEditPrompt();
+    if (config.debugOverlay &&
+        surface == playback_video_timeline_preview::
+                       PresentationSurface::VideoWindow) {
+      projection.debugLines.push_back(
+          output.window().OutputColorDebugLine());
+      projection.debugLines.push_back(
+          playback_debug_lines::videoFrameDebugLine(media.debug));
+    }
+    return playback_session::projectPlaybackOverlay(std::move(projection));
+  }
+
   playback_screen_renderer::PlaybackScreenModel buildScreenModel(
       bool clearHistory, bool frameChanged) {
     playback_screen_renderer::PlaybackScreenModel model;
     model.debugOverlay = config.debugOverlay;
     model.visualMode = presentationController.state().visual();
     model.enableAudio = enableAudio;
-    model.canPlayPrevious = capabilities.transportHandoff;
-    model.canPlayNext = capabilities.transportHandoff;
     model.nativeWindowActive = output.windowOpen();
-    model.hasSubtitles = hasSubtitles;
     model.allowAsciiCpuFallback = false;
-    model.osd = osdSnapshot();
+    model.media = captureMediaPresentation();
     model.timelinePreview = timelinePreviewModel.snapshotFor(
         playback_video_timeline_preview::PresentationSurface::Terminal);
-    model.videoEdit = videoEditWorkspace.edit();
-    model.videoEditExport = videoEditWorkspace.exportProgress();
-    model.videoEditPrompt = videoEditPrompt();
-    model.contextMenu = contextMenuController.snapshotFor(
-        playback_session::ContextMenuSurface::Terminal);
-    model.cellPixelWidth = screen.cellPixelWidth();
-    model.cellPixelHeight = screen.cellPixelHeight();
-    model.cellPixelSourceLabel = screen.cellPixelSourceLabel();
-    model.clearHistory = clearHistory;
-    model.frameChanged = frameChanged;
     const PlaybackSessionPresentationSnapshot corePresentation =
         core.presentationSnapshot(model.nativeWindowActive);
     model.playbackState = corePresentation.playbackState;
     model.audioOk = corePresentation.audioOk;
     model.audioStarting = corePresentation.audioStarting;
     model.frameAvailable = corePresentation.frameAvailable;
+    model.overlay = buildOverlayState(
+        model.media, model.playbackState,
+        playback_video_timeline_preview::PresentationSurface::Terminal);
+    if (!overlayVisible()) overlayControlHover = -1;
+    model.controlHoverToken = overlayControlHover;
+    model.nativeWindowWidth = output.window().GetWidth();
+    model.nativeWindowHeight = output.window().GetHeight();
+    model.cellPixelWidth = screen.cellPixelWidth();
+    model.cellPixelHeight = screen.cellPixelHeight();
+    model.cellPixelSourceLabel = screen.cellPixelSourceLabel();
+    model.clearHistory = clearHistory;
+    model.frameChanged = frameChanged;
     return model;
   }
 
@@ -1017,27 +1051,20 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       const playback_screen_renderer::PlaybackScreenModel& model) {
     playback_session::PresentationModel::Revision revision;
     revision.textGrid = model;
-    revision.windowModel.osd = osdSnapshot();
-    revision.windowModel.timelinePreview = timelinePreviewModel.snapshotFor(
+    revision.textGrid.timelinePreview = timelinePreviewModel.snapshotFor(
         playback_video_timeline_preview::PresentationSurface::VideoWindow);
-    revision.windowModel.videoEdit = videoEditWorkspace.edit();
-    revision.windowModel.videoEditExport =
-        videoEditWorkspace.exportProgress();
-    revision.windowModel.videoEditPrompt = videoEditPrompt();
-    revision.windowModel.contextMenu = contextMenuController.snapshotFor(
-        playback_session::ContextMenuSurface::VideoWindow);
-    {
-      std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
-      revision.window = playback_session::projectWindowUiState(
-          screenResources, output.window(), model, revision.windowModel);
-    }
+    revision.textGrid.overlay = buildOverlayState(
+        model.media, model.playbackState,
+        playback_video_timeline_preview::PresentationSurface::VideoWindow);
+    revision.window =
+        playback_session::projectWindowUiState(revision.textGrid);
     presentationModel->publish(std::move(revision));
   }
 
   void renderTerminal(
       const playback_screen_renderer::PlaybackScreenModel& model) {
     playback_screen_renderer::PlaybackScreenTarget target{
-        screen, output.window(), output.frameCache(), art, timelinePreviewArt,
+        screen, output.frameCache(), art, timelinePreviewArt,
         core.presentationFrame(), frameOutputState};
     playback_screen_renderer::renderPlaybackScreen(screenResources, target,
                                                    model);
@@ -1058,10 +1085,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         buildScreenModel(forceRefreshArt || renderCopiedFrame,
                          presented || renderCopiedFrame);
     publishPresentation(model);
-    {
-      std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
-      renderTerminal(model);
-    }
+    renderTerminal(model);
     auto t1 = std::chrono::steady_clock::now();
     lastDebugRefresh = t1;
     auto durMs =
@@ -1087,7 +1111,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       const playback_screen_renderer::PlaybackScreenModel model =
           buildScreenModel(true, true);
       publishPresentation(model);
-      std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
       renderTerminal(model);
     } else {
       redraw = false;
@@ -1279,7 +1302,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     const playback_screen_renderer::PlaybackScreenModel model =
         buildScreenModel(true, true);
     publishPresentation(model);
-    std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
     renderTerminal(model);
   }
 
@@ -1464,18 +1486,14 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
 
   bool reloadSubtitles(const std::filesystem::path& preferredTrack) {
     bool selectedPreferred = false;
-    {
-      std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
-      subtitleManager.loadForVideo(file);
-      hasSubtitles = subtitleManager.selectableTrackCount() > 0;
-      selectedPreferred =
-          hasSubtitles && subtitleManager.selectTrackForFile(preferredTrack);
-      enableSubtitlesShared.store(selectedPreferred || hasSubtitles,
-                                  std::memory_order_relaxed);
-      hasGeneratedSubtitles =
-          !playback_video_transcript::activeTranscriptPathForVideo(file)
-               .empty();
-    }
+    subtitleManager.loadForVideo(file);
+    hasSubtitles = subtitleManager.selectableTrackCount() > 0;
+    selectedPreferred =
+        hasSubtitles && subtitleManager.selectTrackForFile(preferredTrack);
+    subtitlesEnabled = selectedPreferred || hasSubtitles;
+    hasGeneratedSubtitles =
+        !playback_video_transcript::activeTranscriptPathForVideo(file)
+             .empty();
     redraw = true;
     forceRefreshArt = true;
     copiedFrameNeedsRender = true;

@@ -25,6 +25,7 @@ radioify_add_module_object_library(radioify_playback
   ${CMAKE_CURRENT_SOURCE_DIR}/session/output.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/presentation_controller.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/presentation_model.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/session/presentation_projector.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/video_edit_workspace.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/video/edit/timeline.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/video/edit/scene_suggestion_review.cpp

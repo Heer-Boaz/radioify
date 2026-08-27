@@ -1,40 +1,24 @@
 #pragma once
 
 #include <memory>
-#include <mutex>
 
 #include "playback/ascii/screen_renderer.h"
 #include "playback/framebuffer/presenter.h"
 
 namespace playback_session {
 
-struct WindowPresentationModel {
-  playback_overlay::PlaybackOsdSnapshot osd;
-  playback_video_timeline_preview::Snapshot timelinePreview;
-  playback_video_edit::EditSnapshot videoEdit;
-  playback_video_edit::ExportProgress videoEditExport;
-  playback_video_edit::Prompt videoEditPrompt =
-      playback_video_edit::Prompt::None;
-  playback_overlay::ContextMenuSnapshot contextMenu;
-};
-
 WindowUiState projectWindowUiState(
-    const playback_screen_renderer::PlaybackScreenResources& resources,
-    VideoWindow& videoWindow,
-    const playback_screen_renderer::PlaybackScreenModel& playback,
-    const WindowPresentationModel& window);
+    const playback_screen_renderer::PlaybackScreenModel& playback);
 
 class PresentationModel final
     : public playback_framebuffer_presenter::PresentationSource {
  public:
   struct Dependencies {
     playback_screen_renderer::PlaybackScreenResources renderer;
-    std::mutex& subtitleMutex;
   };
 
   struct Revision {
     WindowUiState window;
-    WindowPresentationModel windowModel;
     playback_screen_renderer::PlaybackScreenModel textGrid;
   };
 

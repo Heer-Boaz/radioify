@@ -1,6 +1,7 @@
 #pragma once
 
-#include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -14,10 +15,6 @@
 #include "playback/overlay/overlay.h"
 #include "playback/session/presentation_policy.h"
 #include "playback/session/state.h"
-#include "playback/video/subtitle/manager.h"
-#include "playback/video/framebuffer/window/window.h"
-
-class AudioPlaybackRuntime;
 
 namespace playback_screen_renderer {
 
@@ -30,11 +27,7 @@ struct TimelinePreviewAsciiCache {
 };
 
 struct PlaybackScreenResources {
-  Player& player;
-  const AudioPlaybackRuntime& audioPlayback;
-  SubtitleManager& subtitleManager;
   GpuAsciiRenderer& gpuRenderer;
-  const std::string& windowTitle;
   const Style& baseStyle;
   const Style& accentStyle;
   const Style& dimStyle;
@@ -42,8 +35,6 @@ struct PlaybackScreenResources {
   const Style& progressFrameStyle;
   const Color& progressStart;
   const Color& progressEnd;
-  std::atomic<bool>& subtitlesEnabled;
-  std::atomic<int>& controlHover;
   playback_frame_output::LogLineWriter warningSink;
   playback_frame_output::LogLineWriter timingSink;
 };
@@ -52,7 +43,6 @@ struct PlaybackScreenResources {
 // shared between the terminal and the native-window presenter.
 struct PlaybackScreenTarget {
   ConsoleScreen& screen;
-  VideoWindow& videoWindow;
   GpuVideoFrameCache& frameCache;
   AsciiArt& art;
   TimelinePreviewAsciiCache& timelinePreviewCache;
@@ -60,28 +50,54 @@ struct PlaybackScreenTarget {
   playback_frame_output::FrameOutputState& frameOutput;
 };
 
+struct PlaybackAudioPresentation {
+  bool streamClockReady = false;
+  bool streamStarved = false;
+  bool finished = false;
+  bool supports50HzToggle = false;
+  bool radioEnabled = false;
+  bool hz50Enabled = false;
+  double durationSec = -1.0;
+  float volume = 0.0f;
+  std::string radioFilterLabel = "Radio: Off";
+};
+
+// Complete, owned projection of mutable playback services for one rendered
+// revision. Render threads never reach back into Player, audio, or subtitles.
+struct PlaybackMediaPresentation {
+  std::string windowTitle;
+  PlayerTimelineSnapshot timeline;
+  PlayerDebugInfo debug;
+  PlaybackAudioPresentation audio;
+  playback_overlay::SubtitlePresentation subtitle;
+  int64_t durationUs = 0;
+  int sourceWidth = 0;
+  int sourceHeight = 0;
+  std::size_t audioTrackCount = 0;
+  bool ended = false;
+  bool canCycleAudioTracks = false;
+  bool hasSubtitles = false;
+  bool subtitlesEnabled = false;
+  std::string activeAudioTrackLabel = "N/A";
+};
+
 // Copyable, immutable-by-convention read model published by the playback
 // loop. It contains no borrowed pointers and no renderer-owned cache state.
 struct PlaybackScreenModel {
+  PlaybackMediaPresentation media;
+  playback_overlay::PlaybackOverlayState overlay;
   bool debugOverlay = false;
-  std::vector<std::string> debugLines;
   PlaybackVisualMode visualMode = PlaybackVisualMode::Framebuffer;
   PlaybackSessionState playbackState = PlaybackSessionState::Active;
   bool enableAudio = false;
   bool audioOk = false;
   bool audioStarting = false;
-  bool canPlayPrevious = false;
-  bool canPlayNext = false;
   bool nativeWindowActive = false;
-  bool hasSubtitles = false;
   bool allowAsciiCpuFallback = false;
-  playback_overlay::PlaybackOsdSnapshot osd;
-  playback_overlay::ContextMenuSnapshot contextMenu;
   playback_video_timeline_preview::Snapshot timelinePreview;
-  playback_video_edit::EditSnapshot videoEdit;
-  playback_video_edit::ExportProgress videoEditExport;
-  playback_video_edit::Prompt videoEditPrompt =
-      playback_video_edit::Prompt::None;
+  int controlHoverToken = -1;
+  int nativeWindowWidth = 0;
+  int nativeWindowHeight = 0;
   bool clearHistory = false;
   bool frameChanged = false;
   bool frameAvailable = false;

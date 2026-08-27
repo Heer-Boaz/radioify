@@ -7,7 +7,6 @@
 #include <utility>
 #include <vector>
 
-#include "audioplayback.h"
 #include "playback/debug/lines.h"
 #include "playback/video/image.h"
 #include "playback/video/state/machine.h"
@@ -128,15 +127,10 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
                           PlaybackScreenTarget& target,
                           const PlaybackScreenModel& model) {
   auto& screen = target.screen;
-  auto& videoWindow = target.videoWindow;
-  auto& player = resources.player;
-  const AudioPlaybackSnapshot audio = resources.audioPlayback.snapshot();
-  auto& subtitleManager = resources.subtitleManager;
   auto& gpuRenderer = resources.gpuRenderer;
   auto& frameCache = target.frameCache;
   auto& art = target.art;
   VideoFrame* frame = &target.frame;
-  const std::string& windowTitle = resources.windowTitle;
   const Style& baseStyle = resources.baseStyle;
   const Style& accentStyle = resources.accentStyle;
   const Style& dimStyle = resources.dimStyle;
@@ -150,20 +144,17 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
   const bool enableAudio = model.enableAudio;
   const bool audioOk = model.audioOk;
   const bool audioStarting = model.audioStarting;
-  const bool canPlayPrevious = model.canPlayPrevious;
-  const bool canPlayNext = model.canPlayNext;
   const bool nativeWindowActive = model.nativeWindowActive;
-  const bool hasSubtitles = model.hasSubtitles;
   const bool allowAsciiCpuFallback = model.allowAsciiCpuFallback;
-  const bool overlayVisibleNow = model.osd.controlsVisible;
+  const bool overlayVisibleNow = model.overlay.overlayVisible;
   const bool clearHistory = model.clearHistory;
   const bool frameChanged = model.frameChanged;
   const bool frameAvailable = model.frameAvailable;
   const double cellPixelWidth = model.cellPixelWidth;
   const double cellPixelHeight = model.cellPixelHeight;
   const std::string& cellPixelSourceLabel = model.cellPixelSourceLabel;
-  auto& subtitlesEnabled = resources.subtitlesEnabled;
-  auto& controlHover = resources.controlHover;
+  const PlaybackMediaPresentation& media = model.media;
+  const PlaybackAudioPresentation& audio = media.audio;
   playback_frame_output::FrameOutputState& frameOutput = target.frameOutput;
   const auto& warningSink = resources.warningSink;
   const auto& timingSink = resources.timingSink;
@@ -174,13 +165,13 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
   if (!audioOk && !audioStarting) {
     if (!enableAudio) {
       statusLine = "Audio disabled";
-    } else if (player.audioTrackCount() > 0) {
+    } else if (media.audioTrackCount > 0) {
       statusLine = "Audio unavailable";
     }
   }
   auto [frameDisplayW, frameDisplayH] = frameDisplaySize(frame);
-  int layoutSourceW = player.sourceWidth();
-  int layoutSourceH = player.sourceHeight();
+  int layoutSourceW = media.sourceWidth;
+  int layoutSourceH = media.sourceHeight;
   const char* layoutSourceKind = "player";
   if (layoutSourceW <= 0 || layoutSourceH <= 0) {
     layoutSourceW = frameDisplayW;
@@ -189,12 +180,12 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
   }
   std::vector<std::string> debugLines;
   if (debugOverlay) {
-    debugLines.insert(debugLines.end(), model.debugLines.begin(),
-                      model.debugLines.end());
+    debugLines.insert(debugLines.end(), model.overlay.debugLines.begin(),
+                      model.overlay.debugLines.end());
   }
   if (debugOverlay && visualMode == PlaybackVisualMode::AsciiGrid) {
     debugLines.push_back(
-        playback_debug_lines::videoFrameDebugLine(player.debugInfo()));
+        playback_debug_lines::videoFrameDebugLine(media.debug));
 
     char buf[512];
     const char* cellSource =
@@ -236,7 +227,7 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
   }
 #if RADIOIFY_ENABLE_TIMING_LOG
   if (debugOverlay) {
-    PlayerDebugInfo dbg = player.debugInfo();
+    const PlayerDebugInfo& dbg = media.debug;
     char buf1[256];
     char buf2[256];
     double masterSec = static_cast<double>(dbg.masterClockUs) / 1000000.0;
@@ -267,12 +258,12 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
 
   double currentSec = 0.0;
   double totalSec = -1.0;
-  const PlayerTimelineSnapshot timeline = player.timelineSnapshot();
+  const PlayerTimelineSnapshot& timeline = media.timeline;
   const int64_t clockUs = timeline.positionUs;
   if (clockUs > 0) {
     currentSec = static_cast<double>(clockUs) / 1000000.0;
   }
-  int64_t durUs = player.durationUs();
+  const int64_t durUs = media.durationUs;
   if (durUs > 0) {
     totalSec = static_cast<double>(durUs) / 1000000.0;
   } else if (audioOk) {
@@ -283,16 +274,14 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
   }
   double displaySec = currentSec;
   const bool seekingOverlay = timeline.seekPending();
-  const bool subtitlesEnabledNow =
-      subtitlesEnabled.load(std::memory_order_relaxed);
   const bool hasVideoStream =
-      player.sourceWidth() > 0 && player.sourceHeight() > 0;
+      media.sourceWidth > 0 && media.sourceHeight > 0;
   const bool waitingForAudio =
       audioOk && !audio.streamClockReady && !audio.finished;
   const bool audioStarved = audioOk && audio.streamStarved;
-  bool waitingForVideo = hasVideoStream && !player.hasVideoFrame();
+  const bool waitingForVideo = hasVideoStream && !media.debug.hasVideoFrame;
   const bool playerTransportPaused =
-      playback_video_state_machine::project(player.state()).transport ==
+      playback_video_state_machine::project(media.debug.state).transport ==
       playback_video_state_machine::TransportState::Paused;
   bool isPaused =
       playbackState == PlaybackSessionState::Paused || playerTransportPaused;
@@ -303,8 +292,8 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
     if (playbackState == PlaybackSessionState::Ended) return "Ended";
     if (seekingOverlay) return "Seeking...";
     if (isPaused) return "Paused";
-    if (player.state() == PlayerState::Opening) return "Opening...";
-    if (player.state() == PlayerState::Prefill) return "Prefilling...";
+    if (media.debug.state == PlayerState::Opening) return "Opening...";
+    if (media.debug.state == PlayerState::Prefill) return "Prefilling...";
     if (waitingForAudio) return "Waiting for audio...";
     if (audioStarved) return "Buffering audio...";
     if (waitingForVideo) return "Buffering video...";
@@ -359,58 +348,16 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
   }
 
   frameOutput.overlayInteractions = {};
-  const bool pausedNow =
-      playbackState == PlaybackSessionState::Paused || playerTransportPaused;
-  playback_overlay::PlaybackOverlayInputs overlayInputs;
-  overlayInputs.windowTitle = windowTitle;
-  overlayInputs.audioOk = audioOk;
-  overlayInputs.playPauseAvailable =
-      playbackState == PlaybackSessionState::Active ||
-      playbackState == PlaybackSessionState::Paused;
-  overlayInputs.audioSupports50HzToggle =
-      audioOk && audio.supports50HzToggle;
-  overlayInputs.canPlayPrevious = canPlayPrevious;
-  overlayInputs.canPlayNext = canPlayNext;
-  overlayInputs.radioEnabled = audio.radioEnabled;
-  overlayInputs.radioLabel = std::string(audio.radioFilterLabel);
-  overlayInputs.hz50Enabled = audio.hz50Enabled;
-  overlayInputs.canCycleAudioTracks = audioOk && player.canCycleAudioTracks();
-  overlayInputs.activeAudioTrackLabel =
-      audioOk ? player.activeAudioTrackLabel() : "N/A";
-  overlayInputs.hasSubtitles = hasSubtitles;
-  overlayInputs.subtitlesEnabled = subtitlesEnabledNow;
-  overlayInputs.subtitleClockUs = timeline.sourcePositionUs;
-  overlayInputs.seekingOverlay = seekingOverlay;
-  overlayInputs.subtitle = playback_overlay::projectSubtitlePresentation(
-      subtitleManager, subtitlesEnabledNow, seekingOverlay,
-      timeline.sourcePositionUs, hasSubtitles);
-  overlayInputs.displaySec = displaySec;
-  overlayInputs.totalSec = totalSec;
-  overlayInputs.volPct =
-      static_cast<int>(std::round(audio.volume * 100.0f));
-  overlayInputs.osd = model.osd;
-  overlayInputs.paused = pausedNow;
-  overlayInputs.pictureInPictureAvailable = true;
-  overlayInputs.pictureInPictureActive =
-      videoWindow.IsOpen() && videoWindow.IsPictureInPicture();
-  overlayInputs.subtitleRenderError = videoWindow.GetSubtitleRenderError();
-  overlayInputs.debugLines = debugLines;
-  overlayInputs.contextMenu = model.contextMenu;
-  overlayInputs.videoEdit = model.videoEdit;
-  overlayInputs.videoEditExport = model.videoEditExport;
-  overlayInputs.videoEditPrompt = model.videoEditPrompt;
-  playback_overlay::PlaybackOverlayState overlayState =
-      playback_overlay::buildPlaybackOverlayState(overlayInputs);
-  const int hoverIndex =
-      controlHover.load(std::memory_order_relaxed);
+  playback_overlay::PlaybackOverlayState overlayState = model.overlay;
+  overlayState.debugLines = std::move(debugLines);
+  overlayState.chromeVisible =
+      overlayState.chromeVisible || !overlayState.debugLines.empty();
+  const int hoverIndex = model.controlHoverToken;
   playback_overlay::OverlayCellLayout overlayLayout;
   playback_overlay::ContextMenuCellLayout contextMenuLayout;
   const bool showPlaybackChrome =
       overlayState.chromeVisible || model.timelinePreview.hoverActive;
   const bool showContextMenu = overlayState.contextMenu.visible;
-  if (!showPlaybackChrome && !showContextMenu) {
-    controlHover.store(-1, std::memory_order_relaxed);
-  }
   int overlayReservedLines = showPlaybackChrome ? 5 : 0;
   if (showPlaybackChrome || showContextMenu) {
     overlayLayout = playback_overlay::layoutPlaybackOverlayCells(
@@ -456,7 +403,7 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
   } else {
     playback_frame_output::renderNonAsciiModeContent(
         screen, nativeWindowActive, allowFrame, width, artTop, maxHeight, frame,
-        videoWindow.GetWidth(), videoWindow.GetHeight(), dimStyle);
+        model.nativeWindowWidth, model.nativeWindowHeight, dimStyle);
   }
 
   if (showPlaybackChrome || showContextMenu) {

@@ -88,6 +88,12 @@ int main() {
           playback_screen_renderer::PlaybackScreenModel>,
       "the playback presentation read model must be publishable by value");
   static_assert(
+      std::is_same_v<
+          decltype(playback_screen_renderer::PlaybackAudioPresentation::
+                       radioFilterLabel),
+          std::string>,
+      "published audio labels must own their storage across render threads");
+  static_assert(
       std::is_abstract_v<playback_session_input::SessionPort>,
       "playback input must dispatch intent through its typed command port");
 

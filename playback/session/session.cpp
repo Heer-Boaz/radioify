@@ -1,6 +1,5 @@
 #include "session.h"
 
-#include <atomic>
 #include <cassert>
 #include <memory>
 #include <utility>
@@ -55,7 +54,6 @@ struct PlaybackSession::Impl {
   void prepareSubtitles() {
     subtitleManager.loadForVideo(request.file);
     hasSubtitles = subtitleManager.selectableTrackCount() > 0;
-    enableSubtitlesShared.store(hasSubtitles);
     host.logSubtitleDetection(subtitleManager);
   }
 
@@ -76,7 +74,7 @@ struct PlaybackSession::Impl {
         dependencies.appearance.progressEnd,
         host.timingSink(),
         host.warningSink(),
-        enableSubtitlesShared,
+        hasSubtitles,
         host.windowTitle(),
         std::move(request.file),
         enableAudio,
@@ -170,7 +168,6 @@ struct PlaybackSession::Impl {
   PlaybackSessionHost host;
   Player player;
   SubtitleManager subtitleManager;
-  std::atomic<bool> enableSubtitlesShared{false};
   bool hasSubtitles = false;
   bool loopShutdown = false;
   Lifecycle lifecycle = Lifecycle::Created;
