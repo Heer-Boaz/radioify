@@ -10,6 +10,7 @@
 #include "app/media_processing_coordinator.h"
 #include "playback/media_processing_actions.h"
 #include "playback/session/media_task_feedback.h"
+#include "tui/ui/media_task_controller.h"
 #include "tui/ui/media_task_presentation.h"
 
 #include <atomic>
@@ -44,6 +45,20 @@ std::optional<media_processing::TaskCompletion> waitForCompletion(
   std::optional<media_processing::TaskCompletion> completion;
   waitUntil([&]() {
     media_processing::PollResult update = coordinator.poll();
+    if (!update.completions.empty()) {
+      completion = std::move(update.completions.back());
+      return true;
+    }
+    return false;
+  });
+  return completion;
+}
+
+std::optional<media_processing::TaskCompletion> waitForCompletion(
+    tui_media_tasks::Controller& controller) {
+  std::optional<media_processing::TaskCompletion> completion;
+  waitUntil([&]() {
+    tui_media_tasks::Update update = controller.poll();
     if (!update.completions.empty()) {
       completion = std::move(update.completions.back());
       return true;
@@ -360,17 +375,29 @@ int main() {
   ok &= expect(!applicationActions.execute(unsupportedRequest),
                "surface navigation actions must remain outside processing");
 
+  tui_media_tasks::Controller taskController(coordinator,
+                                             applicationActions);
+
   processing::ActionRequest trackedMelodyRequest;
   trackedMelodyRequest.action =
       playback_media_actions::Action::AnalyzeAudio;
   trackedMelodyRequest.sourceFile = "album.flac";
   trackedMelodyRequest.trackIndex = 7;
+  melodyStarted.store(false, std::memory_order_release);
+  releaseMelody.store(false, std::memory_order_release);
   const auto trackedMelodyStart =
-      applicationActions.execute(trackedMelodyRequest);
-  const auto trackedMelodyCompletion = waitForCompletion(coordinator);
+      taskController.execute(trackedMelodyRequest);
+  const bool trackedMelodyRunning = waitUntil([&]() {
+    return melodyStarted.load(std::memory_order_acquire);
+  });
+  const auto trackedMelodyCard = taskController.snapshot().activeCard;
+  releaseMelody.store(true, std::memory_order_release);
+  const auto trackedMelodyCompletion = waitForCompletion(taskController);
   ok &= expect(
       trackedMelodyStart && trackedMelodyStart->accepted &&
           trackedMelodyStart->feedback == "Analyzing melody" &&
+          trackedMelodyRunning && trackedMelodyCard &&
+          trackedMelodyCard->title == "Analyzing melody" &&
           trackedMelodyCompletion && trackedMelodyCompletion->succeeded() &&
           observedMelodyTrackIndex == 7 &&
           observedMelodyOutput ==
@@ -380,7 +407,7 @@ int main() {
   processing::ActionRequest invalidTrackRequest = trackedMelodyRequest;
   invalidTrackRequest.trackIndex = -1;
   const auto invalidTrackResult =
-      applicationActions.execute(invalidTrackRequest);
+      taskController.execute(invalidTrackRequest);
   ok &= expect(invalidTrackResult && !invalidTrackResult->accepted &&
                    !coordinator.running(),
                "invalid track selections must be rejected before task start");
@@ -391,11 +418,18 @@ int main() {
   splitRequest.trackIndex = 4;
   splitRequest.outputArgument = R"(D:\exports\named.flac)";
   splitRequest.loopSplitConfig.minConfidence = 0.73f;
-  const auto splitStart = applicationActions.execute(splitRequest);
-  const auto splitCompletion = waitForCompletion(coordinator);
+  loopStarted.store(false, std::memory_order_release);
+  releaseLoop.store(false, std::memory_order_release);
+  const auto splitStart = taskController.execute(splitRequest);
+  const bool splitRunning = waitUntil([&]() {
+    return loopStarted.load(std::memory_order_acquire);
+  });
+  releaseLoop.store(true, std::memory_order_release);
+  const auto splitCompletion = waitForCompletion(taskController);
   ok &= expect(
       splitStart && splitStart->accepted &&
-          splitStart->feedback == "Splitting loop" && splitCompletion &&
+          splitStart->feedback == "Splitting loop" && splitRunning &&
+          splitCompletion &&
           splitCompletion->succeeded() && observedLoopTrackIndex == 4 &&
           observedStingerOutput ==
               std::filesystem::path(R"(D:\exports\named_stinger.wav)") &&
@@ -403,6 +437,38 @@ int main() {
               std::filesystem::path(R"(D:\exports\named_loop.wav)") &&
           observedLoopConfidence == 0.73f,
       "application actions must own loop settings and output resolution");
+
+  separationStarted.store(false, std::memory_order_release);
+  separationCancellationObserved.store(false, std::memory_order_release);
+  releaseSeparation.store(false, std::memory_order_release);
+  processing::ActionRequest cancellableRequest;
+  cancellableRequest.action =
+      playback_media_actions::Action::SeparateAudio;
+  cancellableRequest.sourceFile = "cancel.mp4";
+  const auto cancellableStart = taskController.execute(cancellableRequest);
+  const bool cancellableRunning = waitUntil([&]() {
+    return separationStarted.load(std::memory_order_acquire);
+  });
+  const bool cancellationAccepted =
+      taskController.cancelActive();
+  const bool cancellationReachedWorker = waitUntil([&]() {
+    return separationCancellationObserved.load(std::memory_order_acquire);
+  });
+  const auto cancellingCard = taskController.snapshot().activeCard;
+  releaseSeparation.store(true, std::memory_order_release);
+  const auto controllerCancellation = waitForCompletion(taskController);
+  ok &= expect(
+      cancellableStart && cancellableStart->accepted && cancellableRunning &&
+          cancellationAccepted && cancellationReachedWorker &&
+          cancellingCard &&
+          cancellingCard->title == "Cancelling audio separation" &&
+          !cancellingCard->cancelAction && controllerCancellation &&
+          controllerCancellation->outcome ==
+              processing::TaskOutcome::Cancelled &&
+          taskController.snapshot().latestStatus &&
+          taskController.snapshot().latestStatus->text ==
+              "Audio separation cancelled.",
+      "the TUI task controller must own cancellation and stable presentation");
 
   coordinator.shutdown();
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;

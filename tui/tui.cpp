@@ -88,6 +88,7 @@
 #include "ui_input_pump.h"
 #include "ui_viewport.h"
 #include "media_task_card.h"
+#include "media_task_controller.h"
 #include "media_task_presentation.h"
 #include "melody_visualization.h"
 #include "melody_visualization_renderer.h"
@@ -555,7 +556,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   media_processing::Actions& mediaActions = runtime.mediaActions();
   playback_media_processing::Actions mediaProcessingActions =
       mediaActions.playbackActions();
-  MediaTaskPresenter mediaTaskPresenter(mediaProcessing);
+  tui_media_tasks::Controller mediaTasks(mediaProcessing, mediaActions);
   TuiMediaCoordinator mediaCoordinator(
       {playbackQueue, mediaProcessingActions, mediaSessionDependencies,
        videoConfig});
@@ -621,25 +622,21 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   };
   auto mediaWaitHandles = [&]() {
     std::vector<NativeWaitHandle> handles = mediaCoordinator.waitHandles();
-    if (NativeWaitHandle taskWake = mediaProcessing.waitHandle()) {
+    if (NativeWaitHandle taskWake = mediaTasks.waitHandle()) {
       handles.push_back(taskWake);
     }
     return handles;
-  };
-  auto cancelActiveMediaTask = [&]() {
-    const bool accepted = mediaProcessing.cancelActive();
-    if (accepted) {
-      markLayoutDirty();
-      markDirty(UiDirtyFlags::Async);
-    }
-    return accepted;
   };
   auto handleGlobalShellShortcut = [&](const InputEvent& event) {
     const auto action = tui_shell_shortcuts::resolve(
         event, tui_shell_shortcuts::context(
                    tui_shell_shortcuts::Context::Global));
-    return action == tui_shell_shortcuts::Action::CancelMediaTask &&
-           cancelActiveMediaTask();
+    if (action != tui_shell_shortcuts::Action::CancelMediaTask ||
+        !mediaTasks.cancelActive()) {
+      return false;
+    }
+    markDirty(UiDirtyFlags::Async);
+    return true;
   };
   auto buildPlaybackLabel =
       [&](const std::optional<PlaybackTarget>& target) {
@@ -725,8 +722,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     chromeInput.optionsModeActive = optionsBrowserIsActive(browser);
     chromeInput.selectedEntryHasOptions =
         selectedOptionsSubject().has_value();
-    const std::optional<MediaTaskStatusModel> mediaTaskStatus =
-        mediaTaskPresenter.latestStatus();
+    const std::optional<MediaTaskStatusModel>& mediaTaskStatus =
+        mediaTasks.snapshot().latestStatus;
     chromeInput.hasMediaTaskStatus =
         mediaTaskStatus && !mediaTaskStatus->text.empty();
     chromeInput.hasWarning =
@@ -815,7 +812,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     context.hasGeneratedSubtitles =
         !playback_video_transcript::activeTranscriptPathForVideo(entry.path)
              .empty();
-    mediaActions.applySourceState(entry.path, context);
+    mediaTasks.applySourceState(entry.path, context);
     std::vector<playback_media_actions::Item> items =
         playback_media_actions::build(context);
     if (items.empty()) return;
@@ -1172,7 +1169,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         media_processing::captureActionRequest(
             action, entry.path, trackIndex, o.output, audioPlayback);
     const std::optional<playback_media_processing::ActionResult> processing =
-        mediaActions.execute(processingRequest);
+        mediaTasks.execute(processingRequest);
     if (processing) {
       mediaCommandError =
           processing->accepted ? std::string() : processing->feedback;
@@ -1221,12 +1218,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     for (TuiMediaCoordinator::Event& event : mediaUpdate.events) {
       handleMediaCoordinatorEvent(std::move(event));
     }
-    media_processing::PollResult taskUpdate = mediaProcessing.poll();
+    tui_media_tasks::Update taskUpdate = mediaTasks.poll();
     for (const media_processing::TaskCompletion& completion :
          taskUpdate.completions) {
       mediaCoordinator.handleMediaTaskCompletion(completion);
     }
-    if (!taskUpdate.completions.empty()) {
+    if (taskUpdate.layoutChanged) {
       markLayoutDirty();
     } else if (mediaUpdate.playbackChanged || taskUpdate.changed) {
       markDirty(UiDirtyFlags::Async);
@@ -1782,8 +1779,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         }
       }
       if (line < height && browserChrome.footer.showMediaTaskStatus) {
-        const std::optional<MediaTaskStatusModel> status =
-            mediaTaskPresenter.latestStatus();
+        const std::optional<MediaTaskStatusModel>& status =
+            mediaTasks.snapshot().latestStatus;
         if (status) {
           if (!status->text.empty()) {
             screen.writeText(
@@ -1910,8 +1907,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
             shellOverlayStyles);
       }
 
-      if (const std::optional<MediaTaskCardModel> taskCard =
-              mediaTaskPresenter.activeCard()) {
+      if (const std::optional<MediaTaskCardModel>& taskCard =
+              mediaTasks.snapshot().activeCard) {
         drawMediaTaskCard(screen, width, height, listTop, *taskCard,
                           theme.mediaTaskCardStyles());
       }

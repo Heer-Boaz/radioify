@@ -1106,6 +1106,7 @@ target_sources(media_processing_coordinator_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/audio/loopsplit/output_paths.cpp
   ${CMAKE_SOURCE_DIR}/playback/media_processing_actions.cpp
   ${CMAKE_SOURCE_DIR}/playback/session/media_task_feedback.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/media_task_controller.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/media_task_presentation.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/transcript/generation_job.cpp
   ${CMAKE_SOURCE_DIR}/audio/separation/artifact.cpp
