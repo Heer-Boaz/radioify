@@ -488,6 +488,9 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         return false;
       case playback_media_actions::Action::GenerateSubtitles:
       case playback_media_actions::Action::CancelSubtitleGeneration:
+      case playback_media_actions::Action::ExportTranscriptText:
+      case playback_media_actions::Action::ExportAudio:
+      case playback_media_actions::Action::CancelMediaExport:
       case playback_media_actions::Action::SeparateAudio:
       case playback_media_actions::Action::CancelAudioSeparation:
         return true;

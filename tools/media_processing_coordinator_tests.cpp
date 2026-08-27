@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -90,6 +91,12 @@ int main() {
   std::atomic<bool> separationStarted{false};
   std::atomic<bool> separationCancellationObserved{false};
   std::atomic<bool> releaseSeparation{false};
+  std::atomic<bool> audioExportStarted{false};
+  std::atomic<bool> releaseAudioExport{false};
+  std::atomic<bool> transcriptExportStarted{false};
+  std::atomic<bool> transcriptExportCancellationObserved{false};
+  std::filesystem::path observedAudioExportOutput;
+  std::filesystem::path observedTranscriptExportOutput;
   int observedMelodyTrackIndex = -1;
   std::filesystem::path observedMelodyOutput;
   int observedLoopTrackIndex = -1;
@@ -163,6 +170,37 @@ int main() {
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         if (error) *error = "Controlled cancellation.";
+        return false;
+      };
+  operations.exportAudio =
+      [&](const std::filesystem::path&,
+          const std::filesystem::path& outputFile,
+          const processing::Coordinator::ProgressReporter& progress,
+          const processing::Coordinator::CancellationRequested& cancellation,
+          std::string*) {
+        observedAudioExportOutput = outputFile;
+        progress(0.5f, "Extracting lossless audio");
+        audioExportStarted.store(true, std::memory_order_release);
+        while (!releaseAudioExport.load(std::memory_order_acquire) &&
+               !cancellation()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return !cancellation();
+      };
+  operations.exportTranscriptText =
+      [&](const std::filesystem::path&,
+          const std::filesystem::path& outputFile,
+          const processing::Coordinator::ProgressReporter& progress,
+          const processing::Coordinator::CancellationRequested& cancellation,
+          std::string*) {
+        observedTranscriptExportOutput = outputFile;
+        progress(0.6f, "Writing plain-text transcript");
+        transcriptExportStarted.store(true, std::memory_order_release);
+        while (!cancellation()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        transcriptExportCancellationObserved.store(
+            true, std::memory_order_release);
         return false;
       };
   operations.audioSeparationAvailable = true;
@@ -368,6 +406,90 @@ int main() {
                    mediaTaskStatusModel(*separationCompletion).text ==
                        "Audio separation cancelled.",
                "cancelled separation must not leak backend error text");
+
+  const auto exportStamp =
+      std::chrono::steady_clock::now().time_since_epoch().count();
+  const std::filesystem::path exportDirectory =
+      std::filesystem::temp_directory_path() /
+      ("radioify-coordinator-export-tests-" +
+       std::to_string(exportStamp));
+  std::filesystem::create_directories(exportDirectory);
+  const std::filesystem::path exportVideo = exportDirectory / "movie.mp4";
+  const std::filesystem::path indexedTranscript =
+      exportDirectory / "movie.transcript.srt";
+  std::ofstream(exportVideo, std::ios::binary).put('\0');
+  std::ofstream(indexedTranscript, std::ios::binary)
+      << "1\r\n00:00:00,000 --> 00:00:01,000\r\nSpeech\r\n";
+
+  const auto audioExportStart = playbackActions.execute(
+      playback_media_actions::Action::ExportAudio, exportVideo);
+  const bool audioExportRunning = waitUntil([&]() {
+    return audioExportStarted.load(std::memory_order_acquire);
+  });
+  const auto audioExportActivity = coordinator.activity();
+  const auto audioExportSourceState = coordinator.sourceStateFor(exportVideo);
+  releaseAudioExport.store(true, std::memory_order_release);
+  const auto audioExportCompletion = waitForCompletion(coordinator);
+  const auto playbackAudioExportCompletion =
+      audioExportCompletion
+          ? processing::completionForPlayback(*audioExportCompletion)
+          : std::nullopt;
+  ok &= expect(
+      audioExportStart && audioExportStart->accepted &&
+          audioExportStart->feedback == "Exporting audio" &&
+          audioExportRunning && audioExportActivity &&
+          audioExportActivity->kind == processing::TaskKind::AudioExport &&
+          mediaTaskCardModel(*audioExportActivity).title ==
+              "Exporting audio" &&
+          audioExportSourceState.audioExportRunning &&
+          audioExportSourceState.transcriptTextExportAvailable &&
+          observedAudioExportOutput.filename() == "movie - audio.flac" &&
+          audioExportCompletion && audioExportCompletion->succeeded() &&
+          playbackAudioExportCompletion &&
+          playbackAudioExportCompletion->operation ==
+              playback_media_processing::Operation::AudioExport &&
+          playback_session::mediaTaskFeedback(
+              *playbackAudioExportCompletion) ==
+              "Audio export ready: movie - audio.flac" &&
+          mediaTaskStatusModel(*audioExportCompletion).text ==
+              "Audio export ready: movie - audio.flac",
+      "audio export must share naming, progress and playback feedback");
+
+  const auto transcriptExportStart = playbackActions.execute(
+      playback_media_actions::Action::ExportTranscriptText, exportVideo);
+  const bool transcriptExportRunning = waitUntil([&]() {
+    return transcriptExportStarted.load(std::memory_order_acquire);
+  });
+  const auto transcriptExportActivity = coordinator.activity();
+  const auto transcriptExportSourceState =
+      coordinator.sourceStateFor(exportVideo);
+  const auto cancelTranscriptExport = playbackActions.execute(
+      playback_media_actions::Action::CancelMediaExport, exportVideo);
+  const bool transcriptCancellationReachedWorker = waitUntil([&]() {
+    return transcriptExportCancellationObserved.load(
+        std::memory_order_acquire);
+  });
+  const auto transcriptExportCompletion = waitForCompletion(coordinator);
+  ok &= expect(
+      transcriptExportStart && transcriptExportStart->accepted &&
+          transcriptExportRunning && transcriptExportActivity &&
+          transcriptExportActivity->kind ==
+              processing::TaskKind::TranscriptTextExport &&
+          mediaTaskCardModel(*transcriptExportActivity).title ==
+              "Exporting transcript" &&
+          transcriptExportSourceState.transcriptTextExportRunning &&
+          observedTranscriptExportOutput.filename() ==
+              "movie - transcript.txt" &&
+          cancelTranscriptExport && cancelTranscriptExport->accepted &&
+          transcriptCancellationReachedWorker && transcriptExportCompletion &&
+          transcriptExportCompletion->outcome ==
+              processing::TaskOutcome::Cancelled &&
+          mediaTaskStatusModel(*transcriptExportCompletion).text ==
+              "Transcript export cancelled.",
+      "text export cancellation must use the shared asynchronous task owner");
+
+  std::error_code exportCleanupError;
+  std::filesystem::remove_all(exportDirectory, exportCleanupError);
 
   processing::ActionRequest unsupportedRequest;
   unsupportedRequest.action = playback_media_actions::Action::EditVideo;

@@ -56,6 +56,24 @@ class FakeMediaProcessingService final
     return subtitleCancelled;
   }
 
+  bool requestAudioExport(
+      const std::filesystem::path& sourceFile) override {
+    audioExportRequested = acceptRequests && sourceFile == "source.mp4";
+    return audioExportRequested;
+  }
+
+  bool requestTranscriptTextExport(
+      const std::filesystem::path& sourceFile) override {
+    transcriptExportRequested =
+        acceptRequests && sourceFile == "source.mp4";
+    return transcriptExportRequested;
+  }
+
+  bool requestMediaExportCancellation() override {
+    exportCancelled = acceptRequests;
+    return exportCancelled;
+  }
+
   bool requestAudioSeparation(
       const std::filesystem::path& sourceFile) override {
     separationRequested = acceptRequests && sourceFile == "source.mp4";
@@ -73,6 +91,9 @@ class FakeMediaProcessingService final
   bool subtitleCancelled = false;
   bool separationRequested = false;
   bool separationCancelled = false;
+  bool audioExportRequested = false;
+  bool transcriptExportRequested = false;
+  bool exportCancelled = false;
 };
 
 }  // namespace
@@ -98,16 +119,19 @@ int main() {
   actions::Context video;
   video.mediaKind = actions::MediaKind::Video;
   video.canSeparateAudio = true;
+  video.canExportAudio = true;
   const std::vector<actions::Item> browserVideo = actions::build(video);
-  ok &= expect(browserVideo.size() == 4 &&
+  ok &= expect(browserVideo.size() == 5 &&
                    browserVideo[0].action == actions::Action::Play &&
                    browserVideo[1].action == actions::Action::EditVideo &&
                    browserVideo[2].action ==
                        actions::Action::GenerateSubtitles &&
                    browserVideo[2].label == "Generate subtitles..." &&
-                   browserVideo[3].action ==
+                   browserVideo[3].action == actions::Action::ExportAudio &&
+                   browserVideo[3].label == "Export audio as FLAC" &&
+                   browserVideo[4].action ==
                        actions::Action::SeparateAudio &&
-                   browserVideo[3].label == "Separate audio...",
+                   browserVideo[4].label == "Separate audio...",
                "an idle browser video must expose the canonical source "
                "actions in stable order");
 
@@ -135,19 +159,26 @@ int main() {
                    resumableVideo[1].label == "Resume editing",
                "retained edits must change the shared edit label");
   video.hasGeneratedSubtitles = true;
+  video.canExportTranscriptText = true;
   const std::vector<actions::Item> generatedSubtitleVideo =
       actions::build(video);
   const actions::Item* regenerateSubtitles = findAction(
       generatedSubtitleVideo, actions::Action::GenerateSubtitles);
   ok &= expect(regenerateSubtitles &&
-                   regenerateSubtitles->label == "Regenerate subtitles...",
+                   regenerateSubtitles->label == "Regenerate subtitles..." &&
+                   hasAction(generatedSubtitleVideo,
+                             actions::Action::ExportTranscriptText),
                "existing generated subtitles must be reflected in the shared "
                "action");
   video.backgroundTaskRunning = true;
   ok &= expect(!hasAction(actions::build(video),
                           actions::Action::GenerateSubtitles) &&
                    !hasAction(actions::build(video),
-                              actions::Action::SeparateAudio),
+                              actions::Action::SeparateAudio) &&
+                   !hasAction(actions::build(video),
+                              actions::Action::ExportAudio) &&
+                   !hasAction(actions::build(video),
+                              actions::Action::ExportTranscriptText),
                "a running media task must suppress duplicate generation "
                "and separation");
   video.subtitleGenerationRunningForSource = true;
@@ -159,6 +190,16 @@ int main() {
                               actions::Action::GenerateSubtitles),
                "the source being processed must expose cancellation");
   video.subtitleGenerationRunningForSource = false;
+  video.transcriptTextExportRunningForSource = true;
+  const std::vector<actions::Item> exportingTranscriptVideo =
+      actions::build(video);
+  const actions::Item* cancelTranscriptExport =
+      findAction(exportingTranscriptVideo, actions::Action::CancelMediaExport);
+  ok &= expect(cancelTranscriptExport &&
+                   cancelTranscriptExport->label ==
+                       "Cancel transcript export",
+               "a transcript export must expose source-specific cancellation");
+  video.transcriptTextExportRunningForSource = false;
   video.audioSeparationRunningForSource = true;
   const std::vector<actions::Item> separatingVideo = actions::build(video);
   ok &= expect(hasAction(separatingVideo,
@@ -181,11 +222,13 @@ int main() {
   audio.canBrowseTracks = true;
   audio.canAnalyzeAudio = true;
   audio.canSeparateAudio = true;
+  audio.canExportAudio = true;
   const std::vector<actions::Item> browserAudio = actions::build(audio);
-  ok &= expect(browserAudio.size() == 5 &&
+  ok &= expect(browserAudio.size() == 6 &&
                    hasAction(browserAudio, actions::Action::Play) &&
                    hasAction(browserAudio, actions::Action::BrowseTracks) &&
                    hasAction(browserAudio, actions::Action::SeparateAudio) &&
+                   hasAction(browserAudio, actions::Action::ExportAudio) &&
                    hasAction(browserAudio, actions::Action::AnalyzeAudio) &&
                    hasAction(browserAudio, actions::Action::SplitLoop) &&
                    !hasAction(browserAudio, actions::Action::GenerateSubtitles) &&
@@ -214,6 +257,9 @@ int main() {
   processingService.state.audioSeparationAvailable = true;
   processingService.state.audioSeparationRunning = true;
   processingService.state.separatedAudioExists = true;
+  processingService.state.audioExportAvailable = true;
+  processingService.state.audioExportRunning = true;
+  processingService.state.transcriptTextExportAvailable = true;
   playback_media_processing::Actions processingActions(processingService);
   const actions::Context projected =
       processingActions.contextForSource("source.mp4");
@@ -223,7 +269,9 @@ int main() {
                    projected.hasGeneratedSubtitles &&
                    projected.canSeparateAudio &&
                    projected.audioSeparationRunningForSource &&
-                   projected.hasSeparatedAudio,
+                   projected.hasSeparatedAudio && projected.canExportAudio &&
+                   projected.audioExportRunningForSource &&
+                   projected.canExportTranscriptText,
                "browser and player must share one processing-state projection");
   const std::optional<playback_media_processing::ActionResult>
       generateSubtitles =
@@ -240,6 +288,12 @@ int main() {
       cancelSeparation =
       processingActions.execute(actions::Action::CancelAudioSeparation,
                                 "source.mp4");
+  const auto exportAudio = processingActions.execute(
+      actions::Action::ExportAudio, "source.mp4");
+  const auto exportTranscript = processingActions.execute(
+      actions::Action::ExportTranscriptText, "source.mp4");
+  const auto cancelExport = processingActions.execute(
+      actions::Action::CancelMediaExport, "source.mp4");
   const std::optional<playback_media_processing::ActionResult> surfaceAction =
       processingActions.execute(actions::Action::EditVideo, "source.mp4");
   ok &= expect(
@@ -252,10 +306,19 @@ int main() {
           cancelSubtitles->feedback == "Cancelling subtitle generation" &&
           cancelSeparation && cancelSeparation->accepted &&
           cancelSeparation->feedback == "Cancelling audio separation" &&
+          exportAudio && exportAudio->accepted &&
+          exportAudio->feedback == "Exporting audio" && exportTranscript &&
+          exportTranscript->accepted &&
+          exportTranscript->feedback == "Exporting transcript" &&
+          cancelExport && cancelExport->accepted &&
+          cancelExport->feedback == "Cancelling export" &&
           processingService.subtitleRequested &&
           processingService.subtitleCancelled &&
           processingService.separationRequested &&
           processingService.separationCancelled &&
+          processingService.audioExportRequested &&
+          processingService.transcriptExportRequested &&
+          processingService.exportCancelled &&
           !surfaceAction,
       "browser and player must share processing dispatch and feedback");
   FakeMediaProcessingService rejectingService;

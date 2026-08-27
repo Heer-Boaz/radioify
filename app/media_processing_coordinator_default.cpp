@@ -1,7 +1,9 @@
 #include "app/media_processing_coordinator.h"
 
 #include "audio/audioplayback.h"
+#include "audio/audio_export.h"
 #include "audio/loopsplit/loopsplit.h"
+#include "playback/video/transcript/text_export.h"
 
 namespace media_processing {
 
@@ -36,6 +38,9 @@ Coordinator::Coordinator(AudioPlaybackRuntime& audioPlayback)
                                              reportProgress,
                                              cancellationRequested, error);
             };
+        operations.exportAudio = audio_export::exportToFlac;
+        operations.exportTranscriptText =
+            playback_video_transcript::exportTranscriptText;
 #if RADIOIFY_HAS_AUDIO_SEPARATION
         operations.audioSeparationAvailable = true;
 #else

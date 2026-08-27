@@ -8,6 +8,7 @@
 
 #include "audio/media_formats.h"
 #include "audio/separation/artifact.h"
+#include "core/file_output.h"
 #include "core/path_identity.h"
 #include "core/runtime_helpers.h"
 #include "core/wake_event.h"
@@ -29,6 +30,11 @@ TaskOutcome outcomeFor(const audio_separation::JobSnapshot& snapshot) {
   if (snapshot.state == State::Succeeded) return TaskOutcome::Succeeded;
   if (snapshot.state == State::Cancelled) return TaskOutcome::Cancelled;
   return TaskOutcome::Failed;
+}
+
+bool supportsAudioExport(const std::filesystem::path& sourceFile) {
+  return isSupportedVideoExt(sourceFile) || isMiniaudioExt(sourceFile) ||
+         isFfmpegAudioExt(sourceFile) || isM4aExt(sourceFile);
 }
 
 playback_media_processing::Outcome playbackOutcomeFor(TaskOutcome outcome) {
@@ -251,6 +257,13 @@ std::optional<playback_media_processing::Completion> completionForPlayback(
       projected.operation =
           playback_media_processing::Operation::AudioSeparation;
       break;
+    case TaskKind::AudioExport:
+      projected.operation = playback_media_processing::Operation::AudioExport;
+      break;
+    case TaskKind::TranscriptTextExport:
+      projected.operation =
+          playback_media_processing::Operation::TranscriptTextExport;
+      break;
     case TaskKind::MelodyAnalysis:
     case TaskKind::LoopSplit:
       return std::nullopt;
@@ -268,6 +281,8 @@ struct Coordinator::Impl {
         workerTask(wakeEvent.notifier()),
         analyzeMelody(std::move(backends.analyzeMelody)),
         splitLoop(std::move(backends.splitLoop)),
+        exportAudio(std::move(backends.exportAudio)),
+        exportTranscriptText(std::move(backends.exportTranscriptText)),
         subtitles(
             std::make_unique<playback_video_transcript::GenerationJob>(
                 std::move(backends.generateSubtitles), wakeEvent.notifier())),
@@ -279,6 +294,8 @@ struct Coordinator::Impl {
   WorkerTask workerTask;
   MelodyOperation analyzeMelody;
   LoopSplitOperation splitLoop;
+  FileExportOperation exportAudio;
+  FileExportOperation exportTranscriptText;
   std::unique_ptr<playback_video_transcript::GenerationJob> subtitles;
   std::unique_ptr<audio_separation::Job> audioSeparation;
   bool audioSeparationAvailable = false;
@@ -300,6 +317,9 @@ Coordinator::Coordinator(Operations operations)
         backends.generateSubtitles =
             std::move(operations.generateSubtitles);
         backends.separateAudio = std::move(operations.separateAudio);
+        backends.exportAudio = std::move(operations.exportAudio);
+        backends.exportTranscriptText =
+            std::move(operations.exportTranscriptText);
         backends.audioSeparationAvailable =
             operations.audioSeparationAvailable;
         return backends;
@@ -455,6 +475,47 @@ bool Coordinator::tryStartLoopSplit(
   return started;
 }
 
+bool Coordinator::tryStartFileExport(
+    TaskKind kind, const std::filesystem::path& sourceFile,
+    const std::filesystem::path& outputFile,
+    const FileExportOperation& operation, const char* initialPhase,
+    const char* fallbackError) {
+  if (!impl_ || !operation || sourceFile.empty() || outputFile.empty() ||
+      running() || impl_->completionPending()) {
+    return false;
+  }
+  TaskActivity activity;
+  activity.kind = kind;
+  activity.sourceFile = sourceFile;
+  activity.progress = 0.0f;
+  activity.phase = initialPhase;
+  activity.cancellable = true;
+  const bool started = impl_->workerTask.tryStart(
+      std::move(activity),
+      [kind, operation, sourceFile, outputFile,
+       fallbackError](const WorkerTask::ProgressReporter& reportProgress,
+                      const WorkerTask::CancellationRequested&
+                          cancellationRequested) {
+        std::string error;
+        const bool succeeded = operation(sourceFile, outputFile,
+                                         reportProgress,
+                                         cancellationRequested, &error);
+        TaskCompletion completion;
+        completion.kind = kind;
+        completion.outcome = succeeded ? TaskOutcome::Succeeded
+                                       : TaskOutcome::Failed;
+        completion.sourceFile = sourceFile;
+        completion.outputFile = outputFile;
+        if (!succeeded) {
+          completion.detail =
+              error.empty() ? fallbackError : std::move(error);
+        }
+        return completion;
+      });
+  if (started) impl_->latestCompletion.reset();
+  return started;
+}
+
 playback_media_processing::SourceState Coordinator::sourceStateFor(
     const std::filesystem::path& sourceFile) const {
   playback_media_processing::SourceState state;
@@ -469,10 +530,17 @@ playback_media_processing::SourceState Coordinator::sourceStateFor(
         currentActivity->kind == TaskKind::SubtitleGeneration;
     state.audioSeparationRunning =
         currentActivity->kind == TaskKind::AudioSeparation;
+    state.audioExportRunning =
+        currentActivity->kind == TaskKind::AudioExport;
+    state.transcriptTextExportRunning =
+        currentActivity->kind == TaskKind::TranscriptTextExport;
   }
   state.audioSeparationAvailable =
       audioSeparationAvailableFor(sourceFile);
   state.separatedAudioExists = hasSeparatedAudioFor(sourceFile);
+  state.audioExportAvailable = audioExportAvailableFor(sourceFile);
+  state.transcriptTextExportAvailable =
+      transcriptTextExportAvailableFor(sourceFile);
   return state;
 }
 
@@ -498,6 +566,27 @@ bool Coordinator::requestAudioSeparation(
   impl_->audioSeparationCompletionPending = true;
   impl_->latestCompletion.reset();
   return true;
+}
+
+bool Coordinator::requestAudioExport(
+    const std::filesystem::path& sourceFile) {
+  if (!audioExportAvailableFor(sourceFile)) return false;
+  const std::filesystem::path outputFile = file_output::uniqueSiblingPath(
+      sourceFile, L" - audio", L".flac");
+  return tryStartFileExport(TaskKind::AudioExport, sourceFile, outputFile,
+                            impl_->exportAudio, "Preparing audio export",
+                            "Audio export failed.");
+}
+
+bool Coordinator::requestTranscriptTextExport(
+    const std::filesystem::path& sourceFile) {
+  if (!transcriptTextExportAvailableFor(sourceFile)) return false;
+  const std::filesystem::path outputFile = file_output::uniqueSiblingPath(
+      sourceFile, L" - transcript", L".txt");
+  return tryStartFileExport(
+      TaskKind::TranscriptTextExport, sourceFile, outputFile,
+      impl_->exportTranscriptText, "Preparing transcript export",
+      "Transcript export failed.");
 }
 
 bool Coordinator::subtitleGenerationRunningFor(
@@ -528,6 +617,20 @@ bool Coordinator::hasSeparatedAudioFor(
   return audio_separation::artifactsExistFor(sourceFile);
 }
 
+bool Coordinator::audioExportAvailableFor(
+    const std::filesystem::path& sourceFile) const {
+  return impl_ && impl_->exportAudio && supportsAudioExport(sourceFile) &&
+         !audio_separation::isManagedArtifactPath(sourceFile);
+}
+
+bool Coordinator::transcriptTextExportAvailableFor(
+    const std::filesystem::path& sourceFile) const {
+  return impl_ && impl_->exportTranscriptText &&
+         isSupportedVideoExt(sourceFile) &&
+         !playback_video_transcript::activeTranscriptPathForVideo(sourceFile)
+              .empty();
+}
+
 bool Coordinator::requestSubtitleCancellation() {
   return impl_ && impl_->subtitles && impl_->subtitles->requestCancel();
 }
@@ -535,6 +638,18 @@ bool Coordinator::requestSubtitleCancellation() {
 bool Coordinator::requestAudioSeparationCancellation() {
   return impl_ && impl_->audioSeparation &&
          impl_->audioSeparation->requestCancel();
+}
+
+bool Coordinator::requestMediaExportCancellation() {
+  if (!impl_) return false;
+  const std::optional<TaskActivity> current =
+      impl_->workerTask.activity();
+  if (!current ||
+      (current->kind != TaskKind::AudioExport &&
+       current->kind != TaskKind::TranscriptTextExport)) {
+    return false;
+  }
+  return impl_->workerTask.requestCancel();
 }
 
 bool Coordinator::cancelActive() {

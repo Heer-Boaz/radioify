@@ -21,6 +21,19 @@ std::vector<Item> build(const Context& context) {
            context.hasGeneratedSubtitles ? "Regenerate subtitles..."
                                          : "Generate subtitles..."});
     }
+    if (context.transcriptTextExportRunningForSource) {
+      items.push_back({Action::CancelMediaExport,
+                       "Cancel transcript export"});
+    } else if (!context.backgroundTaskRunning &&
+               context.canExportTranscriptText) {
+      items.push_back(
+          {Action::ExportTranscriptText, "Export transcript as text"});
+    }
+    if (context.audioExportRunningForSource) {
+      items.push_back({Action::CancelMediaExport, "Cancel audio export"});
+    } else if (!context.backgroundTaskRunning && context.canExportAudio) {
+      items.push_back({Action::ExportAudio, "Export audio as FLAC"});
+    }
     if (context.audioSeparationRunningForSource) {
       items.push_back(
           {Action::CancelAudioSeparation, "Cancel audio separation"});
@@ -39,6 +52,11 @@ std::vector<Item> build(const Context& context) {
   }
   if (context.canBrowseTracks) {
     items.push_back({Action::BrowseTracks, "Browse tracks"});
+  }
+  if (context.audioExportRunningForSource) {
+    items.push_back({Action::CancelMediaExport, "Cancel audio export"});
+  } else if (!context.backgroundTaskRunning && context.canExportAudio) {
+    items.push_back({Action::ExportAudio, "Export audio as FLAC"});
   }
   if (context.audioSeparationRunningForSource) {
     items.push_back(

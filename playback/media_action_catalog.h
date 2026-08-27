@@ -15,6 +15,9 @@ enum class Action : uint8_t {
   EditVideo,
   GenerateSubtitles,
   CancelSubtitleGeneration,
+  ExportTranscriptText,
+  ExportAudio,
+  CancelMediaExport,
   SeparateAudio,
   CancelAudioSeparation,
   AnalyzeAudio,
@@ -35,11 +38,15 @@ struct Context {
   bool canBrowseTracks = false;
   bool canAnalyzeAudio = false;
   bool canSeparateAudio = false;
+  bool canExportAudio = false;
+  bool canExportTranscriptText = false;
   bool backgroundTaskRunning = false;
   bool hasGeneratedSubtitles = false;
   bool subtitleGenerationRunningForSource = false;
   bool hasSeparatedAudio = false;
   bool audioSeparationRunningForSource = false;
+  bool audioExportRunningForSource = false;
+  bool transcriptTextExportRunningForSource = false;
 };
 
 struct Item {

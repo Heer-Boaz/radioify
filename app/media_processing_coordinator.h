@@ -23,6 +23,8 @@ enum class TaskKind {
   LoopSplit,
   SubtitleGeneration,
   AudioSeparation,
+  AudioExport,
+  TranscriptTextExport,
 };
 
 enum class TaskOutcome {
@@ -77,12 +79,17 @@ class Coordinator final : public playback_media_processing::Service {
       const std::filesystem::path&, const std::filesystem::path&,
       const std::filesystem::path&, const LoopSplitConfig&, LoopSplitResult*,
       const ProgressReporter&, const CancellationRequested&, std::string*)>;
+  using FileExportOperation = std::function<bool(
+      const std::filesystem::path&, const std::filesystem::path&,
+      const ProgressReporter&, const CancellationRequested&, std::string*)>;
 
   struct Operations {
     MelodyOperation analyzeMelody;
     LoopSplitOperation splitLoop;
     playback_video_transcript::GenerationJob::Operation generateSubtitles;
     audio_separation::Job::Operation separateAudio;
+    FileExportOperation exportAudio;
+    FileExportOperation exportTranscriptText;
     bool audioSeparationAvailable = false;
   };
 
@@ -114,6 +121,11 @@ class Coordinator final : public playback_media_processing::Service {
   bool requestSubtitles(
       const std::filesystem::path& sourceFile) override;
   bool requestSubtitleCancellation() override;
+  bool requestAudioExport(
+      const std::filesystem::path& sourceFile) override;
+  bool requestTranscriptTextExport(
+      const std::filesystem::path& sourceFile) override;
+  bool requestMediaExportCancellation() override;
   bool requestAudioSeparation(
       const std::filesystem::path& sourceFile) override;
   bool requestAudioSeparationCancellation() override;
@@ -125,6 +137,10 @@ class Coordinator final : public playback_media_processing::Service {
   bool audioSeparationRunningFor(
       const std::filesystem::path& sourceFile) const;
   bool hasSeparatedAudioFor(const std::filesystem::path& sourceFile) const;
+  bool audioExportAvailableFor(
+      const std::filesystem::path& sourceFile) const;
+  bool transcriptTextExportAvailableFor(
+      const std::filesystem::path& sourceFile) const;
 
   bool cancelActive();
 
@@ -140,9 +156,18 @@ class Coordinator final : public playback_media_processing::Service {
     LoopSplitOperation splitLoop;
     playback_video_transcript::GenerationJob::Operation generateSubtitles;
     audio_separation::Job::Operation separateAudio;
+    FileExportOperation exportAudio;
+    FileExportOperation exportTranscriptText;
     bool audioSeparationAvailable = false;
   };
   explicit Coordinator(Backends backends);
+
+  bool tryStartFileExport(TaskKind kind,
+                          const std::filesystem::path& sourceFile,
+                          const std::filesystem::path& outputFile,
+                          const FileExportOperation& operation,
+                          const char* initialPhase,
+                          const char* fallbackError);
 
   struct Impl;
   std::unique_ptr<Impl> impl_;

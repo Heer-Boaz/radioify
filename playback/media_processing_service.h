@@ -8,6 +8,8 @@ namespace playback_media_processing {
 enum class Operation {
   SubtitleGeneration,
   AudioSeparation,
+  AudioExport,
+  TranscriptTextExport,
 };
 
 enum class Outcome {
@@ -33,6 +35,10 @@ struct SourceState {
   bool audioSeparationAvailable = false;
   bool audioSeparationRunning = false;
   bool separatedAudioExists = false;
+  bool audioExportAvailable = false;
+  bool audioExportRunning = false;
+  bool transcriptTextExportAvailable = false;
+  bool transcriptTextExportRunning = false;
 };
 
 // Narrow application service consumed by playback surfaces. Implementations
@@ -47,6 +53,11 @@ class Service {
   virtual bool requestSubtitles(
       const std::filesystem::path& sourceFile) = 0;
   virtual bool requestSubtitleCancellation() = 0;
+  virtual bool requestAudioExport(
+      const std::filesystem::path& sourceFile) = 0;
+  virtual bool requestTranscriptTextExport(
+      const std::filesystem::path& sourceFile) = 0;
+  virtual bool requestMediaExportCancellation() = 0;
   virtual bool requestAudioSeparation(
       const std::filesystem::path& sourceFile) = 0;
   virtual bool requestAudioSeparationCancellation() = 0;

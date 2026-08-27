@@ -25,6 +25,18 @@ std::optional<ActionResult> Actions::execute(
       return actionResult(service_.requestSubtitleCancellation(),
                           "Cancelling subtitle generation",
                           "Could not cancel subtitle generation");
+    case playback_media_actions::Action::ExportAudio:
+      return actionResult(service_.requestAudioExport(sourceFile),
+                          "Exporting audio",
+                          "Could not start audio export");
+    case playback_media_actions::Action::ExportTranscriptText:
+      return actionResult(service_.requestTranscriptTextExport(sourceFile),
+                          "Exporting transcript",
+                          "Could not start transcript export");
+    case playback_media_actions::Action::CancelMediaExport:
+      return actionResult(service_.requestMediaExportCancellation(),
+                          "Cancelling export",
+                          "Could not cancel export");
     case playback_media_actions::Action::SeparateAudio:
       return actionResult(
           service_.requestAudioSeparation(sourceFile),
@@ -57,6 +69,11 @@ playback_media_actions::Context Actions::contextForSource(
   context.canSeparateAudio = state.audioSeparationAvailable;
   context.audioSeparationRunningForSource = state.audioSeparationRunning;
   context.hasSeparatedAudio = state.separatedAudioExists;
+  context.canExportAudio = state.audioExportAvailable;
+  context.audioExportRunningForSource = state.audioExportRunning;
+  context.canExportTranscriptText = state.transcriptTextExportAvailable;
+  context.transcriptTextExportRunningForSource =
+      state.transcriptTextExportRunning;
   return context;
 }
 

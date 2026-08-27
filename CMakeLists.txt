@@ -1121,6 +1121,7 @@ target_sources(media_processing_coordinator_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/audio/separation/artifact.cpp
   ${CMAKE_SOURCE_DIR}/audio/separation/job.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+  ${CMAKE_SOURCE_DIR}/core/file_output.cpp
   ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp

@@ -23,6 +23,12 @@ std::string activityTitle(const media_processing::TaskActivity& activity) {
     case Kind::AudioSeparation:
       return activity.cancelling ? "Cancelling audio separation"
                                  : "Separating audio";
+    case Kind::AudioExport:
+      return activity.cancelling ? "Cancelling audio export"
+                                 : "Exporting audio";
+    case Kind::TranscriptTextExport:
+      return activity.cancelling ? "Cancelling transcript export"
+                                 : "Exporting transcript";
   }
   return "Processing media";
 }
@@ -41,6 +47,10 @@ std::string completionText(
         return "Melody analysis cancelled.";
       case Kind::LoopSplit:
         return "Loop split cancelled.";
+      case Kind::AudioExport:
+        return "Audio export cancelled.";
+      case Kind::TranscriptTextExport:
+        return "Transcript export cancelled.";
     }
   }
 
@@ -55,6 +65,10 @@ std::string completionText(
         return "Subtitle generation failed.";
       case Kind::AudioSeparation:
         return "Audio separation failed.";
+      case Kind::AudioExport:
+        return "Audio export failed.";
+      case Kind::TranscriptTextExport:
+        return "Transcript export failed.";
     }
   }
 
@@ -75,6 +89,18 @@ std::string completionText(
     }
     case Kind::AudioSeparation:
       return "Audio stems ready: dialogue, music and effects.";
+    case Kind::AudioExport: {
+      const std::string filename =
+          toUtf8String(completion.outputFile.filename());
+      return filename.empty() ? "Audio export ready."
+                              : "Audio export ready: " + filename;
+    }
+    case Kind::TranscriptTextExport: {
+      const std::string filename =
+          toUtf8String(completion.outputFile.filename());
+      return filename.empty() ? "Transcript export ready."
+                              : "Transcript export ready: " + filename;
+    }
   }
   return {};
 }
