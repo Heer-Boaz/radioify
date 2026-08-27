@@ -53,8 +53,19 @@ struct KssInstrumentProfile {
   uint8_t volume = 0;
 };
 
-void audioInit(const AudioPlaybackConfig& config);
-void audioShutdown();
+// Owns the process-wide audio playback state. Keep this object alive for every
+// consumer of the audio API; dependent workers must be declared after it so
+// they are joined before audio is shut down.
+class AudioPlaybackRuntime {
+ public:
+  explicit AudioPlaybackRuntime(const AudioPlaybackConfig& config);
+  ~AudioPlaybackRuntime();
+
+  AudioPlaybackRuntime(const AudioPlaybackRuntime&) = delete;
+  AudioPlaybackRuntime& operator=(const AudioPlaybackRuntime&) = delete;
+  AudioPlaybackRuntime(AudioPlaybackRuntime&&) = delete;
+  AudioPlaybackRuntime& operator=(AudioPlaybackRuntime&&) = delete;
+};
 
 bool audioIsEnabled();
 bool audioIsReady();

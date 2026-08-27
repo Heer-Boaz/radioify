@@ -343,25 +343,6 @@ struct ObservedFrameStep {
   uint64_t frameCounter = 0;
 };
 
-class AudioRuntime {
- public:
-  explicit AudioRuntime(bool enabled) {
-    AudioPlaybackConfig config;
-    config.enableAudio = enabled;
-    config.enableRadio = false;
-    config.dry = true;
-    audioInit(config);
-    if (enabled) {
-      audioAdjustVolume(-audioGetVolume());
-    }
-  }
-
-  ~AudioRuntime() { audioShutdown(); }
-
-  AudioRuntime(const AudioRuntime&) = delete;
-  AudioRuntime& operator=(const AudioRuntime&) = delete;
-};
-
 bool requestAndObserveFrameStep(
     Player& player, bool audioEnabled,
     playback_video_frame_step::Direction direction, const std::string& label,
@@ -536,7 +517,14 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  AudioRuntime audioRuntime(audioEnabled);
+  AudioPlaybackConfig audioConfig;
+  audioConfig.enableAudio = audioEnabled;
+  audioConfig.enableRadio = false;
+  audioConfig.dry = true;
+  AudioPlaybackRuntime audioRuntime(audioConfig);
+  if (audioEnabled) {
+    audioAdjustVolume(-audioGetVolume());
+  }
   if (audioEnabled && audioGetVolume() != 0.0f) {
     std::cerr << "video_frame_step_smoke: failed to mute audio output\n";
     return 1;

@@ -400,22 +400,23 @@ int runExtractSheetCli(const Options& o,
   std::filesystem::path outputPath =
       resolveMelodyArtifactPath(inputPath, o.output);
 
-  audioInit(audioConfig);
-
   std::string error;
-  int lastPct = -1;
-  auto progress = [&](float p) {
-    int pct = static_cast<int>(std::lround(std::clamp(p, 0.0f, 1.0f) * 100.0f));
-    if (pct == lastPct) return;
-    lastPct = pct;
-    std::cout << "\rAnalyzing: " << pct << "%" << std::flush;
-  };
+  bool ok = false;
+  {
+    AudioPlaybackRuntime audioRuntime(audioConfig);
+    int lastPct = -1;
+    auto progress = [&](float p) {
+      int pct =
+          static_cast<int>(std::lround(std::clamp(p, 0.0f, 1.0f) * 100.0f));
+      if (pct == lastPct) return;
+      lastPct = pct;
+      std::cout << "\rAnalyzing: " << pct << "%" << std::flush;
+    };
 
-  bool ok = audioAnalyzeFileToMelodyFile(
-      inputPath, std::max(0, o.trackIndex), outputPath, progress, &error);
+    ok = audioAnalyzeFileToMelodyFile(
+        inputPath, std::max(0, o.trackIndex), outputPath, progress, &error);
+  }
   std::cout << "\n";
-  audioShutdown();
-
   if (!ok) {
     die(error.empty() ? "Failed to extract melody sheet." : error);
   }

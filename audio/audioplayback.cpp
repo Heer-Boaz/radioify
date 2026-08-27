@@ -331,7 +331,8 @@ void stopPlayback() {
   gAudio.gsfWarning.clear();
   gAudio.vgmWarning.clear();
 }
-void audioInit(const AudioPlaybackConfig& config) {
+AudioPlaybackRuntime::AudioPlaybackRuntime(
+    const AudioPlaybackConfig& config) {
   gAudio.enableAudio = config.enableAudio;
   gAudio.sampleRate = 48000;
   gAudio.baseChannels = config.mono ? 1u : 2u;
@@ -355,7 +356,7 @@ void audioInit(const AudioPlaybackConfig& config) {
   gAudio.state.radioFilter.initialize(radioFilterConfig);
 }
 
-void audioShutdown() {
+AudioPlaybackRuntime::~AudioPlaybackRuntime() {
   stopPlayback();
   audioPlaybackDeviceUninit();
 }

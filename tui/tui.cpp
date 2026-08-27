@@ -456,7 +456,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
   }
 
-  audioInit(audioConfig);
+  AudioPlaybackRuntime audioRuntime(audioConfig);
   PlaybackSystemControls systemControls;
   systemControls.initialize();
   PlaybackNotificationAreaControls notificationAreaControls;
@@ -1712,8 +1712,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       if (windowTuiEnabled && tuiWindow.IsOpen()) {
         tuiWindow.Close();
       }
-      mediaTasks.shutdown();
-      audioShutdown();
     };
 
     auto flushLayoutIfNeeded = [&]() {
@@ -2217,7 +2215,5 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   input.restore();
   screen.restore();
   std::cout << "\n";
-  mediaTasks.shutdown();
-  audioShutdown();
   return 0;
 }
