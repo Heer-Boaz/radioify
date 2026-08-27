@@ -33,6 +33,7 @@
 #include "core/runtime_helpers.h"
 #include "core.h"
 #include "input.h"
+#include "media_task_feedback.h"
 #include "output.h"
 #include "presentation_controller.h"
 #include "presentation_model.h"
@@ -1368,21 +1369,16 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     return hasSubtitles;
   }
 
-  void subtitleGenerationFinished(
-      const std::filesystem::path& preferredSubtitleTrack, bool success,
-      std::string status) {
-    if (success) {
-      reloadSubtitles(preferredSubtitleTrack);
+  void mediaTaskFinished(
+      const playback_media_processing::Completion& completion) {
+    if (completion.operation ==
+            playback_media_processing::Operation::SubtitleGeneration &&
+        completion.succeeded()) {
+      reloadSubtitles(completion.outputFile);
       return;
     }
     syncVideoEditPresentation();
-    showEditMessage(status.empty() ? "Subtitle generation failed"
-                                   : std::move(status));
-  }
-
-  void mediaTaskFinished(std::string status) {
-    syncVideoEditPresentation();
-    if (!status.empty()) showEditMessage(status);
+    showEditMessage(playback_session::mediaTaskFeedback(completion));
   }
 
   std::optional<playback_session_exit::RequestId> requestHandoff() {
@@ -1482,15 +1478,9 @@ std::vector<playback_session::Event> PlaybackLoopRunner::drainEvents() {
   return impl_->drainEvents();
 }
 
-void PlaybackLoopRunner::subtitleGenerationFinished(
-    const std::filesystem::path& preferredSubtitleTrack, bool success,
-    std::string status) {
-  impl_->subtitleGenerationFinished(preferredSubtitleTrack, success,
-                                    std::move(status));
-}
-
-void PlaybackLoopRunner::mediaTaskFinished(std::string status) {
-  impl_->mediaTaskFinished(std::move(status));
+void PlaybackLoopRunner::mediaTaskFinished(
+    const playback_media_processing::Completion& completion) {
+  impl_->mediaTaskFinished(completion);
 }
 
 void PlaybackLoopRunner::requestStop() { impl_->requestStop(); }

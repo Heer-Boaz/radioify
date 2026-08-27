@@ -19,7 +19,6 @@ enum class MediaCommandFailureKind : std::uint8_t {
   Unsupported,
   QueueUnavailable,
   PlaybackFailed,
-  NavigationFailed,
 };
 
 struct MediaCommandFailure {
@@ -260,24 +259,14 @@ struct TuiMediaCoordinator::Impl {
   }
 
   void handleMediaTaskCompletion(
-      const media_processing::TaskCompletion& completion,
-      std::string presentationStatus) {
+      const media_processing::TaskCompletion& completion) {
     if (!videoSession_ || !videoTarget_ ||
         !samePath(playbackTargetFile(*videoTarget_), completion.sourceFile)) {
       return;
     }
-    switch (completion.kind) {
-      case media_processing::TaskKind::SubtitleGeneration:
-        videoSession_->subtitleGenerationFinished(
-            completion.outputFile, completion.succeeded(),
-            std::move(presentationStatus));
-        return;
-      case media_processing::TaskKind::AudioSeparation:
-        videoSession_->mediaTaskFinished(std::move(presentationStatus));
-        return;
-      case media_processing::TaskKind::MelodyAnalysis:
-      case media_processing::TaskKind::LoopSplit:
-        return;
+    if (std::optional<playback_media_processing::Completion> projected =
+            media_processing::completionForPlayback(completion)) {
+      videoSession_->mediaTaskFinished(*projected);
     }
   }
 
@@ -613,12 +602,7 @@ struct TuiMediaCoordinator::Impl {
 
   MediaCommandResult dispatch(
       tui_media_activation::OpenDirectory directory) {
-    if (!services_.callbacks.openBrowserDirectory ||
-        !services_.callbacks.openBrowserDirectory(directory.path)) {
-      return MediaCommandResult::rejected(
-          {MediaCommandFailureKind::NavigationFailed,
-           "Unable to open the requested folder."});
-    }
+    publishEvent(OpenBrowserDirectory{std::move(directory.path)});
     return MediaCommandResult::applied();
   }
 
@@ -713,10 +697,8 @@ TuiMediaCoordinator::PollResult TuiMediaCoordinator::poll() {
 }
 
 void TuiMediaCoordinator::handleMediaTaskCompletion(
-    const media_processing::TaskCompletion& completion,
-    std::string presentationStatus) {
-  impl_->handleMediaTaskCompletion(completion,
-                                   std::move(presentationStatus));
+    const media_processing::TaskCompletion& completion) {
+  impl_->handleMediaTaskCompletion(completion);
 }
 
 bool TuiMediaCoordinator::videoActive() const { return impl_->videoActive(); }

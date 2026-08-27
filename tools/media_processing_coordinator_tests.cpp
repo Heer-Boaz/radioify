@@ -8,6 +8,7 @@
 
 #include "app/media_processing_coordinator.h"
 #include "playback/media_processing_actions.h"
+#include "playback/session/media_task_feedback.h"
 #include "tui/ui/media_task_presentation.h"
 
 #include <atomic>
@@ -171,7 +172,8 @@ int main() {
       presenter.latestStatus();
   ok &= expect(melodyCompletion && melodyCompletion->succeeded() &&
                    melodyStatus && melodyStatus->text ==
-                       "Analyze: Saved clip.melody and clip.mid",
+                       "Analyze: Saved clip.melody and clip.mid" &&
+                   !processing::completionForPlayback(*melodyCompletion),
                "melody completion must use the shared result contract");
 
   ok &= expect(coordinator.tryStartLoopSplit(
@@ -211,9 +213,21 @@ int main() {
                "backend phases must reach the generic task card");
   releaseSubtitles.store(true, std::memory_order_release);
   const auto subtitleCompletion = waitForCompletion(coordinator);
+  const auto playbackSubtitleCompletion =
+      subtitleCompletion
+          ? processing::completionForPlayback(*subtitleCompletion)
+          : std::nullopt;
   ok &= expect(subtitleCompletion && subtitleCompletion->succeeded() &&
                    subtitleCompletion->outputFile ==
                        std::filesystem::path("movie.transcript.srt") &&
+                   playbackSubtitleCompletion &&
+                   playbackSubtitleCompletion->operation ==
+                       playback_media_processing::Operation::
+                           SubtitleGeneration &&
+                   playbackSubtitleCompletion->succeeded() &&
+                   playback_session::mediaTaskFeedback(
+                       *playbackSubtitleCompletion) ==
+                       "Subtitles ready: movie.transcript.srt" &&
                    mediaTaskStatusModel(*subtitleCompletion).text ==
                        "Subtitles ready: movie.transcript.srt",
                "subtitle completion must retain its canonical sidecar");
@@ -250,9 +264,21 @@ int main() {
                "cancellation must remain an explicit generic activity state");
   releaseSeparation.store(true, std::memory_order_release);
   const auto separationCompletion = waitForCompletion(coordinator);
+  const auto playbackSeparationCompletion =
+      separationCompletion
+          ? processing::completionForPlayback(*separationCompletion)
+          : std::nullopt;
   ok &= expect(separationCompletion &&
                    separationCompletion->outcome ==
                        processing::TaskOutcome::Cancelled &&
+                   playbackSeparationCompletion &&
+                   playbackSeparationCompletion->operation ==
+                       playback_media_processing::Operation::AudioSeparation &&
+                   playbackSeparationCompletion->outcome ==
+                       playback_media_processing::Outcome::Cancelled &&
+                   playback_session::mediaTaskFeedback(
+                       *playbackSeparationCompletion) ==
+                       "Audio separation cancelled." &&
                    mediaTaskStatusModel(*separationCompletion).text ==
                        "Audio separation cancelled.",
                "cancelled separation must not leak backend error text");

@@ -55,6 +55,12 @@ struct PollResult {
   std::vector<TaskCompletion> completions;
 };
 
+// Projects application-wide task results onto the narrower protocol consumed
+// by an active playback session. Browser-only tasks intentionally have no
+// playback completion.
+std::optional<playback_media_processing::Completion> completionForPlayback(
+    const TaskCompletion& completion);
+
 // Application-level owner of Radioify's mutually-exclusive, offline media
 // processing. UI surfaces observe one common activity/completion contract
 // instead of understanding every worker's lifecycle and synchronization.

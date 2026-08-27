@@ -30,6 +30,18 @@ TaskOutcome outcomeFor(const audio_separation::JobSnapshot& snapshot) {
   return TaskOutcome::Failed;
 }
 
+playback_media_processing::Outcome playbackOutcomeFor(TaskOutcome outcome) {
+  switch (outcome) {
+    case TaskOutcome::Succeeded:
+      return playback_media_processing::Outcome::Succeeded;
+    case TaskOutcome::Failed:
+      return playback_media_processing::Outcome::Failed;
+    case TaskOutcome::Cancelled:
+      return playback_media_processing::Outcome::Cancelled;
+  }
+  return playback_media_processing::Outcome::Failed;
+}
+
 class WorkerTask {
  public:
   using ProgressReporter = std::function<void(float)>;
@@ -187,6 +199,29 @@ class WorkerTask {
 };
 
 }  // namespace
+
+std::optional<playback_media_processing::Completion> completionForPlayback(
+    const TaskCompletion& completion) {
+  playback_media_processing::Completion projected;
+  switch (completion.kind) {
+    case TaskKind::SubtitleGeneration:
+      projected.operation =
+          playback_media_processing::Operation::SubtitleGeneration;
+      break;
+    case TaskKind::AudioSeparation:
+      projected.operation =
+          playback_media_processing::Operation::AudioSeparation;
+      break;
+    case TaskKind::MelodyAnalysis:
+    case TaskKind::LoopSplit:
+      return std::nullopt;
+  }
+  projected.outcome = playbackOutcomeFor(completion.outcome);
+  projected.sourceFile = completion.sourceFile;
+  projected.outputFile = completion.outputFile;
+  projected.detail = completion.detail;
+  return projected;
+}
 
 struct Coordinator::Impl {
   explicit Impl(Backends backends)

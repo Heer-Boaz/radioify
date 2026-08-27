@@ -265,18 +265,10 @@ std::vector<playback_session::Event> PlaybackSession::drainEvents() {
   return impl_->loop->drainEvents();
 }
 
-void PlaybackSession::subtitleGenerationFinished(
-    const std::filesystem::path& preferredSubtitleTrack, bool success,
-    std::string status) {
+void PlaybackSession::mediaTaskFinished(
+    const playback_media_processing::Completion& completion) {
   if (impl_->canControl()) {
-    impl_->loop->subtitleGenerationFinished(preferredSubtitleTrack, success,
-                                            std::move(status));
-  }
-}
-
-void PlaybackSession::mediaTaskFinished(std::string status) {
-  if (impl_->canControl()) {
-    impl_->loop->mediaTaskFinished(std::move(status));
+    impl_->loop->mediaTaskFinished(completion);
   }
 }
 

@@ -1,8 +1,30 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
 
 namespace playback_media_processing {
+
+enum class Operation {
+  SubtitleGeneration,
+  AudioSeparation,
+};
+
+enum class Outcome {
+  Succeeded,
+  Failed,
+  Cancelled,
+};
+
+struct Completion {
+  Operation operation = Operation::SubtitleGeneration;
+  Outcome outcome = Outcome::Failed;
+  std::filesystem::path sourceFile;
+  std::filesystem::path outputFile;
+  std::string detail;
+
+  bool succeeded() const { return outcome == Outcome::Succeeded; }
+};
 
 struct SourceState {
   bool backgroundTaskRunning = false;

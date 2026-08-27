@@ -1,7 +1,6 @@
 #pragma once
 
 #include <filesystem>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -54,18 +53,18 @@ class TuiMediaCoordinator {
   struct QuitRequested {};
   struct PresentationFinished {};
   struct ActivateBrowserSurface {};
+  struct OpenBrowserDirectory {
+    std::filesystem::path path;
+  };
 
   using Event = std::variant<ApplyAudioPictureInPicture, CommandErrorChanged,
                              AudioPlaybackFailed, ShowImages, QuitRequested,
-                             PresentationFinished, ActivateBrowserSurface>;
+                             PresentationFinished, ActivateBrowserSurface,
+                             OpenBrowserDirectory>;
 
   struct PollResult {
     bool playbackChanged = false;
     std::vector<Event> events;
-  };
-
-  struct Callbacks {
-    std::function<bool(const std::filesystem::path&)> openBrowserDirectory;
   };
 
   struct Services {
@@ -74,7 +73,6 @@ class TuiMediaCoordinator {
     playback_media_processing::Actions mediaProcessingActions;
     PlaybackSession::Dependencies sessionDependencies;
     const VideoPlaybackConfig& videoConfig;
-    Callbacks callbacks;
   };
 
   explicit TuiMediaCoordinator(Services services);
@@ -94,8 +92,7 @@ class TuiMediaCoordinator {
   bool openFiles(const OpenFilesRequest& request);
   PollResult poll();
   void handleMediaTaskCompletion(
-      const media_processing::TaskCompletion& completion,
-      std::string presentationStatus);
+      const media_processing::TaskCompletion& completion);
 
   bool videoActive() const;
   PlaybackShellTerminalRole terminalRole() const;

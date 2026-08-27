@@ -596,21 +596,16 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       browserNavigator, std::move(browserPlaybackCallbacks));
 
   std::string mediaCommandError;
-  auto openBrowserDirectory = [&](const std::filesystem::path& dir) {
-    return browserNavigator.navigate(browserDirectoryLocation(dir));
-  };
 
   PlaybackSession::Dependencies mediaSessionDependencies{
       input, screen, theme.playbackSessionAppearance()};
-  TuiMediaCoordinator::Callbacks mediaCallbacks;
-  mediaCallbacks.openBrowserDirectory = openBrowserDirectory;
   playback_queue::Queue& playbackQueue = runtime.playbackQueue();
   media_processing::Coordinator& mediaProcessing = runtime.mediaProcessing();
   playback_media_processing::Actions mediaProcessingActions(mediaProcessing);
   MediaTaskPresenter mediaTaskPresenter(mediaProcessing);
   TuiMediaCoordinator mediaCoordinator(
       {audioPlayback, playbackQueue, mediaProcessingActions,
-       mediaSessionDependencies, videoConfig, std::move(mediaCallbacks)});
+       mediaSessionDependencies, videoConfig});
   TuiPlaybackPresenter playbackPresenter(mediaCoordinator, audioPlayback);
   auto handleMediaCoordinatorEvent =
       [&](TuiMediaCoordinator::Event event) {
@@ -662,6 +657,16 @@ int runTui(Options o, ApplicationRuntime& runtime) {
             } else {
               activateWindowsConsoleWindow();
             }
+          } else if constexpr (
+              std::is_same_v<Event,
+                             TuiMediaCoordinator::OpenBrowserDirectory>) {
+            if (!browserNavigator.navigate(
+                    browserDirectoryLocation(value.path))) {
+              mediaCommandError = "Unable to open the requested folder.";
+            } else {
+              mediaCommandError.clear();
+            }
+            markDirty(UiDirtyFlags::Async);
           }
         },
         event);
@@ -1305,8 +1310,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     media_processing::PollResult taskUpdate = mediaProcessing.poll();
     for (const media_processing::TaskCompletion& completion :
          taskUpdate.completions) {
-      mediaCoordinator.handleMediaTaskCompletion(
-          completion, mediaTaskStatusModel(completion).text);
+      mediaCoordinator.handleMediaTaskCompletion(completion);
     }
     if (!taskUpdate.completions.empty()) {
       markLayoutDirty();

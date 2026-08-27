@@ -96,10 +96,8 @@ class PlaybackSession {
   bool resolveHandoff(playback_session_exit::RequestId requestId,
                       bool accepted);
   std::vector<playback_session::Event> drainEvents();
-  void subtitleGenerationFinished(
-      const std::filesystem::path& preferredSubtitleTrack, bool success,
-      std::string status);
-  void mediaTaskFinished(std::string status);
+  void mediaTaskFinished(
+      const playback_media_processing::Completion& completion);
   void requestStop();
   void requestQuit();
 
