@@ -1,7 +1,6 @@
 #pragma once
 
 #include <atomic>
-#include <functional>
 #include <memory>
 #include <string>
 
@@ -16,9 +15,8 @@ class WindowPresenter {
  public:
   WindowPresenter(
       Player& player, std::string mediaTitle,
-      std::function<WindowUiState()> buildUiState,
-      playback_framebuffer_presenter::TextGridPresentationProvider
-          buildTextGridPresentation);
+      std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
+          presentationSource);
   ~WindowPresenter();
 
   WindowPresenter(const WindowPresenter&) = delete;

@@ -147,13 +147,7 @@ void runFramebufferPresenterLoop(
     Player& player, VideoWindow& videoWindow, GpuVideoFrameCache& frameCache,
     std::atomic<WindowThreadState>& threadState,
     std::atomic<bool>& forcePresent, NativeWaitHandle wakeEvent,
-    ThreadDispatchQueue& dispatch,
-    const std::function<WindowUiState()>& buildUiState,
-    const TextGridPresentationProvider& buildTextGridPresentation) {
-  if (!buildUiState) {
-    return;
-  }
-
+    ThreadDispatchQueue& dispatch, PresentationSource& presentationSource) {
   playback_frame_refresh::PlaybackFrameRefreshState frameRefresh;
   playback_framebuffer_video_pipeline::Pipeline videoPipeline;
   std::vector<ScreenCell> textGridPresentationCells;
@@ -265,7 +259,7 @@ void runFramebufferPresenterLoop(
     const bool seekingNow = player.timelineSnapshot().seekPending();
     WindowUiState ui;
     if (!textGridPresentationActive) {
-      ui = buildUiState();
+      ui = presentationSource.buildWindowUiState(videoWindow);
     }
     if (textGridPresentationActive) {
       const int windowWidth = videoWindow.GetWidth();
@@ -292,13 +286,12 @@ void runFramebufferPresenterLoop(
         playback_overlay::InteractionMap textInteractions;
         const VideoFrame* textFrame =
             videoFrameResult.frameAvailable ? presentationFrame : nullptr;
-        if (buildTextGridPresentation &&
-            buildTextGridPresentation(windowWidth, windowHeight, cellWidth,
-                                          cellHeight, textFrame,
-                                          textFrameChanged,
-                                          videoFrameResult.debugLine,
-                                          textGridPresentationCells, textCols,
-                                          textRows, textInteractions)) {
+        TextGridPresentationRequest request{
+            videoWindow, windowWidth, windowHeight, cellWidth, cellHeight,
+            textFrame, textFrameChanged, videoFrameResult.debugLine};
+        TextGridPresentationTarget target{
+            textGridPresentationCells, textCols, textRows, textInteractions};
+        if (presentationSource.renderTextGrid(request, target)) {
           buildGpuTextGridFrameFromScreenCells(
               textGridPresentationCells, textCols, textRows,
               textGridPresentationFrame);

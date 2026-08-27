@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <fstream>
 #include <mutex>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 
@@ -61,9 +62,8 @@ std::string nativePlaybackWindowTitle(const std::string& mediaTitle) {
 struct WindowPresenter::Impl {
   Player& player;
   const std::string nativeWindowTitle;
-  const std::function<WindowUiState()> uiStateBuilder;
-  const playback_framebuffer_presenter::TextGridPresentationProvider
-      textGridPresentationBuilder;
+  const std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
+      presentationSource;
   VideoWindow window;
   GpuVideoFrameCache frameCache;
   ThreadDispatchQueue dispatch;
@@ -74,13 +74,15 @@ struct WindowPresenter::Impl {
   UniqueWindowsHandle wakeEvent{CreateEventW(nullptr, FALSE, FALSE, nullptr)};
   std::thread thread;
   Impl(Player& player, std::string mediaTitle,
-       std::function<WindowUiState()> buildUiState,
-       playback_framebuffer_presenter::TextGridPresentationProvider
-           buildTextGridPresentation)
+       std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
+           presentationSource)
       : player(player),
         nativeWindowTitle(nativePlaybackWindowTitle(mediaTitle)),
-        uiStateBuilder(std::move(buildUiState)),
-        textGridPresentationBuilder(std::move(buildTextGridPresentation)) {
+        presentationSource(std::move(presentationSource)) {
+    if (!this->presentationSource) {
+      throw std::invalid_argument(
+          "WindowPresenter requires a presentation source");
+    }
     window.SetVsync(true);
   }
 
@@ -133,8 +135,7 @@ struct WindowPresenter::Impl {
       if (opened) {
         playback_framebuffer_presenter::runFramebufferPresenterLoop(
             player, window, frameCache, threadState, forcePresent,
-            NativeWaitHandle(wakeEvent.get()), dispatch, uiStateBuilder,
-            textGridPresentationBuilder);
+            NativeWaitHandle(wakeEvent.get()), dispatch, *presentationSource);
         dispatch.close();
         window.Close();
         windowHandle.store(nullptr, std::memory_order_release);
@@ -273,12 +274,13 @@ struct WindowPresenter::Impl {
     }
     VideoFrameSnapshotResult result;
     const bool executed = dispatch.invoke([this, &result]() {
-      if (!window.IsOpen() || !window.IsVisible() || !uiStateBuilder) {
+      if (!window.IsOpen() || !window.IsVisible()) {
         result.error =
             "Frame capture is available while the video window is visible.";
         return;
       }
-      result = window.CaptureCurrentFrame(frameCache, uiStateBuilder());
+      result = window.CaptureCurrentFrame(
+          frameCache, presentationSource->buildWindowUiState(window));
     });
     if (!executed) {
       unavailable.error = "The video presenter stopped before frame capture.";
@@ -294,12 +296,10 @@ struct WindowPresenter::Impl {
 
 WindowPresenter::WindowPresenter(
     Player& player, std::string mediaTitle,
-    std::function<WindowUiState()> buildUiState,
-    playback_framebuffer_presenter::TextGridPresentationProvider
-        buildTextGridPresentation)
+    std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
+        presentationSource)
     : impl_(std::make_unique<Impl>(
-          player, std::move(mediaTitle), std::move(buildUiState),
-          std::move(buildTextGridPresentation))) {}
+          player, std::move(mediaTitle), std::move(presentationSource))) {}
 
 WindowPresenter::~WindowPresenter() = default;
 

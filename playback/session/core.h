@@ -18,6 +18,11 @@ namespace playback_screen_renderer {
 struct PlaybackScreenRenderInputs;
 }
 
+struct PlaybackSessionRefreshResult {
+  bool framePresented = false;
+  bool stateChanged = false;
+};
+
 class PlaybackSessionCore {
  public:
   struct Args {
@@ -45,7 +50,7 @@ class PlaybackSessionCore {
 
   bool finalizeAudioStart();
   bool applyPresentationSync(bool switchedAwayFromWindow);
-  bool refresh(bool nativeWindowActive, bool& redraw);
+  PlaybackSessionRefreshResult refresh(bool nativeWindowActive, bool& redraw);
   void setAsciiPresentation(ConsoleScreen& screen, bool enabled);
   uint64_t videoFrameCounter() const;
   bool waitForVideoFrame(uint64_t lastCounter, int timeoutMs) const;

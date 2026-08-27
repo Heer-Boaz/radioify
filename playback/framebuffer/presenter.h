@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <functional>
 #include <string>
 #include <vector>
 
@@ -36,14 +35,36 @@ struct PlaybackFramebufferUiSnapshot {
   playback_overlay::ContextMenuSnapshot contextMenu;
 };
 
-using TextGridPresentationProvider =
-    std::function<bool(int pixelWidth, int pixelHeight, int cellPixelWidth,
-                       int cellPixelHeight,
-                       const VideoFrame* frame, bool frameChanged,
-                       const std::string& enhancementDebugLine,
-                       std::vector<ScreenCell>& outCells,
-                       int& outCols, int& outRows,
-                       playback_overlay::InteractionMap& outInteractions)>;
+struct TextGridPresentationRequest {
+  VideoWindow& videoWindow;
+  int pixelWidth = 0;
+  int pixelHeight = 0;
+  int cellPixelWidth = 0;
+  int cellPixelHeight = 0;
+  const VideoFrame* frame = nullptr;
+  bool frameChanged = false;
+  const std::string& enhancementDebugLine;
+};
+
+struct TextGridPresentationTarget {
+  std::vector<ScreenCell>& cells;
+  int& cols;
+  int& rows;
+  playback_overlay::InteractionMap& interactions;
+};
+
+// Session-owned, thread-safe read model consumed by the window presenter.
+// The presenter keeps this object alive for the complete lifetime of its
+// worker thread; implementations must publish immutable revisions rather than
+// reading mutable session-loop state directly.
+class PresentationSource {
+ public:
+  virtual ~PresentationSource() = default;
+
+  virtual WindowUiState buildWindowUiState(VideoWindow& videoWindow) = 0;
+  virtual bool renderTextGrid(const TextGridPresentationRequest& request,
+                              TextGridPresentationTarget target) = 0;
+};
 
 WindowUiState buildPlaybackFramebufferUiState(
     const std::string& windowTitle, VideoWindow& videoWindow, Player& player,
@@ -58,7 +79,6 @@ void runFramebufferPresenterLoop(
     std::atomic<WindowThreadState>& threadState,
     std::atomic<bool>& forcePresent, NativeWaitHandle wakeEvent,
     ThreadDispatchQueue& dispatch,
-    const std::function<WindowUiState()>& buildUiState,
-    const TextGridPresentationProvider& buildTextGridPresentation);
+    PresentationSource& presentationSource);
 
 }  // namespace playback_framebuffer_presenter

@@ -15,17 +15,19 @@
 
 namespace {
 
-void syncPlaybackEndedState(Player& player,
+bool syncPlaybackEndedState(Player& player,
                             PlaybackSessionState& playbackState) {
+  const PlaybackSessionState previous = playbackState;
   if (player.isEnded()) {
     if (playbackState != PlaybackSessionState::Ended) {
       playbackState = PlaybackSessionState::Ended;
     }
-    return;
+    return playbackState != previous;
   }
   if (playbackState == PlaybackSessionState::Ended) {
     playbackState = PlaybackSessionState::Active;
   }
+  return playbackState != previous;
 }
 
 }  // namespace
@@ -116,17 +118,21 @@ struct PlaybackSessionCore::Impl {
         .frameChanged;
   }
 
-  bool refresh(bool nativeWindowActive, bool& redraw) {
+  PlaybackSessionRefreshResult refresh(bool nativeWindowActive,
+                                       bool& redraw) {
     playback_frame_refresh::PlaybackFrameRefreshRequest request;
     request.acceptNewFrames = !nativeWindowActive;
     playback_frame_refresh::PlaybackFrameRefreshResult result =
         playback_frame_refresh::refresh(player, frameRefresh, request);
-    bool presented = !nativeWindowActive && result.frameChanged;
-    if (presented) {
+    PlaybackSessionRefreshResult refreshResult;
+    refreshResult.framePresented =
+        !nativeWindowActive && result.frameChanged;
+    if (refreshResult.framePresented) {
       redraw = true;
     }
-    syncPlaybackEndedState(player, playbackState);
-    return presented;
+    refreshResult.stateChanged =
+        syncPlaybackEndedState(player, playbackState);
+    return refreshResult;
   }
 
   void setAsciiPresentation(ConsoleScreen& screen, bool enabled) {
@@ -245,7 +251,8 @@ bool PlaybackSessionCore::applyPresentationSync(
   return impl_->applyPresentationSync(switchedAwayFromWindow);
 }
 
-bool PlaybackSessionCore::refresh(bool nativeWindowActive, bool& redraw) {
+PlaybackSessionRefreshResult PlaybackSessionCore::refresh(
+    bool nativeWindowActive, bool& redraw) {
   return impl_->refresh(nativeWindowActive, redraw);
 }
 

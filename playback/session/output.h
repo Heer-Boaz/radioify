@@ -1,6 +1,5 @@
 #pragma once
 
-#include <functional>
 #include <memory>
 #include <string>
 
@@ -23,9 +22,8 @@ class PlaybackOutputController {
  public:
   PlaybackOutputController(
       Player& player, std::string mediaTitle,
-      std::function<WindowUiState()> buildUiState,
-      playback_framebuffer_presenter::TextGridPresentationProvider
-          buildTextGridPresentation);
+      std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
+          presentationSource);
   ~PlaybackOutputController();
 
   PlaybackOutputController(PlaybackOutputController&&) noexcept;

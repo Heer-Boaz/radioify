@@ -35,6 +35,7 @@
 #include "input.h"
 #include "output.h"
 #include "presentation_controller.h"
+#include "presentation_model.h"
 #include "state.h"
 #include "mouse_double_click_tracker.h"
 #include "playback/video/subtitle/manager.h"
@@ -103,21 +104,14 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
   bool hasSubtitles;
   bool hasGeneratedSubtitles = false;
   mutable std::mutex subtitleMutex;
+  std::atomic<int> overlayControlHover{-1};
 
   PlaybackPresentationController presentationController;
   PlaybackSessionCore core;
-  PlaybackOutputController output;
+  std::shared_ptr<playback_session::PresentationModel> presentationModel;
   GpuAsciiRenderer& gpuRenderer;
   AsciiArt art;
   playback_screen_renderer::TimelinePreviewAsciiCache timelinePreviewArt;
-  ConsoleScreen textGridPresentationScreen;
-  std::vector<ScreenCell> textGridPresentationCells;
-  AsciiArt textGridPresentationArt;
-  playback_screen_renderer::TimelinePreviewAsciiCache
-      textGridTimelinePreviewArt;
-  VideoFrame textGridPresentationFrame;
-  GpuVideoFrameCache textGridPresentationFrameCache;
-  playback_frame_output::FrameOutputState textGridPresentationOutputState;
   bool copiedFrameNeedsRender = false;
   bool redraw = true;
   bool forceRefreshArt = false;
@@ -128,13 +122,9 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
   bool timelinePreviewStarted = false;
   playback_session::VideoEditWorkspace videoEditWorkspace;
   playback_session::ContextMenuController contextMenuController;
-  mutable std::mutex publishedWindowUiMutex;
-  playback_framebuffer_presenter::PlaybackFramebufferUiSnapshot
-      publishedWindowUi;
   playback_session_exit::ExitCoordinator exitCoordinator;
   WakeableMailbox<playback_session::Event> events;
   bool exitWhenExportSucceeds = false;
-  std::atomic<int> overlayControlHover{-1};
   bool loopStopRequested = false;
   bool initialized = false;
   bool finished = false;
@@ -148,6 +138,9 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
   pointer_input::MouseDoubleClickTracker mouseDoubleClickTracker;
   playback_session_input::PlaybackSeekGestureState seekState;
   playback_screen_renderer::PlaybackScreenRenderInputs renderInputs;
+  // Constructed last and therefore stopped first. The presenter cannot outlive
+  // any session-owned state referenced by its published presentation model.
+  PlaybackOutputController output;
 
   explicit Impl(PlaybackLoopRunner::Args args)
       : screen(args.screen),
@@ -177,26 +170,19 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
         core({args.player, args.perfLog, args.enableAudio,
               initialPlaybackPresentation(config, args.continuityState)
                   .usesAsciiGrid()}),
-        output(
-            args.player, windowTitle,
-            [this]() { return buildWindowUiState(); },
-            [this](int pixelWidth, int pixelHeight, int cellPixelWidth,
-                   int cellPixelHeight, const VideoFrame* frame,
-                   bool frameChanged,
-                   const std::string& enhancementDebugLine,
-                   std::vector<ScreenCell>& outCells, int& outCols,
-                   int& outRows,
-                   playback_overlay::InteractionMap& outInteractions) {
-              return buildTextGridPresentation(
-                  pixelWidth, pixelHeight, cellPixelWidth, cellPixelHeight,
-                  frame, frameChanged, enhancementDebugLine, outCells,
-                  outCols, outRows, outInteractions);
-            }),
+        presentationModel(std::make_shared<playback_session::PresentationModel>(
+            playback_session::PresentationModel::Dependencies{
+                args.player, args.subtitleManager, subtitleMutex,
+                args.enableSubtitlesShared, overlayControlHover},
+            playback_session::PresentationModel::FixedState{
+                windowTitle, args.capabilities.transportHandoff,
+                args.capabilities.transportHandoff})),
         gpuRenderer(sharedGpuRenderer()),
         videoEditWorkspace(file, core.player(), timelinePreviewModel,
                            timelinePreviewProvider),
         inputSignals(*this, overlayControlHover, osd, loopStopRequested,
-                     redraw, forceRefreshArt) {
+                     redraw, forceRefreshArt),
+        output(args.player, windowTitle, presentationModel) {
     hasGeneratedSubtitles =
         !playback_video_transcript::activeTranscriptPathForVideo(file).empty();
     core.initialize(screen);
@@ -208,20 +194,16 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
                                previewSource.sourceHeight);
     timelinePreviewStarted = timelinePreviewProvider.start(previewSource);
     if (!timelinePreviewStarted) timelinePreviewModel.stop();
-    syncVideoEditPresentation(false);
     bindInputState();
     bindRenderInputs();
+    syncVideoEditPresentation(false);
     if (sessionIntent == PlaybackSessionIntent::EditVideo) {
       executeVideoEditCommand(playback_video_edit::Command::Open, false);
     }
     applyPresenterSync(syncPresentation());
   }
 
-  ~Impl() {
-    // The presenter owns callbacks into this session. Join its thread while
-    // every callback dependency is still alive.
-    output.closeWindow();
-  }
+  ~Impl() = default;
 
   void showEditMessage(const std::string& message) {
     osd.showMessage(message,
@@ -384,6 +366,9 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
   }
 
   void publishWindowUiState() {
+    // Publish terminal/text-grid inputs and window overlays from the same
+    // loop-thread revision. The presenter never samples mutable loop state.
+    updateRenderInputs(false, false);
     playback_framebuffer_presenter::PlaybackFramebufferUiSnapshot next;
     next.osd = osdSnapshot();
     next.timelinePreview = timelinePreviewModel.snapshotFor(
@@ -393,14 +378,9 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     next.videoEditPrompt = videoEditPrompt();
     next.contextMenu = contextMenuController.snapshotFor(
         playback_session::ContextMenuSurface::VideoWindow);
-    std::lock_guard<std::mutex> lock(publishedWindowUiMutex);
-    publishedWindowUi = std::move(next);
-  }
-
-  playback_framebuffer_presenter::PlaybackFramebufferUiSnapshot
-  windowUiStateSnapshot() const {
-    std::lock_guard<std::mutex> lock(publishedWindowUiMutex);
-    return publishedWindowUi;
+    presentationModel->publishWindowState(
+        std::move(next), renderInputs.playbackState, renderInputs.audioOk,
+        renderInputs.audioStarting, hasSubtitles, config.debugOverlay);
   }
 
   void syncVideoEditPresentation(bool requestPresent = true) {
@@ -835,90 +815,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     return snapshot;
   }
 
-  WindowUiState buildWindowUiState() {
-    std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
-    const auto snapshot = windowUiStateSnapshot();
-    return playback_framebuffer_presenter::buildPlaybackFramebufferUiState(
-        windowTitle, output.window(), core.player(), subtitleManager,
-        core.playbackState(), core.audioOk(),
-        capabilities.transportHandoff, capabilities.transportHandoff,
-        hasSubtitles,
-        enableSubtitlesShared, overlayControlHover, snapshot,
-        config.debugOverlay);
-  }
-
-  bool buildTextGridPresentation(int pixelWidth, int pixelHeight,
-                                 int cellPixelWidth, int cellPixelHeight,
-                                 const VideoFrame* frame, bool frameChanged,
-                                 const std::string& enhancementDebugLine,
-                                 std::vector<ScreenCell>& outCells,
-                                 int& outCols, int& outRows,
-                                 playback_overlay::InteractionMap&
-                                     outInteractions) {
-    std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
-    const int cols = playback_overlay::overlayCellCountForPixels(
-        pixelWidth, cellPixelWidth);
-    const int rows = playback_overlay::overlayCellCountForPixels(
-        pixelHeight, cellPixelHeight);
-    textGridPresentationScreen.setVirtualSize(cols, rows);
-
-    textGridPresentationOutputState.renderFailed = false;
-    textGridPresentationOutputState.renderFailMessage.clear();
-    textGridPresentationOutputState.renderFailDetail.clear();
-    if (frame && frame->width > 0 && frame->height > 0) {
-      textGridPresentationFrame = *frame;
-      textGridPresentationOutputState.haveFrame = true;
-    } else if (!textGridPresentationOutputState.haveFrame) {
-      textGridPresentationFrame = VideoFrame{};
-    }
-
-    playback_screen_renderer::PlaybackScreenRenderInputs inputs = renderInputs;
-    inputs.screen = &textGridPresentationScreen;
-    inputs.frame = &textGridPresentationFrame;
-    inputs.frameCache = &textGridPresentationFrameCache;
-    inputs.art = &textGridPresentationArt;
-    inputs.timelinePreviewCache = &textGridTimelinePreviewArt;
-    inputs.visualMode = PlaybackVisualMode::AsciiGrid;
-    inputs.nativeWindowActive = false;
-    const bool audioOnlyPlayback =
-        core.player().sourceWidth() <= 0 || core.player().sourceHeight() <= 0;
-    const auto windowUi = windowUiStateSnapshot();
-    inputs.osd = windowUi.osd;
-    inputs.timelinePreview = windowUi.timelinePreview;
-    inputs.videoEdit = windowUi.videoEdit;
-    if (inputs.videoEdit.active) {
-      inputs.videoEdit.playheadTimelineUs =
-          core.player().timelineSnapshot().positionUs;
-    }
-    inputs.videoEditExport = windowUi.videoEditExport;
-    inputs.videoEditPrompt = windowUi.videoEditPrompt;
-    inputs.contextMenu = windowUi.contextMenu;
-    inputs.osd.controlsVisible =
-        inputs.osd.controlsVisible || audioOnlyPlayback;
-    inputs.clearHistory = false;
-    inputs.frameChanged = frameChanged;
-    inputs.cellPixelWidth = cellPixelWidth;
-    inputs.cellPixelHeight = cellPixelHeight;
-    inputs.cellPixelSourceLabel = "text-grid-presentation";
-    inputs.allowAsciiCpuFallback = false;
-    if (config.debugOverlay) {
-      inputs.debugLines.push_back(output.window().OutputColorDebugLine());
-      if (!enhancementDebugLine.empty()) {
-        inputs.debugLines.push_back(enhancementDebugLine);
-      }
-    }
-    inputs.frameOutputState = &textGridPresentationOutputState;
-    core.updateRenderInputs(inputs);
-    inputs.frameAvailable = textGridPresentationOutputState.haveFrame;
-
-    playback_screen_renderer::renderPlaybackScreen(inputs);
-    if (textGridPresentationOutputState.renderFailed) {
-      return false;
-    }
-    outInteractions = textGridPresentationOutputState.overlayInteractions;
-    return textGridPresentationScreen.snapshot(outCells, outCols, outRows);
-  }
-
   PlaybackPresentationSyncResult syncPresentation() {
     return presentationController.synchronize(output);
   }
@@ -1001,6 +897,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
   void finalizeAudioStart() {
     if (core.finalizeAudioStart()) {
       redraw = true;
+      publishWindowUiState();
+      output.requestWindowPresent();
     }
   }
 
@@ -1027,6 +925,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     renderInputs.clearHistory = clearHistory;
     renderInputs.frameChanged = frameChanged;
     core.updateRenderInputs(renderInputs);
+    presentationModel->publishTextGridInputs(renderInputs);
   }
 
   void renderPlaybackFrame(bool presented, PlaybackLoopState& loopState) {
@@ -1242,7 +1141,13 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
   RefreshState refreshState() {
     RefreshState state;
     state.nativeWindowActive = output.windowOpen();
-    state.presented = core.refresh(state.nativeWindowActive, redraw);
+    const PlaybackSessionRefreshResult refresh =
+        core.refresh(state.nativeWindowActive, redraw);
+    state.presented = refresh.framePresented;
+    if (refresh.stateChanged) {
+      publishWindowUiState();
+      output.requestWindowPresent();
+    }
     const auto nowForRefresh = std::chrono::steady_clock::now();
     state.debugRefreshDue =
         !state.nativeWindowActive && config.debugOverlay &&
