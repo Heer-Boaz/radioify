@@ -3,21 +3,16 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <filesystem>
-#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
-#include <vector>
 
 #include "playback/control/command.h"
 #include "playback/control/transport.h"
 #include "playback/input/shortcut_types.h"
 #include "input_event.h"
 #include "playback/ascii/frame_output.h"
-#include "playback/session/context_menu_controller.h"
-#include "playback/video/edit/view.h"
-#include "playback/video/timeline_preview_types.h"
+#include "playback/session/input_command.h"
 #include "state.h"
 
 class Player;
@@ -51,37 +46,24 @@ struct PlaybackInputView {
 };
 
 struct PlaybackInputSignals {
-  std::atomic<int>* overlayControlHover = nullptr;
-  std::function<void()> requestWindowPresent;
-  std::function<bool()> toggleWindowPresentation;
-  std::function<bool()> togglePictureInPicture;
-  std::function<bool()> toggleFullscreen;
-  std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
-  std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
-  std::function<void()> copyCurrentVideoFrameToClipboard;
-  std::function<bool()> videoEditorActive;
-  std::function<playback_video_edit::Prompt()> videoEditPrompt;
-  std::function<bool(playback_video_edit::Command)> executeVideoEditCommand;
-  std::function<bool()> waitForVideoEditExportAndExit;
-  std::function<void()> navigateBack;
-  std::function<bool()> confirmPendingExit;
-  std::function<bool()> cancelPendingExit;
-  std::function<bool()> contextMenuVisible;
-  std::function<bool(const playback_session::ContextMenuInput&)>
-      handleContextMenuInput;
-  std::function<bool(playback_video_edit::EditBoundary, int64_t timelineUs)>
-      moveVideoEditBoundary;
-  std::function<void(bool quitApplication)> requestPlaybackExit;
-  std::function<void(playback_video_timeline_preview::PresentationSurface,
-                     double ratio, int progressUnits)>
-      requestTimelinePreview;
-  std::function<void(playback_video_timeline_preview::PresentationSurface)>
-      clearTimelinePreview;
-  playback_session::PlaybackOsdTimeline* osd = nullptr;
+  PlaybackInputSignals(CommandTarget& commandTarget,
+                       std::atomic<int>& controlHover,
+                       playback_session::PlaybackOsdTimeline& osdTimeline,
+                       bool& stopRequested, bool& redrawRequested,
+                       bool& forceArtRefresh)
+      : commands(commandTarget),
+        overlayControlHover(controlHover),
+        osd(osdTimeline),
+        loopStopRequested(stopRequested),
+        redraw(redrawRequested),
+        forceRefreshArt(forceArtRefresh) {}
 
-  bool* loopStopRequested = nullptr;
-  bool* redraw = nullptr;
-  bool* forceRefreshArt = nullptr;
+  CommandTarget& commands;
+  std::atomic<int>& overlayControlHover;
+  playback_session::PlaybackOsdTimeline& osd;
+  bool& loopStopRequested;
+  bool& redraw;
+  bool& forceRefreshArt;
 };
 
 struct PlaybackSeekGestureState {

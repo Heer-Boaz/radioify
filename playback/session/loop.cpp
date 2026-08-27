@@ -72,7 +72,7 @@ PlaybackPresentationState initialPlaybackPresentation(
 
 }  // namespace
 
-struct PlaybackLoopRunner::Impl {
+struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
   static constexpr auto kSeekThrottleInterval = std::chrono::milliseconds(50);
   static constexpr auto kFrameCopyMessageDuration =
       std::chrono::milliseconds(1500);
@@ -194,7 +194,9 @@ struct PlaybackLoopRunner::Impl {
             }),
         gpuRenderer(sharedGpuRenderer()),
         videoEditWorkspace(file, core.player(), timelinePreviewModel,
-                           timelinePreviewProvider) {
+                           timelinePreviewProvider),
+        inputSignals(*this, overlayControlHover, osd, loopStopRequested,
+                     redraw, forceRefreshArt) {
     hasGeneratedSubtitles =
         !playback_video_transcript::activeTranscriptPathForVideo(file).empty();
     core.initialize(screen);
@@ -245,7 +247,7 @@ struct PlaybackLoopRunner::Impl {
     return videoEditWorkspace.needsExitConfirmation();
   }
 
-  playback_video_edit::Prompt videoEditPrompt() const {
+  playback_video_edit::Prompt videoEditPrompt() const override {
     if (exitCoordinator.confirmationVisible()) {
       return playback_video_edit::Prompt::LeavePlayback;
     }
@@ -648,6 +650,133 @@ struct PlaybackLoopRunner::Impl {
     return handled;
   }
 
+  bool dispatch(playback_session_input::Command command) override {
+    return std::visit(
+        [this](auto value) {
+          return executeInputCommand(std::move(value));
+        },
+        std::move(command));
+  }
+
+  bool videoEditorActive() const override {
+    return videoEditWorkspace.active();
+  }
+
+  bool contextMenuVisible() const override {
+    return contextMenuController.visible();
+  }
+
+  bool executeInputCommand(playback_session_input::CommandAction action) {
+    using Action = playback_session_input::CommandAction;
+    switch (action) {
+      case Action::RequestWindowPresent:
+        publishWindowUiState();
+        output.requestWindowPresent();
+        return true;
+      case Action::ToggleWindowPresentation: {
+        const bool changed = presentationController.toggleWindow();
+        redraw = redraw || changed;
+        forceRefreshArt = forceRefreshArt || changed;
+        return changed;
+      }
+      case Action::TogglePictureInPicture: {
+        const bool changed = presentationController.togglePictureInPicture();
+        redraw = redraw || changed;
+        forceRefreshArt = forceRefreshArt || changed;
+        return changed;
+      }
+      case Action::ToggleFullscreen: {
+        const bool changed = presentationController.toggleFullscreen();
+        redraw = redraw || changed;
+        forceRefreshArt = forceRefreshArt || changed;
+        return changed;
+      }
+      case Action::CopyCurrentVideoFrame: {
+        std::string error;
+        if (!output.copyCurrentVideoFrameToClipboard(&error)) {
+          std::fprintf(stderr, "Copy frame failed: %s\n", error.c_str());
+          osd.showMessage("Frame copy failed",
+                          playback_session::PlaybackOsdTimeline::Clock::now(),
+                          kFrameCopyMessageDuration);
+        } else {
+          osd.showMessage(
+              "Frame copied to clipboard",
+              playback_session::PlaybackOsdTimeline::Clock::now(),
+              kFrameCopyMessageDuration);
+        }
+        redraw = true;
+        publishWindowUiState();
+        output.requestWindowPresent();
+        return true;
+      }
+      case Action::WaitForVideoEditExportAndExit:
+        return waitForVideoEditExportAndExit();
+      case Action::NavigateBack:
+        navigateBack();
+        return true;
+      case Action::ConfirmPendingExit:
+        return completePendingExit();
+      case Action::CancelPendingExit:
+        return cancelPendingExit();
+    }
+    return false;
+  }
+
+  bool executeInputCommand(
+      playback_session_input::TransportRequest request) {
+    return requestTransportExit(request.command);
+  }
+
+  bool executeInputCommand(playback_session_input::VideoEditRequest request) {
+    return executeVideoEditCommand(request.command);
+  }
+
+  bool executeInputCommand(playback_session_input::ContextMenuRequest request) {
+    return handleContextMenuInput(request.input);
+  }
+
+  bool executeInputCommand(
+      playback_session_input::MoveVideoEditBoundary request) {
+    if (exitCoordinator.pending() ||
+        !videoEditWorkspace.moveBoundary(request.boundary,
+                                         request.timelineUs)) {
+      return false;
+    }
+    syncVideoEditPresentation();
+    return true;
+  }
+
+  bool executeInputCommand(
+      playback_session_input::PlaybackExitRequest request) {
+    requestPlaybackExit(request.quitApplication);
+    return true;
+  }
+
+  bool executeInputCommand(
+      playback_session_input::TimelinePreviewRequest request) {
+    auto update = timelinePreviewModel.hover(
+        request.surface, request.ratio, request.progressUnits);
+    if (update.request && !timelinePreviewProvider.submit(*update.request)) {
+      timelinePreviewModel.reject(*update.request);
+    }
+    if (update.changed) {
+      redraw = true;
+      publishWindowUiState();
+      output.requestWindowPresent();
+    }
+    return update.changed;
+  }
+
+  bool executeInputCommand(
+      playback_session_input::ClearTimelinePreview request) {
+    if (!timelinePreviewModel.hide(request.surface)) return false;
+    timelinePreviewProvider.cancelBefore(timelinePreviewModel.requestId());
+    redraw = true;
+    publishWindowUiState();
+    output.requestWindowPresent();
+    return true;
+  }
+
   void bindInputState() {
     inputView.videoWindow = &output.window();
     inputView.subtitleManager = &subtitleManager;
@@ -658,121 +787,6 @@ struct PlaybackLoopRunner::Impl {
     inputView.timingSink = timingSink;
     core.bindInputView(inputView);
 
-    inputSignals.overlayControlHover = &overlayControlHover;
-    inputSignals.requestWindowPresent = [this]() {
-      publishWindowUiState();
-      output.requestWindowPresent();
-    };
-    inputSignals.copyCurrentVideoFrameToClipboard = [this]() {
-      std::string error;
-      if (!output.copyCurrentVideoFrameToClipboard(&error)) {
-        std::fprintf(stderr, "Copy frame failed: %s\n", error.c_str());
-        osd.showMessage("Frame copy failed",
-                        playback_session::PlaybackOsdTimeline::Clock::now(),
-                        kFrameCopyMessageDuration);
-      } else {
-        osd.showMessage(
-            "Frame copied to clipboard",
-            playback_session::PlaybackOsdTimeline::Clock::now(),
-            kFrameCopyMessageDuration);
-      }
-      redraw = true;
-      publishWindowUiState();
-      output.requestWindowPresent();
-    };
-    inputSignals.videoEditorActive =
-        [this]() { return videoEditWorkspace.active(); };
-    inputSignals.videoEditPrompt = [this]() { return videoEditPrompt(); };
-    inputSignals.executeVideoEditCommand =
-        [this](playback_video_edit::Command command) {
-          return executeVideoEditCommand(command);
-        };
-    inputSignals.waitForVideoEditExportAndExit =
-        [this]() { return waitForVideoEditExportAndExit(); };
-    inputSignals.navigateBack = [this]() { navigateBack(); };
-    inputSignals.confirmPendingExit =
-        [this]() { return completePendingExit(); };
-    inputSignals.cancelPendingExit =
-        [this]() { return cancelPendingExit(); };
-    inputSignals.contextMenuVisible =
-        [this]() { return contextMenuController.visible(); };
-    inputSignals.handleContextMenuInput =
-        [this](const playback_session::ContextMenuInput& request) {
-          return handleContextMenuInput(request);
-        };
-    inputSignals.moveVideoEditBoundary =
-        [this](playback_video_edit::EditBoundary boundary,
-               int64_t timelineUs) {
-          if (exitCoordinator.pending() ||
-              !videoEditWorkspace.moveBoundary(boundary, timelineUs)) {
-            return false;
-          }
-          syncVideoEditPresentation();
-          return true;
-        };
-    inputSignals.requestTimelinePreview =
-        [this](playback_video_timeline_preview::PresentationSurface surface,
-               double ratio, int progressUnits) {
-          auto update =
-              timelinePreviewModel.hover(surface, ratio, progressUnits);
-          if (update.request &&
-              !timelinePreviewProvider.submit(*update.request)) {
-            timelinePreviewModel.reject(*update.request);
-          }
-          if (update.changed) {
-            redraw = true;
-            publishWindowUiState();
-            output.requestWindowPresent();
-          }
-        };
-    inputSignals.clearTimelinePreview =
-        [this](playback_video_timeline_preview::PresentationSurface surface) {
-          if (timelinePreviewModel.hide(surface)) {
-            timelinePreviewProvider.cancelBefore(
-                timelinePreviewModel.requestId());
-            redraw = true;
-            publishWindowUiState();
-            output.requestWindowPresent();
-          }
-        };
-    inputSignals.toggleWindowPresentation = [this]() {
-      const bool changed = presentationController.toggleWindow();
-      redraw = redraw || changed;
-      forceRefreshArt = forceRefreshArt || changed;
-      return changed;
-    };
-    inputSignals.togglePictureInPicture = [this]() {
-      const bool changed = presentationController.togglePictureInPicture();
-      redraw = redraw || changed;
-      forceRefreshArt = forceRefreshArt || changed;
-      return changed;
-    };
-    inputSignals.toggleFullscreen = [this]() {
-      const bool changed = presentationController.toggleFullscreen();
-      redraw = redraw || changed;
-      forceRefreshArt = forceRefreshArt || changed;
-      return changed;
-    };
-    inputSignals.requestPlaybackExit =
-        [this](bool quitApplication) {
-          requestPlaybackExit(quitApplication);
-        };
-    if (capabilities.transportHandoff) {
-      inputSignals.requestTransportCommand =
-          [this](PlaybackTransportCommand cmd) {
-            return requestTransportExit(cmd);
-          };
-    }
-    if (capabilities.openFilesHandoff) {
-      inputSignals.requestOpenFiles =
-          [this](const std::vector<std::filesystem::path>& files) {
-        return requestOpenFilesExit(files);
-      };
-    }
-    inputSignals.osd = &osd;
-    inputSignals.loopStopRequested = &loopStopRequested;
-    inputSignals.redraw = &redraw;
-    inputSignals.forceRefreshArt = &forceRefreshArt;
   }
 
   void bindRenderInputs() {
@@ -1385,22 +1399,25 @@ struct PlaybackLoopRunner::Impl {
   }
 
   bool toggleWindowPresentation() {
-    if (finished || !inputSignals.toggleWindowPresentation) return false;
-    const bool handled = inputSignals.toggleWindowPresentation();
+    if (finished) return false;
+    const bool handled = dispatch(
+        playback_session_input::CommandAction::ToggleWindowPresentation);
     if (handled) applyPresenterSync(syncPresentation());
     return handled;
   }
 
   bool togglePictureInPicture() {
-    if (finished || !inputSignals.togglePictureInPicture) return false;
-    const bool handled = inputSignals.togglePictureInPicture();
+    if (finished) return false;
+    const bool handled = dispatch(
+        playback_session_input::CommandAction::TogglePictureInPicture);
     if (handled) applyPresenterSync(syncPresentation());
     return handled;
   }
 
   bool toggleFullscreen() {
-    if (finished || !inputSignals.toggleFullscreen) return false;
-    const bool handled = inputSignals.toggleFullscreen();
+    if (finished) return false;
+    const bool handled =
+        dispatch(playback_session_input::CommandAction::ToggleFullscreen);
     if (handled) applyPresenterSync(syncPresentation());
     return handled;
   }

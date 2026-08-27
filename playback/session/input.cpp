@@ -24,25 +24,24 @@ namespace {
 
 bool requestTransport(PlaybackInputSignals& signals,
                       PlaybackTransportCommand command) {
-  return signals.requestTransportCommand &&
-         signals.requestTransportCommand(command);
+  return signals.commands.dispatch(TransportRequest{command});
 }
 
 bool hasOverlayVisibleWindow(const PlaybackInputSignals& signals) {
-  return signals.osd->controlsVisible();
+  return signals.osd.controlsVisible();
 }
 
 void requestWindowRefresh(const PlaybackInputSignals& signals) {
-  signals.requestWindowPresent();
+  signals.commands.dispatch(CommandAction::RequestWindowPresent);
 }
 
 void updateOverlayControlHover(PlaybackInputSignals& signals, int nextHover) {
-  const int previousHover = signals.overlayControlHover->exchange(
+  const int previousHover = signals.overlayControlHover.exchange(
       nextHover, std::memory_order_relaxed);
   if (nextHover == previousHover) {
     return;
   }
-  *signals.redraw = true;
+  signals.redraw = true;
   requestWindowRefresh(signals);
 }
 
@@ -122,20 +121,18 @@ void triggerOverlay(const PlaybackInputView& view,
       std::chrono::milliseconds(2500);
   const auto timeout = extended ? kProgressOverlayExtendedTimeout
                                 : kProgressOverlayTimeout;
-  signals.osd->showControls(playback_session::PlaybackOsdTimeline::Clock::now(),
-                            timeout);
+  signals.osd.showControls(playback_session::PlaybackOsdTimeline::Clock::now(),
+                           timeout);
   requestWindowRefresh(signals);
 }
 
 void requestPlaybackExit(PlaybackInputSignals& signals, bool quitApp) {
-  if (signals.requestPlaybackExit) {
-    signals.requestPlaybackExit(quitApp);
-  }
+  signals.commands.dispatch(PlaybackExitRequest{quitApp});
 }
 
 void refreshPlaybackInputDisplay(PlaybackInputSignals& signals) {
-  *signals.forceRefreshArt = true;
-  *signals.redraw = true;
+  signals.forceRefreshArt = true;
+  signals.redraw = true;
 }
 
 void clearQueuedSeek(PlaybackSeekGestureState& seekState) {
@@ -212,7 +209,7 @@ void sendRelativeSeekRequest(const PlaybackInputView& view,
 bool toggleRequestedLayout(const PlaybackInputView& view,
                            PlaybackInputSignals& signals) {
   (void)view;
-  return signals.toggleWindowPresentation();
+  return signals.commands.dispatch(CommandAction::ToggleWindowPresentation);
 }
 
 bool toggleSubtitles(const PlaybackInputView& view) {
@@ -268,7 +265,7 @@ bool toggle50Hz(const PlaybackInputView& view) {
 bool togglePictureInPicture(const PlaybackInputView& view,
                             const PlaybackInputSignals& signals) {
   (void)view;
-  return signals.togglePictureInPicture();
+  return signals.commands.dispatch(CommandAction::TogglePictureInPicture);
 }
 
 bool requestFrameStep(const PlaybackInputView& view,
@@ -308,18 +305,17 @@ bool executeOverlayControl(const PlaybackInputView& view,
     return togglePictureInPicture(view, signals);
   };
   actions.videoEdit = [&](playback_video_edit::Command command) {
-    return signals.executeVideoEditCommand &&
-           signals.executeVideoEditCommand(command);
+    return signals.commands.dispatch(VideoEditRequest{command});
   };
   actions.waitForVideoEditExport = [&]() {
-    return signals.waitForVideoEditExportAndExit &&
-           signals.waitForVideoEditExportAndExit();
+    return signals.commands.dispatch(
+        CommandAction::WaitForVideoEditExportAndExit);
   };
   actions.confirmPendingExit = [&]() {
-    return signals.confirmPendingExit && signals.confirmPendingExit();
+    return signals.commands.dispatch(CommandAction::ConfirmPendingExit);
   };
   actions.cancelPendingExit = [&]() {
-    return signals.cancelPendingExit && signals.cancelPendingExit();
+    return signals.commands.dispatch(CommandAction::CancelPendingExit);
   };
   return playback_overlay::dispatchOverlayControl(control, actions);
 }
@@ -327,10 +323,9 @@ bool executeOverlayControl(const PlaybackInputView& view,
 bool dispatchContextMenuInput(
     PlaybackInputSignals& signals,
     const playback_session::ContextMenuInput& request) {
-  if (!signals.handleContextMenuInput) return false;
-  if (!signals.handleContextMenuInput(request)) return false;
+  if (!signals.commands.dispatch(ContextMenuRequest{request})) return false;
   updateOverlayControlHover(signals, -1);
-  *signals.redraw = true;
+  signals.redraw = true;
   requestWindowRefresh(signals);
   return true;
 }
@@ -401,7 +396,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
                               PlaybackInputSignals& signals,
                               PlaybackSeekGestureState& seekState,
                               const InputEvent& ev) {
-  if (signals.contextMenuVisible && signals.contextMenuVisible()) {
+  if (signals.commands.contextMenuVisible()) {
     playback_session::ContextMenuInput request;
     if (ev.type == InputEvent::Type::Action &&
         ev.action == InputAction::Back) {
@@ -438,9 +433,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
       return;
     }
     if (const auto command = videoEditCommandForShortcut(*action)) {
-      if (signals.executeVideoEditCommand) {
-        signals.executeVideoEditCommand(*command);
-      }
+      signals.commands.dispatch(VideoEditRequest{*command});
       return;
     }
     switch (*action) {
@@ -474,7 +467,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
         togglePictureInPicture(view, signals);
         break;
       case PlaybackAction::ToggleFullscreen:
-        if (signals.toggleFullscreen) signals.toggleFullscreen();
+        signals.commands.dispatch(CommandAction::ToggleFullscreen);
         break;
       case PlaybackAction::ToggleRadio:
         cycleRadioFilter(view);
@@ -503,9 +496,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
                          playback_video_frame_step::Direction::Next);
         break;
       case PlaybackAction::CopyVideoFrame:
-        if (signals.copyCurrentVideoFrameToClipboard) {
-          signals.copyCurrentVideoFrameToClipboard();
-        }
+        signals.commands.dispatch(CommandAction::CopyCurrentVideoFrame);
         break;
       case PlaybackAction::VolumeUp:
         audioAdjustVolume(0.10f);
@@ -514,18 +505,16 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
         audioAdjustVolume(-0.10f);
         break;
       case PlaybackAction::NavigateBackInVideoEditor:
-        if (signals.navigateBack) signals.navigateBack();
+        signals.commands.dispatch(CommandAction::NavigateBack);
         break;
       case PlaybackAction::ExitPlaybackSession:
         requestPlaybackExit(signals, false);
         break;
       case PlaybackAction::DiscardVideoEditsAndExit:
-        if (signals.confirmPendingExit) {
-          signals.confirmPendingExit();
-        }
+        signals.commands.dispatch(CommandAction::ConfirmPendingExit);
         break;
       case PlaybackAction::CancelVideoEditPrompt:
-        if (signals.navigateBack) signals.navigateBack();
+        signals.commands.dispatch(CommandAction::NavigateBack);
         break;
       case PlaybackAction::ToggleOptions:
       case PlaybackAction::TogglePitchMonitor:
@@ -536,8 +525,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
   };
 
   const playback_video_edit::Prompt editPrompt =
-      signals.videoEditPrompt ? signals.videoEditPrompt()
-                              : playback_video_edit::Prompt::None;
+      signals.commands.videoEditPrompt();
   uint32_t shortcutContexts = 0;
   if (editPrompt == playback_video_edit::Prompt::LeaveEditMode) {
     shortcutContexts = kPlaybackShortcutContextVideoEditLeaveConfirmation;
@@ -550,7 +538,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
                        kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextPlaybackSession |
                        kPlaybackShortcutContextVideoPlayback;
-    if (signals.videoEditorActive && signals.videoEditorActive()) {
+    if (signals.commands.videoEditorActive()) {
       shortcutContexts |= kPlaybackShortcutContextVideoEditing;
     }
     if (view.videoWindow && view.videoWindow->IsPictureInPicture()) {
@@ -560,11 +548,11 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
   const PlaybackInputResult playbackResult =
       handlePlaybackInput(ev, cb, shortcutContexts);
   if (playbackResult == PlaybackInputResult::Handled) {
-    if (*signals.loopStopRequested) {
+    if (signals.loopStopRequested) {
       return;
     }
     triggerOverlay(view, signals);
-    *signals.redraw = true;
+    signals.redraw = true;
     return;
   }
   if (playbackResult == PlaybackInputResult::HandledWithoutOverlayRefresh) {
@@ -576,8 +564,8 @@ void handlePlaybackControlCommand(const PlaybackInputView& view,
                                   PlaybackInputSignals& signals,
                                   PlaybackSeekGestureState& seekState,
                                   PlaybackControlCommand command) {
-  if (signals.videoEditPrompt &&
-      signals.videoEditPrompt() != playback_video_edit::Prompt::None) {
+  if (signals.commands.videoEditPrompt() !=
+      playback_video_edit::Prompt::None) {
     return;
   }
   switch (command) {
@@ -601,11 +589,11 @@ void handlePlaybackControlCommand(const PlaybackInputView& view,
       requestTransport(signals, PlaybackTransportCommand::Next);
       break;
   }
-  if (*signals.loopStopRequested) {
+  if (signals.loopStopRequested) {
     return;
   }
   triggerOverlay(view, signals);
-  *signals.redraw = true;
+  signals.redraw = true;
 }
 
 void handlePlaybackMouseEvent(const PlaybackInputView& view,
@@ -628,11 +616,10 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     finishVideoEditBoundaryDrag(view, signals, seekState, previewSurface);
     seekState.progressDragSurface.reset();
     commitQueuedSeek(view, signals, seekState);
-    *signals.redraw = true;
+    signals.redraw = true;
   }
   const playback_video_edit::Prompt editPrompt =
-      signals.videoEditPrompt ? signals.videoEditPrompt()
-                              : playback_video_edit::Prompt::None;
+      signals.commands.videoEditPrompt();
 
   const double pointerX =
       windowEvent && mouse.hasPixelPosition ? mouse.pixelX : mouse.pos.X;
@@ -640,7 +627,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
       windowEvent && mouse.hasPixelPosition ? mouse.pixelY : mouse.pos.Y;
   if (mouse.kind == MouseEventKind::Move) {
     triggerOverlay(view, signals);
-    *signals.redraw = true;
+    signals.redraw = true;
   }
 
   const bool capturedProgressDrag =
@@ -686,7 +673,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     }
     if (dispatchContextMenuInput(signals, request)) return;
   }
-  if (signals.contextMenuVisible && signals.contextMenuVisible()) {
+  if (signals.commands.contextMenuVisible()) {
     playback_session::ContextMenuInput request;
     request.surface =
         windowEvent ? playback_session::ContextMenuSurface::VideoWindow
@@ -724,14 +711,12 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
                               contextMenuItemHit;
   if (isPlaybackFullscreenGesture(mouse) && !interactiveHit &&
       editPrompt == playback_video_edit::Prompt::None) {
-    if (signals.toggleFullscreen) {
-      signals.toggleFullscreen();
-    }
+    signals.commands.dispatch(CommandAction::ToggleFullscreen);
     return;
   }
   if (progressHit) {
     triggerOverlay(view, signals);
-    *signals.redraw = true;
+    signals.redraw = true;
   }
 
   const double progressRatio = progressHit ? progressHit->ratio : 0.0;
@@ -739,8 +724,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
 
   if (progressHit && leftPressed && !dragFromThisSurface &&
       mouse.kind == MouseEventKind::Press && boundaryHit &&
-      signals.videoEditorActive && signals.videoEditorActive() &&
-      signals.moveVideoEditBoundary) {
+      signals.commands.videoEditorActive()) {
     setPlaybackPaused(view, signals, seekState, true);
     seekState.pendingVideoEditBoundaryCommit.reset();
     seekState.videoEditBoundaryDrag =
@@ -759,8 +743,8 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     if (const auto targetUs =
             playbackTimelineTargetForRatio(view, progressRatio)) {
       seekState.videoEditBoundaryDrag->targetTimelineUs = *targetUs;
-      signals.moveVideoEditBoundary(seekState.videoEditBoundaryDrag->boundary,
-                                    *targetUs);
+      signals.commands.dispatch(MoveVideoEditBoundary{
+          seekState.videoEditBoundaryDrag->boundary, *targetUs});
       const int64_t seekTargetUs = videoEditBoundarySeekTargetUs(
           seekState.videoEditBoundaryDrag->boundary, *targetUs);
       queueSeekRequest(signals, seekState,
@@ -772,10 +756,8 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
       }
     }
     updateOverlayControlHover(signals, -1);
-    if (signals.requestTimelinePreview) {
-      signals.requestTimelinePreview(previewSurface, previewRatio,
-                                     progressUnits);
-    }
+    signals.commands.dispatch(
+        TimelinePreviewRequest{previewSurface, previewRatio, progressUnits});
     return;
   }
   const bool seekGesture =
@@ -784,18 +766,14 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
        mouse.kind == MouseEventKind::Move);
   if (progressHit) {
     updateOverlayControlHover(signals, -1);
-    if (signals.requestTimelinePreview) {
-      signals.requestTimelinePreview(previewSurface, progressRatio,
-                                     progressUnits);
-    }
+    signals.commands.dispatch(
+        TimelinePreviewRequest{previewSurface, progressRatio, progressUnits});
     if (seekGesture) {
       queuePlaybackSeekToRatio(view, signals, seekState, progressRatio);
     }
     return;
   }
-  if (signals.clearTimelinePreview) {
-    signals.clearTimelinePreview(previewSurface);
-  }
+  signals.commands.dispatch(ClearTimelinePreview{previewSurface});
   updateOverlayControlHover(
       signals, controlHit ? playback_overlay::overlayControlToken(*controlHit)
                           : -1);
@@ -806,11 +784,11 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
   if (leftPressed && mouse.kind == MouseEventKind::Press && controlHit) {
     if (executeOverlayControl(view, signals, seekState, *controlHit)) {
       updateOverlayControlHover(signals, -1);
-      if (*signals.loopStopRequested) {
+      if (signals.loopStopRequested) {
         return;
       }
       triggerOverlay(view, signals);
-      *signals.redraw = true;
+      signals.redraw = true;
     }
     return;
   }
@@ -828,10 +806,8 @@ void handlePlaybackPointerLeave(PlaybackInputSignals& signals,
       playback_video_timeline_preview::PresentationSurface::VideoWindow);
   seekState.progressDragSurface.reset();
   commitQueuedSeek(view, signals, seekState);
-  if (signals.clearTimelinePreview) {
-    signals.clearTimelinePreview(
-        playback_video_timeline_preview::PresentationSurface::VideoWindow);
-  }
+  signals.commands.dispatch(ClearTimelinePreview{
+      playback_video_timeline_preview::PresentationSurface::VideoWindow});
   updateOverlayControlHover(signals, -1);
 }
 

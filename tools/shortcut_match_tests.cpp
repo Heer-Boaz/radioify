@@ -1,3 +1,5 @@
+#include <type_traits>
+
 #include "playback/ascii/frame_output.h"
 #include "playback/input/shortcuts.h"
 #include "playback/overlay/overlay.h"
@@ -70,11 +72,13 @@ bool expect(bool condition, const char* message) {
 int main() {
   bool ok = true;
 
-  using PlaybackExitRequest = decltype(
-      playback_session_input::PlaybackInputSignals{}.requestPlaybackExit);
-  static_assert(std::is_same_v<PlaybackExitRequest,
-                               std::function<void(bool)>>,
-                "the playback loop must own session-exit completion");
+  static_assert(
+      !std::is_default_constructible_v<
+          playback_session_input::PlaybackInputSignals>,
+      "playback input must have one explicit command owner");
+  static_assert(
+      std::is_abstract_v<playback_session_input::CommandTarget>,
+      "playback input must dispatch intent through its typed command port");
 
   using BoundaryCommitState =
       playback_session_input::VideoEditBoundaryCommitState;
