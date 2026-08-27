@@ -823,13 +823,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     layoutDirty = false;
   };
 
-  InputCallbacks callbacks;
   auto handlePlaybackControlCommand = [&](PlaybackControlCommand command) {
     if (mediaCoordinator.handleControlCommand(command)) {
       markDirty();
     }
   };
-  callbacks.onActivateEntry = [&](const BrowserEntry& entry) {
+  auto activateBrowserEntry = [&](const BrowserEntry& entry) {
     OptionsBrowserResult optionsResult =
         optionsBrowserActivateEntry(browser, entry, audioPlayback);
     if (optionsResult == OptionsBrowserResult::Changed) {
@@ -841,12 +840,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
     return playBrowserEntry(entry);
   };
-  callbacks.onPlayFiles =
-      [&](const std::vector<std::filesystem::path>& files) {
-        return playOpenFilesRequest({files});
-      };
-  callbacks.onOpenFileContextMenu = [&](const BrowserEntry& entry, int x,
-                                        int y) {
+  auto openFileContextMenu = [&](const BrowserEntry& entry, int x, int y) {
     if (!o.play || !entry.isMedia()) {
       return;
     }
@@ -875,7 +869,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     fileContextMenu.open(entry, std::move(items), anchor);
     markDirty();
   };
-  callbacks.onRenderFile = [&](const std::filesystem::path& file) {
+  auto renderInputFile = [&](const std::filesystem::path& file) {
     renderFile(file);
     didRender = true;
   };
@@ -1026,7 +1020,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         break;
     }
   };
-  callbacks.dispatchPlaybackCommand = [&](playback_input::Command command) {
+  auto dispatchPlaybackCommand = [&](playback_input::Command command) {
     if (const auto* action = std::get_if<PlaybackAction>(&command)) {
       dispatchPlaybackShortcut(*action);
       return;
@@ -1068,7 +1062,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
               if constexpr (std::is_same_v<
                                 Event,
                                 AudioPictureInPictureWindow::PlaybackCommand>) {
-                callbacks.dispatchPlaybackCommand(std::move(value.command));
+                dispatchPlaybackCommand(std::move(value.command));
               } else if constexpr (
                   std::is_same_v<Event,
                                  AudioPictureInPictureWindow::OpenFiles>) {
@@ -1141,9 +1135,31 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       handleNotificationAreaCommand(notificationCommand);
     }
   };
-  callbacks.onResize = [&]() {
+  auto handleResize = [&]() {
     screenSizeDirty = true;
     markLayoutDirty();
+  };
+  auto handleTuiInputCommand = [&](tui_input::Command command) {
+    std::visit(
+        [&](auto&& value) {
+          using Command = std::decay_t<decltype(value)>;
+          if constexpr (
+              std::is_same_v<Command, tui_input::PlaybackCommand>) {
+            dispatchPlaybackCommand(std::move(value.command));
+          } else if constexpr (std::is_same_v<Command, tui_input::Resize>) {
+            handleResize();
+          } else if constexpr (
+              std::is_same_v<Command, tui_input::ActivateEntry>) {
+            activateBrowserEntry(value.entry);
+          } else if constexpr (
+              std::is_same_v<Command, tui_input::OpenFileContextMenu>) {
+            openFileContextMenu(value.entry, value.x, value.y);
+          } else if constexpr (
+              std::is_same_v<Command, tui_input::RenderFile>) {
+            renderInputFile(value.file);
+          }
+        },
+        std::move(command));
   };
 
   tui_command_palette::Model commandPalette;
@@ -1431,11 +1447,6 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       } else {
         browserDoubleClickTracker.reset();
       }
-      if (ev.type == InputEvent::Type::Resize) {
-        dirty = true;
-        if (callbacks.onResize) callbacks.onResize();
-        return;
-      }
       if (ev.type == InputEvent::Type::Key && ev.key.vk == VK_F8 &&
           cancelActiveMediaTask()) {
         return;
@@ -1449,8 +1460,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         return;
       }
       if (ev.type == InputEvent::Type::FileDrop &&
-          isCommittedFileDropEvent(ev.fileDrop) && callbacks.onPlayFiles &&
-          callbacks.onPlayFiles(ev.fileDrop.files)) {
+          isCommittedFileDropEvent(ev.fileDrop) &&
+          playOpenFilesRequest({ev.fileDrop.files})) {
         markDirty(UiDirtyFlags::Async);
         return;
       }
@@ -1588,6 +1599,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           return;
         }
       }
+      std::vector<tui_input::Command> inputCommands;
       handleInputEvent(
           ev, browserNavigator, browserEntryClickTracker, browserPointerState,
           layout,
@@ -1595,7 +1607,10 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           listHeight, progressBarX, progressBarY, progressBarWidth, actionStrip,
           browserInteractionEnabled, o.play, audioPlayback.ready(),
           breadcrumbHover,
-          actionHover, searchBarHover, dirty, running, callbacks);
+          actionHover, searchBarHover, dirty, running, inputCommands);
+      for (tui_input::Command& command : inputCommands) {
+        handleTuiInputCommand(std::move(command));
+      }
     };
 
     auto finalizeRenderedExit = [&]() {

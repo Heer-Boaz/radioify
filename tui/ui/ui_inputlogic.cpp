@@ -17,11 +17,9 @@
 
 namespace {
 
-void dispatchPlaybackCommand(const InputCallbacks& callbacks,
-                             playback_input::Command command) {
-  if (callbacks.dispatchPlaybackCommand) {
-    callbacks.dispatchPlaybackCommand(std::move(command));
-  }
+void publishPlaybackCommand(std::vector<tui_input::Command>& commands,
+                            playback_input::Command command) {
+  commands.emplace_back(tui_input::PlaybackCommand{std::move(command)});
 }
 
 bool isSelectableEntry(const BrowserEntry& entry) {
@@ -292,7 +290,7 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
                       bool browserInteractionEnabled, bool playMode,
                       bool decoderReady, int& breadcrumbHover, int& actionHover,
                       bool& searchBarHover, bool& dirty, bool& running,
-                      const InputCallbacks& callbacks) {
+                      std::vector<tui_input::Command>& commands) {
   BrowserState& browser = navigator.state();
   std::optional<BrowserState::EntryIdentity> doubleClickAnchor;
   if (ev.type == InputEvent::Type::Mouse) {
@@ -375,15 +373,12 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       return;
     }
     if (playMode) {
-      if (callbacks.onActivateEntry && callbacks.onActivateEntry(entry)) {
-        dirty = true;
-      }
+      commands.emplace_back(tui_input::ActivateEntry{entry});
+      dirty = true;
       return;
     }
     if (entry.isMedia()) {
-      if (callbacks.onRenderFile) {
-        callbacks.onRenderFile(entry.path);
-      }
+      commands.emplace_back(tui_input::RenderFile{entry.path});
       running = false;
     }
   };
@@ -462,7 +457,7 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
 
   if (ev.type == InputEvent::Type::Resize) {
     dirty = true;
-    if (callbacks.onResize) callbacks.onResize();
+    commands.emplace_back(tui_input::Resize{});
     return;
   }
 
@@ -489,11 +484,13 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
 
     // If browser interaction isn't active (or action wasn't handled by the
     // browser), fall back to handling playback shortcuts as before.
-    if ((playMode || decoderReady) &&
-        handlePlaybackInput(ev, callbacks,
-                            kPlaybackShortcutContextShared |
-                                kPlaybackShortcutContextGlobal) !=
-            PlaybackInputResult::Ignored) {
+    if (const std::optional<PlaybackInputMatch> match =
+            (playMode || decoderReady)
+                ? matchPlaybackInput(ev,
+                                     kPlaybackShortcutContextShared |
+                                         kPlaybackShortcutContextGlobal)
+                : std::nullopt) {
+      publishPlaybackCommand(commands, match->command);
       dirty = true;
       return;
     }
@@ -509,11 +506,7 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
     bool alt = (key.control & altMask) != 0;
 
     if (ctrl && (key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q')) {
-      if (callbacks.dispatchPlaybackCommand) {
-        dispatchPlaybackCommand(callbacks, PlaybackAction::Quit);
-      } else {
-        running = false;
-      }
+      publishPlaybackCommand(commands, PlaybackAction::Quit);
       dirty = true;
       return;
     }
@@ -593,18 +586,19 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       return;
     }
 
-    if ((playMode || decoderReady) &&
-        handlePlaybackInput(ev, callbacks,
-                            kPlaybackShortcutContextShared |
-                                kPlaybackShortcutContextGlobal) !=
-            PlaybackInputResult::Ignored) {
+    if (const std::optional<PlaybackInputMatch> match =
+            (playMode || decoderReady)
+                ? matchPlaybackInput(ev,
+                                     kPlaybackShortcutContextShared |
+                                         kPlaybackShortcutContextGlobal)
+                : std::nullopt) {
+      publishPlaybackCommand(commands, match->command);
       dirty = true;
       return;
     }
     if (!ctrl && !alt &&
         (key.vk == 'M' || key.ch == 'm' || key.ch == 'M')) {
-      dispatchPlaybackCommand(callbacks,
-                              PlaybackAction::TogglePitchMonitor);
+      publishPlaybackCommand(commands, PlaybackAction::TogglePitchMonitor);
       dirty = true;
       return;
     }
@@ -631,10 +625,8 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       return;
     }
     if (key.vk == VK_ESCAPE) {
-      if (callbacks.dispatchPlaybackCommand) {
-        dispatchPlaybackCommand(callbacks, PlaybackAction::Stop);
-        dirty = true;
-      }
+      publishPlaybackCommand(commands, PlaybackAction::Stop);
+      dirty = true;
       return;
     }
     if (backspaceKey) {
@@ -647,10 +639,9 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
         const auto& pick = browser.entries[static_cast<size_t>(browser.selected)];
         if (!pick.isSelectable()) return;
         if (ctrl && playMode && pick.isMedia()) {
-          if (callbacks.onOpenFileContextMenu) {
-            callbacks.onOpenFileContextMenu(pick, -1, -1);
-            dirty = true;
-          }
+          commands.emplace_back(
+              tui_input::OpenFileContextMenu{pick, -1, -1});
+          dirty = true;
           return;
         }
         activateEntry(pick);
@@ -800,37 +791,33 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
     auto invokeAction = [&](ActionStripItem action) {
       switch (action) {
         case ActionStripItem::Previous:
-          dispatchPlaybackCommand(callbacks, PlaybackAction::Previous);
+          publishPlaybackCommand(commands, PlaybackAction::Previous);
           break;
         case ActionStripItem::PlayPause:
-          dispatchPlaybackCommand(callbacks,
-                                  PlaybackAction::TogglePause);
+          publishPlaybackCommand(commands, PlaybackAction::TogglePause);
           break;
         case ActionStripItem::Next:
-          dispatchPlaybackCommand(callbacks, PlaybackAction::Next);
+          publishPlaybackCommand(commands, PlaybackAction::Next);
           break;
         case ActionStripItem::Radio:
-          dispatchPlaybackCommand(callbacks,
-                                  PlaybackAction::ToggleRadio);
+          publishPlaybackCommand(commands, PlaybackAction::ToggleRadio);
           break;
         case ActionStripItem::Hz50:
-          dispatchPlaybackCommand(callbacks,
-                                  PlaybackAction::Toggle50Hz);
+          publishPlaybackCommand(commands, PlaybackAction::Toggle50Hz);
           break;
         case ActionStripItem::PitchMonitor:
-          dispatchPlaybackCommand(callbacks,
-                                  PlaybackAction::TogglePitchMonitor);
+          publishPlaybackCommand(commands,
+                                 PlaybackAction::TogglePitchMonitor);
           break;
         case ActionStripItem::View:
           browser.viewMode = nextViewMode(browser.viewMode);
           break;
         case ActionStripItem::Options:
-          dispatchPlaybackCommand(callbacks,
-                                  PlaybackAction::ToggleOptions);
+          publishPlaybackCommand(commands, PlaybackAction::ToggleOptions);
           break;
         case ActionStripItem::PictureInPicture:
-          dispatchPlaybackCommand(
-              callbacks, PlaybackAction::TogglePictureInPicture);
+          publishPlaybackCommand(commands,
+                                 PlaybackAction::TogglePictureInPicture);
           break;
         }
       dirty = true;
@@ -880,8 +867,8 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
             mouse.hasPixelPosition ? mouse.pixelY : mouse.pos.Y;
         if (const auto hit = playback_overlay::progressBarHitAt(
                 progressRegion, pointerX, pointerY)) {
-          dispatchPlaybackCommand(callbacks,
-                                  playback_input::SeekToRatio{hit->ratio});
+          publishPlaybackCommand(
+              commands, playback_input::SeekToRatio{hit->ratio});
           dirty = true;
           return;
         }
@@ -906,8 +893,9 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
         dirty = true;
       }
       const auto& pick = browser.entries[static_cast<size_t>(browser.selected)];
-      if (pick.isMedia() && callbacks.onOpenFileContextMenu) {
-        callbacks.onOpenFileContextMenu(pick, mouse.pos.X, mouse.pos.Y);
+      if (pick.isMedia()) {
+        commands.emplace_back(tui_input::OpenFileContextMenu{
+            pick, mouse.pos.X, mouse.pos.Y});
         dirty = true;
       }
       return;
@@ -933,14 +921,4 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
       }
     }
   }
-}
-
-PlaybackInputResult handlePlaybackInput(const InputEvent& ev,
-                                        const InputCallbacks& callbacks,
-                                        uint32_t shortcutContexts) {
-  std::optional<PlaybackInputMatch> match =
-      matchPlaybackInput(ev, shortcutContexts);
-  if (!match) return PlaybackInputResult::Ignored;
-  dispatchPlaybackCommand(callbacks, std::move(match->command));
-  return match->result;
 }

@@ -2,8 +2,8 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <optional>
+#include <variant>
 #include <vector>
 
 #include "browser_action_strip.h"
@@ -33,14 +33,28 @@ class EntryClickTracker {
 
 }  // namespace browser_input
 
-struct InputCallbacks {
-  std::function<void(playback_input::Command)> dispatchPlaybackCommand;
-  std::function<void()> onResize;
-  std::function<bool(const BrowserEntry&)> onActivateEntry;
-  std::function<bool(const std::vector<std::filesystem::path>&)> onPlayFiles;
-  std::function<void(const BrowserEntry&, int, int)> onOpenFileContextMenu;
-  std::function<void(const std::filesystem::path&)> onRenderFile;
+namespace tui_input {
+
+struct PlaybackCommand {
+  playback_input::Command command;
 };
+struct Resize {};
+struct ActivateEntry {
+  BrowserEntry entry;
+};
+struct OpenFileContextMenu {
+  BrowserEntry entry;
+  int x = -1;
+  int y = -1;
+};
+struct RenderFile {
+  std::filesystem::path file;
+};
+
+using Command = std::variant<PlaybackCommand, Resize, ActivateEntry,
+                             OpenFileContextMenu, RenderFile>;
+
+}  // namespace tui_input
 
 class BrowserNavigator;
 
@@ -100,11 +114,6 @@ class BrowserPointerState {
 
 bool setBrowserHoveredEntry(BrowserState& browser, int entryIndex);
 
-PlaybackInputResult handlePlaybackInput(
-    const InputEvent& ev, const InputCallbacks& callbacks,
-    uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
-                                kPlaybackShortcutContextShared);
-
 void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
                       browser_input::EntryClickTracker& entryClickTracker,
                       BrowserPointerState& pointerState,
@@ -117,4 +126,5 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
                       bool browserInteractionEnabled, bool playMode,
                       bool decoderReady, int& breadcrumbHover,
                       int& actionHover, bool& searchBarHover, bool& dirty,
-                      bool& running, const InputCallbacks& callbacks);
+                      bool& running,
+                      std::vector<tui_input::Command>& commands);
