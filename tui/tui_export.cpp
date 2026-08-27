@@ -414,7 +414,8 @@ int runExtractSheetCli(const Options& o,
     };
 
     ok = audioRuntime.analyzeFileToMelodyFile(
-        inputPath, std::max(0, o.trackIndex), outputPath, progress, &error);
+        inputPath, std::max(0, o.trackIndex), outputPath, progress, {},
+        &error);
   }
   std::cout << "\n";
   if (!ok) {

@@ -11,9 +11,11 @@ std::string activityTitle(const media_processing::TaskActivity& activity) {
   using Kind = media_processing::TaskKind;
   switch (activity.kind) {
     case Kind::MelodyAnalysis:
-      return "Analyzing melody";
+      return activity.cancelling ? "Cancelling melody analysis"
+                                 : "Analyzing melody";
     case Kind::LoopSplit:
-      return "Splitting loop";
+      return activity.cancelling ? "Cancelling loop split"
+                                 : "Splitting loop";
     case Kind::SubtitleGeneration:
       return activity.cancelling ? "Cancelling subtitles"
                                  : "Generating subtitles";

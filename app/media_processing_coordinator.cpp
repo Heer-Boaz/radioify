@@ -44,19 +44,22 @@ playback_media_processing::Outcome playbackOutcomeFor(TaskOutcome outcome) {
 
 class WorkerTask {
  public:
-  using ProgressReporter = std::function<void(float)>;
-  using Operation = std::function<TaskCompletion(const ProgressReporter&)>;
+  using ProgressReporter = Coordinator::ProgressReporter;
+  using CancellationRequested = Coordinator::CancellationRequested;
+  using Operation = std::function<TaskCompletion(
+      const ProgressReporter&, const CancellationRequested&)>;
 
   explicit WorkerTask(WakeNotifier ownerWake = {})
       : ownerWake_(std::move(ownerWake)) {}
 
-  ~WorkerTask() { join(); }
+  ~WorkerTask() { cancelAndJoin(); }
 
   bool tryStart(TaskActivity activity, Operation operation) {
     joinFinished();
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (!operation || activity_ || completion_) return false;
+      cancelRequested_.store(false, std::memory_order_relaxed);
       if (activity.progress) {
         activity.progress = std::clamp(*activity.progress, 0.0f, 1.0f);
       }
@@ -124,7 +127,23 @@ class WorkerTask {
     return changed_.exchange(false, std::memory_order_acq_rel);
   }
 
-  void join() {
+  bool requestCancel() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!activity_ || !activity_->cancellable || activity_->cancelling) {
+        return false;
+      }
+      activity_->cancelling = true;
+      activity_->cancellable = false;
+      cancelRequested_.store(true, std::memory_order_release);
+    }
+    notifyChanged();
+    return true;
+  }
+
+  void cancelAndJoin() {
+    requestCancel();
+    cancelRequested_.store(true, std::memory_order_release);
     std::thread worker;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -139,7 +158,7 @@ class WorkerTask {
     ownerWake_.notify();
   }
 
-  void updateProgress(float progress) {
+  void updateProgress(float progress, std::string phase) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (!activity_) return;
@@ -147,6 +166,9 @@ class WorkerTask {
       activity_->progress = activity_->progress
                                 ? std::max(*activity_->progress, clamped)
                                 : clamped;
+      if (!activity_->cancelling && !phase.empty()) {
+        activity_->phase = std::move(phase);
+      }
     }
     notifyChanged();
   }
@@ -155,7 +177,12 @@ class WorkerTask {
     TaskCompletion completion;
     try {
       completion = operation(
-          [this](float progress) { updateProgress(progress); });
+          [this](float progress, std::string phase) {
+            updateProgress(progress, std::move(phase));
+          },
+          [this]() {
+            return cancelRequested_.load(std::memory_order_acquire);
+          });
     } catch (const std::exception& exception) {
       std::lock_guard<std::mutex> lock(mutex_);
       if (activity_) {
@@ -173,6 +200,12 @@ class WorkerTask {
       }
       completion.outcome = TaskOutcome::Failed;
       completion.detail = "Media processing failed unexpectedly.";
+    }
+
+    if (cancelRequested_.load(std::memory_order_acquire) &&
+        !completion.succeeded()) {
+      completion.outcome = TaskOutcome::Cancelled;
+      completion.detail.clear();
     }
 
     {
@@ -197,6 +230,7 @@ class WorkerTask {
   mutable std::mutex mutex_;
   std::thread worker_;
   std::atomic<bool> changed_{false};
+  std::atomic<bool> cancelRequested_{false};
   WakeNotifier ownerWake_;
   std::optional<TaskActivity> activity_;
   std::optional<TaskCompletion> completion_;
@@ -335,13 +369,18 @@ bool Coordinator::tryStartMelodyAnalysis(
   activity.kind = TaskKind::MelodyAnalysis;
   activity.sourceFile = sourceFile;
   activity.progress = 0.0f;
+  activity.phase = "Preparing melody analysis";
+  activity.cancellable = true;
   const bool started = impl_->workerTask.tryStart(
       std::move(activity),
       [operation, sourceFile, trackIndex,
-       outputFile](const WorkerTask::ProgressReporter& reportProgress) {
+       outputFile](const WorkerTask::ProgressReporter& reportProgress,
+                   const WorkerTask::CancellationRequested&
+                       cancellationRequested) {
         std::string error;
         const bool succeeded = operation(sourceFile, trackIndex, outputFile,
-                                         reportProgress, &error);
+                                         reportProgress,
+                                         cancellationRequested, &error);
         TaskCompletion completion;
         completion.kind = TaskKind::MelodyAnalysis;
         completion.outcome = succeeded ? TaskOutcome::Succeeded
@@ -379,14 +418,19 @@ bool Coordinator::tryStartLoopSplit(
   TaskActivity activity;
   activity.kind = TaskKind::LoopSplit;
   activity.sourceFile = sourceFile;
+  activity.phase = "Preparing loop split";
+  activity.cancellable = true;
   const bool started = impl_->workerTask.tryStart(
       std::move(activity),
       [operation, sourceFile, stingerOutput, loopOutput,
-       config](const WorkerTask::ProgressReporter&) {
+       config](const WorkerTask::ProgressReporter& reportProgress,
+               const WorkerTask::CancellationRequested&
+                   cancellationRequested) {
         LoopSplitResult result;
         std::string error;
         const bool succeeded = operation(sourceFile, stingerOutput, loopOutput,
-                                         config, &result, &error);
+                                         config, &result, reportProgress,
+                                         cancellationRequested, &error);
         TaskCompletion completion;
         completion.kind = TaskKind::LoopSplit;
         completion.outcome = succeeded ? TaskOutcome::Succeeded
@@ -491,6 +535,9 @@ bool Coordinator::requestAudioSeparationCancellation() {
 
 bool Coordinator::cancelActive() {
   if (!impl_) return false;
+  if (impl_->workerTask.running()) {
+    return impl_->workerTask.requestCancel();
+  }
   if (impl_->subtitles && impl_->subtitles->snapshot().running()) {
     return requestSubtitleCancellation();
   }
@@ -555,7 +602,7 @@ NativeWaitHandle Coordinator::waitHandle() const {
 
 void Coordinator::shutdown() {
   if (!impl_) return;
-  impl_->workerTask.join();
+  impl_->workerTask.cancelAndJoin();
   if (impl_->subtitles) impl_->subtitles->cancelAndJoin();
   if (impl_->audioSeparation) impl_->audioSeparation->cancelAndJoin();
 }

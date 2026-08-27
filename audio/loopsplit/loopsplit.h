@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 
 #include "kssoptions.h"
@@ -33,11 +34,18 @@ struct LoopSplitResult {
   uint64_t totalFrames = 0;
 };
 
+using LoopSplitProgressReporter =
+    std::function<void(float, std::string)>;
+using LoopSplitCancellationRequested = std::function<bool()>;
+
 bool splitAudioIntoLoopFiles(const std::filesystem::path& inputFile,
                             const std::filesystem::path& stingerOutput,
                             const std::filesystem::path& loopOutput,
                             const LoopSplitConfig& config,
                             LoopSplitResult* result,
+                            const LoopSplitProgressReporter& reportProgress,
+                            const LoopSplitCancellationRequested&
+                                cancellationRequested,
                             std::string* error);
 
 #endif  // LOOPSPLIT_H

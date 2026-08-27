@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "ffmpegaudio.h"
@@ -26,6 +27,23 @@
 namespace {
 
 constexpr float kScoreEpsilon = 1e-6f;
+
+bool cancellationRequested(
+    const LoopSplitCancellationRequested& cancellation) {
+  return cancellation && cancellation();
+}
+
+bool stopIfCancelled(
+    const LoopSplitCancellationRequested& cancellation, std::string* error) {
+  if (!cancellationRequested(cancellation)) return false;
+  if (error) *error = "Loop split cancelled.";
+  return true;
+}
+
+void reportProgress(const LoopSplitProgressReporter& reporter, float progress,
+                    std::string phase) {
+  if (reporter) reporter(std::clamp(progress, 0.0f, 1.0f), std::move(phase));
+}
 
 uint64_t secToFrames(double seconds, uint32_t sampleRate) {
   if (seconds <= 0.0 || sampleRate == 0) return 0;
@@ -310,8 +328,9 @@ float featureCompare(const std::vector<float>& feature, size_t aStart,
                                      -1.0, 1.0));
 }
 
-MatchCandidate bestMatchAtLength(const std::vector<float>& feature, size_t len,
-                                size_t window) {
+MatchCandidate bestMatchAtLength(
+    const std::vector<float>& feature, size_t len, size_t window,
+    const LoopSplitCancellationRequested& cancellation) {
   MatchCandidate best;
   if (feature.empty() || len == 0) return best;
   window = std::min(window, len);
@@ -351,6 +370,9 @@ MatchCandidate bestMatchAtLength(const std::vector<float>& feature, size_t len,
   size_t bestStart = 0;
 
   for (size_t start = 1; start <= maxStart; ++start) {
+    if ((start & 0xfffu) == 0 && cancellationRequested(cancellation)) {
+      return {};
+    }
     const size_t outA = start - 1;
     const size_t outB = outA + len;
     const double outDA = feature[outA];
@@ -383,7 +405,9 @@ MatchCandidate bestMatchAtLength(const std::vector<float>& feature, size_t len,
 }
 
 std::vector<float> buildFeature(const std::vector<float>& mono,
-                               uint32_t hopFrames) {
+                                uint32_t hopFrames,
+                                const LoopSplitCancellationRequested&
+                                    cancellation) {
   std::vector<float> feature;
   if (mono.empty() || hopFrames == 0) return feature;
   const size_t frames = mono.size();
@@ -391,6 +415,9 @@ std::vector<float> buildFeature(const std::vector<float>& mono,
   feature.reserve(blockCount);
 
   for (size_t block = 0; block < blockCount; ++block) {
+    if ((block & 0xffu) == 0 && cancellationRequested(cancellation)) {
+      return {};
+    }
     const size_t base = block * hopFrames;
     const size_t end = std::min<size_t>(frames, base + hopFrames);
     const size_t n = end - base;
@@ -407,12 +434,16 @@ std::vector<float> buildFeature(const std::vector<float>& mono,
 }
 
 std::vector<float> toMono(const std::vector<float>& interleaved,
-                         uint32_t channels) {
+                          uint32_t channels,
+                          const LoopSplitCancellationRequested& cancellation) {
   if (channels == 0) return {};
   const size_t frameCount = interleaved.size() / channels;
   std::vector<float> mono(frameCount, 0.0f);
   if (channels == 1) {
     for (size_t i = 0; i < frameCount; ++i) {
+      if ((i & 0xffffu) == 0 && cancellationRequested(cancellation)) {
+        return {};
+      }
       mono[i] = interleaved[i];
     }
     return mono;
@@ -420,6 +451,9 @@ std::vector<float> toMono(const std::vector<float>& interleaved,
 
   const float invCh = 1.0f / static_cast<float>(channels);
   for (size_t i = 0; i < frameCount; ++i) {
+    if ((i & 0xffffu) == 0 && cancellationRequested(cancellation)) {
+      return {};
+    }
     float sum = 0.0f;
     const size_t base = i * channels;
     for (uint32_t c = 0; c < channels; ++c) {
@@ -431,8 +465,11 @@ std::vector<float> toMono(const std::vector<float>& interleaved,
 }
 
 MatchCandidate detectLoopByFeatures(const std::vector<float>& feature,
-                                   double featureRate,
-                                   const LoopSplitConfig& config) {
+                                    double featureRate,
+                                    const LoopSplitConfig& config,
+                                    const LoopSplitProgressReporter& reporter,
+                                    const LoopSplitCancellationRequested&
+                                        cancellation) {
   MatchCandidate fallback{};
   if (feature.empty()) return fallback;
   const size_t maxLen = feature.size() / 2;
@@ -474,7 +511,17 @@ MatchCandidate detectLoopByFeatures(const std::vector<float>& feature,
   };
   std::vector<LenScore> scores;
 
+  size_t lengthIndex = 0;
+  const size_t lengthCount =
+      ((maxLoopLen - minLen) / std::max<size_t>(1u, lenStep)) + 1;
   for (size_t len = minLen; len <= maxLoopLen; len += lenStep) {
+    if (cancellationRequested(cancellation)) return {};
+    if ((lengthIndex++ & 0x7u) == 0) {
+      reportProgress(reporter,
+                     0.58f + 0.16f * static_cast<float>(lengthIndex) /
+                                 static_cast<float>(lengthCount),
+                     "Finding the best loop boundary");
+    }
     const size_t window = std::min(coarseWindow, len);
     float bestLenScore = -1.0f;
     for (size_t start : coarseStarts) {
@@ -510,10 +557,12 @@ MatchCandidate detectLoopByFeatures(const std::vector<float>& feature,
 
   MatchCandidate best{};
   for (size_t len : candidateLens) {
+    if (cancellationRequested(cancellation)) return {};
     if (len < minLen || len > maxLoopLen) continue;
     if (len == 0) continue;
     if (len + 1 >= feature.size()) continue;
-    MatchCandidate candidate = bestMatchAtLength(feature, len, refineWindow);
+    MatchCandidate candidate =
+        bestMatchAtLength(feature, len, refineWindow, cancellation);
     if (!candidate.valid) continue;
     if (!best.valid || candidate.score > best.score) {
       best = candidate;
@@ -523,11 +572,14 @@ MatchCandidate detectLoopByFeatures(const std::vector<float>& feature,
 }
 
 MatchCandidate refineSampleMatch(const std::vector<float>& mono,
-                                uint32_t sampleRate, uint64_t approxStartFrame,
-                                uint64_t approxLenFrames,
-                                const LoopSplitConfig& config,
-                                size_t minLoopFrames,
-                                size_t maxLoopFrames) {
+                                 uint32_t sampleRate,
+                                 uint64_t approxStartFrame,
+                                 uint64_t approxLenFrames,
+                                 const LoopSplitConfig& config,
+                                 size_t minLoopFrames, size_t maxLoopFrames,
+                                 const LoopSplitProgressReporter& reporter,
+                                 const LoopSplitCancellationRequested&
+                                     cancellation) {
   MatchCandidate best;
   if (mono.empty() || approxLenFrames == 0 || sampleRate == 0) return best;
   if (approxStartFrame >= mono.size()) return best;
@@ -544,6 +596,12 @@ MatchCandidate refineSampleMatch(const std::vector<float>& mono,
 
   for (int64_t ds = -static_cast<int64_t>(shiftLimit);
        ds <= static_cast<int64_t>(shiftLimit); ds += shiftStep) {
+    if (cancellationRequested(cancellation)) return {};
+    const float refineFraction =
+        static_cast<float>(ds + static_cast<int64_t>(shiftLimit)) /
+        static_cast<float>(std::max<int64_t>(1, 2 * shiftLimit));
+    reportProgress(reporter, 0.75f + 0.10f * refineFraction,
+                   "Refining the loop boundary");
     const int64_t start = static_cast<int64_t>(approxStartFrame) + ds;
     if (start < 0 || static_cast<size_t>(start) >= mono.size()) continue;
     const size_t clampedStart = static_cast<size_t>(start);
@@ -640,7 +698,10 @@ bool writeSegment(const std::filesystem::path& outputPath,
 
 bool decodeToInterleaved(const std::filesystem::path& inputFile,
                         const LoopSplitConfig& config, std::vector<float>& out,
-                        uint64_t* totalFrames, std::string* error) {
+                        uint64_t* totalFrames,
+                        const LoopSplitProgressReporter& reporter,
+                        const LoopSplitCancellationRequested& cancellation,
+                        std::string* error) {
   if (totalFrames) *totalFrames = 0;
   out.clear();
   LoopSplitDecoder decoder;
@@ -663,6 +724,10 @@ bool decodeToInterleaved(const std::filesystem::path& inputFile,
   uint64_t processed = 0;
 
   while (true) {
+    if (stopIfCancelled(cancellation, error)) {
+      decoder.close();
+      return false;
+    }
     uint64_t framesRead = 0;
     if (!decoder.readFrames(buffer.data(), chunkFrames, &framesRead)) {
       decoder.close();
@@ -675,6 +740,13 @@ bool decodeToInterleaved(const std::filesystem::path& inputFile,
         static_cast<size_t>(framesRead * config.channels);
     out.insert(out.end(), buffer.data(), buffer.data() + sampleCount);
     processed += framesRead;
+    if (total > 0) {
+      reportProgress(reporter,
+                     0.05f +
+                         0.40f * static_cast<float>(processed) /
+                             static_cast<float>(total),
+                     "Decoding source audio");
+    }
     if (total > 0 && processed >= total) break;
   }
   decoder.close();
@@ -694,6 +766,8 @@ bool splitAudioIntoLoopFiles(const std::filesystem::path& inputFile,
                             const std::filesystem::path& loopOutput,
                             const LoopSplitConfig& config,
                             LoopSplitResult* result,
+                            const LoopSplitProgressReporter& reporter,
+                            const LoopSplitCancellationRequested& cancellation,
                             std::string* error) {
   if (result) {
     *result = LoopSplitResult{};
@@ -722,12 +796,14 @@ bool splitAudioIntoLoopFiles(const std::filesystem::path& inputFile,
     if (error) *error = "Input file not found.";
     return false;
   }
+  if (stopIfCancelled(cancellation, error)) return false;
 
+  reportProgress(reporter, 0.02f, "Opening source audio");
   uint32_t sampleRate = std::max<uint32_t>(1u, config.sampleRate);
   uint64_t totalFrames = 0;
   std::vector<float> interleaved;
-  if (!decodeToInterleaved(inputFile, config, interleaved,
-                           &totalFrames, error)) {
+  if (!decodeToInterleaved(inputFile, config, interleaved, &totalFrames,
+                           reporter, cancellation, error)) {
     return false;
   }
   if (totalFrames == 0 || interleaved.empty()) {
@@ -736,8 +812,12 @@ bool splitAudioIntoLoopFiles(const std::filesystem::path& inputFile,
   }
   result->totalFrames = totalFrames;
 
-  std::vector<float> mono = toMono(interleaved, config.channels);
+  if (stopIfCancelled(cancellation, error)) return false;
+  reportProgress(reporter, 0.48f, "Preparing the analysis signal");
+  std::vector<float> mono =
+      toMono(interleaved, config.channels, cancellation);
   if (mono.empty()) {
+    if (stopIfCancelled(cancellation, error)) return false;
     if (error) *error = "Failed to build analysis signal.";
     return false;
   }
@@ -746,11 +826,16 @@ bool splitAudioIntoLoopFiles(const std::filesystem::path& inputFile,
   const uint64_t maxLoopFrames = secToFrames(config.maxLoopSeconds, sampleRate);
   const double featureRate =
       static_cast<double>(sampleRate) / static_cast<double>(std::max<uint32_t>(1u, config.analysisHop));
-  const std::vector<float> feature = buildFeature(mono, config.analysisHop);
+  reportProgress(reporter, 0.52f, "Measuring the audio structure");
+  const std::vector<float> feature =
+      buildFeature(mono, config.analysisHop, cancellation);
+  if (stopIfCancelled(cancellation, error)) return false;
   MatchCandidate match{};
   if (feature.size() >= 4) {
-    match = detectLoopByFeatures(feature, featureRate, config);
+    match = detectLoopByFeatures(feature, featureRate, config, reporter,
+                                 cancellation);
   }
+  if (stopIfCancelled(cancellation, error)) return false;
 
   bool hasMatch = match.valid && match.score >= config.minConfidence;
   if (!hasMatch) {
@@ -771,7 +856,9 @@ bool splitAudioIntoLoopFiles(const std::filesystem::path& inputFile,
         static_cast<size_t>(std::min<uint64_t>(totalFrames,
                                                std::max<uint64_t>(1u, minLoopFrames))),
         static_cast<size_t>(std::min<uint64_t>(totalFrames,
-                                               std::max<uint64_t>(1u, maxLoopFrames))));
+                                               std::max<uint64_t>(1u, maxLoopFrames))),
+        reporter, cancellation);
+    if (stopIfCancelled(cancellation, error)) return false;
     if (refined.valid) {
       match = refined;
       hasMatch = match.score >= config.minConfidence;
@@ -798,19 +885,27 @@ bool splitAudioIntoLoopFiles(const std::filesystem::path& inputFile,
     result->hasStinger = false;
   }
 
-  if (result->hasStinger && !stingerOutput.empty() &&
-      !writeSegment(stingerOutput, interleaved, config.channels, sampleRate,
-                    0, result->loopStartFrame, error)) {
-    return false;
+  // Output publication is the commit phase. Once it begins, finish both files
+  // so a late cancellation cannot leave only half of the requested pair.
+  if (stopIfCancelled(cancellation, error)) return false;
+  if (result->hasStinger && !stingerOutput.empty()) {
+    reportProgress(reporter, 0.88f, "Writing the stinger");
+    if (!writeSegment(stingerOutput, interleaved, config.channels, sampleRate,
+                      0, result->loopStartFrame, error)) {
+      return false;
+    }
   }
 
   if (result->loopFrameCount == 0) {
     if (error) *error = "No loop segment found.";
     return false;
   }
+  reportProgress(reporter, result->hasStinger ? 0.94f : 0.88f,
+                 "Writing the main loop");
   if (!writeSegment(loopOutput, interleaved, config.channels, sampleRate,
                    result->loopStartFrame, result->loopFrameCount, error)) {
     return false;
   }
+  reportProgress(reporter, 1.0f, "Loop files ready");
   return true;
 }

@@ -46,4 +46,5 @@ bool melodyOfflineAnalyzeToFile(
     const VgmPlaybackOptions& vgmOptions,
     const std::unordered_map<uint32_t, VgmDeviceOptions>& vgmDeviceOverrides,
     const std::filesystem::path& outputFile,
-    const std::function<void(float)>& progressCallback, std::string* error);
+    const std::function<void(float)>& progressCallback,
+    const std::function<bool()>& cancellationRequested, std::string* error);

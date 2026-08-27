@@ -12,20 +12,29 @@ Coordinator::Coordinator(AudioPlaybackRuntime& audioPlayback)
             [&audioPlayback](const std::filesystem::path& sourceFile,
                              int trackIndex,
                              const std::filesystem::path& outputFile,
-                             const MelodyProgressReporter& reportProgress,
+                             const ProgressReporter& reportProgress,
+                             const CancellationRequested&
+                                 cancellationRequested,
                              std::string* error) {
               return audioPlayback.analyzeFileToMelodyFile(
-                  sourceFile, trackIndex, outputFile, reportProgress, error);
+                  sourceFile, trackIndex, outputFile,
+                  [&](float progress) {
+                    reportProgress(progress, "Analyzing melody");
+                  },
+                  cancellationRequested, error);
             };
         operations.splitLoop =
             [](const std::filesystem::path& sourceFile,
                const std::filesystem::path& stingerOutput,
                const std::filesystem::path& loopOutput,
                const LoopSplitConfig& config, LoopSplitResult* result,
+               const ProgressReporter& reportProgress,
+               const CancellationRequested& cancellationRequested,
                std::string* error) {
               return splitAudioIntoLoopFiles(sourceFile, stingerOutput,
                                              loopOutput, config, result,
-                                             error);
+                                             reportProgress,
+                                             cancellationRequested, error);
             };
 #if RADIOIFY_HAS_AUDIO_SEPARATION
         operations.audioSeparationAvailable = true;

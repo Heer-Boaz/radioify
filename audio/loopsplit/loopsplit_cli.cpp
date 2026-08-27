@@ -32,7 +32,8 @@ int runSplitLoopCli(const Options& o) {
   std::string error;
 
   bool ok = splitAudioIntoLoopFiles(inputPath, outputPaths.stinger,
-                                    outputPaths.loop, config, &result, &error);
+                                    outputPaths.loop, config, &result, {}, {},
+                                    &error);
   if (!ok) {
     die(error.empty() ? "Failed to split loop." : error);
   }

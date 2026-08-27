@@ -68,14 +68,15 @@ std::optional<playback_media_processing::Completion> completionForPlayback(
 // instead of understanding every worker's lifecycle and synchronization.
 class Coordinator final : public playback_media_processing::Service {
  public:
-  using MelodyProgressReporter = std::function<void(float)>;
+  using ProgressReporter = std::function<void(float, std::string)>;
+  using CancellationRequested = std::function<bool()>;
   using MelodyOperation = std::function<bool(
       const std::filesystem::path&, int, const std::filesystem::path&,
-      const MelodyProgressReporter&, std::string*)>;
+      const ProgressReporter&, const CancellationRequested&, std::string*)>;
   using LoopSplitOperation = std::function<bool(
       const std::filesystem::path&, const std::filesystem::path&,
       const std::filesystem::path&, const LoopSplitConfig&, LoopSplitResult*,
-      std::string*)>;
+      const ProgressReporter&, const CancellationRequested&, std::string*)>;
 
   struct Operations {
     MelodyOperation analyzeMelody;

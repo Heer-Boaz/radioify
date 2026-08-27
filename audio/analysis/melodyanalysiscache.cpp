@@ -910,7 +910,8 @@ bool writeMidiFramesToFile(const std::filesystem::path& outputFile,
 }
 
 void analyzeTrackForCache(MelodyOfflineCache* cache, MelodyOfflineJob job,
-                          const std::function<void(float)>& progressCallback) {
+                          const std::function<void(float)>& progressCallback,
+                          const std::function<bool()>& cancellationRequested) {
   if (!cache) return;
   NeuralPitchState neural{};
   DecoderContext decoder;
@@ -928,6 +929,12 @@ void analyzeTrackForCache(MelodyOfflineCache* cache, MelodyOfflineJob job,
     cache->stopRequested.store(false, std::memory_order_release);
   }
   if (progressCallback) progressCallback(0.0f);
+  const auto stopRequested = [&]() {
+    if (cache->stopRequested.load(std::memory_order_acquire)) return true;
+    if (!cancellationRequested || !cancellationRequested()) return false;
+    cache->stopRequested.store(true, std::memory_order_release);
+    return true;
+  };
 
   std::string error;
   if (!decoder.init(job, &error)) {
@@ -981,7 +988,7 @@ void analyzeTrackForCache(MelodyOfflineCache* cache, MelodyOfflineJob job,
     nextCaptureFrame = std::min(kCaptureStrideFrames, job.leadInFrames);
   }
 
-  while (!cache->stopRequested.load(std::memory_order_acquire)) {
+  while (!stopRequested()) {
     uint64_t framesToRead = kAnalysisChunkFrames;
     if (totalKnown && totalFrames > processedFrames) {
       uint64_t remaining = totalFrames - processedFrames;
@@ -1012,8 +1019,7 @@ void analyzeTrackForCache(MelodyOfflineCache* cache, MelodyOfflineJob job,
     processedFrames += readFrames;
 
     const uint64_t decodedFramePos = job.leadInFrames + processedFrames;
-    while (!cache->stopRequested.load(std::memory_order_acquire) &&
-           nextCaptureFrame <= decodedFramePos) {
+    while (!stopRequested() && nextCaptureFrame <= decodedFramePos) {
       while (!pendingNeuralFrames.empty() &&
              pendingNeuralFrames.front().sourceFrame <= nextCaptureFrame) {
         alignedNeuralFrame = pendingNeuralFrames.front();
@@ -1078,7 +1084,7 @@ void analyzeTrackForCache(MelodyOfflineCache* cache, MelodyOfflineJob job,
     }
   }
 
-  const bool stopped = cache->stopRequested.load(std::memory_order_acquire);
+  const bool stopped = stopRequested();
   std::vector<MelodyAnalysisPoint> refinedFrames;
   if (!stopped && !rawFrames.empty()) {
     refinedFrames = refineOfflineFrames(rawFrames);
@@ -1114,7 +1120,7 @@ void analyzeTrackForCache(MelodyOfflineCache* cache, MelodyOfflineJob job,
 }
 
 void analyzeTrack(MelodyOfflineJob job) {
-  analyzeTrackForCache(&gCache, std::move(job), {});
+  analyzeTrackForCache(&gCache, std::move(job), {}, {});
 }
 }  // namespace
 
@@ -1211,7 +1217,8 @@ bool melodyOfflineAnalyzeToFile(
     const VgmPlaybackOptions& vgmOptions,
     const std::unordered_map<uint32_t, VgmDeviceOptions>& vgmDeviceOverrides,
     const std::filesystem::path& outputFile,
-    const std::function<void(float)>& progressCallback, std::string* error) {
+    const std::function<void(float)>& progressCallback,
+    const std::function<bool()>& cancellationRequested, std::string* error) {
   if (file.empty() || !std::filesystem::exists(file)) {
     if (error) *error = "Input file not found.";
     return false;
@@ -1238,7 +1245,13 @@ bool melodyOfflineAnalyzeToFile(
 
   MelodyOfflineCache localCache;
   localCache.stopRequested.store(false, std::memory_order_release);
-  analyzeTrackForCache(&localCache, std::move(job), progressCallback);
+  analyzeTrackForCache(&localCache, std::move(job), progressCallback,
+                       cancellationRequested);
+
+  if (cancellationRequested && cancellationRequested()) {
+    if (error) *error = "Melody analysis cancelled.";
+    return false;
+  }
 
   std::vector<MelodyAnalysisPoint> frames;
   uint32_t resultSampleRate = sourceSampleRate;
@@ -1264,6 +1277,10 @@ bool melodyOfflineAnalyzeToFile(
   std::filesystem::path midiPath = melodyPath;
   midiPath.replace_extension(".mid");
 
+  if (cancellationRequested && cancellationRequested()) {
+    if (error) *error = "Melody analysis cancelled.";
+    return false;
+  }
   const bool melodyOk =
       writeMelodyFramesToFile(melodyPath, resultSampleRate, frames, error);
   bool midiOk = false;

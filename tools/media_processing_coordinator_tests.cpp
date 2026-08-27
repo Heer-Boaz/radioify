@@ -78,23 +78,30 @@ int main() {
   processing::Coordinator::Operations operations;
   operations.analyzeMelody =
       [&](const std::filesystem::path&, int, const std::filesystem::path&,
-          const processing::Coordinator::MelodyProgressReporter& progress,
+          const processing::Coordinator::ProgressReporter& progress,
+          const processing::Coordinator::CancellationRequested& cancellation,
           std::string*) {
-        progress(0.4f);
+        progress(0.4f, "Analyzing melody");
         melodyStarted.store(true, std::memory_order_release);
-        while (!releaseMelody.load(std::memory_order_acquire)) {
+        while (!releaseMelody.load(std::memory_order_acquire) &&
+               !cancellation()) {
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        return true;
+        return !cancellation();
       };
   operations.splitLoop =
       [&](const std::filesystem::path&, const std::filesystem::path&,
           const std::filesystem::path&, const LoopSplitConfig&,
-          LoopSplitResult* result, std::string*) {
+          LoopSplitResult* result,
+          const processing::Coordinator::ProgressReporter&,
+          const processing::Coordinator::CancellationRequested& cancellation,
+          std::string*) {
         loopStarted.store(true, std::memory_order_release);
-        while (!releaseLoop.load(std::memory_order_acquire)) {
+        while (!releaseLoop.load(std::memory_order_acquire) &&
+               !cancellation()) {
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+        if (cancellation()) return false;
         if (result) result->hasStinger = true;
         return true;
       };
@@ -167,7 +174,7 @@ int main() {
   ok &= expect(melody &&
                    melody->kind == processing::TaskKind::MelodyAnalysis &&
                    melody->progress && *melody->progress == 0.4f &&
-                   !melody->cancellable &&
+                   melody->cancellable &&
                    melodyCard && melodyCard->title == "Analyzing melody" &&
                    !coordinator.tryStartLoopSplit(
                        "other.flac", "other_stinger.wav", "other_loop.wav",
@@ -191,10 +198,30 @@ int main() {
                    }),
                "starting new work must retire the previous footer result");
   const std::optional<MediaTaskCardModel> loopCard = presenter.activeCard();
-  ok &= expect(loopCard && !loopCard->progress &&
+  ok &= expect(loopCard && !loopCard->progress && loopCard->cancellable &&
                    loopCard->title == "Splitting loop",
                "tasks without measurable progress must stay indeterminate");
+  ok &= expect(coordinator.cancelActive() && !coordinator.cancelActive(),
+               "generic background work must accept cancellation once");
+  const std::optional<MediaTaskCardModel> cancellingLoopCard =
+      presenter.activeCard();
+  ok &= expect(cancellingLoopCard && !cancellingLoopCard->cancellable &&
+                   cancellingLoopCard->title == "Cancelling loop split",
+               "generic cancellation must reach the shared task card");
+  const auto cancelledLoopCompletion = waitForCompletion(coordinator);
+  ok &= expect(cancelledLoopCompletion &&
+                   cancelledLoopCompletion->outcome ==
+                       processing::TaskOutcome::Cancelled,
+               "a cancelled generic worker must publish a cancelled result");
+
+  loopStarted.store(false, std::memory_order_release);
   releaseLoop.store(true, std::memory_order_release);
+  ok &= expect(coordinator.tryStartLoopSplit(
+                   "loop.flac", "loop_stinger.wav", "loop_loop.wav", {}) &&
+                   waitUntil([&]() {
+                     return loopStarted.load(std::memory_order_acquire);
+                   }),
+               "a completed cancellation must not poison the next task");
   const auto loopCompletion = waitForCompletion(coordinator);
   ok &= expect(loopCompletion && loopCompletion->succeeded() &&
                    mediaTaskStatusModel(*loopCompletion).text ==
