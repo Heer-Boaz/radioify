@@ -3,6 +3,7 @@
 #include "audioplayback_internal.h"
 
 #include "audioplayback.h"
+#include "audio_stream.h"
 
 #include <chrono>
 #include <thread>
@@ -66,8 +67,9 @@ void startAuditionWorker(AudioPlaybackState& audio, AuditionTone tone) {
             int64_t ptsUs = static_cast<int64_t>((framePos + offset) *
                                                  1000000ULL / sampleRate);
             uint64_t written = 0;
-            if (!audioStreamWriteSamples(
-                    buffer.data() + static_cast<size_t>(offset) * channels,
+        if (!audioStreamWriteSamples(
+                audio,
+                buffer.data() + static_cast<size_t>(offset) * channels,
                     remaining, ptsUs, 0, false, &written)) {
               remaining = 0;
               break;

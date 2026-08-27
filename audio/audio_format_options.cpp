@@ -1,5 +1,6 @@
 #include "audioplayback_internal.h"
 #include "audioplayback.h"
+#include "audio_stream.h"
 
 #include "media_formats.h"
 #include "playback_backend.h"
@@ -346,7 +347,7 @@ bool audioStartKssInstrumentAudition(const KssInstrumentProfile& profile) {
   if (gAudio.audition.active.load()) {
     stopAuditionWorker(gAudio);
     if (gAudio.state.externalStream.load()) {
-      audioStreamReset(0);
+      audioStreamReset(gAudio, 0);
     }
   } else {
     gAudio.audition.resumeValid =
@@ -358,7 +359,7 @@ bool audioStartKssInstrumentAudition(const KssInstrumentProfile& profile) {
       gAudio.audition.resumePaused = gAudio.state.paused.load();
       gAudio.audition.resumeTrackIndex = gAudio.trackIndex;
     }
-    if (!audioStartStream(0)) {
+    if (!audioStartStream(gAudio, 0)) {
       if (gAudio.audition.resumeValid) {
         loadFileAt(gAudio.audition.resumeFile, gAudio.audition.resumeFrame,
                    gAudio.audition.resumeTrackIndex);
@@ -393,7 +394,7 @@ bool audioStopKssInstrumentAudition() {
     gAudio.audition.resumeValid = false;
     return resumed;
   }
-  audioStopStream();
+  audioStopStream(gAudio);
   gAudio.audition.resumeValid = false;
   return true;
 }

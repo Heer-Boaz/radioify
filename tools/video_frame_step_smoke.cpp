@@ -130,13 +130,14 @@ bool waitFor(Player& player, int timeoutMs, const char* label,
   return false;
 }
 
-bool waitForAppliedAudioReset(uint64_t previousGeneration, int expectedSerial,
-                              AudioStreamReset* out) {
+bool waitForAppliedAudioReset(AudioPlaybackRuntime& audioPlayback,
+                              uint64_t previousGeneration,
+                              int expectedSerial, AudioStreamReset* out) {
   const auto deadline = std::chrono::steady_clock::now() +
                         std::chrono::milliseconds(kDefaultTimeoutMs);
   AudioStreamReset observed{};
   while (std::chrono::steady_clock::now() < deadline) {
-    observed = audioStreamLastAppliedReset();
+    observed = audioPlayback.lastAppliedStreamReset();
     if (observed.generation > previousGeneration &&
         observed.serial == expectedSerial) {
       if (out) {
@@ -152,7 +153,8 @@ bool waitForAppliedAudioReset(uint64_t previousGeneration, int expectedSerial,
   return false;
 }
 
-bool expectFrameStepTransition(bool audioEnabled, int64_t expectedPtsUs,
+bool expectFrameStepTransition(AudioPlaybackRuntime& audioPlayback,
+                               bool audioEnabled, int64_t expectedPtsUs,
                                int previousSerial, int expectedSerial,
                                const AudioStreamReset& previousReset,
                                const char* label) {
@@ -168,10 +170,10 @@ bool expectFrameStepTransition(bool audioEnabled, int64_t expectedPtsUs,
     return true;
   }
 
-  AudioStreamReset applied = audioStreamLastAppliedReset();
+  AudioStreamReset applied = audioPlayback.lastAppliedStreamReset();
   if (seekBackedStep) {
-    if (!waitForAppliedAudioReset(previousReset.generation, expectedSerial,
-                                  &applied)) {
+    if (!waitForAppliedAudioReset(audioPlayback, previousReset.generation,
+                                  expectedSerial, &applied)) {
       std::cerr << "video_frame_step_smoke: " << label
                 << " timed out waiting for applied audio reset"
                 << " previous_generation=" << previousReset.generation
@@ -201,17 +203,18 @@ bool expectFrameStepTransition(bool audioEnabled, int64_t expectedPtsUs,
     return false;
   }
 
-  if (audioStreamSerial() != expectedSerial) {
+  if (audioPlayback.streamSerial() != expectedSerial) {
     std::cerr << "video_frame_step_smoke: " << label
               << " audio stream serial mismatch previous_serial="
               << previousSerial << " expected_serial=" << expectedSerial
-              << " actual_serial=" << audioStreamSerial() << '\n';
+              << " actual_serial=" << audioPlayback.streamSerial() << '\n';
     return false;
   }
   return true;
 }
 
-bool expectSerialTransition(bool audioEnabled, int64_t expectedPtsUs,
+bool expectSerialTransition(AudioPlaybackRuntime& audioPlayback,
+                            bool audioEnabled, int64_t expectedPtsUs,
                             int previousSerial, int expectedSerial,
                             const AudioStreamReset& previousReset,
                             const char* label) {
@@ -227,12 +230,12 @@ bool expectSerialTransition(bool audioEnabled, int64_t expectedPtsUs,
   }
 
   AudioStreamReset applied{};
-  if (!waitForAppliedAudioReset(previousReset.generation, expectedSerial,
-                                &applied) ||
+  if (!waitForAppliedAudioReset(audioPlayback, previousReset.generation,
+                                expectedSerial, &applied) ||
       applied.generation != previousReset.generation + 1 ||
       applied.discardUntilUs != expectedPtsUs ||
       applied.resetPlaybackPosition ||
-      audioStreamSerial() != expectedSerial) {
+      audioPlayback.streamSerial() != expectedSerial) {
     std::cerr << "video_frame_step_smoke: " << label
               << " audio serial reset mismatch"
               << " expected_generation=" << previousReset.generation + 1
@@ -241,14 +244,15 @@ bool expectSerialTransition(bool audioEnabled, int64_t expectedPtsUs,
               << " actual_discard_until_us=" << applied.discardUntilUs
               << " expected_serial=" << expectedSerial
               << " actual_serial=" << applied.serial
-              << " stream_serial=" << audioStreamSerial() << '\n';
+              << " stream_serial=" << audioPlayback.streamSerial() << '\n';
     return false;
   }
   return true;
 }
 
 bool expectSeekStepOverlapTransition(
-    bool audioEnabled, int64_t requestedSeekUs, int64_t presentedPtsUs,
+    AudioPlaybackRuntime& audioPlayback, bool audioEnabled,
+    int64_t requestedSeekUs, int64_t presentedPtsUs,
     int previousSerial, int expectedSerial,
     const AudioStreamReset& previousReset, const char* label) {
   if (expectedSerial <= previousSerial) {
@@ -267,7 +271,7 @@ bool expectSeekStepOverlapTransition(
       previousReset.generation +
       static_cast<uint64_t>(expectedSerial - previousSerial);
   const bool resetObserved = waitForAppliedAudioReset(
-      previousReset.generation, expectedSerial, &applied);
+      audioPlayback, previousReset.generation, expectedSerial, &applied);
   const bool discardMatchesTransportAnchor =
       applied.discardUntilUs == requestedSeekUs ||
       applied.discardUntilUs == presentedPtsUs;
@@ -276,7 +280,7 @@ bool expectSeekStepOverlapTransition(
       !discardMatchesTransportAnchor ||
       applied.framePosition < previousReset.framePosition ||
       applied.resetPlaybackPosition ||
-      audioStreamSerial() != expectedSerial) {
+      audioPlayback.streamSerial() != expectedSerial) {
     std::cerr << "video_frame_step_smoke: " << label
               << " combined seek/frame-step audio reset mismatch"
               << " expected_generation=" << expectedGeneration
@@ -290,25 +294,26 @@ bool expectSeekStepOverlapTransition(
               << (applied.resetPlaybackPosition ? 1 : 0)
               << " expected_serial=" << expectedSerial
               << " actual_serial=" << applied.serial
-              << " stream_serial=" << audioStreamSerial() << '\n';
+              << " stream_serial=" << audioPlayback.streamSerial() << '\n';
     return false;
   }
   return true;
 }
 
 bool expectConcurrentResumeTransition(
-    bool audioEnabled, int64_t expectedPtsUs, int expectedSerial,
+    AudioPlaybackRuntime& audioPlayback, bool audioEnabled,
+    int64_t expectedPtsUs, int expectedSerial,
     const AudioStreamReset& previousReset, const char* label) {
   if (!audioEnabled) {
     return true;
   }
 
   AudioStreamReset applied{};
-  if (!waitForAppliedAudioReset(previousReset.generation, expectedSerial,
-                                &applied) ||
+  if (!waitForAppliedAudioReset(audioPlayback, previousReset.generation,
+                                expectedSerial, &applied) ||
       applied.discardUntilUs != expectedPtsUs ||
       applied.resetPlaybackPosition ||
-      audioStreamSerial() != expectedSerial) {
+      audioPlayback.streamSerial() != expectedSerial) {
     std::cerr << "video_frame_step_smoke: " << label
               << " concurrent audio resume reset mismatch"
               << " previous_generation=" << previousReset.generation
@@ -317,7 +322,7 @@ bool expectConcurrentResumeTransition(
               << " actual_discard_until_us=" << applied.discardUntilUs
               << " expected_serial=" << expectedSerial
               << " actual_serial=" << applied.serial
-              << " stream_serial=" << audioStreamSerial() << '\n';
+              << " stream_serial=" << audioPlayback.streamSerial() << '\n';
     return false;
   }
   return true;
@@ -345,7 +350,7 @@ struct ObservedFrameStep {
 };
 
 bool requestAndObserveFrameStep(
-    Player& player, bool audioEnabled,
+    AudioPlaybackRuntime& audioPlayback, Player& player, bool audioEnabled,
     playback_video_frame_step::Direction direction, const std::string& label,
     const int64_t* expectedPtsUs, ObservedFrameStep* current,
     bool previousDiscoveryUsesBoundaryAnchor = false) {
@@ -357,7 +362,8 @@ bool requestAndObserveFrameStep(
   const int beforeSerial = current->serial;
   const uint64_t beforeCounter = current->frameCounter;
   const AudioStreamReset beforeAudioReset =
-      audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+      audioEnabled ? audioPlayback.lastAppliedStreamReset()
+                   : AudioStreamReset{};
 
   if (!player.requestFrameStep(direction)) {
     std::cerr << "video_frame_step_smoke: " << label
@@ -405,7 +411,7 @@ bool requestAndObserveFrameStep(
   const int64_t audioTargetUs = seekBackedPreviousDiscovery
                                     ? beforePtsUs
                                     : observed.lastPresentedPtsUs;
-  if (!expectFrameStepTransition(audioEnabled, audioTargetUs,
+  if (!expectFrameStepTransition(audioPlayback, audioEnabled, audioTargetUs,
                                  beforeSerial, observed.currentSerial,
                                  beforeAudioReset, label.c_str())) {
     return false;
@@ -624,7 +630,7 @@ int main(int argc, char** argv) {
     const int beforeSerial = player.debugInfo().currentSerial;
     const uint64_t beforeCompositionCounter = player.videoFrameCounter();
     const AudioStreamReset beforeAudioReset =
-        audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+        audioEnabled ? audioRuntime.lastAppliedStreamReset() : AudioStreamReset{};
     if (player.motionCompositionSupport() !=
         MotionCompositionSupport::Available) {
       std::cerr << "video_frame_step_smoke: composition preview is not "
@@ -665,7 +671,7 @@ int main(int argc, char** argv) {
     const int projectedSerial = projected.currentSerial;
     const int64_t projectedPositionUs = player.timelineSnapshot().positionUs;
     const AudioStreamReset projectedAudioReset =
-        audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+        audioEnabled ? audioRuntime.lastAppliedStreamReset() : AudioStreamReset{};
 
     VideoFrame composed;
     const auto previewDeadline = std::chrono::steady_clock::now() +
@@ -704,7 +710,7 @@ int main(int argc, char** argv) {
     }
     if (audioEnabled) {
       const AudioStreamReset afterRenderAudioReset =
-          audioStreamLastAppliedReset();
+          audioRuntime.lastAppliedStreamReset();
       if (afterRenderAudioReset.generation !=
               projectedAudioReset.generation ||
           projectedAudioReset.generation <= beforeAudioReset.generation) {
@@ -759,7 +765,7 @@ int main(int argc, char** argv) {
         activeCompositionPositionUs, activeCompositionSerial,
         player.videoFrameCounter()};
     for (size_t step = 0; step < 3; ++step) {
-      if (!requestAndObserveFrameStep(
+      if (!requestAndObserveFrameStep(audioRuntime,
               player, audioEnabled,
               playback_video_frame_step::Direction::Next,
               "composition_next_" + std::to_string(step + 1), nullptr,
@@ -783,7 +789,7 @@ int main(int argc, char** argv) {
       }
     }
     for (size_t step = 0; step < 3; ++step) {
-      if (!requestAndObserveFrameStep(
+      if (!requestAndObserveFrameStep(audioRuntime,
               player, audioEnabled,
               playback_video_frame_step::Direction::Previous,
               "composition_previous_" + std::to_string(step + 1), nullptr,
@@ -875,7 +881,7 @@ int main(int argc, char** argv) {
     const uint64_t beforeSequenceCounter = player.videoFrameCounter();
     const int beforeSequenceSerial = player.debugInfo().currentSerial;
     const AudioStreamReset beforeSequenceAudioReset =
-        audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+        audioEnabled ? audioRuntime.lastAppliedStreamReset() : AudioStreamReset{};
     if (!player.setPlaybackSequence(ranges, kSequenceStartUs)) {
       std::cerr << "video_frame_step_smoke: player rejected the immutable "
                    "sequence; source_duration_us="
@@ -901,7 +907,7 @@ int main(int argc, char** argv) {
             "seek pending")) {
       return 1;
     }
-    if (!expectSerialTransition(
+    if (!expectSerialTransition(audioRuntime,
             audioEnabled, kSequenceStartUs, beforeSequenceSerial,
             firstClip.currentSerial, beforeSequenceAudioReset,
             "sequence_apply")) {
@@ -924,7 +930,7 @@ int main(int argc, char** argv) {
       return 1;
     }
     const AudioStreamReset sequenceAudioReset =
-        audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+        audioEnabled ? audioRuntime.lastAppliedStreamReset() : AudioStreamReset{};
     constexpr size_t kStepsAcrossCut = 40;
     for (size_t step = 0; step < kStepsAcrossCut; ++step) {
       if (!player.requestFrameStep(
@@ -972,7 +978,7 @@ int main(int argc, char** argv) {
       return 1;
     }
     if (audioEnabled) {
-      const AudioStreamReset afterCutReset = audioStreamLastAppliedReset();
+      const AudioStreamReset afterCutReset = audioRuntime.lastAppliedStreamReset();
       if (afterCutReset.generation != sequenceAudioReset.generation ||
           afterCutReset.serial != sequenceAudioReset.serial) {
         std::cerr << "video_frame_step_smoke: clip boundary incorrectly "
@@ -991,7 +997,7 @@ int main(int argc, char** argv) {
     for (size_t step = 0; step < kStepsBackAcrossCut; ++step) {
       const std::string label =
           "sequence_reverse_" + std::to_string(step + 1);
-      if (!requestAndObserveFrameStep(
+      if (!requestAndObserveFrameStep(audioRuntime,
               player, audioEnabled,
               playback_video_frame_step::Direction::Previous, label,
               nullptr, &reverse, true)) {
@@ -1023,7 +1029,7 @@ int main(int argc, char** argv) {
     }
 
     const AudioStreamReset beforeResumeAudioReset =
-        audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+        audioEnabled ? audioRuntime.lastAppliedStreamReset() : AudioStreamReset{};
     const int resumeSerial = reverse.serial;
     const int64_t resumeTargetUs = reverse.ptsUs;
     const uint64_t beforeResumeCounter = reverse.frameCounter;
@@ -1050,7 +1056,7 @@ int main(int argc, char** argv) {
             "without a pending seek")) {
       return 1;
     }
-    if (!expectSerialTransition(
+    if (!expectSerialTransition(audioRuntime,
             audioEnabled, resumeTargetUs, resumeSerial,
             resumed.currentSerial, beforeResumeAudioReset,
             "sequence_resume_across_cut")) {
@@ -1184,7 +1190,7 @@ int main(int argc, char** argv) {
       const int beforeSerial = current.serial;
       const PlayerTimelineSnapshot beforeTimeline = player.timelineSnapshot();
       const AudioStreamReset beforeAudioReset =
-          audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+          audioEnabled ? audioRuntime.lastAppliedStreamReset() : AudioStreamReset{};
 
       // Submit two simultaneous relative seeks before the frame step. This is
       // stricter than keyboard input: publication order and event-queue order
@@ -1282,7 +1288,7 @@ int main(int argc, char** argv) {
         player.close();
         return 1;
       }
-      if (!expectSeekStepOverlapTransition(
+      if (!expectSeekStepOverlapTransition(audioRuntime,
               audioEnabled, seekTargetUs, observed.lastPresentedPtsUs,
               beforeSerial, observed.currentSerial, beforeAudioReset,
               label.c_str())) {
@@ -1321,7 +1327,7 @@ int main(int argc, char** argv) {
         const std::string label =
             "alternating_" + std::to_string(cycle + 1) + "_" +
             directionName + "_" + std::to_string(i + 1);
-        if (!requestAndObserveFrameStep(player, audioEnabled, direction, label,
+        if (!requestAndObserveFrameStep(audioRuntime, player, audioEnabled, direction, label,
                                         nullptr, &current)) {
           return false;
         }
@@ -1338,7 +1344,7 @@ int main(int argc, char** argv) {
         const std::string label =
             "alternating_" + std::to_string(cycle + 1) + "_" +
             directionName + "_inverse_" + std::to_string(i + 1);
-        if (!requestAndObserveFrameStep(player, audioEnabled, inverse, label,
+        if (!requestAndObserveFrameStep(audioRuntime, player, audioEnabled, inverse, label,
                                         &expectedPtsUs, &current)) {
           return false;
         }
@@ -1349,7 +1355,7 @@ int main(int argc, char** argv) {
         const std::string label =
             "alternating_" + std::to_string(cycle + 1) + "_" +
             directionName + "_return_" + std::to_string(i + 1);
-        if (!requestAndObserveFrameStep(player, audioEnabled, direction, label,
+        if (!requestAndObserveFrameStep(audioRuntime, player, audioEnabled, direction, label,
                                         &expectedPtsUs, &current)) {
           return false;
         }
@@ -1375,7 +1381,7 @@ int main(int argc, char** argv) {
         const uint64_t beforeSeekCounter = current.frameCounter;
         const int beforeSeekSerial = current.serial;
         const AudioStreamReset beforeSeekAudioReset =
-            audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+            audioEnabled ? audioRuntime.lastAppliedStreamReset() : AudioStreamReset{};
         player.requestSeek(seekTargetUs);
         PlayerDebugInfo seeked{};
         const std::string label =
@@ -1393,7 +1399,7 @@ int main(int argc, char** argv) {
           player.close();
           return 1;
         }
-        if (!expectSerialTransition(
+        if (!expectSerialTransition(audioRuntime,
                 audioEnabled, seekTargetUs, beforeSeekSerial,
                 seeked.currentSerial, beforeSeekAudioReset, label.c_str())) {
           player.close();
@@ -1527,7 +1533,7 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < stepCount; ++i) {
       const int beforeStepSerial = lastSerial;
       const AudioStreamReset beforeStepAudioReset =
-          audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+          audioEnabled ? audioRuntime.lastAppliedStreamReset() : AudioStreamReset{};
       if (!player.requestFrameStep(playback_video_frame_step::Direction::Next)) {
         std::cerr << "video_frame_step_smoke: next-frame request rejected at "
                   << "step " << (i + 1) << '\n';
@@ -1553,7 +1559,7 @@ int main(int argc, char** argv) {
       }
       lastPtsUs = next.lastPresentedPtsUs;
       lastCounter = player.videoFrameCounter();
-      if (!expectFrameStepTransition(
+      if (!expectFrameStepTransition(audioRuntime,
               audioEnabled, next.lastPresentedPtsUs, beforeStepSerial,
               next.currentSerial, beforeStepAudioReset, label.c_str())) {
         player.close();
@@ -1563,7 +1569,7 @@ int main(int argc, char** argv) {
     }
 
     const AudioStreamReset beforeResumeAudioReset =
-        audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+        audioEnabled ? audioRuntime.lastAppliedStreamReset() : AudioStreamReset{};
     player.setVideoPaused(false);
     PlayerDebugInfo resumed{};
     if (!waitFor(player, kDefaultTimeoutMs, "resume_after_forward",
@@ -1582,7 +1588,7 @@ int main(int argc, char** argv) {
       player.close();
       return 1;
     }
-    if (!expectSerialTransition(audioEnabled, lastPtsUs, lastSerial,
+    if (!expectSerialTransition(audioRuntime, audioEnabled, lastPtsUs, lastSerial,
                                 resumed.currentSerial, beforeResumeAudioReset,
                                 "resume_after_forward")) {
       player.close();
@@ -1606,7 +1612,7 @@ int main(int argc, char** argv) {
   for (size_t i = 0; i < stepCount; ++i) {
     const int beforeStepSerial = lastSerial;
     const AudioStreamReset beforeStepAudioReset =
-        audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+        audioEnabled ? audioRuntime.lastAppliedStreamReset() : AudioStreamReset{};
     if (!player.requestFrameStep(
             playback_video_frame_step::Direction::Previous)) {
       std::cerr << "video_frame_step_smoke: previous-frame request rejected at "
@@ -1634,7 +1640,7 @@ int main(int argc, char** argv) {
     }
     lastPtsUs = previous.lastPresentedPtsUs;
     lastCounter = player.videoFrameCounter();
-    if (!expectFrameStepTransition(
+    if (!expectFrameStepTransition(audioRuntime,
             audioEnabled, previous.lastPresentedPtsUs, beforeStepSerial,
             previous.currentSerial, beforeStepAudioReset, label.c_str())) {
       player.close();
@@ -1646,7 +1652,7 @@ int main(int argc, char** argv) {
 
   if (resumeDuringStep) {
     const AudioStreamReset beforeResumeAudioReset =
-        audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+        audioEnabled ? audioRuntime.lastAppliedStreamReset() : AudioStreamReset{};
     if (!player.requestFrameStep(
             playback_video_frame_step::Direction::Previous)) {
       std::cerr << "video_frame_step_smoke: resume-during-step previous-frame "
@@ -1671,7 +1677,7 @@ int main(int argc, char** argv) {
       player.close();
       return 1;
     }
-    if (!expectConcurrentResumeTransition(
+    if (!expectConcurrentResumeTransition(audioRuntime,
             audioEnabled, lastPtsUs, resumed.currentSerial,
             beforeResumeAudioReset, "resume_during_step")) {
       player.close();
@@ -1687,7 +1693,7 @@ int main(int argc, char** argv) {
 
   if (resumeAfterPrevious) {
     const AudioStreamReset beforeResumeAudioReset =
-        audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+        audioEnabled ? audioRuntime.lastAppliedStreamReset() : AudioStreamReset{};
     player.setVideoPaused(false);
     PlayerDebugInfo resumed{};
     if (!waitFor(player, kDefaultTimeoutMs, "resume_after_previous",
@@ -1705,7 +1711,7 @@ int main(int argc, char** argv) {
       player.close();
       return 1;
     }
-    if (!expectSerialTransition(audioEnabled, lastPtsUs, lastSerial,
+    if (!expectSerialTransition(audioRuntime, audioEnabled, lastPtsUs, lastSerial,
                                 resumed.currentSerial, beforeResumeAudioReset,
                                 "resume_after_previous")) {
       player.close();
@@ -1724,7 +1730,7 @@ int main(int argc, char** argv) {
     const int64_t expectedPtsUs = steppedPts[targetIndex];
     const int beforeStepSerial = lastSerial;
     const AudioStreamReset beforeStepAudioReset =
-        audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+        audioEnabled ? audioRuntime.lastAppliedStreamReset() : AudioStreamReset{};
     if (!player.requestFrameStep(playback_video_frame_step::Direction::Next)) {
       std::cerr << "video_frame_step_smoke: next-frame request rejected at step "
                 << (i + 1) << '\n';
@@ -1751,7 +1757,7 @@ int main(int argc, char** argv) {
     }
     lastPtsUs = next.lastPresentedPtsUs;
     lastCounter = player.videoFrameCounter();
-    if (!expectFrameStepTransition(audioEnabled, next.lastPresentedPtsUs,
+    if (!expectFrameStepTransition(audioRuntime, audioEnabled, next.lastPresentedPtsUs,
                                    beforeStepSerial, next.currentSerial,
                                    beforeStepAudioReset, label.c_str())) {
       player.close();
@@ -1762,7 +1768,7 @@ int main(int argc, char** argv) {
 
   if (resumeAfterMixed) {
     const AudioStreamReset beforeResumeAudioReset =
-        audioEnabled ? audioStreamLastAppliedReset() : AudioStreamReset{};
+        audioEnabled ? audioRuntime.lastAppliedStreamReset() : AudioStreamReset{};
     player.setVideoPaused(false);
     PlayerDebugInfo resumed{};
     if (!waitFor(player, kDefaultTimeoutMs, "resume_after_mixed",
@@ -1781,7 +1787,7 @@ int main(int argc, char** argv) {
       player.close();
       return 1;
     }
-    if (!expectSerialTransition(audioEnabled, lastPtsUs, lastSerial,
+    if (!expectSerialTransition(audioRuntime, audioEnabled, lastPtsUs, lastSerial,
                                 resumed.currentSerial, beforeResumeAudioReset,
                                 "resume_after_mixed")) {
       player.close();

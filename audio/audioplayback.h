@@ -80,12 +80,15 @@ class AudioPlaybackRuntime {
   bool startStream(uint64_t totalFrames);
   void stopStream();
   size_t streamBufferedFrames() const;
+  size_t streamCapacityFrames() const;
   int64_t streamOldestPtsUs() const;
   bool writeStreamSamples(const float* interleaved, uint64_t frames,
                           int64_t ptsUs, int serial, bool allowBlock,
                           uint64_t* writtenFrames);
   void primeStreamClock(int serial, int64_t targetPtsUs);
   void flushStreamSerial(int serial, int64_t discardUntilUs);
+  void resetStream(uint64_t framePosition);
+  AudioStreamReset lastAppliedStreamReset() const;
   void setStreamEnd(bool atEnd);
   int streamSerial() const;
   int64_t streamClockUs(int64_t nowUs) const;
@@ -138,33 +141,6 @@ bool audioStartFile(const std::filesystem::path& file, int trackIndex = 0);
 bool audioStartFileAt(const std::filesystem::path& file, double startSec,
                       int trackIndex = 0);
 void audioStop();
-bool audioStartStream(uint64_t totalFrames);
-void audioStopStream();
-size_t audioStreamBufferedFrames();
-size_t audioStreamCapacityFrames();
-int64_t audioStreamOldestPtsUs();
-bool audioStreamWriteSamples(const float* interleaved,
-                             uint64_t frames,
-                             int64_t ptsUs,
-                             int serial,
-                             bool allowBlock,
-                             uint64_t* writtenFrames);
-void audioStreamPrimeClock(int serial, int64_t targetPtsUs);
-void audioStreamSetEnd(bool atEnd);
-void audioStreamReset(uint64_t framePos);
-void audioStreamFlushSerial(int serial, int64_t discardUntilUs);
-AudioStreamReset audioStreamLastAppliedReset();
-int audioStreamSerial();
-int64_t audioStreamClockUs(int64_t nowUs);
-int64_t audioStreamClockLastUpdatedUs();
-bool audioStreamStarved();
-bool audioStreamClockReady();
-
-// Block until the audio hardware callback has progressed or timeout.
-// Returns the new update counter value.
-uint64_t audioStreamWaitForUpdate(uint64_t lastCounter, int timeoutMs);
-uint64_t audioStreamUpdateCounter();
-
 std::optional<AudioPlaybackSource> audioGetPlaybackSource();
 AudioPlaybackSnapshot audioGetPlaybackSnapshot();
 

@@ -147,7 +147,7 @@ void drainPlaybackPipelineForReplacement(AudioState& state);
 bool audioPlaybackFinishSeekPipelineTransition(AudioState& state);
 void dataCallback(ma_device* device, void* output, const void* input,
                   ma_uint32 frameCount);
-void stopAndUninitActiveDecoder();
-void stopPlayback();
+void stopAndUninitActiveDecoder(AudioPlaybackState& audio);
+void stopPlayback(AudioPlaybackState& audio);
 bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
                int trackIndex);
