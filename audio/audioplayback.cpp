@@ -253,7 +253,7 @@ bool loadFileAt(const std::filesystem::path& file, uint64_t startFrame,
   audioPipelineTransitionRequestOutputFadeIn(
       gAudio.state.pipelineTransition, gAudio.state.sampleRate);
 
-  if (!audioPlaybackDeviceEnsureRunning()) {
+  if (!audioPlaybackDeviceEnsureRunning(gAudio)) {
     gAudio.state.sourcePreparing.store(false, std::memory_order_release);
     stopAndUninitActiveDecoder();
     audioPipelineTransitionReset(gAudio.state.pipelineTransition);
@@ -281,7 +281,7 @@ bool ensureChannels(uint32_t newChannels) {
   int trackIndex = gAudio.trackIndex;
 
   drainPlaybackPipelineForReplacement(gAudio.state);
-  audioPlaybackDeviceUninit();
+  audioPlaybackDeviceUninit(gAudio);
   if (gAudio.decoderReady) {
     stopAndUninitActiveDecoder();
   }
@@ -301,7 +301,7 @@ void stopPlayback() {
     gAudio.audition.resumeValid = false;
   }
   drainPlaybackPipelineForReplacement(gAudio.state);
-  audioPlaybackDeviceUninit();
+  audioPlaybackDeviceUninit(gAudio);
   if (gAudio.decoderReady) {
     stopAndUninitActiveDecoder();
   }
@@ -358,7 +358,7 @@ AudioPlaybackRuntime::AudioPlaybackRuntime(
 
 AudioPlaybackRuntime::~AudioPlaybackRuntime() {
   stopPlayback();
-  audioPlaybackDeviceUninit();
+  audioPlaybackDeviceUninit(gAudio);
 }
 
 bool AudioPlaybackRuntime::enabled() const { return audioIsEnabled(); }
@@ -635,7 +635,7 @@ double audioGetTimeSec() {
     return 0.0;
   }
   int64_t frames = static_cast<int64_t>(gAudio.state.audioClockFrames.load());
-  uint64_t latencyFrames = audioPlaybackDeviceLatencyFrames();
+  uint64_t latencyFrames = audioPlaybackDeviceLatencyFrames(gAudio);
   frames -= static_cast<int64_t>(latencyFrames);
   if (frames < 0) {
     frames = 0;
@@ -725,7 +725,7 @@ AudioPerfStats audioGetPerfStats() {
   stats.channels = gAudio.state.channels;
   const AudioMode mode = currentAudioMode(gAudio);
   stats.usingFfmpeg = mode == AudioMode::M4a || mode == AudioMode::Ffmpeg;
-  audioPlaybackDeviceFillPerfStats(&stats);
+  audioPlaybackDeviceFillPerfStats(gAudio, &stats);
   return stats;
 }
 
@@ -745,7 +745,7 @@ void audioPlay() {
 
   // The device owner recreates only when Windows reported a stopped, rerouted,
   // interrupted, or otherwise invalid endpoint.
-  if (!audioPlaybackDeviceEnsureRunning()) {
+  if (!audioPlaybackDeviceEnsureRunning(gAudio)) {
     gAudio.lastInitError = "Failed to restore audio output device.";
     return;
   }

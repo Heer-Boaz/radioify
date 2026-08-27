@@ -120,6 +120,7 @@ struct AudioState {
 
 struct AudioPlaybackState {
   AudioState state{};
+  std::mutex playbackDeviceMutex;
   bool deviceReady = false;
   bool decoderReady = false;
   bool enableAudio = false;

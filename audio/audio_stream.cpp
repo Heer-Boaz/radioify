@@ -75,13 +75,13 @@ bool audioStartStream(uint64_t totalFrames) {
   audioPipelineTransitionRequestSignalFadeIn(gAudio.state.pipelineTransition,
                                              gAudio.state.sampleRate);
 
-  if (!audioPlaybackDeviceEnsureRunning()) {
+  if (!audioPlaybackDeviceEnsureRunning(gAudio)) {
     stopAndUninitActiveDecoder();
     gAudio.state.sourcePreparing.store(false, std::memory_order_release);
     audioPipelineTransitionReset(gAudio.state.pipelineTransition);
     return false;
   }
-  audioPlaybackDeviceLatencyFrames();
+  audioPlaybackDeviceLatencyFrames(gAudio);
   gAudio.state.sourcePreparing.store(false, std::memory_order_release);
 
   gAudio.nowPlaying.clear();
