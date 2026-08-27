@@ -32,6 +32,7 @@
 #include "app/playback_queue.h"
 #include "app/playback_route.h"
 #include "audio/analysis/melody_artifact_paths.h"
+#include "audio/loopsplit/loopsplit.h"
 #include "audio_picture_in_picture_window.h"
 #include "audioplayback.h"
 #include "browser_action_strip.h"
@@ -54,7 +55,6 @@
 #include "core/windows_console_window.h"
 #include "core/windows_shell_open.h"
 #include "media_coordinator.h"
-#include "media_processing_coordinator.h"
 #include "m4adecoder.h"
 #include "miniaudio.h"
 #include "optionsbrowser.h"
@@ -622,17 +622,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   BrowserPlaybackRevealer browserPlaybackRevealer(
       browserNavigator, std::move(browserPlaybackCallbacks));
 
-  media_processing::Coordinator mediaTasks;
-  playback_media_processing::Actions mediaProcessingActions(mediaTasks);
-  auto cancelActiveMediaTask = [&]() {
-    const bool accepted = mediaTasks.cancelActive();
-    if (accepted) {
-      markLayoutDirty();
-      markDirty(UiDirtyFlags::Async);
-    }
-    return accepted;
-  };
-
   std::string mediaCommandError;
   auto openBrowserDirectory = [&](const std::filesystem::path& dir) {
     return browserNavigator.navigate(browserDirectoryLocation(dir));
@@ -663,7 +652,15 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   };
   TuiMediaCoordinator mediaCoordinator(
       {playbackQueue, mediaSessionDependencies, videoConfig, openFileRequests,
-       mediaProcessingActions, std::move(mediaCallbacks)});
+       std::move(mediaCallbacks)});
+  auto cancelActiveMediaTask = [&]() {
+    const bool accepted = mediaCoordinator.cancelActiveMediaTask();
+    if (accepted) {
+      markLayoutDirty();
+      markDirty(UiDirtyFlags::Async);
+    }
+    return accepted;
+  };
   auto currentPlaybackFile = [&]() {
     const std::optional<PlaybackTarget> target =
         mediaCoordinator.currentPlaybackTarget();
@@ -695,13 +692,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   };
   auto buildNowPlayingLabel = [&]() {
     return buildPlaybackLabel(mediaCoordinator.currentPlaybackTarget());
-  };
-  auto mediaActivityWaitHandles = [&]() {
-    std::vector<NativeWaitHandle> handles =
-        mediaCoordinator.activityWaitHandles();
-    std::vector<NativeWaitHandle> taskHandles = mediaTasks.waitHandles();
-    handles.insert(handles.end(), taskHandles.begin(), taskHandles.end());
-    return handles;
   };
   auto startPlayback = [&](playback_route::Route route,
                            playback_queue::Source source) {
@@ -802,10 +792,10 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
 
   auto buildFooterLayout = [&]() {
     const AudioPlaybackSnapshot audio = audioGetPlaybackSnapshot();
-    const std::optional<media_processing::TaskCompletion> completion =
-        mediaTasks.latestCompletion();
+    const std::optional<MediaTaskStatusModel> mediaTaskStatus =
+        mediaCoordinator.latestMediaTaskStatus();
     const bool hasMediaTaskStatus =
-        completion && !mediaTaskStatusModel(*completion).text.empty();
+        mediaTaskStatus && !mediaTaskStatus->text.empty();
     const std::filesystem::path nowPlaying = currentPlaybackFile();
     const bool showNowPlaying =
         !nowPlaying.empty() || audio.ready || audio.seeking || audio.holding;
@@ -916,7 +906,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     context.hasGeneratedSubtitles =
         !playback_video_transcript::activeTranscriptPathForVideo(entry.path)
              .empty();
-    mediaProcessingActions.applySourceState(entry.path, context);
+    mediaCoordinator.applyMediaProcessingState(entry.path, context);
     std::vector<playback_media_actions::Item> items =
         playback_media_actions::build(context);
     if (items.empty()) return;
@@ -1251,7 +1241,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         track ? melodyArtifactPathForTrack(
                     entry.path, static_cast<std::uint32_t>(trackIndex))
               : defaultMelodyArtifactPath(entry.path);
-    if (mediaTasks.tryStartMelodyAnalysis(
+    if (mediaCoordinator.tryStartMelodyAnalysis(
             entry.path, trackIndex, outputPath)) {
       markLayoutDirty();
       markDirty(UiDirtyFlags::Async);
@@ -1263,7 +1253,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     const playback_media_actions::Action action = command.action;
     dirty = true;
     const std::optional<playback_media_processing::ActionResult> processing =
-        mediaProcessingActions.execute(action, entry.path);
+        mediaCoordinator.executeMediaProcessingAction(action, entry.path);
     if (processing) {
       mediaCommandError =
           processing->accepted ? std::string() : processing->feedback;
@@ -1307,7 +1297,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         splitConfig.vgmOptions = audioGetVgmOptionState();
         const LoopSplitOutputPaths outputPaths =
             resolveLoopSplitOutputPaths(entry.path, o.output);
-        if (mediaTasks.tryStartLoopSplit(
+        if (mediaCoordinator.tryStartLoopSplit(
                 entry.path, outputPaths.stinger, outputPaths.loop,
                 splitConfig)) {
           markLayoutDirty();
@@ -1326,7 +1316,11 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   PlaybackShellTerminalRole previousTerminalRole =
       mediaCoordinator.terminalRole();
   while (running) {
-    if (mediaCoordinator.pump()) {
+    const TuiMediaCoordinator::PumpResult mediaUpdate =
+        mediaCoordinator.pump();
+    if (mediaUpdate.layoutChanged) {
+      markLayoutDirty();
+    } else if (mediaUpdate.changed) {
       markDirty(UiDirtyFlags::Async);
     }
     if (!running) break;
@@ -1370,14 +1364,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     if (layoutDirty) {
       rebuildLayout();
     }
-    const media_processing::PollResult mediaTaskUpdate = mediaTasks.poll();
-    for (const media_processing::TaskCompletion& completion :
-         mediaTaskUpdate.completions) {
-      mediaCoordinator.handleMediaTaskCompletion(completion);
-      markLayoutDirty();
-    }
-    if (mediaTaskUpdate.changed) markDirty(UiDirtyFlags::Async);
-
     if (windowTuiEnabled && tuiWindow.IsOpen()) {
       tuiWindow.PollEvents();
     }
@@ -1418,7 +1404,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       dirtyFlags = UiDirtyFlags::None;
       forceFullRedraw = false;
       const std::vector<NativeWaitHandle> playbackActivityHandles =
-          mediaActivityWaitHandles();
+          mediaCoordinator.activityWaitHandles();
       const int playbackTimeoutMs =
           std::max(0, mediaCoordinator.nextWakeTimeoutMs());
       waitForBrowserWake(
@@ -1724,7 +1710,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     if (!dirty) {
       DWORD waitTimeout = computeWakeTimeout(now);
       const std::vector<NativeWaitHandle> playbackActivityHandles =
-          mediaActivityWaitHandles();
+          mediaCoordinator.activityWaitHandles();
       DWORD waitResult = waitForBrowserWake(
           input, openFileRequests, browserThumbnailWakeHandle(),
           browserContentWorker.nativeWaitHandle(),
@@ -1939,15 +1925,13 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         }
       }
       if (line < height && footerLayout.showMediaTaskStatus) {
-        const std::optional<media_processing::TaskCompletion> completion =
-            mediaTasks.latestCompletion();
-        if (completion) {
-          const MediaTaskStatusModel status =
-              mediaTaskStatusModel(*completion);
-          if (!status.text.empty()) {
+        const std::optional<MediaTaskStatusModel> status =
+            mediaCoordinator.latestMediaTaskStatus();
+        if (status) {
+          if (!status->text.empty()) {
             screen.writeText(
-                0, line++, fitLine(" " + status.text, width),
-                status.succeeded ? theme.dim : theme.alert);
+                0, line++, fitLine(" " + status->text, width),
+                status->succeeded ? theme.dim : theme.alert);
           }
         }
       }
@@ -2081,10 +2065,9 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
                                      fileContextStyles);
       }
 
-      if (const std::optional<media_processing::TaskActivity> activity =
-              mediaTasks.activity()) {
-        drawMediaTaskCard(screen, width, height, listTop,
-                          mediaTaskCardModel(*activity),
+      if (const std::optional<MediaTaskCardModel> taskCard =
+              mediaCoordinator.activeMediaTaskCard()) {
+        drawMediaTaskCard(screen, width, height, listTop, *taskCard,
                           theme.mediaTaskCardStyles());
       }
 

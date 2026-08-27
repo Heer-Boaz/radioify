@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "app/media_processing_coordinator.h"
 #include "core/runtime_helpers.h"
 
 namespace {

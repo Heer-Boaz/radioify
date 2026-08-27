@@ -2,7 +2,10 @@
 
 #include <string>
 
-#include "app/media_processing_coordinator.h"
+namespace media_processing {
+struct TaskActivity;
+struct TaskCompletion;
+}
 
 struct MediaTaskCardModel {
   std::string title;

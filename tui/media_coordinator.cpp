@@ -68,7 +68,9 @@ class MediaCommandResult {
 }  // namespace
 
 struct TuiMediaCoordinator::Impl {
-  explicit Impl(Services services) : services_(std::move(services)) {}
+  explicit Impl(Services services)
+      : services_(std::move(services)),
+        mediaProcessingActions_(mediaTasks_) {}
 
   MediaCommandResult startPlayback(playback_route::Route route,
                                    playback_queue::Source source) {
@@ -122,13 +124,70 @@ struct TuiMediaCoordinator::Impl {
     return submit(PreparedPlayback{std::move(*activation)});
   }
 
-  std::optional<MediaCommandResult> pump() {
-    if (!videoSession_) return std::nullopt;
-    std::optional<PlaybackSessionCompletion> completion =
-        videoSession_->pump();
-    if (!completion) return std::nullopt;
-    finishVideoSession(std::move(*completion));
-    return drainPendingCommands();
+  PumpResult pump() {
+    PumpResult result;
+    if (videoSession_) {
+      if (std::optional<PlaybackSessionCompletion> completion =
+              videoSession_->pump()) {
+        finishVideoSession(std::move(*completion));
+        drainPendingCommands();
+        result.changed = true;
+      }
+    }
+
+    media_processing::PollResult taskUpdate = mediaTasks_.poll();
+    result.changed = result.changed || taskUpdate.changed;
+    result.layoutChanged = !taskUpdate.completions.empty();
+    for (const media_processing::TaskCompletion& completion :
+         taskUpdate.completions) {
+      handleMediaTaskCompletion(completion);
+    }
+    return result;
+  }
+
+  bool tryStartMelodyAnalysis(const std::filesystem::path& sourceFile,
+                              int trackIndex,
+                              const std::filesystem::path& outputFile) {
+    return mediaTasks_.tryStartMelodyAnalysis(sourceFile, trackIndex,
+                                              outputFile);
+  }
+
+  bool tryStartLoopSplit(const std::filesystem::path& sourceFile,
+                         const std::filesystem::path& stingerOutput,
+                         const std::filesystem::path& loopOutput,
+                         const LoopSplitConfig& config) {
+    return mediaTasks_.tryStartLoopSplit(sourceFile, stingerOutput,
+                                         loopOutput, config);
+  }
+
+  bool cancelActiveMediaTask() { return mediaTasks_.cancelActive(); }
+
+  void applyMediaProcessingState(
+      const std::filesystem::path& sourceFile,
+      playback_media_actions::Context& context) const {
+    mediaProcessingActions_.applySourceState(sourceFile, context);
+  }
+
+  std::optional<playback_media_processing::ActionResult>
+  executeMediaProcessingAction(playback_media_actions::Action action,
+                               const std::filesystem::path& sourceFile) {
+    return mediaProcessingActions_.execute(action, sourceFile);
+  }
+
+  std::optional<MediaTaskCardModel> activeMediaTaskCard() const {
+    const std::optional<media_processing::TaskActivity> activity =
+        mediaTasks_.activity();
+    return activity ? std::optional<MediaTaskCardModel>(
+                          mediaTaskCardModel(*activity))
+                    : std::nullopt;
+  }
+
+  std::optional<MediaTaskStatusModel> latestMediaTaskStatus() const {
+    const std::optional<media_processing::TaskCompletion> completion =
+        mediaTasks_.latestCompletion();
+    return completion ? std::optional<MediaTaskStatusModel>(
+                            mediaTaskStatusModel(*completion))
+                      : std::nullopt;
   }
 
   bool videoActive() const { return videoSession_.has_value(); }
@@ -159,8 +218,13 @@ struct TuiMediaCoordinator::Impl {
   }
 
   std::vector<NativeWaitHandle> activityWaitHandles() const {
-    return videoSession_ ? videoSession_->activityWaitHandles()
-                         : std::vector<NativeWaitHandle>{};
+    std::vector<NativeWaitHandle> handles =
+        videoSession_ ? videoSession_->activityWaitHandles()
+                      : std::vector<NativeWaitHandle>{};
+    std::vector<NativeWaitHandle> taskHandles = mediaTasks_.waitHandles();
+    handles.reserve(handles.size() + taskHandles.size());
+    handles.insert(handles.end(), taskHandles.begin(), taskHandles.end());
+    return handles;
   }
 
   int nextWakeTimeoutMs() const {
@@ -524,7 +588,7 @@ struct TuiMediaCoordinator::Impl {
     sessionRequest.sessionIntent = route.sessionIntent;
     sessionRequest.requestTransportCommand = std::move(requestTransport);
     sessionRequest.requestOpenFiles = std::move(requestDroppedFiles);
-    sessionRequest.mediaProcessingActions = services_.mediaProcessingActions;
+    sessionRequest.mediaProcessingActions = mediaProcessingActions_;
     sessionRequest.activateBrowserSurface =
         services_.callbacks.activateBrowserSurface;
     videoSession_.emplace(std::move(sessionRequest),
@@ -648,6 +712,8 @@ struct TuiMediaCoordinator::Impl {
   }
 
   Services services_;
+  media_processing::Coordinator mediaTasks_;
+  playback_media_processing::Actions mediaProcessingActions_;
   PlaybackSessionContinuationState continuationState_;
   std::optional<PlaybackSession> videoSession_;
   std::optional<PlaybackTarget> videoTarget_;
@@ -684,7 +750,51 @@ bool TuiMediaCoordinator::openFiles(const OpenFilesRequest& request) {
   return impl_->openFiles(request).accepted();
 }
 
-bool TuiMediaCoordinator::pump() { return impl_->pump().has_value(); }
+TuiMediaCoordinator::PumpResult TuiMediaCoordinator::pump() {
+  return impl_->pump();
+}
+
+bool TuiMediaCoordinator::tryStartMelodyAnalysis(
+    const std::filesystem::path& sourceFile, int trackIndex,
+    const std::filesystem::path& outputFile) {
+  return impl_->tryStartMelodyAnalysis(sourceFile, trackIndex, outputFile);
+}
+
+bool TuiMediaCoordinator::tryStartLoopSplit(
+    const std::filesystem::path& sourceFile,
+    const std::filesystem::path& stingerOutput,
+    const std::filesystem::path& loopOutput,
+    const LoopSplitConfig& config) {
+  return impl_->tryStartLoopSplit(sourceFile, stingerOutput, loopOutput,
+                                  config);
+}
+
+bool TuiMediaCoordinator::cancelActiveMediaTask() {
+  return impl_->cancelActiveMediaTask();
+}
+
+void TuiMediaCoordinator::applyMediaProcessingState(
+    const std::filesystem::path& sourceFile,
+    playback_media_actions::Context& context) const {
+  impl_->applyMediaProcessingState(sourceFile, context);
+}
+
+std::optional<playback_media_processing::ActionResult>
+TuiMediaCoordinator::executeMediaProcessingAction(
+    playback_media_actions::Action action,
+    const std::filesystem::path& sourceFile) {
+  return impl_->executeMediaProcessingAction(action, sourceFile);
+}
+
+std::optional<MediaTaskCardModel>
+TuiMediaCoordinator::activeMediaTaskCard() const {
+  return impl_->activeMediaTaskCard();
+}
+
+std::optional<MediaTaskStatusModel>
+TuiMediaCoordinator::latestMediaTaskStatus() const {
+  return impl_->latestMediaTaskStatus();
+}
 
 bool TuiMediaCoordinator::videoActive() const { return impl_->videoActive(); }
 
@@ -752,11 +862,6 @@ bool TuiMediaCoordinator::toggleFullscreen() {
 
 bool TuiMediaCoordinator::activateVideoPresentation() {
   return impl_->activateVideoPresentation();
-}
-
-void TuiMediaCoordinator::handleMediaTaskCompletion(
-    const media_processing::TaskCompletion& completion) {
-  impl_->handleMediaTaskCompletion(completion);
 }
 
 void TuiMediaCoordinator::requestQuit() { impl_->requestQuit(); }

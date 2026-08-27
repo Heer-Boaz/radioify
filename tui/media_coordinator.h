@@ -16,18 +16,21 @@
 #include "playback/media_processing_actions.h"
 #include "playback/session/session.h"
 #include "playback/target.h"
+#include "tui/ui/media_task_presentation.h"
 
 struct InputEvent;
-
-namespace media_processing {
-struct TaskCompletion;
-}
+struct LoopSplitConfig;
 
 // Owns media activation, playback-session handoff and image-viewer routing for
 // the TUI. The browser loop submits intent and observes session state without
 // owning the playback state machine itself.
 class TuiMediaCoordinator {
  public:
+  struct PumpResult {
+    bool changed = false;
+    bool layoutChanged = false;
+  };
+
   struct Callbacks {
     std::function<bool(const std::filesystem::path&, int)> startAudio;
     std::function<void(playback_route::AudioPictureInPicturePlan)>
@@ -44,7 +47,6 @@ class TuiMediaCoordinator {
     PlaybackSession::Dependencies sessionDependencies;
     const VideoPlaybackConfig& videoConfig;
     OpenFileRequests& openFileRequests;
-    playback_media_processing::Actions mediaProcessingActions;
     Callbacks callbacks;
   };
 
@@ -63,7 +65,24 @@ class TuiMediaCoordinator {
       const WindowPlacementState* sourcePlacement,
       std::optional<PlaybackPresentationState> videoPresentation);
   bool openFiles(const OpenFilesRequest& request);
-  bool pump();
+  PumpResult pump();
+
+  bool tryStartMelodyAnalysis(const std::filesystem::path& sourceFile,
+                              int trackIndex,
+                              const std::filesystem::path& outputFile);
+  bool tryStartLoopSplit(const std::filesystem::path& sourceFile,
+                         const std::filesystem::path& stingerOutput,
+                         const std::filesystem::path& loopOutput,
+                         const LoopSplitConfig& config);
+  bool cancelActiveMediaTask();
+  void applyMediaProcessingState(
+      const std::filesystem::path& sourceFile,
+      playback_media_actions::Context& context) const;
+  std::optional<playback_media_processing::ActionResult>
+  executeMediaProcessingAction(playback_media_actions::Action action,
+                               const std::filesystem::path& sourceFile);
+  std::optional<MediaTaskCardModel> activeMediaTaskCard() const;
+  std::optional<MediaTaskStatusModel> latestMediaTaskStatus() const;
 
   bool videoActive() const;
   PlaybackShellTerminalRole terminalRole() const;
@@ -83,8 +102,6 @@ class TuiMediaCoordinator {
   bool toggleFullscreen();
   bool activateVideoPresentation();
 
-  void handleMediaTaskCompletion(
-      const media_processing::TaskCompletion& completion);
   void requestQuit();
 
  private:
