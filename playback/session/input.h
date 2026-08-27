@@ -13,9 +13,9 @@
 #include "input_event.h"
 #include "playback/ascii/frame_output.h"
 #include "playback/session/input_command.h"
+#include "playback/session/input_transport.h"
 #include "state.h"
 
-class Player;
 class SubtitleManager;
 class VideoWindow;
 namespace playback_session {
@@ -30,18 +30,13 @@ inline bool isPlaybackFullscreenGesture(const MouseEvent& mouse) {
 }
 
 struct PlaybackInputView {
-  Player* player = nullptr;
-  VideoWindow* videoWindow = nullptr;
-  SubtitleManager* subtitleManager = nullptr;
-  std::mutex* subtitleMutex = nullptr;
-
-  std::atomic<bool>* enableSubtitlesShared = nullptr;
-  PlaybackSessionState* playbackState = nullptr;
-  bool* audioOk = nullptr;
+  Transport& transport;
+  VideoWindow& videoWindow;
+  SubtitleManager& subtitleManager;
+  std::mutex& subtitleMutex;
+  std::atomic<bool>& enableSubtitlesShared;
   bool hasSubtitles = false;
-
-  playback_frame_output::FrameOutputState* frameOutputState = nullptr;
-
+  playback_frame_output::FrameOutputState& frameOutputState;
   playback_frame_output::LogLineWriter timingSink;
 };
 

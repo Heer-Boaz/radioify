@@ -7,7 +7,6 @@
 
 #include "audioplayback.h"
 #include "playback/overlay/overlay.h"
-#include "playback/video/player.h"
 #include "playback/input/shortcuts.h"
 #include "playback/session/osd_timeline.h"
 #include "playback/video/subtitle/manager.h"
@@ -46,7 +45,7 @@ void updateOverlayControlHover(PlaybackInputSignals& signals, int nextHover) {
 }
 
 double playbackDurationSec(const PlaybackInputView& view) {
-  const int64_t durationUs = view.player->durationUs();
+  const int64_t durationUs = view.transport.snapshot().durationUs;
   if (durationUs > 0) {
     return static_cast<double>(durationUs) / 1000000.0;
   }
@@ -80,8 +79,9 @@ bool readQueuedSeekTargetSec(const PlaybackSeekGestureState& seekState,
 }
 
 bool pauseRequestedByToggle(const PlaybackInputView& view) {
-  return playback_session_state::toggleRequestsPause(*view.playbackState,
-                                                      view.player->isEnded());
+  const TransportSnapshot transport = view.transport.snapshot();
+  return playback_session_state::toggleRequestsPause(
+      transport.state, transport.ended);
 }
 
 bool queuePlaybackSeekToRatio(const PlaybackInputView& view,
@@ -98,7 +98,7 @@ bool queuePlaybackSeekToRatio(const PlaybackInputView& view,
 
 std::optional<int64_t> playbackTimelineTargetForRatio(
     const PlaybackInputView& view, double ratio) {
-  const int64_t durationUs = view.player->durationUs();
+  const int64_t durationUs = view.transport.snapshot().durationUs;
   if (durationUs <= 0 || !std::isfinite(ratio)) return std::nullopt;
   return static_cast<int64_t>(std::llround(
       std::clamp(ratio, 0.0, 1.0) * static_cast<double>(durationUs)));
@@ -106,16 +106,10 @@ std::optional<int64_t> playbackTimelineTargetForRatio(
 
 void triggerOverlay(const PlaybackInputView& view,
                     const PlaybackInputSignals& signals) {
-  bool extended = false;
-  if (*view.playbackState == PlaybackSessionState::Paused) {
-    extended = true;
-  }
-  if (*view.playbackState == PlaybackSessionState::Ended) {
-    extended = true;
-  }
-  if (view.player->seekPending()) {
-    extended = true;
-  }
+  const TransportSnapshot transport = view.transport.snapshot();
+  const bool extended = transport.state == PlaybackSessionState::Paused ||
+                        transport.state == PlaybackSessionState::Ended ||
+                        transport.seekPending;
   constexpr auto kProgressOverlayTimeout = std::chrono::milliseconds(1750);
   constexpr auto kProgressOverlayExtendedTimeout =
       std::chrono::milliseconds(2500);
@@ -172,13 +166,13 @@ void finishVideoEditBoundaryDrag(
   const PlaybackSeekGestureState::VideoEditBoundaryDrag completed =
       *seekState.videoEditBoundaryDrag;
   commitQueuedSeek(view, signals, seekState);
-  const PlayerTimelineSnapshot timeline = view.player->timelineSnapshot();
+  const TransportSnapshot transport = view.transport.snapshot();
   if (completed.targetTimelineUs >= 0 &&
-      timeline.latestSeekRequestGeneration >
+      transport.latestSeekRequestGeneration >
           completed.seekGenerationAtStart) {
     seekState.pendingVideoEditBoundaryCommit =
         PlaybackSeekGestureState::PendingVideoEditBoundaryCommit{
-            completed.boundary, timeline.latestSeekRequestGeneration};
+            completed.boundary, transport.latestSeekRequestGeneration};
   }
   seekState.videoEditBoundaryDrag.reset();
 }
@@ -188,20 +182,20 @@ void sendRelativeSeekRequest(const PlaybackInputView& view,
                              PlaybackSeekGestureState& seekState,
                              int64_t deltaUs) {
   commitQueuedSeek(view, signals, seekState);
-  if (!view.player->requestRelativeSeek(deltaUs)) {
+  if (!view.transport.seekBy(deltaUs)) {
     return;
   }
   markSeekSent(signals, seekState);
   if (view.timingSink) {
-    const PlayerTimelineSnapshot timeline = view.player->timelineSnapshot();
+    const TransportSnapshot transport = view.transport.snapshot();
     char buf[256];
     std::snprintf(
         buf, sizeof(buf),
         "seek_relative_request delta_us=%lld target_us=%lld generation=%llu",
         static_cast<long long>(deltaUs),
-        static_cast<long long>(timeline.positionUs),
+        static_cast<long long>(transport.positionUs),
         static_cast<unsigned long long>(
-            timeline.latestSeekRequestGeneration));
+            transport.latestSeekRequestGeneration));
     view.timingSink(std::string(buf));
   }
 }
@@ -216,38 +210,32 @@ bool toggleSubtitles(const PlaybackInputView& view) {
   if (!view.hasSubtitles) {
     return false;
   }
-  std::unique_lock<std::mutex> subtitleLock;
-  if (view.subtitleMutex) {
-    subtitleLock = std::unique_lock<std::mutex>(*view.subtitleMutex);
-  }
+  std::lock_guard<std::mutex> subtitleLock(view.subtitleMutex);
   const bool enabled =
-      view.enableSubtitlesShared->load(std::memory_order_relaxed);
+      view.enableSubtitlesShared.load(std::memory_order_relaxed);
   if (!enabled) {
-    view.subtitleManager->selectFirstTrackWithCues();
-    view.enableSubtitlesShared->store(true, std::memory_order_relaxed);
+    view.subtitleManager.selectFirstTrackWithCues();
+    view.enableSubtitlesShared.store(true, std::memory_order_relaxed);
     return true;
   }
-  const size_t count = view.subtitleManager->selectableTrackCount();
+  const size_t count = view.subtitleManager.selectableTrackCount();
   if (count <= 1) {
-    view.enableSubtitlesShared->store(false, std::memory_order_relaxed);
+    view.enableSubtitlesShared.store(false, std::memory_order_relaxed);
     return true;
   }
-  if (view.subtitleManager->isActiveLastCueTrack()) {
-    view.enableSubtitlesShared->store(false, std::memory_order_relaxed);
+  if (view.subtitleManager.isActiveLastCueTrack()) {
+    view.enableSubtitlesShared.store(false, std::memory_order_relaxed);
     return true;
   }
-  return view.subtitleManager->cycleLanguage();
+  return view.subtitleManager.cycleLanguage();
 }
 
 bool toggleAudioTrack(const PlaybackInputView& view) {
-  if (!*view.audioOk) {
-    return false;
-  }
-  return view.player->cycleAudioTrack();
+  return view.transport.cycleAudioTrack();
 }
 
 bool cycleRadioFilter(const PlaybackInputView& view) {
-  if (!*view.audioOk) {
+  if (!view.transport.snapshot().audioAvailable) {
     return false;
   }
   audioCycleRadioFilter();
@@ -255,7 +243,8 @@ bool cycleRadioFilter(const PlaybackInputView& view) {
 }
 
 bool toggle50Hz(const PlaybackInputView& view) {
-  if (!*view.audioOk || !audioSupports50HzToggle()) {
+  if (!view.transport.snapshot().audioAvailable ||
+      !audioSupports50HzToggle()) {
     return false;
   }
   audioToggle50Hz();
@@ -274,10 +263,9 @@ bool requestFrameStep(const PlaybackInputView& view,
                       playback_video_frame_step::Direction direction) {
   commitQueuedSeek(view, signals, seekState);
 
-  if (!view.player->requestFrameStep(direction)) {
+  if (!view.transport.requestFrameStep(direction)) {
     return false;
   }
-  *view.playbackState = PlaybackSessionState::Paused;
   refreshFrameStepRequestDisplay(signals);
   return true;
 }
@@ -342,7 +330,7 @@ void sendSeekRequest(const PlaybackInputView& view,
   targetSec = clampPlaybackSeekTarget(view, targetSec);
   int64_t targetUs =
       static_cast<int64_t>(std::llround(targetSec * 1000000.0));
-  if (!view.player->requestSeek(targetUs)) {
+  if (!view.transport.seekTo(targetUs)) {
     return;
   }
   markSeekSent(signals, seekState);
@@ -365,31 +353,7 @@ void setPlaybackPaused(const PlaybackInputView& view,
                        PlaybackInputSignals& signals,
                        PlaybackSeekGestureState& seekState, bool paused) {
   commitQueuedSeek(view, signals, seekState);
-  const bool ended = *view.playbackState == PlaybackSessionState::Ended ||
-                     view.player->isEnded();
-  if (!paused && ended) {
-    const PlayerTimelineSnapshot timeline = view.player->timelineSnapshot();
-    const int64_t durationUs = view.player->durationUs();
-    const bool pendingAwayFromEnd =
-        timeline.seekPending() &&
-        (durationUs <= 0 || timeline.positionUs < durationUs);
-    if (!pendingAwayFromEnd) {
-      view.player->requestSeek(0);
-    }
-    view.player->setVideoPaused(false);
-    *view.playbackState = PlaybackSessionState::Active;
-    return;
-  }
-
-  if (paused && ended) {
-    view.player->setVideoPaused(true);
-    return;
-  }
-
-  bool pausedNow = paused;
-  view.player->setVideoPaused(pausedNow);
-  *view.playbackState =
-      pausedNow ? PlaybackSessionState::Paused : PlaybackSessionState::Active;
+  view.transport.setPaused(paused);
 }
 
 namespace {
@@ -545,7 +509,7 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
     if (signals.commands.videoEditorActive()) {
       shortcutContexts |= kPlaybackShortcutContextVideoEditing;
     }
-    if (view.videoWindow && view.videoWindow->IsPictureInPicture()) {
+    if (view.videoWindow.IsPictureInPicture()) {
       shortcutContexts |= kPlaybackShortcutContextPictureInPicture;
     }
   }
@@ -642,11 +606,11 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
       (dragFromThisSurface || progressDragFromThisSurface) && leftPressed;
   playback_overlay::InteractionHit interactionHit;
   if (windowEvent) {
-    interactionHit = view.videoWindow->OverlayHitAt(
+    interactionHit = view.videoWindow.OverlayHitAt(
         pointerX, pointerY, capturedProgressDrag);
-  } else if (view.frameOutputState) {
+  } else {
     const playback_overlay::InteractionMap& interactions =
-        view.frameOutputState->overlayInteractions;
+        view.frameOutputState.overlayInteractions;
     if (mouse.hasPixelPosition) {
       interactionHit = playback_overlay::interactionHitAtTransformed(
           interactions, 0.0, 0.0, std::max(1.0, mouse.unitWidth),
@@ -673,7 +637,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     if (progressHit) {
       request.timelineUs =
           playbackTimelineTargetForRatio(view, progressHit->ratio);
-      const int64_t durationUs = view.player->durationUs();
+      const int64_t durationUs = view.transport.snapshot().durationUs;
       if (durationUs > 0) {
         request.timelineToleranceUs = std::max<int64_t>(
             1, durationUs / std::max(1, progressHit->units - 1));
@@ -738,7 +702,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
     seekState.videoEditBoundaryDrag =
         PlaybackSeekGestureState::VideoEditBoundaryDrag{
             *boundaryHit, previewSurface, -1,
-            view.player->timelineSnapshot().latestSeekRequestGeneration};
+            view.transport.snapshot().latestSeekRequestGeneration};
   } else if (progressHit && leftPressed &&
              mouse.kind == MouseEventKind::Press) {
     seekState.progressDragSurface = previewSurface;
@@ -757,7 +721,7 @@ void handlePlaybackMouseEvent(const PlaybackInputView& view,
           seekState.videoEditBoundaryDrag->boundary, *targetUs);
       queueSeekRequest(signals, seekState,
                        static_cast<double>(seekTargetUs) / 1000000.0);
-      const int64_t durationUs = view.player->durationUs();
+      const int64_t durationUs = view.transport.snapshot().durationUs;
       if (durationUs > 0) {
         previewRatio = static_cast<double>(seekTargetUs) /
                        static_cast<double>(durationUs);

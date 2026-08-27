@@ -77,6 +77,10 @@ int main() {
           playback_session_input::PlaybackInputSignals>,
       "playback input must have one explicit command owner");
   static_assert(
+      !std::is_default_constructible_v<
+          playback_session_input::PlaybackInputView>,
+      "playback input dependencies must be supplied explicitly");
+  static_assert(
       std::is_abstract_v<playback_session_input::CommandTarget>,
       "playback input must dispatch intent through its typed command port");
 

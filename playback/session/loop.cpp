@@ -134,7 +134,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
   std::chrono::steady_clock::time_point lastUiHeartbeat =
       std::chrono::steady_clock::now();
 
-  playback_session_input::PlaybackInputView inputView;
   playback_session_input::PlaybackInputSignals inputSignals;
   pointer_input::MouseDoubleClickTracker mouseDoubleClickTracker;
   playback_session_input::PlaybackSeekGestureState seekState;
@@ -195,7 +194,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
                                previewSource.sourceHeight);
     timelinePreviewStarted = timelinePreviewProvider.start(previewSource);
     if (!timelinePreviewStarted) timelinePreviewModel.stop();
-    bindInputState();
     bindRenderInputs();
     syncVideoEditPresentation(false);
     if (sessionIntent == PlaybackSessionIntent::EditVideo) {
@@ -216,9 +214,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
   }
 
   void finishLoopExit(bool quitApplication) {
-    if (inputView.playbackState) {
-      *inputView.playbackState = PlaybackSessionState::Exiting;
-    }
+    core.beginExit();
     loopStopRequested = true;
     osd.clear();
     redraw = true;
@@ -248,8 +244,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
           playback_session::Event{*transition.handoffCancellation});
     }
     if (transition.resumePlayback) {
-      playback_session_input::setPlaybackPaused(inputView, inputSignals,
-                                                seekState, false);
+      playback_session_input::setPlaybackPaused(
+          inputView(), inputSignals, seekState, false);
     }
     if (transition.finishSession) {
       finishLoopExit(transition.quitApplication);
@@ -267,15 +263,14 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
       videoEditWorkspace.execute(playback_video_edit::Command::CancelPrompt);
     }
     const bool playbackActive =
-        inputView.playbackState &&
-        *inputView.playbackState == PlaybackSessionState::Active;
+        core.playbackState() == PlaybackSessionState::Active;
     playback_session_exit::Transition transition = exitCoordinator.request(
         std::move(intent), confirmationRequired, playbackActive);
     if (transition.handled && exitCoordinator.confirmationVisible()) {
       exitWhenExportSucceeds = false;
       overlayControlHover.store(-1, std::memory_order_relaxed);
-      playback_session_input::setPlaybackPaused(inputView, inputSignals,
-                                                seekState, true);
+      playback_session_input::setPlaybackPaused(
+          inputView(), inputSignals, seekState, true);
       syncVideoEditPresentation();
     }
     applyExitTransition(transition);
@@ -471,8 +466,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     const playback_session::VideoEditActionResult result =
         videoEditWorkspace.execute(command);
     if (result.pausePlayback) {
-      playback_session_input::setPlaybackPaused(inputView, inputSignals,
-                                                seekState, true);
+      playback_session_input::setPlaybackPaused(
+          inputView(), inputSignals, seekState, true);
     }
     overlayControlHover.store(-1, std::memory_order_relaxed);
     std::string message = result.message;
@@ -758,16 +753,15 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     return true;
   }
 
-  void bindInputState() {
-    inputView.videoWindow = &output.window();
-    inputView.subtitleManager = &subtitleManager;
-    inputView.subtitleMutex = &subtitleMutex;
-    inputView.enableSubtitlesShared = &enableSubtitlesShared;
-    inputView.hasSubtitles = hasSubtitles;
-    inputView.frameOutputState = &frameOutputState;
-    inputView.timingSink = timingSink;
-    core.bindInputView(inputView);
-
+  playback_session_input::PlaybackInputView inputView() {
+    return {core,
+            output.window(),
+            subtitleManager,
+            subtitleMutex,
+            enableSubtitlesShared,
+            hasSubtitles,
+            frameOutputState,
+            timingSink};
   }
 
   void bindRenderInputs() {
@@ -1016,17 +1010,17 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
     } else if (event.type == InputEvent::Type::Key ||
                event.type == InputEvent::Type::Action) {
       playback_session_input::handlePlaybackInputEvent(
-          inputView, inputSignals, seekState, event);
+          inputView(), inputSignals, seekState, event);
     } else if (event.type == InputEvent::Type::Mouse) {
       MouseEvent mouse = event.mouse;
       mouseDoubleClickTracker.classifyUsingSystemSettings(
           mouse, screen.cellPixelWidth(), screen.cellPixelHeight());
       playback_session_input::handlePlaybackMouseEvent(
-          inputView, inputSignals, seekState, mouse);
+          inputView(), inputSignals, seekState, mouse);
     } else if (event.type == InputEvent::Type::PointerLeave) {
       mouseDoubleClickTracker.reset();
       playback_session_input::handlePlaybackPointerLeave(
-          inputSignals, seekState, inputView);
+          inputSignals, seekState, inputView());
     }
     if (!loopStopRequested) applyPresenterSync(syncPresentation());
     if (loopStopRequested) {
@@ -1090,8 +1084,9 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
              std::chrono::steady_clock::time_point::min()) ||
         (now - seekState.lastSeekSentTime >= kSeekThrottleInterval);
     if (canSend) {
-      playback_session_input::sendSeekRequest(inputView, inputSignals, seekState,
-                                              seekState.queuedSeekTargetSec);
+      playback_session_input::sendSeekRequest(
+          inputView(), inputSignals, seekState,
+          seekState.queuedSeekTargetSec);
     }
   }
 
@@ -1285,7 +1280,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
   bool handleControlCommand(PlaybackControlCommand command) {
     if (finished) return false;
     playback_session_input::handlePlaybackControlCommand(
-        inputView, inputSignals, seekState, command);
+        inputView(), inputSignals, seekState, command);
     if (!loopStopRequested) {
       applyPresenterSync(syncPresentation());
     }
@@ -1351,7 +1346,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::CommandTarget {
       hasSubtitles = subtitleManager.selectableTrackCount() > 0;
       selectedPreferred =
           hasSubtitles && subtitleManager.selectTrackForFile(preferredTrack);
-      inputView.hasSubtitles = hasSubtitles;
       enableSubtitlesShared.store(selectedPreferred || hasSubtitles,
                                   std::memory_order_relaxed);
       hasGeneratedSubtitles =

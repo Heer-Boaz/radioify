@@ -10,7 +10,6 @@
 #include "playback/video/player.h"
 #include "playback/ascii/frame_output.h"
 #include "playback/ascii/screen_renderer.h"
-#include "input.h"
 #include "log.h"
 
 namespace {
@@ -65,12 +64,6 @@ struct PlaybackSessionCore::Impl {
     }
   }
 
-  void bindInputView(playback_session_input::PlaybackInputView& inputView) {
-    inputView.player = &player;
-    inputView.playbackState = &playbackState;
-    inputView.audioOk = &audioOk;
-  }
-
   void bindRenderInputs(
       playback_screen_renderer::PlaybackScreenRenderInputs& renderInputs) {
     renderInputs.player = &player;
@@ -107,6 +100,58 @@ struct PlaybackSessionCore::Impl {
     }
     return true;
   }
+
+  playback_session_input::TransportSnapshot inputSnapshot() const {
+    const PlayerTimelineSnapshot timeline = player.timelineSnapshot();
+    return playback_session_input::TransportSnapshot{
+        playbackState,
+        audioOk,
+        player.isEnded(),
+        timeline.seekPending(),
+        player.durationUs(),
+        timeline.positionUs,
+        timeline.latestSeekRequestGeneration};
+  }
+
+  bool seekTo(int64_t targetUs) { return player.requestSeek(targetUs); }
+
+  bool seekBy(int64_t deltaUs) {
+    return player.requestRelativeSeek(deltaUs);
+  }
+
+  void setPaused(bool paused) {
+    const bool ended = playbackState == PlaybackSessionState::Ended ||
+                       player.isEnded();
+    if (!paused && ended) {
+      const PlayerTimelineSnapshot timeline = player.timelineSnapshot();
+      const int64_t durationUs = player.durationUs();
+      const bool pendingAwayFromEnd =
+          timeline.seekPending() &&
+          (durationUs <= 0 || timeline.positionUs < durationUs);
+      if (!pendingAwayFromEnd) player.requestSeek(0);
+      player.setVideoPaused(false);
+      playbackState = PlaybackSessionState::Active;
+      return;
+    }
+    if (paused && ended) {
+      player.setVideoPaused(true);
+      return;
+    }
+    player.setVideoPaused(paused);
+    playbackState = paused ? PlaybackSessionState::Paused
+                           : PlaybackSessionState::Active;
+  }
+
+  bool requestFrameStep(
+      playback_video_frame_step::Direction direction) {
+    if (!player.requestFrameStep(direction)) return false;
+    playbackState = PlaybackSessionState::Paused;
+    return true;
+  }
+
+  bool cycleAudioTrack() { return audioOk && player.cycleAudioTrack(); }
+
+  void beginExit() { playbackState = PlaybackSessionState::Exiting; }
 
   bool applyPresentationSync(bool switchedAwayFromWindow) {
     if (!switchedAwayFromWindow) {
@@ -227,11 +272,6 @@ void PlaybackSessionCore::initialize(ConsoleScreen& screen) {
   impl_->initialize(screen);
 }
 
-void PlaybackSessionCore::bindInputView(
-    playback_session_input::PlaybackInputView& inputView) {
-  impl_->bindInputView(inputView);
-}
-
 void PlaybackSessionCore::bindRenderInputs(
     playback_screen_renderer::PlaybackScreenRenderInputs& renderInputs) {
   impl_->bindRenderInputs(renderInputs);
@@ -245,6 +285,34 @@ void PlaybackSessionCore::updateRenderInputs(
 bool PlaybackSessionCore::finalizeAudioStart() {
   return impl_->finalizeAudioStart();
 }
+
+playback_session_input::TransportSnapshot PlaybackSessionCore::snapshot()
+    const {
+  return impl_->inputSnapshot();
+}
+
+bool PlaybackSessionCore::seekTo(int64_t targetUs) {
+  return impl_->seekTo(targetUs);
+}
+
+bool PlaybackSessionCore::seekBy(int64_t deltaUs) {
+  return impl_->seekBy(deltaUs);
+}
+
+void PlaybackSessionCore::setPaused(bool paused) {
+  impl_->setPaused(paused);
+}
+
+bool PlaybackSessionCore::requestFrameStep(
+    playback_video_frame_step::Direction direction) {
+  return impl_->requestFrameStep(direction);
+}
+
+bool PlaybackSessionCore::cycleAudioTrack() {
+  return impl_->cycleAudioTrack();
+}
+
+void PlaybackSessionCore::beginExit() { impl_->beginExit(); }
 
 bool PlaybackSessionCore::applyPresentationSync(
     bool switchedAwayFromWindow) {

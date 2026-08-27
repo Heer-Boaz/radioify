@@ -3,16 +3,13 @@
 #include <memory>
 
 #include "core/native_wait_handle.h"
+#include "input_transport.h"
 #include "presentation_policy.h"
 #include "state.h"
 
 class ConsoleScreen;
 class Player;
 struct PerfLog;
-
-namespace playback_session_input {
-struct PlaybackInputView;
-}
 
 namespace playback_screen_renderer {
 struct PlaybackScreenRenderInputs;
@@ -23,7 +20,7 @@ struct PlaybackSessionRefreshResult {
   bool stateChanged = false;
 };
 
-class PlaybackSessionCore {
+class PlaybackSessionCore final : public playback_session_input::Transport {
  public:
   struct Args {
     Player& player;
@@ -42,13 +39,20 @@ class PlaybackSessionCore {
   PlaybackSessionCore& operator=(const PlaybackSessionCore&) = delete;
 
   void initialize(ConsoleScreen& screen);
-  void bindInputView(playback_session_input::PlaybackInputView& inputView);
   void bindRenderInputs(
       playback_screen_renderer::PlaybackScreenRenderInputs& renderInputs);
   void updateRenderInputs(
       playback_screen_renderer::PlaybackScreenRenderInputs& renderInputs) const;
 
   bool finalizeAudioStart();
+  playback_session_input::TransportSnapshot snapshot() const override;
+  bool seekTo(int64_t targetUs) override;
+  bool seekBy(int64_t deltaUs) override;
+  void setPaused(bool paused) override;
+  bool requestFrameStep(
+      playback_video_frame_step::Direction direction) override;
+  bool cycleAudioTrack() override;
+  void beginExit();
   bool applyPresentationSync(bool switchedAwayFromWindow);
   PlaybackSessionRefreshResult refresh(bool nativeWindowActive, bool& redraw);
   void setAsciiPresentation(ConsoleScreen& screen, bool enabled);
