@@ -704,6 +704,7 @@ target_sources(video_edit_export_smoke PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/edit/export_metadata.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/composition/render_plan.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/export_pipeline.cpp
+  ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
@@ -1161,6 +1162,7 @@ target_sources(scene_analysis_smoke PRIVATE
   $<TARGET_OBJECTS:radioify_transcript_cue_semantics>
   ${CMAKE_SOURCE_DIR}/playback/video/decoder.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/timing/timeline.cpp
+  ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
