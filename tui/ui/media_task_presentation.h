@@ -9,12 +9,17 @@ struct TaskActivity;
 struct TaskCompletion;
 }
 
+struct MediaTaskActionHint {
+  std::string shortcut;
+  std::string label;
+};
+
 struct MediaTaskCardModel {
   std::string title;
   std::string sourceName;
   std::string detail;
+  std::optional<MediaTaskActionHint> cancelAction;
   std::optional<float> progress;
-  bool cancellable = false;
 };
 
 struct MediaTaskStatusModel {

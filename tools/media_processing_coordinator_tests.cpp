@@ -176,6 +176,9 @@ int main() {
                    melody->progress && *melody->progress == 0.4f &&
                    melody->cancellable &&
                    melodyCard && melodyCard->title == "Analyzing melody" &&
+                   melodyCard->cancelAction &&
+                   melodyCard->cancelAction->shortcut == "F8" &&
+                   melodyCard->cancelAction->label == "Cancel" &&
                    !coordinator.tryStartLoopSplit(
                        "other.flac", "other_stinger.wav", "other_loop.wav",
                        {}),
@@ -198,14 +201,17 @@ int main() {
                    }),
                "starting new work must retire the previous footer result");
   const std::optional<MediaTaskCardModel> loopCard = presenter.activeCard();
-  ok &= expect(loopCard && !loopCard->progress && loopCard->cancellable &&
+  ok &= expect(loopCard && !loopCard->progress &&
+                   loopCard->cancelAction &&
+                   loopCard->cancelAction->shortcut == "F8" &&
                    loopCard->title == "Splitting loop",
                "tasks without measurable progress must stay indeterminate");
   ok &= expect(coordinator.cancelActive() && !coordinator.cancelActive(),
                "generic background work must accept cancellation once");
   const std::optional<MediaTaskCardModel> cancellingLoopCard =
       presenter.activeCard();
-  ok &= expect(cancellingLoopCard && !cancellingLoopCard->cancellable &&
+  ok &= expect(cancellingLoopCard &&
+                   !cancellingLoopCard->cancelAction &&
                    cancellingLoopCard->title == "Cancelling loop split",
                "generic cancellation must reach the shared task card");
   const auto cancelledLoopCompletion = waitForCompletion(coordinator);
@@ -233,7 +239,7 @@ int main() {
           playback_media_actions::Action::GenerateSubtitles, "movie.mp4");
   ok &= expect(subtitleStart && subtitleStart->accepted &&
                    subtitleStart->feedback ==
-                       "Generating subtitles (F8 to cancel)" &&
+                       "Generating subtitles" &&
                    wakeIsSignaled(coordinator) &&
                    waitUntil([&]() {
                      return subtitlesStarted.load(std::memory_order_acquire);
@@ -251,7 +257,10 @@ int main() {
                    mediaTaskCardModel(*subtitles).title ==
                        "Generating subtitles" &&
                    mediaTaskCardModel(*subtitles).detail ==
-                       "Transcribing audio",
+                       "Transcribing audio" &&
+                   mediaTaskCardModel(*subtitles).cancelAction &&
+                   mediaTaskCardModel(*subtitles).cancelAction->shortcut ==
+                       "F8",
                "backend phases must reach the generic task card");
   releaseSubtitles.store(true, std::memory_order_release);
   const auto subtitleCompletion = waitForCompletion(coordinator);
@@ -280,7 +289,7 @@ int main() {
                               "movie.mp4");
   ok &= expect(separationStart && separationStart->accepted &&
                    separationStart->feedback ==
-                       "Separating audio (F8 to cancel)" &&
+                       "Separating audio" &&
                    wakeIsSignaled(coordinator) &&
                    waitUntil([&]() {
                      return separationStarted.load(std::memory_order_acquire);
@@ -303,7 +312,8 @@ int main() {
                    !separationSourceState.subtitleGenerationRunning &&
                    separationSourceState.audioSeparationRunning &&
                    mediaTaskCardModel(*cancelling).title ==
-                       "Cancelling audio separation",
+                       "Cancelling audio separation" &&
+                   !mediaTaskCardModel(*cancelling).cancelAction,
                "cancellation must remain an explicit generic activity state");
   releaseSeparation.store(true, std::memory_order_release);
   const auto separationCompletion = waitForCompletion(coordinator);

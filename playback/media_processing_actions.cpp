@@ -17,7 +17,7 @@ std::optional<ActionResult> Actions::execute(
   switch (action) {
     case playback_media_actions::Action::GenerateSubtitles:
       return actionResult(service_.requestSubtitles(sourceFile),
-                          "Generating subtitles (F8 to cancel)",
+                          "Generating subtitles",
                           "Could not start subtitle generation");
     case playback_media_actions::Action::CancelSubtitleGeneration:
       return actionResult(service_.requestSubtitleCancellation(),
@@ -26,7 +26,7 @@ std::optional<ActionResult> Actions::execute(
     case playback_media_actions::Action::SeparateAudio:
       return actionResult(
           service_.requestAudioSeparation(sourceFile),
-          "Separating audio (F8 to cancel)",
+          "Separating audio",
           "Could not start audio separation");
     case playback_media_actions::Action::CancelAudioSeparation:
       return actionResult(

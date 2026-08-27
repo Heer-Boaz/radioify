@@ -103,6 +103,7 @@
 #include "windows_file_drop_apartment.h"
 #include "media_formats.h"
 #include "runtime_helpers.h"
+#include "shell_shortcuts.h"
 
 #include "tui.h"
 #include "timing_log.h"
@@ -663,6 +664,13 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       markDirty(UiDirtyFlags::Async);
     }
     return accepted;
+  };
+  auto handleGlobalShellShortcut = [&](const InputEvent& event) {
+    const auto action = tui_shell_shortcuts::resolve(
+        event, tui_shell_shortcuts::context(
+                   tui_shell_shortcuts::Context::Global));
+    return action == tui_shell_shortcuts::Action::CancelMediaTask &&
+           cancelActiveMediaTask();
   };
   auto buildPlaybackLabel =
       [&](const std::optional<PlaybackTarget>& target) {
@@ -1390,9 +1398,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         if (playbackEvent.type == InputEvent::Type::Resize) {
           screen.updateSize();
         }
-        if (playbackEvent.type == InputEvent::Type::Key &&
-            playbackEvent.key.vk == VK_F8 &&
-            cancelActiveMediaTask()) {
+        if (handleGlobalShellShortcut(playbackEvent)) {
           continue;
         }
         mediaCoordinator.handleVideoInputEvent(playbackEvent);
@@ -1420,8 +1426,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       } else {
         browserDoubleClickTracker.reset();
       }
-      if (ev.type == InputEvent::Type::Key && ev.key.vk == VK_F8 &&
-          cancelActiveMediaTask()) {
+      if (handleGlobalShellShortcut(ev)) {
         return;
       }
       if (mediaCoordinator.capturesBrowserInput()) {
@@ -1478,23 +1483,21 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           markDirty();
         }
       }
-      if (ev.type == InputEvent::Type::Key) {
-        const KeyEvent& key = ev.key;
-        // Open command palette with F1 (no modifier). Previously Ctrl+P
-        // conflicted with the playback Ctrl+P PiP binding.
-        bool paletteToggle = (key.vk == VK_F1);
-        if (paletteToggle) {
-          if (commandPalette.active()) {
-            commandPalette.dismiss();
-          } else {
-            commandPalette.open();
-            dismissFileContextMenu();
-          }
-          dirty =
-              setBrowserSearchFocus(browser, BrowserSearchFocus::None) || dirty;
-          markDirty();
-          return;
+      const auto browserShellAction = tui_shell_shortcuts::resolve(
+          ev, tui_shell_shortcuts::context(
+                  tui_shell_shortcuts::Context::Browser));
+      if (browserShellAction ==
+          tui_shell_shortcuts::Action::ToggleCommandPalette) {
+        if (commandPalette.active()) {
+          commandPalette.dismiss();
+        } else {
+          commandPalette.open();
+          dismissFileContextMenu();
         }
+        dirty =
+            setBrowserSearchFocus(browser, BrowserSearchFocus::None) || dirty;
+        markDirty();
+        return;
       }
       if (ev.type == InputEvent::Type::Mouse && clearBtnHover && isLeftClick) {
         if (browserFilterFocused(browser)) {

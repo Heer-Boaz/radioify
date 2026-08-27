@@ -4,6 +4,7 @@
 
 #include "app/media_processing_coordinator.h"
 #include "core/runtime_helpers.h"
+#include "tui/shell_shortcuts.h"
 
 namespace {
 
@@ -91,7 +92,12 @@ MediaTaskCardModel mediaTaskCardModel(
   if (activity.progress) {
     model.progress = std::clamp(*activity.progress, 0.0f, 1.0f);
   }
-  model.cancellable = activity.cancellable;
+  if (activity.cancellable) {
+    model.cancelAction = MediaTaskActionHint{
+        std::string(tui_shell_shortcuts::label(
+            tui_shell_shortcuts::Action::CancelMediaTask)),
+        "Cancel"};
+  }
   return model;
 }
 

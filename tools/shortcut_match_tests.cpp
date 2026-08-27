@@ -16,7 +16,9 @@
 #include "playback/video/enhancement/pipeline.h"
 #include "playback/session/presentation_policy.h"
 #include "playback/session/input.h"
+#include "playback/session/bootstrap_input.h"
 #include "playback/session/state.h"
+#include "tui/shell_shortcuts.h"
 #include "ui_inputlogic.h"
 #include "clock.h"
 #include "queues.h"
@@ -141,6 +143,38 @@ int main() {
                    makeKey(VK_F1), kPlaybackShortcutContextPlaybackSession)
                    .has_value(),
                "VK_F1 must not resolve to any playback-session shortcut");
+  ok &= expect(
+      tui_shell_shortcuts::resolve(
+          makeKeyEvent(VK_F1),
+          tui_shell_shortcuts::context(
+              tui_shell_shortcuts::Context::Browser)) ==
+              tui_shell_shortcuts::Action::ToggleCommandPalette &&
+          !tui_shell_shortcuts::resolve(
+              makeKeyEvent(VK_F1, 0, LEFT_CTRL_PRESSED),
+              tui_shell_shortcuts::context(
+                  tui_shell_shortcuts::Context::Browser)) &&
+          tui_shell_shortcuts::resolve(
+              makeKeyEvent(VK_F8),
+              tui_shell_shortcuts::context(
+                  tui_shell_shortcuts::Context::Global)) ==
+              tui_shell_shortcuts::Action::CancelMediaTask &&
+          tui_shell_shortcuts::label(
+              tui_shell_shortcuts::Action::CancelMediaTask) == "F8",
+      "shell shortcut matching and displayed labels must share one catalog");
+  ok &= expect(
+      playback_session_bootstrap_input::resolve(
+          makeKeyEvent('Q', 'q', LEFT_CTRL_PRESSED)) ==
+              playback_session_bootstrap_input::Action::QuitApplication &&
+          playback_session_bootstrap_input::resolve(
+              makeKeyEvent('C', 'c', RIGHT_CTRL_PRESSED)) ==
+              playback_session_bootstrap_input::Action::Cancel &&
+          playback_session_bootstrap_input::resolve(
+              makeKeyEvent(VK_ESCAPE)) ==
+              playback_session_bootstrap_input::Action::Cancel &&
+          playback_session_bootstrap_input::resolve(
+              makeActionEvent(InputAction::Back)) ==
+              playback_session_bootstrap_input::Action::Cancel,
+      "playback initialization must publish typed cancel and quit intents");
   ok &= expect(resolvePlaybackAction(
                    makeKey(VK_ESCAPE), kPlaybackShortcutContextPlaybackSession)
                    .value() == PlaybackAction::ExitPlaybackSession,

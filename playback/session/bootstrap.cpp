@@ -10,6 +10,7 @@
 #include "consoleinput.h"
 #include "consolescreen.h"
 #include "playback_dialog.h"
+#include "playback/session/bootstrap_input.h"
 #include "playback/video/player.h"
 #include "runtime_helpers.h"
 #include "ui_helpers.h"
@@ -125,19 +126,6 @@ struct PlaybackSessionBootstrap::Impl {
                           progressEnd, pulseProgress(initStart, now));
   }
 
-  bool handleKeyCancel(const KeyEvent& key) {
-    const DWORD ctrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
-    const bool ctrl = (key.control & ctrlMask) != 0;
-    if (ctrl && (key.vk == 'Q' || key.ch == 'q' || key.ch == 'Q')) {
-      requestQuit();
-      return true;
-    }
-    if ((key.vk == 'C' || key.ch == 'c' || key.ch == 'C') && ctrl) {
-      return true;
-    }
-    return key.vk == VK_ESCAPE || key.vk == VK_BACK;
-  }
-
   bool handleMouseCancel(const MouseEvent& mouse) const {
     return mouse.kind == MouseEventKind::Press &&
            (mouse.button == MouseButton::Right ||
@@ -157,11 +145,11 @@ struct PlaybackSessionBootstrap::Impl {
 
       InputEvent ev{};
       while (input.poll(ev)) {
-        if (ev.type == InputEvent::Type::Action &&
-            ev.action == InputAction::Back) {
-          return false;
-        }
-        if (ev.type == InputEvent::Type::Key && handleKeyCancel(ev.key)) {
+        if (const auto action = playback_session_bootstrap_input::resolve(ev)) {
+          using BootstrapAction = playback_session_bootstrap_input::Action;
+          if (*action == BootstrapAction::QuitApplication) {
+            requestQuit();
+          }
           return false;
         }
         if (ev.type == InputEvent::Type::Mouse && handleMouseCancel(ev.mouse)) {

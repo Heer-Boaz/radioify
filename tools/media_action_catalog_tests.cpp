@@ -233,9 +233,9 @@ int main() {
   ok &= expect(
       generateSubtitles && generateSubtitles->accepted &&
           generateSubtitles->feedback ==
-              "Generating subtitles (F8 to cancel)" &&
+              "Generating subtitles" &&
           separateAudio && separateAudio->accepted &&
-          separateAudio->feedback == "Separating audio (F8 to cancel)" &&
+          separateAudio->feedback == "Separating audio" &&
           cancelSubtitles && cancelSubtitles->accepted &&
           cancelSubtitles->feedback == "Cancelling subtitle generation" &&
           cancelSeparation && cancelSeparation->accepted &&
