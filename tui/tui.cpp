@@ -36,6 +36,7 @@
 #include "audio_picture_in_picture_window.h"
 #include "audioplayback.h"
 #include "browser_action_strip.h"
+#include "browser_chrome.h"
 #include "browser_media_menu.h"
 #include "browser_media_menu_renderer.h"
 #include "browser_playback_reveal.h"
@@ -71,7 +72,6 @@
 #include "playback/media_processing_actions.h"
 #include "playback/media/track_catalog.h"
 #include "playback/notification_area/controls.h"
-#include "playback/overlay/overlay.h"
 #include "playback/session/session.h"
 #include "playback/system_media_transport/controls.h"
 #include "playback_target_match.h"
@@ -83,7 +83,6 @@
 #include "audio/loopsplit/output_paths.h"
 #include "tui_export.h"
 #include "tui_theme.h"
-#include "ui_footer_layout.h"
 #include "ui_helpers.h"
 #include "ui_inputlogic.h"
 #include "ui_input_pump.h"
@@ -591,7 +590,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   browser_input::EntryClickTracker browserEntryClickTracker;
   BrowserPointerState browserPointerState;
   BrowserViewport viewport;
-  BrowserFooterLayout footerLayout;
+  browser_chrome::Model browserChrome;
   auto showAudioPictureInPictureOpenError = [&]() {
     const std::string detail = audioPictureInPicture.lastError().empty()
                                    ? "The picture-in-picture window did not open."
@@ -690,9 +689,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
     return label;
   };
-  auto buildNowPlayingLabel = [&]() {
-    return buildPlaybackLabel(mediaCoordinator.currentPlaybackTarget());
-  };
   auto startPlayback = [&](playback_route::Route route,
                            playback_queue::Source source) {
     return mediaCoordinator.startPlayback(std::move(route),
@@ -738,90 +734,32 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         browser.entries[static_cast<size_t>(browser.selected)]);
   };
 
-  auto buildActionStripItems = [&](bool browserInteractionEnabled) {
-    browser_action_strip::Input stripInput;
-    playback_overlay::PlaybackOverlayInputs overlayInputs;
-    const AudioPlaybackSnapshot audio = audioGetPlaybackSnapshot();
-    const std::filesystem::path nowPlaying = currentPlaybackFile();
-    const std::optional<PlaybackControlState> controlState =
-        mediaCoordinator.playbackControlState();
-    const bool videoActive = controlState && controlState->isVideo;
-    const bool audioTargetAvailable = audio.source.has_value();
-    overlayInputs.audioOk = videoActive || audio.ready;
-    overlayInputs.playPauseAvailable = overlayInputs.audioOk;
-    overlayInputs.audioSupports50HzToggle =
-        audio.ready && audio.supports50HzToggle;
-    overlayInputs.canPlayPrevious =
-        controlState ? controlState->canPrevious
-                     : overlayInputs.audioOk || !nowPlaying.empty();
-    overlayInputs.canPlayNext =
-        controlState ? controlState->canNext
-                     : overlayInputs.audioOk || !nowPlaying.empty();
-    overlayInputs.radioEnabled = audio.radioEnabled;
-    overlayInputs.radioLabel = audio.radioFilterLabel;
-    overlayInputs.hz50Enabled = audio.hz50Enabled;
-    overlayInputs.paused =
-        controlState
-            ? controlState->status != PlaybackControlStatus::Playing
-            : audio.paused || audio.finished;
-    overlayInputs.pictureInPictureAvailable =
-        videoActive || audioPictureInPicture.isOpen() ||
-        overlayInputs.audioOk || !nowPlaying.empty();
-    const std::optional<PlaybackPresentationState> videoPresentation =
+  auto buildBrowserChrome = [&]() {
+    browser_chrome::Input chromeInput;
+    chromeInput.audio = audioGetPlaybackSnapshot();
+    chromeInput.playback = mediaCoordinator.playbackControlState();
+    chromeInput.videoPresentation =
         mediaCoordinator.videoPresentationState();
-    overlayInputs.pictureInPictureActive =
-        videoPresentation
-            ? videoPresentation->layer() ==
-                  PlaybackPresentationLayer::PictureInPicture
-            : audioPictureInPicture.isOpen();
-    stripInput.playback =
-        playback_overlay::buildPlaybackOverlayState(overlayInputs);
-    stripInput.pitchMonitorAvailable =
-        !videoActive && (melodyVisualization.active() || audio.ready ||
-                         audioTargetAvailable);
-    stripInput.pitchMonitorActive = melodyVisualization.active();
-    stripInput.browserControlsAvailable = browserInteractionEnabled;
-    stripInput.viewMode = browser.viewMode;
-    const bool selectedEntryHasOptions =
-        browserInteractionEnabled && selectedOptionsSubject().has_value();
-    stripInput.optionsAvailable =
-        optionsBrowserIsActive(browser) || selectedEntryHasOptions;
-    stripInput.optionsActive = optionsBrowserIsActive(browser);
-    return browser_action_strip::build(stripInput);
-  };
-
-  auto buildFooterLayout = [&]() {
-    const AudioPlaybackSnapshot audio = audioGetPlaybackSnapshot();
+    const std::optional<PlaybackTarget> playbackTarget =
+        mediaCoordinator.currentPlaybackTarget();
+    chromeInput.playbackTargetAvailable = playbackTarget.has_value();
+    chromeInput.audioPictureInPictureOpen =
+        audioPictureInPicture.isOpen();
+    chromeInput.melodyVisualizationActive = melodyVisualization.active();
+    chromeInput.transportUiEnabled = o.play;
+    chromeInput.optionsModeActive = optionsBrowserIsActive(browser);
+    chromeInput.selectedEntryHasOptions =
+        selectedOptionsSubject().has_value();
     const std::optional<MediaTaskStatusModel> mediaTaskStatus =
         mediaCoordinator.latestMediaTaskStatus();
-    const bool hasMediaTaskStatus =
+    chromeInput.hasMediaTaskStatus =
         mediaTaskStatus && !mediaTaskStatus->text.empty();
-    const std::filesystem::path nowPlaying = currentPlaybackFile();
-    const bool showNowPlaying =
-        !nowPlaying.empty() || audio.ready || audio.seeking || audio.holding;
-    BrowserFooterLayoutInput layoutInput;
-    layoutInput.browserInteractionEnabled = !melodyVisualization.active();
-    layoutInput.showWarning =
+    chromeInput.hasWarning =
         !mediaCommandError.empty() || !audioGetWarning().empty();
-    layoutInput.showMediaTaskStatus = hasMediaTaskStatus;
-    layoutInput.enableTransportUi = o.play;
-    layoutInput.showNowPlaying = showNowPlaying;
-    layoutInput.showPeakMeter = o.play && audio.ready;
-    BrowserFooterLayout layout = computeBrowserFooterLayout(layoutInput);
-    if (layout.showNowPlaying) {
-      const int nowPlayingLines = std::max(
-          1, wrappedLineCount(" " + buildNowPlayingLabel(),
-                              screen.width()));
-      layout.reservedLines += nowPlayingLines - layout.nowPlayingLines;
-      layout.nowPlayingLines = nowPlayingLines;
-    }
-    if (layout.showActionStrip) {
-      const bool browserInteractionEnabled = !melodyVisualization.active();
-      layout.actionStripLines = browser_action_strip::wrappedLineCount(
-          buildActionStripItems(browserInteractionEnabled), screen.width());
-      layout.reservedLines += std::max(0, layout.actionStripLines - 1);
-    }
-    return layout;
+    chromeInput.viewMode = browser.viewMode;
+    chromeInput.nowPlayingLabel = buildPlaybackLabel(playbackTarget);
+    chromeInput.width = screen.width();
+    return browser_chrome::build(chromeInput);
   };
 
   auto rebuildLayout = [&]() {
@@ -829,7 +767,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       screen.updateSize();
       screenSizeDirty = false;
     }
-    footerLayout = buildFooterLayout();
+    browserChrome = buildBrowserChrome();
     const bool browserInteractionEnabled = !melodyVisualization.active();
     const bool showHeaderLabel =
         browserInteractionEnabled &&
@@ -837,7 +775,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     viewport = computeBrowserViewport(screen.width(), screen.height(),
                                       browserInteractionEnabled,
                                       showHeaderLabel,
-                                      footerLayout.reservedLines,
+                                      browserChrome.footer.reservedLines,
                                       searchBarClearButtonWidth);
     width = viewport.width;
     height = viewport.height;
@@ -851,7 +789,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     if (browserInteractionEnabled) {
       listTop = std::max(listTop, breadcrumbY + 1);
     }
-    listHeight = std::max(1, height - listTop - footerLayout.reservedLines);
+    listHeight =
+        std::max(1, height - listTop - browserChrome.footer.reservedLines);
     layout = buildLayout(browser, width, listHeight);
     applyBrowserViewportRestore(browser, layout);
     breadcrumbLine = buildBreadcrumbLine(browser.location, width);
@@ -1653,11 +1592,11 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
 
     processShellPlaybackCommands();
     if (!running) break;
-    BrowserFooterLayout nextFooterLayout = buildFooterLayout();
-    if (nextFooterLayout != footerLayout) {
-      footerLayout = nextFooterLayout;
+    browser_chrome::Model nextBrowserChrome = buildBrowserChrome();
+    if (nextBrowserChrome.footer != browserChrome.footer) {
       markLayoutDirty();
     }
+    browserChrome = std::move(nextBrowserChrome);
 
     if (browser.viewMode != preInputViewMode ||
         melodyVisualization.active() != preInputMelodyVisualization ||
@@ -1892,7 +1831,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
 
       int footerStart = listTop + listHeight;
       int line = footerStart;
-      if (line < height && footerLayout.showMeta) {
+      if (line < height && browserChrome.footer.showMeta) {
         std::string meta;
         Style metaStyle = theme.dim;
         if (browser.contentLoading) {
@@ -1911,7 +1850,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           screen.writeText(0, line++, fitLine(meta, width), metaStyle);
         }
       }
-      if (line < height && footerLayout.showWarning) {
+      if (line < height && browserChrome.footer.showWarning) {
         if (!mediaCommandError.empty()) {
           screen.writeText(
               0, line++, fitLine("  Error: " + mediaCommandError, width),
@@ -1924,7 +1863,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           }
         }
       }
-      if (line < height && footerLayout.showMediaTaskStatus) {
+      if (line < height && browserChrome.footer.showMediaTaskStatus) {
         const std::optional<MediaTaskStatusModel> status =
             mediaCoordinator.latestMediaTaskStatus();
         if (status) {
@@ -1935,10 +1874,11 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           }
         }
       }
-      std::string nowLabel = buildNowPlayingLabel();
-      if (footerLayout.showNowPlaying) {
+      const std::string& nowLabel = browserChrome.nowPlayingLabel;
+      if (browserChrome.footer.showNowPlaying) {
         const int nowStart = line;
-        const int nowPlayingLines = std::max(1, footerLayout.nowPlayingLines);
+        const int nowPlayingLines =
+            std::max(1, browserChrome.footer.nowPlayingLines);
         std::vector<std::string> lines =
             wrapLine(std::string(" ") + nowLabel, width);
         for (int i = 0; i < nowPlayingLines &&
@@ -1954,14 +1894,13 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
 
       actionStrip.buttons.clear();
       actionStrip.y = -1;
-      if (footerLayout.showActionStrip && line < height) {
+      if (browserChrome.footer.showActionStrip && line < height) {
         actionStrip.y = line;
-        std::vector<browser_action_strip::Item> items =
-            buildActionStripItems(browserInteractionEnabled);
         const int gapWidth = 2;
         int x = 0;
         int itemLine = line;
-        for (const auto& item : items) {
+        for (const browser_action_strip::Item& item :
+             browserChrome.actions) {
           int widthUsed = std::min(std::max(1, item.width), width);
           const int gap = x > 0 ? gapWidth : 0;
           if (x > 0 && x + gap + widthUsed > width) {
@@ -1995,13 +1934,13 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         if (actionHover >= static_cast<int>(actionStrip.buttons.size())) {
           actionHover = -1;
         }
-        line += std::max(1, footerLayout.actionStripLines);
+        line += std::max(1, browserChrome.footer.actionStripLines);
       } else {
         actionHover = -1;
       }
 
       int peakMeterY = -1;
-      if (footerLayout.showPeakMeter && line < height) {
+      if (browserChrome.footer.showPeakMeter && line < height) {
         peakMeterY = line;
         line++;
       }

@@ -2,6 +2,7 @@ radioify_add_module_object_library(radioify_ui
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_playback_reveal.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_playback_source.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_action_strip.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/browser_chrome.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_content_preparation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_content_view.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_directory_listing.cpp
