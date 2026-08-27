@@ -413,7 +413,7 @@ int runExtractSheetCli(const Options& o,
       std::cout << "\rAnalyzing: " << pct << "%" << std::flush;
     };
 
-    ok = audioAnalyzeFileToMelodyFile(
+    ok = audioRuntime.analyzeFileToMelodyFile(
         inputPath, std::max(0, o.trackIndex), outputPath, progress, &error);
   }
   std::cout << "\n";

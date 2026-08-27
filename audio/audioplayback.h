@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
-#include <optional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -55,9 +55,10 @@ struct KssInstrumentProfile {
   uint8_t volume = 0;
 };
 
-// Owns the process-wide audio playback state. Keep this object alive for every
-// consumer of the audio API; dependent workers must be declared after it so
-// they are joined before audio is shut down.
+struct AudioPlaybackState;
+
+// Owns an audio playback session. Keep this object alive for every dependent
+// player and worker so they are joined before the session is shut down.
 class AudioPlaybackRuntime {
  public:
   explicit AudioPlaybackRuntime(const AudioPlaybackConfig& config);
@@ -68,9 +69,8 @@ class AudioPlaybackRuntime {
   AudioPlaybackRuntime(AudioPlaybackRuntime&&) = delete;
   AudioPlaybackRuntime& operator=(AudioPlaybackRuntime&&) = delete;
 
-  // Application-facing audio-player API. Low-level decoder and stream
-  // functions below remain available to the playback engine, while shells
-  // receive this owner instead of reaching into process globals.
+  // Application-facing audio-player API. Decoder and stream details stay
+  // internal; shells receive this owner instead of reaching into shared state.
   bool enabled() const;
   bool ready() const;
   bool startFile(const std::filesystem::path& file, int trackIndex = 0);
@@ -132,52 +132,11 @@ class AudioPlaybackRuntime {
   bool adjustVgmDeviceOption(const VgmDeviceInfo& device,
                              const VgmDeviceOptions& baseline,
                              VgmDeviceOptionId id, int direction = 1);
+
+ private:
+  std::unique_ptr<AudioPlaybackState> state_;
 };
 
-bool audioIsEnabled();
-bool audioIsReady();
-
-bool audioStartFile(const std::filesystem::path& file, int trackIndex = 0);
-bool audioStartFileAt(const std::filesystem::path& file, double startSec,
-                      int trackIndex = 0);
-void audioStop();
-std::optional<AudioPlaybackSource> audioGetPlaybackSource();
-AudioPlaybackSnapshot audioGetPlaybackSnapshot();
-
-double audioGetTimeSec();
-double audioGetTotalSec();
-bool audioIsSeeking();
-double audioGetSeekTargetSec();
-
-bool audioIsPaused();
-bool audioIsFinished();
-bool audioIsRadioEnabled();
-RadioFilterMode audioGetRadioFilterMode();
-std::string_view audioGetRadioFilterLabel();
-bool audioIsHolding();
-
-AudioPerfStats audioGetPerfStats();
-
-void audioPlay();
-void audioPause();
-void audioTogglePause();
-void audioSeekBy(int direction);
-void audioSeekToRatio(double ratio);
-void audioSeekToSec(double sec);
-void audioCycleRadioFilter();
-void audioSetHold(bool hold);
-void audioAdjustVolume(float delta);
-float audioGetVolume();
-float audioGetUnclippedOutputPeak();
-AudioMelodyInfo audioGetMelodyInfo();
-AudioMelodyAnalysisState audioGetMelodyAnalysisState();
-bool audioAnalyzeFileToMelodyFile(const std::filesystem::path& file,
-                                  int trackIndex,
-                                  const std::filesystem::path& outputFile,
-                                  const std::function<void(float)>& progressCallback,
-                                  std::string* error);
-bool audioCanAnalyzeFileToMelodyFile(const std::filesystem::path& file);
-std::string audioGetWarning();
 bool audioScanKssInstruments(const std::filesystem::path& file, int trackIndex,
                              uint32_t sampleRate,
                              KssPlaybackOptions options,

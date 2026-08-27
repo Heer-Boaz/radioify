@@ -140,8 +140,6 @@ struct AudioPlaybackState {
   AuditionState audition{};
 };
 
-extern AudioPlaybackState gAudio;
-
 void appendAudioTimingLogLine(const char* line);
 void drainPlaybackPipelineForReplacement(AudioPlaybackState& audio);
 bool audioPlaybackFinishSeekPipelineTransition(AudioState& state);

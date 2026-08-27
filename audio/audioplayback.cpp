@@ -9,8 +9,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <string_view>
 
 #include "clock.h"
 #include "audio_format_options.h"
@@ -47,8 +50,6 @@
 
 #include "timing_log.h"
 #include "audioplayback_internal.h"
-
-AudioPlaybackState gAudio;
 
 void appendAudioTimingLogLine(const char* line) {
 #if RADIOIFY_ENABLE_TIMING_LOG
@@ -311,18 +312,63 @@ void stopPlayback(AudioPlaybackState& audio) {
   audio.gsfWarning.clear();
   audio.vgmWarning.clear();
 }
+
+static bool audioIsEnabled(const AudioPlaybackState& audio);
+static bool audioIsReady(const AudioPlaybackState& audio);
+static bool audioStartFile(AudioPlaybackState& audio,
+                           const std::filesystem::path& file, int trackIndex);
+static void audioStop(AudioPlaybackState& audio);
+static std::optional<AudioPlaybackSource> audioGetPlaybackSource(
+    const AudioPlaybackState& audio);
+static AudioPlaybackSnapshot audioGetPlaybackSnapshot(
+    AudioPlaybackState& audio);
+static double audioGetTimeSec(AudioPlaybackState& audio);
+static double audioGetTotalSec(const AudioPlaybackState& audio);
+static bool audioIsSeeking(const AudioPlaybackState& audio);
+static double audioGetSeekTargetSec(const AudioPlaybackState& audio);
+static bool audioIsPaused(const AudioPlaybackState& audio);
+static bool audioIsFinished(const AudioPlaybackState& audio);
+static bool audioIsRadioEnabled(const AudioPlaybackState& audio);
+static RadioFilterMode audioGetRadioFilterMode(
+    const AudioPlaybackState& audio);
+static std::string_view audioGetRadioFilterLabel(
+    const AudioPlaybackState& audio);
+static bool audioIsHolding(const AudioPlaybackState& audio);
+static AudioPerfStats audioGetPerfStats(AudioPlaybackState& audio);
+static void audioPause(AudioPlaybackState& audio);
+static void audioPlay(AudioPlaybackState& audio);
+static void audioTogglePause(AudioPlaybackState& audio);
+static void audioSeekBy(AudioPlaybackState& audio, int direction);
+static void audioSeekToRatio(AudioPlaybackState& audio, double ratio);
+static void audioCycleRadioFilter(AudioPlaybackState& audio);
+static void audioSetHold(AudioPlaybackState& audio, bool hold);
+static void audioAdjustVolume(AudioPlaybackState& audio, float delta);
+static float audioGetVolume(const AudioPlaybackState& audio);
+static float audioGetUnclippedOutputPeak(const AudioPlaybackState& audio);
+static AudioMelodyInfo audioGetMelodyInfo(AudioPlaybackState& audio);
+static AudioMelodyAnalysisState audioGetMelodyAnalysisState();
+static bool audioAnalyzeFileToMelodyFile(
+    const AudioPlaybackState& audio, const std::filesystem::path& file,
+    int trackIndex, const std::filesystem::path& outputFile,
+    const std::function<void(float)>& progressCallback, std::string* error);
+static bool audioCanAnalyzeFileToMelodyFile(
+    const std::filesystem::path& file);
+static std::string audioGetWarning(const AudioPlaybackState& audio);
+
 AudioPlaybackRuntime::AudioPlaybackRuntime(
-    const AudioPlaybackConfig& config) {
-  gAudio.enableAudio = config.enableAudio;
-  gAudio.sampleRate = 48000;
-  gAudio.baseChannels = config.mono ? 1u : 2u;
-  gAudio.channels = gAudio.baseChannels;
-  gAudio.state.channels = gAudio.channels;
-  gAudio.state.sampleRate = gAudio.sampleRate;
-  gAudio.state.dry = config.dry;
+    const AudioPlaybackConfig& config)
+    : state_(std::make_unique<AudioPlaybackState>()) {
+  AudioPlaybackState& audio = *state_;
+  audio.enableAudio = config.enableAudio;
+  audio.sampleRate = 48000;
+  audio.baseChannels = config.mono ? 1u : 2u;
+  audio.channels = audio.baseChannels;
+  audio.state.channels = audio.channels;
+  audio.state.sampleRate = audio.sampleRate;
+  audio.state.dry = config.dry;
   RadioPlaybackFilterConfig radioFilterConfig;
-  radioFilterConfig.sampleRate = gAudio.sampleRate;
-  radioFilterConfig.outputChannels = gAudio.channels;
+  radioFilterConfig.sampleRate = audio.sampleRate;
+  radioFilterConfig.outputChannels = audio.channels;
   radioFilterConfig.bandwidthHz = static_cast<float>(config.bwHz);
   radioFilterConfig.noise = static_cast<float>(config.noise);
   radioFilterConfig.initialMode =
@@ -333,147 +379,152 @@ AudioPlaybackRuntime::AudioPlaybackRuntime(
       radioReceptionConfigForProfile(config.radioReceptionProfile);
   radioFilterConfig.settingsPath = config.radioSettingsPath;
   radioFilterConfig.presetName = config.radioPresetName;
-  gAudio.state.radioFilter.initialize(radioFilterConfig);
+  audio.state.radioFilter.initialize(radioFilterConfig);
 }
 
 AudioPlaybackRuntime::~AudioPlaybackRuntime() {
-  stopPlayback(gAudio);
-  audioPlaybackDeviceUninit(gAudio);
+  stopPlayback(*state_);
 }
 
-bool AudioPlaybackRuntime::enabled() const { return audioIsEnabled(); }
+bool AudioPlaybackRuntime::enabled() const { return audioIsEnabled(*state_); }
 
-bool AudioPlaybackRuntime::ready() const { return audioIsReady(); }
+bool AudioPlaybackRuntime::ready() const { return audioIsReady(*state_); }
 
 bool AudioPlaybackRuntime::startFile(const std::filesystem::path& file,
                                      int trackIndex) {
-  return audioStartFile(file, trackIndex);
+  return audioStartFile(*state_, file, trackIndex);
 }
 
-void AudioPlaybackRuntime::stop() { audioStop(); }
+void AudioPlaybackRuntime::stop() { audioStop(*state_); }
 
 AudioPlaybackSnapshot AudioPlaybackRuntime::snapshot() const {
-  return audioGetPlaybackSnapshot();
+  return audioGetPlaybackSnapshot(*state_);
 }
 
 AudioPerfStats AudioPlaybackRuntime::perfStats() const {
-  return audioGetPerfStats();
+  return audioGetPerfStats(*state_);
 }
 
 bool AudioPlaybackRuntime::startStream(uint64_t totalFrames) {
-  return audioStartStream(gAudio, totalFrames);
+  return audioStartStream(*state_, totalFrames);
 }
 
-void AudioPlaybackRuntime::stopStream() { audioStopStream(gAudio); }
+void AudioPlaybackRuntime::stopStream() { audioStopStream(*state_); }
 
 size_t AudioPlaybackRuntime::streamBufferedFrames() const {
-  return audioStreamBufferedFrames(gAudio);
+  return audioStreamBufferedFrames(*state_);
 }
 
 size_t AudioPlaybackRuntime::streamCapacityFrames() const {
-  return audioStreamCapacityFrames(gAudio);
+  return audioStreamCapacityFrames(*state_);
 }
 
 int64_t AudioPlaybackRuntime::streamOldestPtsUs() const {
-  return audioStreamOldestPtsUs(gAudio);
+  return audioStreamOldestPtsUs(*state_);
 }
 
 bool AudioPlaybackRuntime::writeStreamSamples(
     const float* interleaved, uint64_t frames, int64_t ptsUs, int serial,
     bool allowBlock, uint64_t* writtenFrames) {
-  return audioStreamWriteSamples(gAudio, interleaved, frames, ptsUs, serial,
+  return audioStreamWriteSamples(*state_, interleaved, frames, ptsUs, serial,
                                  allowBlock, writtenFrames);
 }
 
 void AudioPlaybackRuntime::primeStreamClock(int serial,
                                             int64_t targetPtsUs) {
-  audioStreamPrimeClock(gAudio, serial, targetPtsUs);
+  audioStreamPrimeClock(*state_, serial, targetPtsUs);
 }
 
 void AudioPlaybackRuntime::flushStreamSerial(int serial,
                                              int64_t discardUntilUs) {
-  audioStreamFlushSerial(gAudio, serial, discardUntilUs);
+  audioStreamFlushSerial(*state_, serial, discardUntilUs);
 }
 
 void AudioPlaybackRuntime::resetStream(uint64_t framePosition) {
-  audioStreamReset(gAudio, framePosition);
+  audioStreamReset(*state_, framePosition);
 }
 
 AudioStreamReset AudioPlaybackRuntime::lastAppliedStreamReset() const {
-  return audioStreamLastAppliedReset(gAudio);
+  return audioStreamLastAppliedReset(*state_);
 }
 
 void AudioPlaybackRuntime::setStreamEnd(bool atEnd) {
-  audioStreamSetEnd(gAudio, atEnd);
+  audioStreamSetEnd(*state_, atEnd);
 }
 
 int AudioPlaybackRuntime::streamSerial() const {
-  return audioStreamSerial(gAudio);
+  return audioStreamSerial(*state_);
 }
 
 int64_t AudioPlaybackRuntime::streamClockUs(int64_t nowUs) const {
-  return audioStreamClockUs(gAudio, nowUs);
+  return audioStreamClockUs(*state_, nowUs);
 }
 
 int64_t AudioPlaybackRuntime::streamClockLastUpdatedUs() const {
-  return audioStreamClockLastUpdatedUs(gAudio);
+  return audioStreamClockLastUpdatedUs(*state_);
 }
 
 bool AudioPlaybackRuntime::streamClockReady() const {
-  return audioStreamClockReady(gAudio);
+  return audioStreamClockReady(*state_);
 }
 
 bool AudioPlaybackRuntime::streamStarved() const {
-  return audioStreamStarved(gAudio);
+  return audioStreamStarved(*state_);
 }
 
 uint64_t AudioPlaybackRuntime::streamUpdateCounter() const {
-  return audioStreamUpdateCounter(gAudio);
+  return audioStreamUpdateCounter(*state_);
 }
 
 uint64_t AudioPlaybackRuntime::waitForStreamUpdate(uint64_t lastCounter,
                                                    int timeoutMs) const {
-  return audioStreamWaitForUpdate(gAudio, lastCounter, timeoutMs);
+  return audioStreamWaitForUpdate(*state_, lastCounter, timeoutMs);
 }
 
-void AudioPlaybackRuntime::setHold(bool hold) { audioSetHold(hold); }
+void AudioPlaybackRuntime::setHold(bool hold) { audioSetHold(*state_, hold); }
 
-void AudioPlaybackRuntime::play() { audioPlay(); }
+void AudioPlaybackRuntime::play() { audioPlay(*state_); }
 
-void AudioPlaybackRuntime::pause() { audioPause(); }
+void AudioPlaybackRuntime::pause() { audioPause(*state_); }
 
-void AudioPlaybackRuntime::togglePause() { audioTogglePause(); }
+void AudioPlaybackRuntime::togglePause() { audioTogglePause(*state_); }
 
-void AudioPlaybackRuntime::seekBy(int direction) { audioSeekBy(direction); }
+void AudioPlaybackRuntime::seekBy(int direction) {
+  audioSeekBy(*state_, direction);
+}
 
 void AudioPlaybackRuntime::seekToRatio(double ratio) {
-  audioSeekToRatio(ratio);
+  audioSeekToRatio(*state_, ratio);
 }
 
-void AudioPlaybackRuntime::cycleRadioFilter() { audioCycleRadioFilter(); }
+void AudioPlaybackRuntime::cycleRadioFilter() {
+  audioCycleRadioFilter(*state_);
+}
 
-void AudioPlaybackRuntime::toggle50Hz() { audioToggle50Hz(gAudio); }
+void AudioPlaybackRuntime::toggle50Hz() { audioToggle50Hz(*state_); }
 
 void AudioPlaybackRuntime::adjustVolume(float delta) {
-  audioAdjustVolume(delta);
+  audioAdjustVolume(*state_, delta);
 }
 
 RadioFilterMode AudioPlaybackRuntime::radioFilterMode() const {
-  return audioGetRadioFilterMode();
+  return audioGetRadioFilterMode(*state_);
 }
 
 bool AudioPlaybackRuntime::radioEnabled() const {
-  return audioIsRadioEnabled();
+  return audioIsRadioEnabled(*state_);
 }
 
 bool AudioPlaybackRuntime::supports50HzToggle() const {
-  return audioSupports50HzToggle(gAudio);
+  return audioSupports50HzToggle(*state_);
 }
 
-std::string AudioPlaybackRuntime::warning() const { return audioGetWarning(); }
+std::string AudioPlaybackRuntime::warning() const {
+  return audioGetWarning(*state_);
+}
 
 AudioMelodyInfo AudioPlaybackRuntime::melodyInfo() const {
-  return audioGetMelodyInfo();
+  return audioGetMelodyInfo(*state_);
 }
 
 AudioMelodyAnalysisState AudioPlaybackRuntime::melodyAnalysisState() const {
@@ -485,7 +536,7 @@ bool AudioPlaybackRuntime::analyzeFileToMelodyFile(
     const std::filesystem::path& outputFile,
     const std::function<void(float)>& progressCallback,
     std::string* error) const {
-  return audioAnalyzeFileToMelodyFile(file, trackIndex, outputFile,
+  return audioAnalyzeFileToMelodyFile(*state_, file, trackIndex, outputFile,
                                       progressCallback, error);
 }
 
@@ -495,343 +546,335 @@ bool AudioPlaybackRuntime::canAnalyzeFile(
 }
 
 KssPlaybackOptions AudioPlaybackRuntime::kssOptions() const {
-  return audioGetKssOptionState(gAudio);
+  return audioGetKssOptionState(*state_);
 }
 
 bool AudioPlaybackRuntime::kssInstrumentAuditionState(
     KssInstrumentDevice* device, uint32_t* hash) const {
-  return audioGetKssInstrumentAuditionState(gAudio, device, hash);
+  return audioGetKssInstrumentAuditionState(*state_, device, hash);
 }
 
 bool AudioPlaybackRuntime::startKssInstrumentAudition(
     const KssInstrumentProfile& profile) {
-  return audioStartKssInstrumentAudition(gAudio, profile);
+  return audioStartKssInstrumentAudition(*state_, profile);
 }
 
 bool AudioPlaybackRuntime::stopKssInstrumentAudition() {
-  return audioStopKssInstrumentAudition(gAudio);
+  return audioStopKssInstrumentAudition(*state_);
 }
 
 bool AudioPlaybackRuntime::adjustKssOption(KssOptionId id, int direction) {
-  return audioAdjustKssOption(gAudio, id, direction);
+  return audioAdjustKssOption(*state_, id, direction);
 }
 
 NsfPlaybackOptions AudioPlaybackRuntime::nsfOptions() const {
-  return audioGetNsfOptionState(gAudio);
+  return audioGetNsfOptionState(*state_);
 }
 
 bool AudioPlaybackRuntime::adjustNsfOption(NsfOptionId id, int direction) {
-  return audioAdjustNsfOption(gAudio, id, direction);
+  return audioAdjustNsfOption(*state_, id, direction);
 }
 
 VgmPlaybackOptions AudioPlaybackRuntime::vgmOptions() const {
-  return audioGetVgmOptionState(gAudio);
+  return audioGetVgmOptionState(*state_);
 }
 
 bool AudioPlaybackRuntime::adjustVgmOption(VgmOptionId id, int direction) {
-  return audioAdjustVgmOption(gAudio, id, direction);
+  return audioAdjustVgmOption(*state_, id, direction);
 }
 
 bool AudioPlaybackRuntime::vgmDeviceOptions(uint32_t deviceId,
                                             VgmDeviceOptions* out) const {
-  return audioGetVgmDeviceOptions(gAudio, deviceId, out);
+  return audioGetVgmDeviceOptions(*state_, deviceId, out);
 }
 
 bool AudioPlaybackRuntime::adjustVgmDeviceOption(
     const VgmDeviceInfo& device, const VgmDeviceOptions& baseline,
     VgmDeviceOptionId id, int direction) {
-  return audioAdjustVgmDeviceOption(gAudio, device, baseline, id, direction);
+  return audioAdjustVgmDeviceOption(*state_, device, baseline, id, direction);
 }
 
-bool audioIsEnabled() { return gAudio.enableAudio; }
-
-bool audioIsReady() { return gAudio.decoderReady; }
-
-bool audioStartFile(const std::filesystem::path& file, int trackIndex) {
-  return loadFileAt(gAudio, file, 0, trackIndex);
+static bool audioIsEnabled(const AudioPlaybackState& audio) {
+  return audio.enableAudio;
 }
 
-bool audioStartFileAt(const std::filesystem::path& file, double startSec,
-                      int trackIndex) {
-  if (!std::isfinite(startSec) || startSec <= 0.0) {
-    return loadFileAt(gAudio, file, 0, trackIndex);
-  }
-  double framesDouble = startSec * static_cast<double>(gAudio.sampleRate);
-  int64_t startFrame = static_cast<int64_t>(std::llround(framesDouble));
-  if (startFrame < 0) startFrame = 0;
-  return loadFileAt(gAudio, file, static_cast<uint64_t>(startFrame),
-                    trackIndex);
+static bool audioIsReady(const AudioPlaybackState& audio) {
+  return audio.decoderReady;
 }
 
-void audioStop() {
-  gAudio.audition.resumeValid = false;
-  stopPlayback(gAudio);
+static bool audioStartFile(AudioPlaybackState& audio,
+                           const std::filesystem::path& file,
+                           int trackIndex) {
+  return loadFileAt(audio, file, 0, trackIndex);
 }
 
-static void requestAudioSeekFrame(int64_t target) {
+static void audioStop(AudioPlaybackState& audio) {
+  audio.audition.resumeValid = false;
+  stopPlayback(audio);
+}
+
+static void requestAudioSeekFrame(AudioPlaybackState& audio, int64_t target) {
   if (target < 0) target = 0;
-  const uint64_t total = gAudio.state.totalFrames.load();
+  const uint64_t total = audio.state.totalFrames.load();
   if (total > 0 && target > static_cast<int64_t>(total)) {
     target = static_cast<int64_t>(total);
   }
-  gAudio.state.pendingSeekFrames.store(target);
-  gAudio.state.seekRequested.store(true, std::memory_order_release);
-  gAudio.state.seekPresentation.request();
-  gAudio.state.finished.store(false);
-  gAudio.state.sourceAtEnd.store(false, std::memory_order_relaxed);
-  gAudio.state.processedAtEnd.store(false, std::memory_order_relaxed);
-  gAudio.state.audioPrimed.store(false);
-  audioPipelineTransitionRequestDiscontinuity(gAudio.state.pipelineTransition,
-                                              gAudio.state.sampleRate);
-  gAudio.state.audioQueueCv.notify_all();
-  gAudio.state.radioDspCv.notify_all();
+  audio.state.pendingSeekFrames.store(target);
+  audio.state.seekRequested.store(true, std::memory_order_release);
+  audio.state.seekPresentation.request();
+  audio.state.finished.store(false);
+  audio.state.sourceAtEnd.store(false, std::memory_order_relaxed);
+  audio.state.processedAtEnd.store(false, std::memory_order_relaxed);
+  audio.state.audioPrimed.store(false);
+  audioPipelineTransitionRequestDiscontinuity(audio.state.pipelineTransition,
+                                              audio.state.sampleRate);
+  audio.state.audioQueueCv.notify_all();
+  audio.state.radioDspCv.notify_all();
 }
 
-std::optional<AudioPlaybackSource> audioGetPlaybackSource() {
-  if (gAudio.nowPlaying.empty()) return std::nullopt;
+static std::optional<AudioPlaybackSource> audioGetPlaybackSource(
+    const AudioPlaybackState& audio) {
+  if (audio.nowPlaying.empty()) return std::nullopt;
 
   AudioPlaybackSource source;
-  source.file = gAudio.nowPlaying;
-  const AudioBackendHandlers* backend = gAudio.state.backend;
-  if (gAudio.decoderReady && backend && backend->supportsTrackIndex) {
-    source.trackIndex = gAudio.trackIndex;
+  source.file = audio.nowPlaying;
+  const AudioBackendHandlers* backend = audio.state.backend;
+  if (audio.decoderReady && backend && backend->supportsTrackIndex) {
+    source.trackIndex = audio.trackIndex;
   }
   return source;
 }
 
-AudioPlaybackSnapshot audioGetPlaybackSnapshot() {
+static AudioPlaybackSnapshot audioGetPlaybackSnapshot(
+    AudioPlaybackState& audio) {
   AudioPlaybackSnapshot snapshot;
-  snapshot.source = audioGetPlaybackSource();
-  snapshot.ready = audioIsReady();
-  snapshot.seeking = audioIsSeeking();
-  snapshot.paused = audioIsPaused();
-  snapshot.finished = audioIsFinished();
-  snapshot.streamClockReady = audioStreamClockReady(gAudio);
-  snapshot.streamStarved = audioStreamStarved(gAudio);
-  snapshot.holding = audioIsHolding();
-  snapshot.radioEnabled = audioIsRadioEnabled();
-  snapshot.hz50Enabled = audioIs50HzEnabled(gAudio);
-  snapshot.supports50HzToggle = audioSupports50HzToggle(gAudio);
-  snapshot.positionSec = snapshot.ready ? audioGetTimeSec() : 0.0;
-  snapshot.durationSec = snapshot.ready ? audioGetTotalSec() : -1.0;
+  snapshot.source = audioGetPlaybackSource(audio);
+  snapshot.ready = audioIsReady(audio);
+  snapshot.seeking = audioIsSeeking(audio);
+  snapshot.paused = audioIsPaused(audio);
+  snapshot.finished = audioIsFinished(audio);
+  snapshot.streamClockReady = audioStreamClockReady(audio);
+  snapshot.streamStarved = audioStreamStarved(audio);
+  snapshot.holding = audioIsHolding(audio);
+  snapshot.radioEnabled = audioIsRadioEnabled(audio);
+  snapshot.hz50Enabled = audioIs50HzEnabled(audio);
+  snapshot.supports50HzToggle = audioSupports50HzToggle(audio);
+  snapshot.positionSec = snapshot.ready ? audioGetTimeSec(audio) : 0.0;
+  snapshot.durationSec = snapshot.ready ? audioGetTotalSec(audio) : -1.0;
   snapshot.seekTargetSec =
-      snapshot.seeking ? audioGetSeekTargetSec() : -1.0;
-  snapshot.volume = audioGetVolume();
-  snapshot.unclippedOutputPeak = audioGetUnclippedOutputPeak();
-  snapshot.radioFilterLabel = audioGetRadioFilterLabel();
+      snapshot.seeking ? audioGetSeekTargetSec(audio) : -1.0;
+  snapshot.volume = audioGetVolume(audio);
+  snapshot.unclippedOutputPeak = audioGetUnclippedOutputPeak(audio);
+  snapshot.radioFilterLabel = audioGetRadioFilterLabel(audio);
   return snapshot;
 }
 
-double audioGetTimeSec() {
-  if (!gAudio.decoderReady) {
+static double audioGetTimeSec(AudioPlaybackState& audio) {
+  if (!audio.decoderReady) {
     return 0.0;
   }
-  if (!gAudio.state.audioPrimed.load()) {
+  if (!audio.state.audioPrimed.load()) {
     return 0.0;
   }
-  int64_t frames = static_cast<int64_t>(gAudio.state.audioClockFrames.load());
-  uint64_t latencyFrames = audioPlaybackDeviceLatencyFrames(gAudio);
+  int64_t frames = static_cast<int64_t>(audio.state.audioClockFrames.load());
+  uint64_t latencyFrames = audioPlaybackDeviceLatencyFrames(audio);
   frames -= static_cast<int64_t>(latencyFrames);
   if (frames < 0) {
     frames = 0;
   }
-  double timeSec = static_cast<double>(frames) / gAudio.sampleRate;
-  uint64_t totalFrames = gAudio.state.totalFrames.load();
+  double timeSec = static_cast<double>(frames) / audio.sampleRate;
+  uint64_t totalFrames = audio.state.totalFrames.load();
   if (totalFrames > 0) {
-    double totalSec = static_cast<double>(totalFrames) / gAudio.sampleRate;
-    if (gAudio.state.finished.load() || timeSec > totalSec) {
+    double totalSec = static_cast<double>(totalFrames) / audio.sampleRate;
+    if (audio.state.finished.load() || timeSec > totalSec) {
       timeSec = totalSec;
     }
   }
   return timeSec;
 }
 
-double audioGetTotalSec() {
-  if (!gAudio.decoderReady) {
+static double audioGetTotalSec(const AudioPlaybackState& audio) {
+  if (!audio.decoderReady) {
     return -1.0;
   }
-  uint64_t total = gAudio.state.totalFrames.load();
+  uint64_t total = audio.state.totalFrames.load();
   if (total == 0) return -1.0;
-  return static_cast<double>(total) / gAudio.sampleRate;
+  return static_cast<double>(total) / audio.sampleRate;
 }
 
-bool audioIsSeeking() {
-  if (!gAudio.decoderReady) {
+static bool audioIsSeeking(const AudioPlaybackState& audio) {
+  if (!audio.decoderReady) {
     return false;
   }
-  return gAudio.state.seekRequested.load(std::memory_order_acquire) ||
-         gAudio.state.seekPresentation.pending();
+  return audio.state.seekRequested.load(std::memory_order_acquire) ||
+         audio.state.seekPresentation.pending();
 }
 
-double audioGetSeekTargetSec() {
-  if (!gAudio.decoderReady) {
+static double audioGetSeekTargetSec(const AudioPlaybackState& audio) {
+  if (!audio.decoderReady) {
     return -1.0;
   }
-  uint64_t total = gAudio.state.totalFrames.load();
+  uint64_t total = audio.state.totalFrames.load();
   if (total == 0) return -1.0;
-  int64_t target = gAudio.state.pendingSeekFrames.load();
+  int64_t target = audio.state.pendingSeekFrames.load();
   if (target < 0) target = 0;
   if (static_cast<uint64_t>(target) > total) {
     target = static_cast<int64_t>(total);
   }
-  return static_cast<double>(target) / gAudio.sampleRate;
+  return static_cast<double>(target) / audio.sampleRate;
 }
 
-bool audioIsPaused() {
-  if (!gAudio.decoderReady) return false;
-  return gAudio.state.paused.load();
+static bool audioIsPaused(const AudioPlaybackState& audio) {
+  if (!audio.decoderReady) return false;
+  return audio.state.paused.load();
 }
 
-bool audioIsFinished() {
-  if (!gAudio.decoderReady) return false;
-  return gAudio.state.finished.load();
+static bool audioIsFinished(const AudioPlaybackState& audio) {
+  if (!audio.decoderReady) return false;
+  return audio.state.finished.load();
 }
 
-bool audioIsRadioEnabled() {
-  return radioFilterModeEnabled(gAudio.state.radioFilter.mode());
+static bool audioIsRadioEnabled(const AudioPlaybackState& audio) {
+  return radioFilterModeEnabled(audio.state.radioFilter.mode());
 }
 
-RadioFilterMode audioGetRadioFilterMode() {
-  return gAudio.state.radioFilter.mode();
+static RadioFilterMode audioGetRadioFilterMode(
+    const AudioPlaybackState& audio) {
+  return audio.state.radioFilter.mode();
 }
 
-std::string_view audioGetRadioFilterLabel() {
-  return radioFilterModeLabel(audioGetRadioFilterMode());
+static std::string_view audioGetRadioFilterLabel(
+    const AudioPlaybackState& audio) {
+  return radioFilterModeLabel(audioGetRadioFilterMode(audio));
 }
 
-bool audioIsHolding() { return gAudio.state.hold.load(); }
+static bool audioIsHolding(const AudioPlaybackState& audio) {
+  return audio.state.hold.load();
+}
 
-AudioPerfStats audioGetPerfStats() {
+static AudioPerfStats audioGetPerfStats(AudioPlaybackState& audio) {
   AudioPerfStats stats{};
-  if (!gAudio.decoderReady) {
+  if (!audio.decoderReady) {
     return stats;
   }
-  stats.callbacks = gAudio.state.callbackCount.load(std::memory_order_relaxed);
+  stats.callbacks = audio.state.callbackCount.load(std::memory_order_relaxed);
   stats.framesRequested =
-      gAudio.state.framesRequested.load(std::memory_order_relaxed);
-  stats.framesRead = gAudio.state.framesReadTotal.load(std::memory_order_relaxed);
-  stats.shortReads = gAudio.state.shortReadCount.load(std::memory_order_relaxed);
-  stats.silentFrames = gAudio.state.silentFrames.load(std::memory_order_relaxed);
+      audio.state.framesRequested.load(std::memory_order_relaxed);
+  stats.framesRead = audio.state.framesReadTotal.load(std::memory_order_relaxed);
+  stats.shortReads = audio.state.shortReadCount.load(std::memory_order_relaxed);
+  stats.silentFrames = audio.state.silentFrames.load(std::memory_order_relaxed);
   stats.lastCallbackFrames =
-      gAudio.state.lastCallbackFrames.load(std::memory_order_relaxed);
+      audio.state.lastCallbackFrames.load(std::memory_order_relaxed);
   stats.lastFramesRead =
-      gAudio.state.lastFramesRead.load(std::memory_order_relaxed);
-  stats.sampleRate = gAudio.state.sampleRate;
-  stats.channels = gAudio.state.channels;
-  const AudioMode mode = currentAudioMode(gAudio);
+      audio.state.lastFramesRead.load(std::memory_order_relaxed);
+  stats.sampleRate = audio.state.sampleRate;
+  stats.channels = audio.state.channels;
+  const AudioMode mode = currentAudioMode(audio);
   stats.usingFfmpeg = mode == AudioMode::M4a || mode == AudioMode::Ffmpeg;
-  audioPlaybackDeviceFillPerfStats(gAudio, &stats);
+  audioPlaybackDeviceFillPerfStats(audio, &stats);
   return stats;
 }
 
-void audioPause() {
-  if (!gAudio.decoderReady) return;
-  if (gAudio.state.finished.load(std::memory_order_relaxed)) return;
-  gAudio.state.paused.store(true, std::memory_order_relaxed);
+static void audioPause(AudioPlaybackState& audio) {
+  if (!audio.decoderReady) return;
+  if (audio.state.finished.load(std::memory_order_relaxed)) return;
+  audio.state.paused.store(true, std::memory_order_relaxed);
 }
 
-void audioPlay() {
-  if (!gAudio.decoderReady) return;
+static void audioPlay(AudioPlaybackState& audio) {
+  if (!audio.decoderReady) return;
   const bool wasPaused =
-      gAudio.state.paused.load(std::memory_order_relaxed);
+      audio.state.paused.load(std::memory_order_relaxed);
   const bool wasFinished =
-      gAudio.state.finished.load(std::memory_order_relaxed);
+      audio.state.finished.load(std::memory_order_relaxed);
   if (!wasPaused && !wasFinished) return;
 
   // The device owner recreates only when Windows reported a stopped, rerouted,
   // interrupted, or otherwise invalid endpoint.
-  if (!audioPlaybackDeviceEnsureRunning(gAudio)) {
-    gAudio.lastInitError = "Failed to restore audio output device.";
+  if (!audioPlaybackDeviceEnsureRunning(audio)) {
+    audio.lastInitError = "Failed to restore audio output device.";
     return;
   }
 
-  gAudio.lastInitError.clear();
-  gAudio.state.paused.store(false, std::memory_order_relaxed);
+  audio.lastInitError.clear();
+  audio.state.paused.store(false, std::memory_order_relaxed);
   const bool externalStream =
-      gAudio.state.externalStream.load(std::memory_order_relaxed);
+      audio.state.externalStream.load(std::memory_order_relaxed);
   if (wasFinished && !externalStream) {
-    requestAudioSeekFrame(0);
+    requestAudioSeekFrame(audio, 0);
     return;
   }
 
-  gAudio.state.finished.store(false, std::memory_order_relaxed);
-  gAudio.state.sourceAtEnd.store(false, std::memory_order_relaxed);
+  audio.state.finished.store(false, std::memory_order_relaxed);
+  audio.state.sourceAtEnd.store(false, std::memory_order_relaxed);
   if (externalStream) {
-    gAudio.state.streamClockReady.store(false, std::memory_order_relaxed);
-    gAudio.state.streamStarved.store(false, std::memory_order_relaxed);
-    gAudio.state.audioClock.reset(
-        gAudio.state.streamSerial.load(std::memory_order_relaxed));
+    audio.state.streamClockReady.store(false, std::memory_order_relaxed);
+    audio.state.streamStarved.store(false, std::memory_order_relaxed);
+    audio.state.audioClock.reset(
+        audio.state.streamSerial.load(std::memory_order_relaxed));
   }
-  audioPipelineTransitionRequestOutputFadeIn(gAudio.state.pipelineTransition,
-                                             gAudio.state.sampleRate);
+  audioPipelineTransitionRequestOutputFadeIn(audio.state.pipelineTransition,
+                                             audio.state.sampleRate);
 }
 
-void audioTogglePause() {
-  if (!gAudio.decoderReady) return;
-  if (gAudio.state.paused.load(std::memory_order_relaxed) ||
-      gAudio.state.finished.load(std::memory_order_relaxed)) {
-    audioPlay();
+static void audioTogglePause(AudioPlaybackState& audio) {
+  if (!audio.decoderReady) return;
+  if (audio.state.paused.load(std::memory_order_relaxed) ||
+      audio.state.finished.load(std::memory_order_relaxed)) {
+    audioPlay(audio);
   } else {
-    audioPause();
+    audioPause(audio);
   }
 }
 
-void audioSeekBy(int direction) {
-  if (!gAudio.decoderReady) return;
-  int64_t deltaFrames = static_cast<int64_t>(direction) * 5 * gAudio.sampleRate;
-  int64_t current = static_cast<int64_t>(gAudio.state.audioClockFrames.load());
-  if (gAudio.state.seekRequested.load()) {
-    current = gAudio.state.pendingSeekFrames.load();
+static void audioSeekBy(AudioPlaybackState& audio, int direction) {
+  if (!audio.decoderReady) return;
+  int64_t deltaFrames = static_cast<int64_t>(direction) * 5 * audio.sampleRate;
+  int64_t current = static_cast<int64_t>(audio.state.audioClockFrames.load());
+  if (audio.state.seekRequested.load()) {
+    current = audio.state.pendingSeekFrames.load();
   }
-  requestAudioSeekFrame(current + deltaFrames);
+  requestAudioSeekFrame(audio, current + deltaFrames);
 }
 
-void audioSeekToRatio(double ratio) {
-  if (!gAudio.decoderReady) return;
-  uint64_t total = gAudio.state.totalFrames.load();
+static void audioSeekToRatio(AudioPlaybackState& audio, double ratio) {
+  if (!audio.decoderReady) return;
+  uint64_t total = audio.state.totalFrames.load();
   if (total == 0) return;
   ratio = std::clamp(ratio, 0.0, 1.0);
   int64_t target = static_cast<int64_t>(ratio * static_cast<double>(total));
-  requestAudioSeekFrame(target);
+  requestAudioSeekFrame(audio, target);
 }
 
-void audioSeekToSec(double sec) {
-  if (!gAudio.decoderReady) return;
-  if (!std::isfinite(sec)) return;
-  int64_t target =
-      static_cast<int64_t>(std::llround(sec * gAudio.sampleRate));
-  requestAudioSeekFrame(target);
+static void audioCycleRadioFilter(AudioPlaybackState& audio) {
+  audio.state.radioFilter.cycleMode();
+  audio.state.radioDspCv.notify_all();
 }
 
-void audioCycleRadioFilter() {
-  gAudio.state.radioFilter.cycleMode();
-  gAudio.state.radioDspCv.notify_all();
-}
-
-void audioSetHold(bool hold) {
-  const bool wasHold = gAudio.state.hold.exchange(hold);
+static void audioSetHold(AudioPlaybackState& audio, bool hold) {
+  const bool wasHold = audio.state.hold.exchange(hold);
   if (wasHold && !hold) {
-    audioPipelineTransitionRequestOutputFadeIn(gAudio.state.pipelineTransition,
-                                               gAudio.state.sampleRate);
+    audioPipelineTransitionRequestOutputFadeIn(audio.state.pipelineTransition,
+                                               audio.state.sampleRate);
   }
 }
 
-void audioAdjustVolume(float delta) {
-  float current = gAudio.state.volume.load(std::memory_order_relaxed);
+static void audioAdjustVolume(AudioPlaybackState& audio, float delta) {
+  float current = audio.state.volume.load(std::memory_order_relaxed);
   float next = std::clamp(current + delta, 0.0f, 4.0f);
-  gAudio.state.volume.store(next, std::memory_order_relaxed);
+  audio.state.volume.store(next, std::memory_order_relaxed);
 }
 
-float audioGetVolume() {
-  return gAudio.state.volume.load(std::memory_order_relaxed);
+static float audioGetVolume(const AudioPlaybackState& audio) {
+  return audio.state.volume.load(std::memory_order_relaxed);
 }
 
-float audioGetUnclippedOutputPeak() {
-  return gAudio.state.unclippedOutputPeak.load(std::memory_order_relaxed);
+static float audioGetUnclippedOutputPeak(const AudioPlaybackState& audio) {
+  return audio.state.unclippedOutputPeak.load(std::memory_order_relaxed);
 }
 
-AudioMelodyInfo audioGetMelodyInfo() {
-  if (!gAudio.decoderReady) {
+static AudioMelodyInfo audioGetMelodyInfo(AudioPlaybackState& audio) {
+  if (!audio.decoderReady) {
     return AudioMelodyInfo{};
   }
   MelodyOfflineAnalysisState analysisState = melodyOfflineGetState();
@@ -839,7 +882,7 @@ AudioMelodyInfo audioGetMelodyInfo() {
     return {};
   }
   const MelodyOfflineFrame frame =
-      melodyOfflineGetFrame(audioGetTimeSec());
+      melodyOfflineGetFrame(audioGetTimeSec(audio));
   AudioMelodyInfo info{};
   info.frequencyHz = frame.frequencyHz;
   info.confidence = std::clamp(frame.confidence, 0.0f, 1.0f);
@@ -852,7 +895,7 @@ AudioMelodyInfo audioGetMelodyInfo() {
   return info;
 }
 
-AudioMelodyAnalysisState audioGetMelodyAnalysisState() {
+static AudioMelodyAnalysisState audioGetMelodyAnalysisState() {
   const MelodyOfflineAnalysisState state = melodyOfflineGetState();
   AudioMelodyAnalysisState result;
   result.ready = state.ready;
@@ -863,30 +906,30 @@ AudioMelodyAnalysisState audioGetMelodyAnalysisState() {
   return result;
 }
 
-bool audioAnalyzeFileToMelodyFile(const std::filesystem::path& file,
-                                  int trackIndex,
-                                  const std::filesystem::path& outputFile,
-                                  const std::function<void(float)>& progressCallback,
-                                  std::string* error) {
+static bool audioAnalyzeFileToMelodyFile(
+    const AudioPlaybackState& audio, const std::filesystem::path& file,
+    int trackIndex, const std::filesystem::path& outputFile,
+    const std::function<void(float)>& progressCallback, std::string* error) {
   if (file.empty() || !std::filesystem::exists(file)) {
     if (error) *error = "Input file not found.";
     return false;
   }
-  uint32_t analysisSampleRate = std::max<uint32_t>(1u, gAudio.sampleRate);
+  uint32_t analysisSampleRate = std::max<uint32_t>(1u, audio.sampleRate);
   uint32_t analysisChannels =
-      std::clamp<uint32_t>(std::max<uint32_t>(1u, gAudio.baseChannels), 1u, 2u);
+      std::clamp<uint32_t>(std::max<uint32_t>(1u, audio.baseChannels), 1u, 2u);
   return melodyOfflineAnalyzeToFile(
       file, trackIndex, analysisSampleRate, analysisChannels, 0,
-      gAudio.kssOptions, gAudio.nsfOptions, gAudio.vgmOptions,
-      gAudio.vgmDeviceOverrides, outputFile, progressCallback, error);
+      audio.kssOptions, audio.nsfOptions, audio.vgmOptions,
+      audio.vgmDeviceOverrides, outputFile, progressCallback, error);
 }
 
-bool audioCanAnalyzeFileToMelodyFile(const std::filesystem::path& file) {
+static bool audioCanAnalyzeFileToMelodyFile(
+    const std::filesystem::path& file) {
   return melodyOfflineCanAnalyzeFile(file);
 }
 
-std::string audioGetWarning() {
-  std::string warning = warningForBackend(gAudio, gAudio.state.backend);
+static std::string audioGetWarning(const AudioPlaybackState& audio) {
+  std::string warning = warningForBackend(audio, audio.state.backend);
   if (!warning.empty()) return warning;
-  return gAudio.lastInitError;
+  return audio.lastInitError;
 }
