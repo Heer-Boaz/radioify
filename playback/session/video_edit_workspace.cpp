@@ -887,6 +887,18 @@ VideoEditPollResult VideoEditWorkspace::poll() {
   return result;
 }
 
+std::vector<NativeWaitHandle> VideoEditWorkspace::waitHandles() const {
+  std::vector<NativeWaitHandle> handles;
+  if (!impl_) return handles;
+  handles.reserve(2);
+  const auto append = [&handles](NativeWaitHandle handle) {
+    if (handle) handles.push_back(handle);
+  };
+  append(impl_->exporter.nativeWaitHandle());
+  append(impl_->sceneAnalysis.nativeWaitHandle());
+  return handles;
+}
+
 bool VideoEditWorkspace::selectCutAt(int64_t timelineUs,
                                      int64_t toleranceUs) {
   if (!impl_ || !impl_->active) return false;

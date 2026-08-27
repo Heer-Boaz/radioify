@@ -1330,7 +1330,7 @@ struct PlaybackLoopRunner::Impl {
 
   std::vector<NativeWaitHandle> activityWaitHandles() const {
     std::vector<NativeWaitHandle> handles;
-    handles.reserve(4);
+    handles.reserve(6);
     const auto append = [&](NativeWaitHandle handle) {
       if (handle) handles.push_back(handle);
     };
@@ -1342,6 +1342,9 @@ struct PlaybackLoopRunner::Impl {
     }
     if (timelinePreviewStarted) {
       append(timelinePreviewProvider.changedWaitHandle());
+    }
+    for (NativeWaitHandle handle : videoEditWorkspace.waitHandles()) {
+      append(handle);
     }
     return handles;
   }

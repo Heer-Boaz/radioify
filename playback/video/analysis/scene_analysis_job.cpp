@@ -17,6 +17,7 @@
 #include <thread>
 #include <utility>
 
+#include "core/waitable_signal.h"
 #include "playback/video/analysis/scene_analyzer.h"
 
 namespace playback_video_analysis {
@@ -26,7 +27,7 @@ struct SceneAnalysisJob::Impl {
       : operation(std::move(analysisOperation)) {}
 
   mutable std::mutex mutex;
-  std::atomic<bool> changed{false};
+  WaitableSignal changed;
   std::thread worker;
   std::atomic<bool> cancelled{false};
   Operation operation;
@@ -53,7 +54,7 @@ struct SceneAnalysisJob::Impl {
         notify = true;
       }
     }
-    if (notify) changed.store(true, std::memory_order_release);
+    if (notify) changed.signal();
   }
 
   void run(JobRequest request) {
@@ -98,7 +99,7 @@ struct SceneAnalysisJob::Impl {
       }
       completion = state;
     }
-    changed.store(true, std::memory_order_release);
+    changed.signal();
   }
 };
 
@@ -139,11 +140,11 @@ bool SceneAnalysisJob::start(JobRequest request) {
       impl_->state.phase = "Segment detection failed";
       impl_->state.error = "Could not start the segment-detection worker.";
       impl_->completion = impl_->state;
-      impl_->changed.store(true, std::memory_order_release);
+      impl_->changed.signal();
       return false;
     }
   }
-  impl_->changed.store(true, std::memory_order_release);
+  impl_->changed.signal();
   return true;
 }
 
@@ -154,7 +155,7 @@ bool SceneAnalysisJob::cancel() {
       impl_->cancelled.exchange(true, std::memory_order_relaxed)) {
     return false;
   }
-  impl_->changed.store(true, std::memory_order_release);
+  impl_->changed.signal();
   return true;
 }
 
@@ -169,7 +170,7 @@ void SceneAnalysisJob::stop() {
       impl_->state.phase = "Segment detection cancelled";
     }
   }
-  impl_->changed.store(false, std::memory_order_release);
+  impl_->changed.clear();
 }
 
 JobSnapshot SceneAnalysisJob::snapshot() const {
@@ -196,8 +197,11 @@ std::optional<JobSnapshot> SceneAnalysisJob::takeCompletion() {
 }
 
 bool SceneAnalysisJob::consumeChanged() {
-  return impl_ &&
-         impl_->changed.exchange(false, std::memory_order_acq_rel);
+  return impl_ && impl_->changed.consume();
+}
+
+NativeWaitHandle SceneAnalysisJob::nativeWaitHandle() const {
+  return impl_ ? impl_->changed.nativeWaitHandle() : NativeWaitHandle{};
 }
 
 }  // namespace playback_video_analysis

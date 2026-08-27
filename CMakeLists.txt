@@ -706,6 +706,7 @@ add_executable(exporter_job_tests)
 target_sources(exporter_job_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_exporter_job_tests>
   ${CMAKE_SOURCE_DIR}/playback/video/edit/export.cpp
+  ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
 )
 radioify_link_repo_target(exporter_job_tests)
 add_test(NAME exporter_job_tests
@@ -1084,6 +1085,7 @@ add_executable(scene_analysis_job_tests)
 target_sources(scene_analysis_job_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_scene_analysis_job_tests>
   ${CMAKE_SOURCE_DIR}/playback/video/analysis/scene_analysis_job.cpp
+  ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
 )
 radioify_link_repo_target(scene_analysis_job_tests)
 add_test(NAME scene_analysis_job_tests

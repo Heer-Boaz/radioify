@@ -1,5 +1,9 @@
 #include "playback/video/edit/export.h"
 
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -17,6 +21,10 @@ bool expect(bool condition, const char* message) {
   if (condition) return true;
   std::cerr << "exporter_job_tests: " << message << '\n';
   return false;
+}
+
+DWORD waitNow(NativeWaitHandle handle) {
+  return WaitForSingleObject(static_cast<HANDLE>(handle.get()), 0);
 }
 
 class ControlledExport {
@@ -115,12 +123,20 @@ int main() {
         return controlled.run(request, cancelled, reportProgress);
       });
 
+  const NativeWaitHandle changeHandle = exporter.nativeWaitHandle();
+  ok &= expect(changeHandle && waitNow(changeHandle) == WAIT_TIMEOUT,
+               "a new export job must expose an unsignaled wake handle");
+
   ok &= expect(!exporter.start({}),
                "an incomplete request must not start an export");
   const edit::ExportRequest firstRequest = requestFor("edited.mp4");
   ok &= expect(exporter.start(firstRequest) &&
                    controlled.waitUntilReported(1),
                "a valid request must start the injected export");
+  ok &= expect(waitNow(changeHandle) == WAIT_OBJECT_0 &&
+                   exporter.consumeChanged() &&
+                   waitNow(changeHandle) == WAIT_TIMEOUT,
+               "starting or progressing an export must wake and reset once");
   const edit::ExportSnapshot running = exporter.snapshot();
   ok &= expect(running.running() && running.progress == 0.4 &&
                    running.destinationPath == firstRequest.destinationPath &&
@@ -138,6 +154,9 @@ int main() {
   controlled.release(1);
   ok &= expect(waitUntilFinished(exporter),
                "the successful export must reach a terminal state");
+  ok &= expect(waitNow(changeHandle) == WAIT_OBJECT_0 &&
+                   exporter.consumeChanged(),
+               "export completion must wake the session loop");
   ok &= expect(!exporter.start(requestFor("other.mp4")),
                "an unconsumed completion must not be overwritten");
   const auto succeeded = exporter.takeCompletion();
@@ -155,8 +174,13 @@ int main() {
   ok &= expect(exporter.start(cancelledRequest) &&
                    controlled.waitUntilReported(2),
                "a consumed completion must permit another export");
+  ok &= expect(exporter.consumeChanged(),
+               "a subsequent export start must publish a change");
   ok &= expect(exporter.cancel() && !exporter.cancel(),
                "export cancellation must be accepted exactly once");
+  ok &= expect(waitNow(changeHandle) == WAIT_OBJECT_0 &&
+                   exporter.consumeChanged(),
+               "export cancellation must wake the session loop");
   controlled.release(2);
   ok &= expect(waitUntilFinished(exporter),
                "the cancelled export must reach a terminal state");

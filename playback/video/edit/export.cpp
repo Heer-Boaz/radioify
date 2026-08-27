@@ -16,6 +16,8 @@
 #include <thread>
 #include <utility>
 
+#include "core/waitable_signal.h"
+
 namespace playback_video_edit {
 namespace {
 
@@ -59,7 +61,7 @@ struct Exporter::Impl {
       : operation(std::move(exportOperation)) {}
 
   mutable std::mutex mutex;
-  std::atomic<bool> changed{false};
+  WaitableSignal changed;
   std::thread worker;
   std::atomic<bool> cancelled{false};
   Operation operation;
@@ -84,7 +86,7 @@ struct Exporter::Impl {
         notify = true;
       }
     }
-    if (notify) changed.store(true, std::memory_order_release);
+    if (notify) changed.signal();
   }
 
   void run(ExportRequest request) {
@@ -122,7 +124,7 @@ struct Exporter::Impl {
       state.error = std::move(completed.error);
       completion = state;
     }
-    changed.store(true, std::memory_order_release);
+    changed.signal();
   }
 };
 
@@ -165,11 +167,11 @@ bool Exporter::start(ExportRequest request) {
       impl_->state.state = ExportState::Failed;
       impl_->state.error = "Could not start the export worker.";
       impl_->completion = impl_->state;
-      impl_->changed.store(true, std::memory_order_release);
+      impl_->changed.signal();
       return false;
     }
   }
-  impl_->changed.store(true, std::memory_order_release);
+  impl_->changed.signal();
   return true;
 }
 
@@ -180,7 +182,7 @@ bool Exporter::cancel() {
       impl_->cancelled.exchange(true, std::memory_order_relaxed)) {
     return false;
   }
-  impl_->changed.store(true, std::memory_order_release);
+  impl_->changed.signal();
   return true;
 }
 
@@ -195,7 +197,7 @@ void Exporter::stop() {
       impl_->state.error.clear();
     }
   }
-  impl_->changed.store(false, std::memory_order_release);
+  impl_->changed.clear();
 }
 
 ExportSnapshot Exporter::snapshot() const {
@@ -223,7 +225,11 @@ std::optional<ExportSnapshot> Exporter::takeCompletion() {
 }
 
 bool Exporter::consumeChanged() {
-  return impl_ && impl_->changed.exchange(false, std::memory_order_acq_rel);
+  return impl_ && impl_->changed.consume();
+}
+
+NativeWaitHandle Exporter::nativeWaitHandle() const {
+  return impl_ ? impl_->changed.nativeWaitHandle() : NativeWaitHandle{};
 }
 
 }  // namespace playback_video_edit

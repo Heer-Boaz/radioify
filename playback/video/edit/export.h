@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 
+#include "core/native_wait_handle.h"
 #include "playback/video/edit/decision_list.h"
 
 namespace playback_video_edit {
@@ -84,6 +85,7 @@ class Exporter {
   ExportSnapshot snapshot() const;
   std::optional<ExportSnapshot> takeCompletion();
   bool consumeChanged();
+  NativeWaitHandle nativeWaitHandle() const;
 
  private:
   struct Impl;

@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "core/native_wait_handle.h"
 #include "playback/video/analysis/scene_analysis.h"
 
 namespace playback_video_analysis {
@@ -72,6 +73,7 @@ class SceneAnalysisJob {
   JobSnapshot snapshot() const;
   std::optional<JobSnapshot> takeCompletion();
   bool consumeChanged();
+  NativeWaitHandle nativeWaitHandle() const;
 
  private:
   struct Impl;

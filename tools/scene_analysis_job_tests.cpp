@@ -1,6 +1,10 @@
 #include "playback/video/analysis/scene_analysis_job.h"
 #include "playback/video/analysis/scene_analyzer.h"
 
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -19,6 +23,10 @@ bool expect(bool condition, const char* message) {
   if (condition) return true;
   std::cerr << "scene_analysis_job_tests: " << message << '\n';
   return false;
+}
+
+DWORD waitNow(NativeWaitHandle handle) {
+  return WaitForSingleObject(static_cast<HANDLE>(handle.get()), 0);
 }
 
 class ControlledAnalysis {
@@ -119,6 +127,10 @@ int main() {
                               error);
       });
 
+  const NativeWaitHandle changeHandle = job.nativeWaitHandle();
+  ok &= expect(changeHandle && waitNow(changeHandle) == WAIT_TIMEOUT,
+               "a new analysis job must expose an unsignaled wake handle");
+
   analysis::JobRequest request;
   request.sourcePath = "clip.mp4";
   request.durationUs = 60'000'000;
@@ -127,6 +139,10 @@ int main() {
                "an incomplete request must not start analysis");
   ok &= expect(job.start(request) && controlled.waitUntilReported(1),
                "a valid request must start the injected analysis");
+  ok &= expect(waitNow(changeHandle) == WAIT_OBJECT_0 &&
+                   job.consumeChanged() &&
+                   waitNow(changeHandle) == WAIT_TIMEOUT,
+               "starting or progressing analysis must wake and reset once");
   const analysis::JobSnapshot running = job.snapshot();
   ok &= expect(running.running() && running.progress == 0.4 &&
                    running.phase == "Sampling video",
@@ -142,6 +158,8 @@ int main() {
   controlled.release(1);
   ok &= expect(waitUntilFinished(job),
                "the successful analysis must reach a terminal state");
+  ok &= expect(waitNow(changeHandle) == WAIT_OBJECT_0 && job.consumeChanged(),
+               "analysis completion must wake the session loop");
   ok &= expect(!job.start(request),
                "an unconsumed completion must not be overwritten");
   const auto succeeded = job.takeCompletion();
@@ -158,8 +176,12 @@ int main() {
   request.forceReanalysis = true;
   ok &= expect(job.start(request) && controlled.waitUntilReported(2),
                "a consumed completion must permit reanalysis");
+  ok &= expect(job.consumeChanged(),
+               "a subsequent analysis start must publish a change");
   ok &= expect(job.cancel() && !job.cancel(),
                "analysis cancellation must be accepted exactly once");
+  ok &= expect(waitNow(changeHandle) == WAIT_OBJECT_0 && job.consumeChanged(),
+               "analysis cancellation must wake the session loop");
   controlled.release(2);
   ok &= expect(waitUntilFinished(job),
                "cancelled analysis must reach a terminal state");
