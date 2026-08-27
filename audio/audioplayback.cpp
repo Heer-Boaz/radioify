@@ -187,7 +187,7 @@ bool loadFileAt(AudioPlaybackState& audio, const std::filesystem::path& file,
   if (!validateSupportedAudioInputFile(file, &audio.lastInitError)) {
     return false;
   }
-  melodyOfflineStop();
+  audio.melodyAnalysis.stop();
   audio.state.audioLeadSilenceFrames.store(0);
   if (audio.audition.active.load()) {
     stopAuditionWorker(audio);
@@ -266,10 +266,10 @@ bool loadFileAt(AudioPlaybackState& audio, const std::filesystem::path& file,
 
   const uint64_t analysisLeadInFrames = audio.state.audioLeadSilenceFrames.load();
   if (backend->allowConcurrentOfflineAnalysis) {
-    melodyOfflineStart(file, trackIndex, audio.sampleRate, audio.channels,
-                      analysisLeadInFrames, audio.kssOptions,
-                      audio.nsfOptions, audio.vgmOptions,
-                      audio.vgmDeviceOverrides);
+    audio.melodyAnalysis.start(
+        file, trackIndex, audio.sampleRate, audio.channels,
+        analysisLeadInFrames, audio.kssOptions, audio.nsfOptions,
+        audio.vgmOptions, audio.vgmDeviceOverrides);
   }
 
   audio.nowPlaying = file;
@@ -304,7 +304,7 @@ void stopPlayback(AudioPlaybackState& audio) {
   audio.state.streamStarved.store(false);
   audio.state.processedAtEnd.store(false);
   audio.state.audioClock.reset(0);
-  melodyOfflineStop();
+  audio.melodyAnalysis.stop();
   audio.nowPlaying.clear();
   audio.trackIndex = 0;
   audio.lastInitError.clear();
@@ -346,7 +346,8 @@ static void audioAdjustVolume(AudioPlaybackState& audio, float delta);
 static float audioGetVolume(const AudioPlaybackState& audio);
 static float audioGetUnclippedOutputPeak(const AudioPlaybackState& audio);
 static AudioMelodyInfo audioGetMelodyInfo(AudioPlaybackState& audio);
-static AudioMelodyAnalysisState audioGetMelodyAnalysisState();
+static AudioMelodyAnalysisState audioGetMelodyAnalysisState(
+    const AudioPlaybackState& audio);
 static bool audioAnalyzeFileToMelodyFile(
     const AudioPlaybackState& audio, const std::filesystem::path& file,
     int trackIndex, const std::filesystem::path& outputFile,
@@ -529,7 +530,7 @@ AudioMelodyInfo AudioPlaybackRuntime::melodyInfo() const {
 }
 
 AudioMelodyAnalysisState AudioPlaybackRuntime::melodyAnalysisState() const {
-  return audioGetMelodyAnalysisState();
+  return audioGetMelodyAnalysisState(*state_);
 }
 
 bool AudioPlaybackRuntime::analyzeFileToMelodyFile(
@@ -880,12 +881,12 @@ static AudioMelodyInfo audioGetMelodyInfo(AudioPlaybackState& audio) {
   if (!audio.decoderReady) {
     return AudioMelodyInfo{};
   }
-  MelodyOfflineAnalysisState analysisState = melodyOfflineGetState();
+  MelodyOfflineAnalysisState analysisState = audio.melodyAnalysis.state();
   if (!analysisState.running && !analysisState.ready) {
     return {};
   }
   const MelodyOfflineFrame frame =
-      melodyOfflineGetFrame(audioGetTimeSec(audio));
+      audio.melodyAnalysis.frameAt(audioGetTimeSec(audio));
   AudioMelodyInfo info{};
   info.frequencyHz = frame.frequencyHz;
   info.confidence = std::clamp(frame.confidence, 0.0f, 1.0f);
@@ -898,8 +899,9 @@ static AudioMelodyInfo audioGetMelodyInfo(AudioPlaybackState& audio) {
   return info;
 }
 
-static AudioMelodyAnalysisState audioGetMelodyAnalysisState() {
-  const MelodyOfflineAnalysisState state = melodyOfflineGetState();
+static AudioMelodyAnalysisState audioGetMelodyAnalysisState(
+    const AudioPlaybackState& audio) {
+  const MelodyOfflineAnalysisState state = audio.melodyAnalysis.state();
   AudioMelodyAnalysisState result;
   result.ready = state.ready;
   result.running = state.running;

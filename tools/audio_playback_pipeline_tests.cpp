@@ -1,3 +1,4 @@
+#include "audio/analysis/melodyanalysiscache.h"
 #include "audio/pipeline_transition.h"
 #include "audio/playback_source_priming.h"
 #include "audio/radio_filter_mode.h"
@@ -12,9 +13,14 @@
 #include <cstdlib>
 #include <iostream>
 #include <iterator>
+#include <type_traits>
 #include <vector>
 
 namespace {
+
+static_assert(!std::is_copy_constructible_v<MelodyOfflineCache> &&
+                  !std::is_move_constructible_v<MelodyOfflineCache>,
+              "playback melody analysis must remain a session-owned worker");
 
 void fail(const char* message) {
   std::cerr << message << '\n';

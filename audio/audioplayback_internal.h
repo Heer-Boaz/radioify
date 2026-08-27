@@ -20,6 +20,7 @@
 #include "kssaudio.h"
 #include "kssoptions.h"
 #include "midiaudio.h"
+#include "melodyanalysiscache.h"
 #include "miniaudio.h"
 #include "nsfoptions.h"
 #include "pipeline_transition.h"
@@ -138,6 +139,7 @@ struct AudioPlaybackState {
   VgmPlaybackOptions vgmOptions{};
   std::unordered_map<uint32_t, VgmDeviceOptions> vgmDeviceOverrides;
   AuditionState audition{};
+  MelodyOfflineCache melodyAnalysis;
 };
 
 void appendAudioTimingLogLine(const char* line);

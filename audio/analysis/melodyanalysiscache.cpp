@@ -600,7 +600,7 @@ class DecoderContext {
   PsfAudioDecoder psf_;
 };
 
-struct MelodyOfflineCache {
+struct MelodyOfflineCacheStorage {
   std::mutex mutex;
   std::vector<MelodyAnalysisPoint> frames;
   bool ready = false;
@@ -614,9 +614,8 @@ struct MelodyOfflineCache {
   std::atomic<bool> stopRequested{false};
 };
 
-MelodyOfflineCache gCache;
-
-void setCacheState(MelodyOfflineCache* cache, const MelodyOfflineJob& job) {
+void setCacheState(MelodyOfflineCacheStorage* cache,
+                   const MelodyOfflineJob& job) {
   if (!cache) return;
   std::lock_guard<std::mutex> lock(cache->mutex);
   cache->frames.clear();
@@ -630,18 +629,19 @@ void setCacheState(MelodyOfflineCache* cache, const MelodyOfflineJob& job) {
   cache->leadInFrames = job.leadInFrames;
 }
 
-void stopWorker() {
-  gCache.stopRequested.store(true, std::memory_order_release);
-  if (gCache.worker.joinable()) {
-    gCache.worker.join();
+void stopWorker(MelodyOfflineCacheStorage* cache) {
+  if (!cache) return;
+  cache->stopRequested.store(true, std::memory_order_release);
+  if (cache->worker.joinable()) {
+    cache->worker.join();
   }
-  std::lock_guard<std::mutex> lock(gCache.mutex);
-  gCache.running = false;
-  gCache.ready = false;
-  gCache.progress = 0.0f;
-  gCache.frameCount = 0;
-  gCache.frames.clear();
-  gCache.error.clear();
+  std::lock_guard<std::mutex> lock(cache->mutex);
+  cache->running = false;
+  cache->ready = false;
+  cache->progress = 0.0f;
+  cache->frameCount = 0;
+  cache->frames.clear();
+  cache->error.clear();
 }
 
 std::array<float, kOfflineStateCount> buildEmissionForPoint(
@@ -655,14 +655,14 @@ std::array<float, kOfflineStateCount> buildEmissionForPoint(
   return emission;
 }
 
-void updateProgressLocked(MelodyOfflineCache* cache, size_t frameCount,
+void updateProgressLocked(MelodyOfflineCacheStorage* cache, size_t frameCount,
                          float progress) {
   if (!cache) return;
   cache->frameCount = frameCount;
   cache->progress = progress;
 }
 
-void storePoint(MelodyOfflineCache* cache, uint64_t frame,
+void storePoint(MelodyOfflineCacheStorage* cache, uint64_t frame,
                 const MelodyOfflineFrame& data) {
   if (!cache) return;
   std::lock_guard<std::mutex> lock(cache->mutex);
@@ -909,7 +909,8 @@ bool writeMidiFramesToFile(const std::filesystem::path& outputFile,
   return true;
 }
 
-void analyzeTrackForCache(MelodyOfflineCache* cache, MelodyOfflineJob job,
+void analyzeTrackForCache(MelodyOfflineCacheStorage* cache,
+                          MelodyOfflineJob job,
                           const std::function<void(float)>& progressCallback,
                           const std::function<bool()>& cancellationRequested) {
   if (!cache) return;
@@ -1119,19 +1120,21 @@ void analyzeTrackForCache(MelodyOfflineCache* cache, MelodyOfflineJob job,
   }
 }
 
-void analyzeTrack(MelodyOfflineJob job) {
-  analyzeTrackForCache(&gCache, std::move(job), {}, {});
-}
 }  // namespace
 
-void melodyOfflineStart(const std::filesystem::path& file, int trackIndex,
-                       uint32_t sourceSampleRate, uint32_t channels,
-                       uint64_t leadInFrames,
-                       const KssPlaybackOptions& kssOptions,
-                       const NsfPlaybackOptions& nsfOptions,
-                       const VgmPlaybackOptions& vgmOptions,
-                       const std::unordered_map<uint32_t, VgmDeviceOptions>&
-                           vgmDeviceOverrides) {
+struct MelodyOfflineCache::Impl : MelodyOfflineCacheStorage {};
+
+MelodyOfflineCache::MelodyOfflineCache() : impl_(std::make_unique<Impl>()) {}
+
+MelodyOfflineCache::~MelodyOfflineCache() { stop(); }
+
+void MelodyOfflineCache::start(
+    const std::filesystem::path& file, int trackIndex,
+    uint32_t sourceSampleRate, uint32_t channels, uint64_t leadInFrames,
+    const KssPlaybackOptions& kssOptions,
+    const NsfPlaybackOptions& nsfOptions,
+    const VgmPlaybackOptions& vgmOptions,
+    const std::unordered_map<uint32_t, VgmDeviceOptions>& vgmDeviceOverrides) {
   if (file.empty() || !std::filesystem::exists(file)) {
     return;
   }
@@ -1139,7 +1142,7 @@ void melodyOfflineStart(const std::filesystem::path& file, int trackIndex,
     return;
   }
 
-  stopWorker();
+  stop();
 
   MelodyOfflineJob job;
   job.file = file;
@@ -1152,39 +1155,40 @@ void melodyOfflineStart(const std::filesystem::path& file, int trackIndex,
   job.vgmOptions = vgmOptions;
   job.vgmDeviceOverrides = vgmDeviceOverrides;
 
-  setCacheState(&gCache, job);
+  setCacheState(impl_.get(), job);
 
-  gCache.worker = std::thread([job = std::move(job)]() { analyzeTrack(std::move(job)); });
+  Impl* const cache = impl_.get();
+  cache->worker = std::thread([cache, job = std::move(job)]() mutable {
+    analyzeTrackForCache(cache, std::move(job), {}, {});
+  });
 }
 
-void melodyOfflineStop() {
-  stopWorker();
-}
+void MelodyOfflineCache::stop() { stopWorker(impl_.get()); }
 
-MelodyOfflineFrame melodyOfflineGetFrame(double timeSec) {
+MelodyOfflineFrame MelodyOfflineCache::frameAt(double timeSec) const {
   if (!std::isfinite(timeSec) || timeSec < 0.0) {
     return {};
   }
 
-  std::lock_guard<std::mutex> lock(gCache.mutex);
-  if (gCache.frames.empty() || gCache.sourceSampleRate == 0) {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  if (impl_->frames.empty() || impl_->sourceSampleRate == 0) {
     return {};
   }
 
   double safeTime = std::max(0.0, timeSec);
   uint64_t targetFrame = static_cast<uint64_t>(
-      std::llround(safeTime * static_cast<double>(gCache.sourceSampleRate)));
+      std::llround(safeTime * static_cast<double>(impl_->sourceSampleRate)));
 
   auto it = std::lower_bound(
-      gCache.frames.begin(), gCache.frames.end(), targetFrame,
+      impl_->frames.begin(), impl_->frames.end(), targetFrame,
       [](const MelodyAnalysisPoint& lhs, uint64_t rhs) {
         return lhs.frame < rhs;
       });
 
-  if (it == gCache.frames.end()) {
-    return gCache.frames.back().frameData;
+  if (it == impl_->frames.end()) {
+    return impl_->frames.back().frameData;
   }
-  if (it == gCache.frames.begin()) {
+  if (it == impl_->frames.begin()) {
     return it->frameData;
   }
   if (it->frame != targetFrame) {
@@ -1193,14 +1197,14 @@ MelodyOfflineFrame melodyOfflineGetFrame(double timeSec) {
   return it->frameData;
 }
 
-MelodyOfflineAnalysisState melodyOfflineGetState() {
-  std::lock_guard<std::mutex> lock(gCache.mutex);
+MelodyOfflineAnalysisState MelodyOfflineCache::state() const {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
   MelodyOfflineAnalysisState state;
-  state.ready = gCache.ready;
-  state.running = gCache.running;
-  state.progress = gCache.progress;
-  state.frameCount = gCache.frameCount;
-  state.error = gCache.error;
+  state.ready = impl_->ready;
+  state.running = impl_->running;
+  state.progress = impl_->progress;
+  state.frameCount = impl_->frameCount;
+  state.error = impl_->error;
   return state;
 }
 
@@ -1243,7 +1247,7 @@ bool melodyOfflineAnalyzeToFile(
   job.vgmOptions = vgmOptions;
   job.vgmDeviceOverrides = vgmDeviceOverrides;
 
-  MelodyOfflineCache localCache;
+  MelodyOfflineCacheStorage localCache;
   localCache.stopRequested.store(false, std::memory_order_release);
   analyzeTrackForCache(&localCache, std::move(job), progressCallback,
                        cancellationRequested);

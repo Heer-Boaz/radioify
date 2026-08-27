@@ -13,7 +13,6 @@ extern "C" {
 #include <mutex>
 
 #include "audioplayback.h"
-#include "melodyanalysiscache.h"
 #include "pipeline_transition.h"
 #include "playback_device.h"
 #include "playback_source_priming.h"
@@ -21,7 +20,7 @@ extern "C" {
 #include "runtime_helpers.h"
 
 bool audioStartStream(AudioPlaybackState& audio, uint64_t totalFrames) {
-  melodyOfflineStop();
+  audio.melodyAnalysis.stop();
   audio.lastInitError.clear();
   audio.gmeWarning.clear();
   audio.gsfWarning.clear();
