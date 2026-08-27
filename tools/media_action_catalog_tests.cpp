@@ -46,27 +46,28 @@ class FakeMediaProcessingService final
 
   bool requestSubtitles(
       const std::filesystem::path& sourceFile) override {
-    subtitleRequested = sourceFile == "source.mp4";
+    subtitleRequested = acceptRequests && sourceFile == "source.mp4";
     return subtitleRequested;
   }
 
   bool requestSubtitleCancellation() override {
-    subtitleCancelled = true;
-    return true;
+    subtitleCancelled = acceptRequests;
+    return subtitleCancelled;
   }
 
   bool requestAudioSeparation(
       const std::filesystem::path& sourceFile) override {
-    separationRequested = sourceFile == "source.mp4";
+    separationRequested = acceptRequests && sourceFile == "source.mp4";
     return separationRequested;
   }
 
   bool requestAudioSeparationCancellation() override {
-    separationCancelled = true;
-    return true;
+    separationCancelled = acceptRequests;
+    return separationCancelled;
   }
 
   playback_media_processing::SourceState state;
+  bool acceptRequests = true;
   bool subtitleRequested = false;
   bool subtitleCancelled = false;
   bool separationRequested = false;
@@ -245,7 +246,9 @@ int main() {
           processingService.separationCancelled &&
           !surfaceAction,
       "browser and player must share processing dispatch and feedback");
-  playback_media_processing::Actions unavailable;
+  FakeMediaProcessingService rejectingService;
+  rejectingService.acceptRequests = false;
+  playback_media_processing::Actions unavailable(rejectingService);
   const std::optional<playback_media_processing::ActionResult>
       rejectedGeneration =
       unavailable.execute(actions::Action::GenerateSubtitles, "source.mp4");
@@ -259,7 +262,7 @@ int main() {
                    rejectedCancellation && !rejectedCancellation->accepted &&
                    rejectedCancellation->feedback ==
                        "Could not cancel audio separation",
-               "missing application services must fail closed");
+               "a rejecting application service must surface failure");
 
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

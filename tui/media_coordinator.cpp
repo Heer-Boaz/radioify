@@ -536,7 +536,8 @@ struct TuiMediaCoordinator::Impl {
       return MediaCommandResult::applied();
     }
 
-    PlaybackSession::Request sessionRequest;
+    PlaybackSession::Request sessionRequest(
+        services_.mediaProcessingActions);
     sessionRequest.file = targetFile;
     sessionRequest.config = sessionConfig(services_.videoConfig,
                                           continuationState_);
@@ -545,7 +546,6 @@ struct TuiMediaCoordinator::Impl {
     sessionRequest.capabilities.transportHandoff = true;
     sessionRequest.capabilities.openFilesHandoff = true;
     sessionRequest.capabilities.browserSurfaceActivation = true;
-    sessionRequest.mediaProcessingActions = services_.mediaProcessingActions;
     videoSession_.emplace(std::move(sessionRequest),
                           services_.sessionDependencies);
 

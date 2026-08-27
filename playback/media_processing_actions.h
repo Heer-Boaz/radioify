@@ -14,12 +14,11 @@ struct ActionResult {
   std::string feedback;
 };
 
-// Small nullable facade copied into playback sessions. The bound service is
-// borrowed and must outlive every Actions copy.
+// Required command facade copied into playback surfaces. The application
+// service is the long-lived owner and must outlive the surfaces it creates.
 class Actions {
  public:
-  Actions() = default;
-  explicit Actions(Service& service) : service_(&service) {}
+  explicit Actions(Service& service) : service_(service) {}
 
   std::optional<ActionResult> execute(
       playback_media_actions::Action action,
@@ -28,7 +27,7 @@ class Actions {
                         playback_media_actions::Context& context) const;
 
  private:
-  Service* service_ = nullptr;
+  Service& service_;
 };
 
 }  // namespace playback_media_processing

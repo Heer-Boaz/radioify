@@ -16,21 +16,21 @@ std::optional<ActionResult> Actions::execute(
     const std::filesystem::path& sourceFile) const {
   switch (action) {
     case playback_media_actions::Action::GenerateSubtitles:
-      return actionResult(service_ && service_->requestSubtitles(sourceFile),
+      return actionResult(service_.requestSubtitles(sourceFile),
                           "Generating subtitles (F8 to cancel)",
                           "Could not start subtitle generation");
     case playback_media_actions::Action::CancelSubtitleGeneration:
-      return actionResult(service_ && service_->requestSubtitleCancellation(),
+      return actionResult(service_.requestSubtitleCancellation(),
                           "Cancelling subtitle generation",
                           "Could not cancel subtitle generation");
     case playback_media_actions::Action::SeparateAudio:
       return actionResult(
-          service_ && service_->requestAudioSeparation(sourceFile),
+          service_.requestAudioSeparation(sourceFile),
           "Separating audio (F8 to cancel)",
           "Could not start audio separation");
     case playback_media_actions::Action::CancelAudioSeparation:
       return actionResult(
-          service_ && service_->requestAudioSeparationCancellation(),
+          service_.requestAudioSeparationCancellation(),
           "Cancelling audio separation",
           "Could not cancel audio separation");
     case playback_media_actions::Action::Play:
@@ -46,8 +46,7 @@ std::optional<ActionResult> Actions::execute(
 void Actions::applySourceState(
     const std::filesystem::path& sourceFile,
     playback_media_actions::Context& context) const {
-  const SourceState state =
-      service_ ? service_->sourceStateFor(sourceFile) : SourceState{};
+  const SourceState state = service_.sourceStateFor(sourceFile);
   context.backgroundTaskRunning = state.backgroundTaskRunning;
   context.subtitleGenerationRunningForSource =
       state.subtitleGenerationRunning;

@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "core/native_wait_handle.h"
@@ -52,6 +53,10 @@ class PlaybackSession {
 
   // Session-owned activation data; it remains valid across pump() calls.
   struct Request {
+    explicit Request(
+        playback_media_processing::Actions mediaProcessingActions)
+        : mediaProcessingActions(std::move(mediaProcessingActions)) {}
+
     std::filesystem::path file;
     VideoPlaybackConfig config;
     PlaybackSessionContinuationState continuityState;
