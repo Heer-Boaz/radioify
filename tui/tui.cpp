@@ -45,6 +45,7 @@
 #include "browser_media_menu_renderer.h"
 #include "browser_playback_reveal.h"
 #include "browser_playback_source.h"
+#include "browser_thumbnail_cache.h"
 #include "browser_content_service.h"
 #include "browser_navigation.h"
 #include "browser_model.h"
@@ -389,6 +390,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       {audioPlayback, sampleRate, o.mono ? 1u : 2u});
   BrowserNavigator browserNavigator(browser, browserContentService);
   BrowserSelectionMetadata browserSelectionMetadata(isVideoExt);
+  BrowserThumbnailCache browserThumbnails;
   const bool initialBrowserPreparationAccepted =
       browserNavigator.initialize(browserDirectoryLocation(startDir),
                                   initialName);
@@ -1372,7 +1374,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     processShellPlaybackCommands();
     if (!running) break;
 
-    if (consumeBrowserThumbnailWake()) {
+    if (browserThumbnails.consumeReady()) {
       markDirty(UiDirtyFlags::Async);
     }
 
@@ -1404,7 +1406,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       const std::vector<NativeWaitHandle> activityHandles =
           mediaWaitHandles();
       waitForBrowserWake(
-          input, openFileRequests, browserThumbnailWakeHandle(),
+          input, openFileRequests, browserThumbnails.waitHandle(),
           browserContentService.nativeWaitHandle(),
           browserSelectionMetadata.nativeWaitHandle(),
           notificationAreaControls.nativeWaitHandle(), tuiWindow,
@@ -1692,12 +1694,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       const std::vector<NativeWaitHandle> activityHandles =
           mediaWaitHandles();
       DWORD waitResult = waitForBrowserWake(
-          input, openFileRequests, browserThumbnailWakeHandle(),
+          input, openFileRequests, browserThumbnails.waitHandle(),
           browserContentService.nativeWaitHandle(),
           browserSelectionMetadata.nativeWaitHandle(),
           notificationAreaControls.nativeWaitHandle(), tuiWindow,
           audioPictureInPicture, activityHandles, wakeDeadline);
-      if (consumeBrowserThumbnailWake()) {
+      if (browserThumbnails.consumeReady()) {
         markDirty(UiDirtyFlags::Async);
       } else if (waitResult == WAIT_TIMEOUT) {
         markDirty();
@@ -1850,7 +1852,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
                 ? findBrowserPlaybackTargetEntry(browser.entries,
                                                  *nowPlayingTarget)
                 : -1;
-        drawBrowserEntries(screen, browser, layout, listTop, listHeight,
+        drawBrowserEntries(screen, browserThumbnails, browser, layout, listTop,
+                           listHeight,
                            theme.normal, theme.normal, theme.directory,
                            theme.highlight, theme.browserHover, theme.dim,
                            theme.accent,

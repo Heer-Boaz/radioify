@@ -201,10 +201,13 @@ struct GridLayout {
   std::vector<std::string> names;
 };
 
+class BrowserThumbnailCache;
+
 void sortBrowserEntries(BrowserState& state);
 
 GridLayout buildLayout(const BrowserState& state, int width, int listHeight);
 void drawBrowserEntries(ConsoleScreen& screen,
+                        BrowserThumbnailCache& thumbnailCache,
                         const BrowserState& browser,
                         const GridLayout& layout,
                         int listTop,

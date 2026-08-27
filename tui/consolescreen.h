@@ -15,7 +15,6 @@
 #include <vector>
 
 #include "ui/browser_location.h"
-#include "core/native_wait_handle.h"
 #include "style.h"
 #include "terminal_cell_metrics.h"
 
@@ -42,9 +41,6 @@ BreadcrumbLine buildBreadcrumbLine(const BrowserLocation& location, int width);
 int breadcrumbIndexAt(const BreadcrumbLine& line, int x, int y, int lineY);
 bool hitTestBreadcrumb(const BreadcrumbLine& line, int x, int y, int lineY,
                        BrowserLocation* outLocation);
-NativeWaitHandle browserThumbnailWakeHandle();
-bool consumeBrowserThumbnailWake();
-
 class ConsoleScreen {
  public:
   bool init();
