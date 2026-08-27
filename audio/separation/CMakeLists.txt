@@ -1,7 +1,7 @@
 set(_radioify_audio_separation_sources
   ${CMAKE_CURRENT_SOURCE_DIR}/artifact.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/job.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/job_default.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/operation.cpp
 )
 if (RADIOIFY_HAS_AUDIO_SEPARATION)
   list(APPEND _radioify_audio_separation_sources

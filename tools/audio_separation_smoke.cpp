@@ -1,5 +1,6 @@
 #include "audio/separation/artifact.h"
 #include "audio/separation/job.h"
+#include "audio/separation/operation.h"
 
 #include <atomic>
 #include <chrono>
@@ -12,8 +13,8 @@
 #include "runtime_helpers.h"
 
 int main(int argc, char** argv) {
-  if (argc != 2) {
-    std::cerr << "Usage: audio_separation_smoke <media-file>\n";
+  if (argc < 2 || argc > 3) {
+    std::cerr << "Usage: audio_separation_smoke <media-file> [model-file]\n";
     return 2;
   }
   const std::filesystem::path media = pathFromUtf8String(argv[1]);
@@ -23,11 +24,11 @@ int main(int argc, char** argv) {
   int lastPercent = -1;
   const auto started = std::chrono::steady_clock::now();
   std::string error;
-  const audio_separation::Job::Operation operation =
-      audio_separation::Job::productionOperation();
+  const audio_separation::Job::Operation operation = argc == 3
+      ? audio_separation::makeModelOperation(pathFromUtf8String(argv[2]))
+      : audio_separation::makeProductionOperation();
   if (!operation) {
-    std::cerr << "Audio separation failed: production operation is not "
-                 "configured\n";
+    std::cerr << "Audio separation failed: operation is not configured\n";
     return EXIT_FAILURE;
   }
   const bool succeeded = operation(

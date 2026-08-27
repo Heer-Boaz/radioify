@@ -68,25 +68,13 @@ class ScopedTemporaryFile {
   std::filesystem::path path_;
 };
 
-bool resolveModelPath(std::filesystem::path* modelPath,
-                      std::string* error) {
+bool resolveBundledModelPath(std::filesystem::path* modelPath,
+                             std::string* error) {
   if (!modelPath) {
     setError(error, "No audio-separation model destination was provided.");
     return false;
   }
   modelPath->clear();
-  if (const auto configured =
-          getEnvString("RADIOIFY_AUDIO_SEPARATION_MODEL")) {
-    *modelPath = pathFromUtf8String(*configured);
-    std::error_code ec;
-    if (!std::filesystem::is_regular_file(*modelPath, ec) || ec) {
-      setError(error,
-               "RADIOIFY_AUDIO_SEPARATION_MODEL is not a readable model: " +
-                   *configured);
-      return false;
-    }
-    return true;
-  }
   for (const std::filesystem::path& root : radioifyResourceSearchRoots()) {
     const std::array<std::filesystem::path, 3> candidates = {
         root / "models" / "audio_separation" / kDefaultModelName,
@@ -101,10 +89,39 @@ bool resolveModelPath(std::filesystem::path* modelPath,
     }
   }
   setError(error,
-           "Audio-separation model not found. Rebuild Radioify so "
-           "models/audio_separation/bandit-v2-multi-mask-core-fp16.onnx "
-           "is installed, or set RADIOIFY_AUDIO_SEPARATION_MODEL.");
+           "Bundled audio-separation model not found. Reinstall Radioify or "
+           "rebuild it so models/audio_separation/"
+           "bandit-v2-multi-mask-core-fp16.onnx is installed.");
   return false;
+}
+
+bool validateRequest(const std::filesystem::path& mediaPath,
+                     const std::atomic<bool>* cancelRequested,
+                     std::string* error) {
+  if (mediaPath.empty()) {
+    setError(error, "The media path is empty.");
+    return false;
+  }
+  if (cancelled(cancelRequested)) {
+    setError(error, "Audio separation cancelled.");
+    return false;
+  }
+  return true;
+}
+
+bool validateModelPath(const std::filesystem::path& modelPath,
+                       std::string* error) {
+  if (modelPath.empty()) {
+    setError(error, "No audio-separation model was selected.");
+    return false;
+  }
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(modelPath, ec) || ec) {
+    setError(error, "Audio-separation model is not a readable file: " +
+                        toUtf8String(modelPath));
+    return false;
+  }
+  return true;
 }
 
 bool decodeToRawFile(const std::filesystem::path& mediaPath,
@@ -397,26 +414,22 @@ void shiftOverlap(std::array<std::vector<float>, kStemCount>* overlap) {
 
 }  // namespace
 
-bool separateMediaAudio(const std::filesystem::path& mediaPath,
-                        const ArtifactPaths& outputPaths,
-                        const ProgressCallback& onProgress,
-                        const std::atomic<bool>* cancelRequested,
-                        std::string* error) {
-  if (error) error->clear();
-  if (mediaPath.empty()) {
-    setError(error, "The media path is empty.");
-    return false;
-  }
-  if (cancelled(cancelRequested)) {
-    setError(error, "Audio separation cancelled.");
-    return false;
-  }
+namespace {
 
-  std::filesystem::path modelPath;
-  if (!resolveModelPath(&modelPath, error)) return false;
+bool separateMediaAudioUsingModel(
+    const std::filesystem::path& mediaPath,
+    const std::filesystem::path& modelPath,
+    const ArtifactPaths& outputPaths,
+    const ProgressCallback& onProgress,
+    const std::atomic<bool>* cancelRequested,
+    std::string* error) {
   report(onProgress, 0.01f, "Loading DirectML separation model");
   BanditMaskModel model;
-  if (!model.initialize(modelPath, error)) return false;
+  std::string modelError;
+  if (!model.initialize(modelPath, &modelError)) {
+    setError(error, modelError + " Model: " + toUtf8String(modelPath));
+    return false;
+  }
   BanditSpectralTransform spectral;
   if (!spectral.initialize(error)) return false;
   report(onProgress, 0.03f, "DirectML GPU ready");
@@ -522,6 +535,38 @@ bool separateMediaAudio(const std::filesystem::path& mediaPath,
   cleanup.published = true;
   report(onProgress, 1.0f, "Audio stems ready");
   return true;
+}
+
+}  // namespace
+
+bool separateMediaAudioWithModel(
+    const std::filesystem::path& mediaPath,
+    const std::filesystem::path& modelPath,
+    const ArtifactPaths& outputPaths,
+    const ProgressCallback& onProgress,
+    const std::atomic<bool>* cancelRequested,
+    std::string* error) {
+  if (error) error->clear();
+  if (!validateRequest(mediaPath, cancelRequested, error) ||
+      !validateModelPath(modelPath, error)) {
+    return false;
+  }
+  return separateMediaAudioUsingModel(mediaPath, modelPath, outputPaths,
+                                      onProgress, cancelRequested, error);
+}
+
+bool separateMediaAudio(const std::filesystem::path& mediaPath,
+                        const ArtifactPaths& outputPaths,
+                        const ProgressCallback& onProgress,
+                        const std::atomic<bool>* cancelRequested,
+                        std::string* error) {
+  if (error) error->clear();
+  if (!validateRequest(mediaPath, cancelRequested, error)) return false;
+
+  std::filesystem::path modelPath;
+  if (!resolveBundledModelPath(&modelPath, error)) return false;
+  return separateMediaAudioUsingModel(mediaPath, modelPath, outputPaths,
+                                      onProgress, cancelRequested, error);
 }
 
 }  // namespace audio_separation

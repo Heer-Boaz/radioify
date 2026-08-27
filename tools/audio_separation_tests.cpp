@@ -1,6 +1,7 @@
 #include "audio/separation/artifact.h"
 #include "audio/flac_writer.h"
 #include "audio/separation/job.h"
+#include "audio/separation/operation.h"
 #include "audio/separation/spectral_transform.h"
 #include "audio/ffmpegaudio.h"
 
@@ -14,6 +15,7 @@
 #include <numbers>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -196,8 +198,10 @@ bool testFlacWriter(const std::filesystem::path& directory) {
   return ok;
 }
 
-bool testJobLifecycle() {
+bool testJobLifecycle(const std::filesystem::path& directory) {
   namespace separation = audio_separation;
+  static_assert(!std::is_default_constructible_v<separation::Job>,
+                "background jobs must receive their backend explicitly");
   separation::Job unconfigured(separation::Job::Operation{});
   separation::Job job(
       [](const std::filesystem::path&, const separation::ArtifactPaths&,
@@ -208,7 +212,7 @@ bool testJobLifecycle() {
       });
   bool ok = true;
   ok &= expect(!unconfigured.configured() && job.configured() &&
-                   static_cast<bool>(separation::Job::productionOperation()),
+                   static_cast<bool>(separation::makeProductionOperation()),
                "job availability must derive from an actual operation and "
                "the production adapter must be constructible");
   ok &= expect(job.tryStart("clip.mp4"),
@@ -225,6 +229,22 @@ bool testJobLifecycle() {
                "job completion must own and expose the managed stem set");
   ok &= expect(!job.takeCompletion(),
                "a separation completion must be delivered exactly once");
+
+  const std::filesystem::path missingModel =
+      directory / "missing-explicit-model.onnx";
+  const separation::Job::Operation explicitModelOperation =
+      separation::makeModelOperation(missingModel);
+  std::atomic<bool> notCancelled{false};
+  std::string explicitModelError;
+  ok &= expect(
+      explicitModelOperation &&
+          !explicitModelOperation(
+              "clip.mp4", separation::artifactPathsFor("clip.mp4"),
+              [](float, std::string) {}, &notCancelled,
+              &explicitModelError) &&
+          explicitModelError.find("missing-explicit-model.onnx") !=
+              std::string::npos,
+      "diagnostic model selection must be explicit and identify a bad path");
 
   std::atomic<bool> operationStarted{false};
   separation::Job cancellable(
@@ -278,7 +298,7 @@ int main() {
   ok &= testArtifactContract(directory);
   ok &= testSpectralContract();
   ok &= testFlacWriter(directory);
-  ok &= testJobLifecycle();
+  ok &= testJobLifecycle(directory);
 
   std::filesystem::remove_all(directory, ec);
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;

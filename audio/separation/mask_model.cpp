@@ -29,6 +29,19 @@ bool isDimension(std::int64_t actual, std::int64_t expected) {
   return actual <= 0 || actual == expected;
 }
 
+std::string elementTypeName(ONNXTensorElementDataType type) {
+  switch (type) {
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
+      return "float32";
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16:
+      return "float16";
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE:
+      return "float64";
+    default:
+      return "ONNX tensor type " + std::to_string(static_cast<int>(type));
+  }
+}
+
 bool matchesModelContract(Ort::Session& session, std::string* error) {
   if (session.GetInputCount() != 1 || session.GetOutputCount() != 1) {
     setError(error, "The audio-separation model has an unexpected graph interface.");
@@ -43,13 +56,19 @@ bool matchesModelContract(Ort::Session& session, std::string* error) {
     setError(error, "The audio-separation model has unexpected tensor names.");
     return false;
   }
-  const auto inputInfo = session.GetInputTypeInfo(0).GetTensorTypeAndShapeInfo();
-  const auto outputInfo =
-      session.GetOutputTypeInfo(0).GetTensorTypeAndShapeInfo();
-  if (inputInfo.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
-      outputInfo.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-    setError(error,
-             "The audio-separation model must use float32 graph I/O.");
+  // Tensor type-and-shape views are borrowed from their owning TypeInfo.
+  // Keep both owners alive for every metadata read below.
+  const Ort::TypeInfo inputTypeInfo = session.GetInputTypeInfo(0);
+  const Ort::TypeInfo outputTypeInfo = session.GetOutputTypeInfo(0);
+  const auto inputInfo = inputTypeInfo.GetTensorTypeAndShapeInfo();
+  const auto outputInfo = outputTypeInfo.GetTensorTypeAndShapeInfo();
+  const ONNXTensorElementDataType inputType = inputInfo.GetElementType();
+  const ONNXTensorElementDataType outputType = outputInfo.GetElementType();
+  if (inputType != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+      outputType != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+    setError(error, "Graph input is " + elementTypeName(inputType) +
+                        " and output is " + elementTypeName(outputType) +
+                        "; Radioify requires float32 for both.");
     return false;
   }
   const std::vector<std::int64_t> inputShape = inputInfo.GetShape();

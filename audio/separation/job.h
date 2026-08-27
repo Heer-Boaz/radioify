@@ -52,9 +52,6 @@ class Job {
       const std::filesystem::path&, const ArtifactPaths&,
       const ProgressReporter&, const std::atomic<bool>*, std::string*)>;
 
-  // Uses Radioify's DirectML BandIt v2 operation.
-  Job();
-  static Operation productionOperation();
   explicit Job(Operation operation);
   Job(Operation operation, WakeNotifier ownerWake);
   ~Job();

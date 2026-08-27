@@ -3,6 +3,7 @@
 #include "audio/audioplayback.h"
 #include "audio/audio_export.h"
 #include "audio/loopsplit/loopsplit.h"
+#include "audio/separation/operation.h"
 #include "playback/video/transcript/text_export.h"
 
 namespace media_processing {
@@ -45,7 +46,7 @@ Coordinator::Coordinator(AudioPlaybackRuntime& audioPlayback)
             playback_video_transcript::GenerationJob::productionOperation();
 #if RADIOIFY_HAS_AUDIO_SEPARATION
         operations.separateAudio =
-            audio_separation::Job::productionOperation();
+            audio_separation::makeProductionOperation();
 #endif
         return operations;
       }()) {}
