@@ -9,6 +9,7 @@
 
 #include "app/playback_queue.h"
 #include "app/playback_route.h"
+#include "audio/playback_snapshot.h"
 #include "core/native_wait_handle.h"
 #include "core/open_file_requests.h"
 #include "playback/control/command.h"
@@ -26,6 +27,16 @@ struct LoopSplitConfig;
 // owning the playback state machine itself.
 class TuiMediaCoordinator {
  public:
+  // One immutable observation of every playback surface. Consumers retain it
+  // for a complete presentation update instead of mixing timed getters.
+  struct PresentationSnapshot {
+    AudioPlaybackSnapshot audio;
+    std::optional<PlaybackTarget> audioTarget;
+    std::optional<PlaybackTarget> currentTarget;
+    std::optional<PlaybackControlState> control;
+    std::optional<PlaybackPresentationState> videoPresentation;
+  };
+
   struct PumpResult {
     bool changed = false;
     bool layoutChanged = false;
@@ -86,12 +97,9 @@ class TuiMediaCoordinator {
 
   bool videoActive() const;
   PlaybackShellTerminalRole terminalRole() const;
-  std::optional<PlaybackTarget> audioPlaybackTarget() const;
-  std::optional<PlaybackTarget> currentPlaybackTarget() const;
+  PresentationSnapshot presentationSnapshot() const;
   std::vector<NativeWaitHandle> activityWaitHandles() const;
   int nextWakeTimeoutMs() const;
-  std::optional<PlaybackControlState> playbackControlState() const;
-  std::optional<PlaybackPresentationState> videoPresentationState() const;
   bool capturesBrowserInput() const;
 
   bool handleVideoInputEvent(const InputEvent& event);
