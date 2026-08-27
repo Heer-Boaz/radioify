@@ -22,6 +22,9 @@
 
 struct InputEvent;
 struct LoopSplitConfig;
+namespace media_processing {
+class Coordinator;
+}
 
 // Owns media activation, playback-session handoff and image-viewer routing for
 // the TUI. The browser loop submits intent and observes session state without
@@ -56,6 +59,7 @@ class TuiMediaCoordinator {
 
   struct Services {
     playback_queue::Queue& queue;
+    media_processing::Coordinator& mediaProcessing;
     PlaybackSession::Dependencies sessionDependencies;
     const VideoPlaybackConfig& videoConfig;
     OpenFileRequests& openFileRequests;

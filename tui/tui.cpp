@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "app_common.h"
+#include "app/media_processing_coordinator.h"
 #include "app/playback_queue.h"
 #include "app/playback_route.h"
 #include "audio/analysis/melody_artifact_paths.h"
@@ -650,9 +651,10 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       activateWindowsConsoleWindow();
     }
   };
+  media_processing::Coordinator mediaProcessing;
   TuiMediaCoordinator mediaCoordinator(
-      {playbackQueue, mediaSessionDependencies, videoConfig, openFileRequests,
-       std::move(mediaCallbacks)});
+      {playbackQueue, mediaProcessing, mediaSessionDependencies, videoConfig,
+       openFileRequests, std::move(mediaCallbacks)});
   auto cancelActiveMediaTask = [&]() {
     const bool accepted = mediaCoordinator.cancelActiveMediaTask();
     if (accepted) {
