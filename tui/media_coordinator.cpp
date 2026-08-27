@@ -4,6 +4,7 @@
 #include <utility>
 #include <variant>
 
+#include "app/media_processing_coordinator.h"
 #include "audio/audioplayback.h"
 #include "audio/media_formats.h"
 #include "core/path_identity.h"
@@ -201,25 +202,25 @@ struct TuiMediaCoordinator::Impl {
     return videoSession_ && videoSession_->activatePresentation();
   }
 
-  void subtitleGenerationFinishedFor(
-      const std::filesystem::path& sourceFile,
-      const std::filesystem::path& outputFile, bool success,
+  void handleMediaTaskCompletion(
+      const media_processing::TaskCompletion& completion,
       std::string status) {
     if (!videoSession_ || !videoTarget_ ||
-        !samePath(playbackTargetFile(*videoTarget_), sourceFile)) {
+        !samePath(playbackTargetFile(*videoTarget_), completion.sourceFile)) {
       return;
     }
-    videoSession_->subtitleGenerationFinished(outputFile, success,
-                                              std::move(status));
-  }
-
-  void mediaTaskFinishedFor(const std::filesystem::path& sourceFile,
-                            std::string status) {
-    if (!videoSession_ || !videoTarget_ ||
-        !samePath(playbackTargetFile(*videoTarget_), sourceFile)) {
-      return;
+    switch (completion.kind) {
+      case media_processing::TaskKind::SubtitleGeneration:
+        videoSession_->subtitleGenerationFinished(
+            completion.outputFile, completion.succeeded(), std::move(status));
+        return;
+      case media_processing::TaskKind::AudioSeparation:
+        videoSession_->mediaTaskFinished(std::move(status));
+        return;
+      case media_processing::TaskKind::MelodyAnalysis:
+      case media_processing::TaskKind::LoopSplit:
+        return;
     }
-    videoSession_->mediaTaskFinished(std::move(status));
   }
 
   void stopVideo() {
@@ -698,17 +699,10 @@ bool TuiMediaCoordinator::activateVideoPresentation() {
   return impl_->activateVideoPresentation();
 }
 
-void TuiMediaCoordinator::subtitleGenerationFinishedFor(
-    const std::filesystem::path& sourceFile,
-    const std::filesystem::path& outputFile, bool success,
+void TuiMediaCoordinator::handleMediaTaskCompletion(
+    const media_processing::TaskCompletion& completion,
     std::string status) {
-  impl_->subtitleGenerationFinishedFor(sourceFile, outputFile, success,
-                                       std::move(status));
-}
-
-void TuiMediaCoordinator::mediaTaskFinishedFor(
-    const std::filesystem::path& sourceFile, std::string status) {
-  impl_->mediaTaskFinishedFor(sourceFile, std::move(status));
+  impl_->handleMediaTaskCompletion(completion, std::move(status));
 }
 
 void TuiMediaCoordinator::stopVideo() { impl_->stopVideo(); }

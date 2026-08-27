@@ -1495,16 +1495,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     for (const media_processing::TaskCompletion& completion :
          mediaTaskUpdate.completions) {
       const MediaTaskStatusModel status = mediaTaskStatusModel(completion);
-      if (completion.kind ==
-          media_processing::TaskKind::SubtitleGeneration) {
-        mediaCoordinator.subtitleGenerationFinishedFor(
-            completion.sourceFile, completion.outputFile,
-            completion.succeeded(), status.text);
-      } else if (completion.kind ==
-                 media_processing::TaskKind::AudioSeparation) {
-        mediaCoordinator.mediaTaskFinishedFor(completion.sourceFile,
-                                              status.text);
-      }
+      mediaCoordinator.handleMediaTaskCompletion(completion, status.text);
       markLayoutDirty();
     }
     if (mediaTaskUpdate.changed) markDirty(UiDirtyFlags::Async);

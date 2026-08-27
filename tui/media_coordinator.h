@@ -18,6 +18,10 @@
 
 struct InputEvent;
 
+namespace media_processing {
+struct TaskCompletion;
+}
+
 // Owns media activation, playback-session handoff and image-viewer routing for
 // the TUI. The browser loop submits intent and observes session state without
 // owning the playback state machine itself.
@@ -79,12 +83,9 @@ class TuiMediaCoordinator {
   bool toggleFullscreen();
   bool activateVideoPresentation();
 
-  void subtitleGenerationFinishedFor(
-      const std::filesystem::path& sourceFile,
-      const std::filesystem::path& outputFile, bool success,
+  void handleMediaTaskCompletion(
+      const media_processing::TaskCompletion& completion,
       std::string status);
-  void mediaTaskFinishedFor(const std::filesystem::path& sourceFile,
-                            std::string status);
   void stopVideo();
   void requestQuit();
 
