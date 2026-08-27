@@ -392,6 +392,112 @@ void setPlaybackPaused(const PlaybackInputView& view,
       pausedNow ? PlaybackSessionState::Paused : PlaybackSessionState::Active;
 }
 
+namespace {
+
+void dispatchPlaybackInputCommand(
+    const PlaybackInputView& view, PlaybackInputSignals& signals,
+    PlaybackSeekGestureState& seekState, playback_input::Command command) {
+  const auto* action = std::get_if<PlaybackAction>(&command);
+  if (!action) {
+    if (const auto* volume =
+            std::get_if<playback_input::AdjustVolume>(&command)) {
+      audioAdjustVolume(volume->delta);
+    }
+    return;
+  }
+  if (const auto editCommand = videoEditCommandForShortcut(*action)) {
+    signals.commands.dispatch(VideoEditRequest{*editCommand});
+    return;
+  }
+  switch (*action) {
+    case PlaybackAction::Quit:
+      requestPlaybackExit(signals, true);
+      break;
+    case PlaybackAction::Play:
+      setPlaybackPaused(view, signals, seekState, false);
+      break;
+    case PlaybackAction::Pause:
+      setPlaybackPaused(view, signals, seekState, true);
+      break;
+    case PlaybackAction::TogglePause:
+      setPlaybackPaused(view, signals, seekState, pauseRequestedByToggle(view));
+      break;
+    case PlaybackAction::Stop:
+      requestPlaybackExit(signals, false);
+      break;
+    case PlaybackAction::Previous:
+      requestTransport(signals, PlaybackTransportCommand::Previous);
+      break;
+    case PlaybackAction::Next:
+      requestTransport(signals, PlaybackTransportCommand::Next);
+      break;
+    case PlaybackAction::ToggleWindow:
+      toggleRequestedLayout(view, signals);
+      break;
+    case PlaybackAction::TogglePictureInPicture:
+    case PlaybackAction::DismissPictureInPicture:
+      togglePictureInPicture(view, signals);
+      break;
+    case PlaybackAction::ToggleFullscreen:
+      signals.commands.dispatch(CommandAction::ToggleFullscreen);
+      break;
+    case PlaybackAction::ToggleRadio:
+      cycleRadioFilter(view);
+      break;
+    case PlaybackAction::Toggle50Hz:
+      toggle50Hz(view);
+      break;
+    case PlaybackAction::ToggleSubtitles:
+      toggleSubtitles(view);
+      break;
+    case PlaybackAction::ToggleAudioTrack:
+      toggleAudioTrack(view);
+      break;
+    case PlaybackAction::SeekBackward:
+      sendRelativeSeekRequest(view, signals, seekState, -5000000);
+      break;
+    case PlaybackAction::SeekForward:
+      sendRelativeSeekRequest(view, signals, seekState, 5000000);
+      break;
+    case PlaybackAction::PreviousFrame:
+      requestFrameStep(view, signals, seekState,
+                       playback_video_frame_step::Direction::Previous);
+      break;
+    case PlaybackAction::NextFrame:
+      requestFrameStep(view, signals, seekState,
+                       playback_video_frame_step::Direction::Next);
+      break;
+    case PlaybackAction::CopyVideoFrame:
+      signals.commands.dispatch(CommandAction::CopyCurrentVideoFrame);
+      break;
+    case PlaybackAction::VolumeUp:
+      audioAdjustVolume(0.10f);
+      break;
+    case PlaybackAction::VolumeDown:
+      audioAdjustVolume(-0.10f);
+      break;
+    case PlaybackAction::NavigateBackInVideoEditor:
+      signals.commands.dispatch(CommandAction::NavigateBack);
+      break;
+    case PlaybackAction::ExitPlaybackSession:
+      requestPlaybackExit(signals, false);
+      break;
+    case PlaybackAction::DiscardVideoEditsAndExit:
+      signals.commands.dispatch(CommandAction::ConfirmPendingExit);
+      break;
+    case PlaybackAction::CancelVideoEditPrompt:
+      signals.commands.dispatch(CommandAction::NavigateBack);
+      break;
+    case PlaybackAction::ToggleOptions:
+    case PlaybackAction::TogglePitchMonitor:
+    case PlaybackAction::CloseViewer:
+    default:
+      break;
+  }
+}
+
+}  // namespace
+
 void handlePlaybackInputEvent(const PlaybackInputView& view,
                               PlaybackInputSignals& signals,
                               PlaybackSeekGestureState& seekState,
@@ -422,108 +528,6 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
       return;
     }
   }
-  InputCallbacks cb;
-  cb.dispatchPlaybackCommand = [&](playback_input::Command command) {
-    const auto* action = std::get_if<PlaybackAction>(&command);
-    if (!action) {
-      if (const auto* volume = std::get_if<playback_input::AdjustVolume>(
-              &command)) {
-        audioAdjustVolume(volume->delta);
-      }
-      return;
-    }
-    if (const auto command = videoEditCommandForShortcut(*action)) {
-      signals.commands.dispatch(VideoEditRequest{*command});
-      return;
-    }
-    switch (*action) {
-      case PlaybackAction::Quit:
-        requestPlaybackExit(signals, true);
-        break;
-      case PlaybackAction::Play:
-        setPlaybackPaused(view, signals, seekState, false);
-        break;
-      case PlaybackAction::Pause:
-        setPlaybackPaused(view, signals, seekState, true);
-        break;
-      case PlaybackAction::TogglePause:
-        setPlaybackPaused(view, signals, seekState,
-                          pauseRequestedByToggle(view));
-        break;
-      case PlaybackAction::Stop:
-        requestPlaybackExit(signals, false);
-        break;
-      case PlaybackAction::Previous:
-        requestTransport(signals, PlaybackTransportCommand::Previous);
-        break;
-      case PlaybackAction::Next:
-        requestTransport(signals, PlaybackTransportCommand::Next);
-        break;
-      case PlaybackAction::ToggleWindow:
-        toggleRequestedLayout(view, signals);
-        break;
-      case PlaybackAction::TogglePictureInPicture:
-      case PlaybackAction::DismissPictureInPicture:
-        togglePictureInPicture(view, signals);
-        break;
-      case PlaybackAction::ToggleFullscreen:
-        signals.commands.dispatch(CommandAction::ToggleFullscreen);
-        break;
-      case PlaybackAction::ToggleRadio:
-        cycleRadioFilter(view);
-        break;
-      case PlaybackAction::Toggle50Hz:
-        toggle50Hz(view);
-        break;
-      case PlaybackAction::ToggleSubtitles:
-        toggleSubtitles(view);
-        break;
-      case PlaybackAction::ToggleAudioTrack:
-        toggleAudioTrack(view);
-        break;
-      case PlaybackAction::SeekBackward:
-        sendRelativeSeekRequest(view, signals, seekState, -5000000);
-        break;
-      case PlaybackAction::SeekForward:
-        sendRelativeSeekRequest(view, signals, seekState, 5000000);
-        break;
-      case PlaybackAction::PreviousFrame:
-        requestFrameStep(view, signals, seekState,
-                         playback_video_frame_step::Direction::Previous);
-        break;
-      case PlaybackAction::NextFrame:
-        requestFrameStep(view, signals, seekState,
-                         playback_video_frame_step::Direction::Next);
-        break;
-      case PlaybackAction::CopyVideoFrame:
-        signals.commands.dispatch(CommandAction::CopyCurrentVideoFrame);
-        break;
-      case PlaybackAction::VolumeUp:
-        audioAdjustVolume(0.10f);
-        break;
-      case PlaybackAction::VolumeDown:
-        audioAdjustVolume(-0.10f);
-        break;
-      case PlaybackAction::NavigateBackInVideoEditor:
-        signals.commands.dispatch(CommandAction::NavigateBack);
-        break;
-      case PlaybackAction::ExitPlaybackSession:
-        requestPlaybackExit(signals, false);
-        break;
-      case PlaybackAction::DiscardVideoEditsAndExit:
-        signals.commands.dispatch(CommandAction::ConfirmPendingExit);
-        break;
-      case PlaybackAction::CancelVideoEditPrompt:
-        signals.commands.dispatch(CommandAction::NavigateBack);
-        break;
-      case PlaybackAction::ToggleOptions:
-      case PlaybackAction::TogglePitchMonitor:
-      case PlaybackAction::CloseViewer:
-      default:
-        break;
-    }
-  };
-
   const playback_video_edit::Prompt editPrompt =
       signals.commands.videoEditPrompt();
   uint32_t shortcutContexts = 0;
@@ -545,8 +549,12 @@ void handlePlaybackInputEvent(const PlaybackInputView& view,
       shortcutContexts |= kPlaybackShortcutContextPictureInPicture;
     }
   }
-  const PlaybackInputResult playbackResult =
-      handlePlaybackInput(ev, cb, shortcutContexts);
+  std::optional<PlaybackInputMatch> match =
+      matchPlaybackInput(ev, shortcutContexts);
+  if (!match) return;
+  const PlaybackInputResult playbackResult = match->result;
+  dispatchPlaybackInputCommand(view, signals, seekState,
+                               std::move(match->command));
   if (playbackResult == PlaybackInputResult::Handled) {
     if (signals.loopStopRequested) {
       return;
