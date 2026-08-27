@@ -168,16 +168,14 @@ BrowserContentPreparation BrowserContentPreparation::failed(
   return {std::move(error)};
 }
 
-bool BrowserNavigator::prepare(
-    const BrowserLocation& target, const std::string& initialName,
-    const std::string& filter, int selected,
-    CommitPrepared commitPrepared) {
+bool BrowserNavigator::prepare(PendingCommit pending,
+                               const std::string& initialName) {
   BrowserContentRequest request;
-  request.location = target;
+  request.location = pending.target;
   request.previousContent = browser_.content;
   request.initialName = initialName;
-  request.filter = filter;
-  request.selected = selected;
+  request.filter = pending.resetSearch ? std::string{} : browser_.filter;
+  request.selected = pending.resetSearch ? 0 : browser_.selected;
   request.sortMode = browser_.sortMode;
   request.sortDescending = browser_.sortDescending;
 
@@ -186,7 +184,7 @@ bool BrowserNavigator::prepare(
     preparationService_.cancelThrough(preparationId);
   }
   pendingPreparationId_ = preparationId;
-  pendingCommit_ = std::move(commitPrepared);
+  pendingCommit_ = std::move(pending);
   browser_.contentError.clear();
 
   BrowserContentPreparation preparation;
@@ -196,12 +194,12 @@ bool BrowserNavigator::prepare(
     return completePreparation(
         preparationId,
         BrowserPreparationError{BrowserPreparationErrorKind::Internal,
-                                target, error.what()});
+                                request.location, error.what()});
   } catch (...) {
     return completePreparation(
         preparationId,
         BrowserPreparationError{BrowserPreparationErrorKind::Internal,
-                                target,
+                                request.location,
                                 "Unexpected browser preparation failure."});
   }
 
@@ -239,28 +237,101 @@ void BrowserNavigator::commit(const BrowserLocation& target,
   browser_.contentError.clear();
 }
 
+void BrowserNavigator::applyCommitEffect(CommitEffect effect) {
+  std::visit(
+      [this](auto&& typedEffect) {
+        using Effect = std::decay_t<decltype(typedEffect)>;
+        if constexpr (std::is_same_v<Effect, NoCommitEffect>) {
+          return;
+        } else if constexpr (std::is_same_v<Effect, BeginContextEffect>) {
+          BrowserState::NavigationContext context;
+          context.kind = typedEffect.target.kind();
+          context.origin = std::move(typedEffect.origin);
+          browser_.navigationContext = std::move(context);
+        } else if constexpr (
+            std::is_same_v<Effect, RecordNavigationEffect>) {
+          recordBrowserNavigation(browser_, typedEffect.from,
+                                  captureBrowserLocation(browser_));
+        } else if constexpr (
+            std::is_same_v<Effect, RecordContextNavigationEffect>) {
+          if (!browser_.navigationContext) {
+            return;
+          }
+          BrowserState::NavigationContext& context =
+              *browser_.navigationContext;
+          recordNavigation(context.backHistory, context.forwardHistory,
+                           typedEffect.from,
+                           captureBrowserLocation(browser_));
+        } else if constexpr (std::is_same_v<Effect, LeaveContextEffect>) {
+          if (typedEffect.restoreOriginViewport) {
+            restoreBrowserLocation(browser_, typedEffect.origin);
+          }
+          browser_.navigationContext.reset();
+          recordBrowserNavigation(browser_, typedEffect.origin,
+                                  captureBrowserLocation(browser_));
+        } else if constexpr (
+            std::is_same_v<Effect, RestoreContextBoundaryEffect>) {
+          if (browser_.navigationContext &&
+              typedEffect.target.kind() !=
+                  browser_.navigationContext->kind) {
+            browser_.navigationContext.reset();
+          }
+        } else if constexpr (std::is_same_v<Effect,
+                                             TraverseHistoryEffect>) {
+          BrowserState::NavigationContext* context =
+              typedEffect.contextual && browser_.navigationContext
+                  ? &*browser_.navigationContext
+                  : nullptr;
+          if (typedEffect.contextual && !context) {
+            return;
+          }
+          auto* committedSource =
+              context ? &context->backHistory : &browser_.backHistory;
+          auto* committedDestination =
+              context ? &context->forwardHistory : &browser_.forwardHistory;
+          if (!typedEffect.backward) {
+            std::swap(committedSource, committedDestination);
+          }
+          if (committedSource->empty()) {
+            return;
+          }
+          committedSource->pop_back();
+          if (typedEffect.backward) {
+            typedEffect.entry.to = std::move(typedEffect.current);
+          } else {
+            typedEffect.entry.from = std::move(typedEffect.current);
+          }
+          committedDestination->push_back(std::move(typedEffect.entry));
+        } else if constexpr (std::is_same_v<Effect, CloseContextEffect>) {
+          browser_.navigationContext.reset();
+        }
+      },
+      std::move(effect));
+}
+
+void BrowserNavigator::commitPrepared(PendingCommit pending,
+                                      PreparedBrowserContent prepared) {
+  commit(pending.target, std::move(prepared), pending.resetSearch);
+  if (pending.selection &&
+      selectBrowserEntry(browser_, *pending.selection)) {
+    requestBrowserSelectionReveal(browser_);
+  }
+  if (pending.restoreLocation) {
+    restoreBrowserLocation(browser_, *pending.restoreLocation);
+  }
+  applyCommitEffect(std::move(pending.effect));
+  notifyChanged();
+}
+
 bool BrowserNavigator::activate(const BrowserLocation& target,
                                 const std::string& initialName,
                                 const std::optional<BrowserState::EntryIdentity>&
                                     selection,
                                 bool resetSearch,
-                                std::function<void()> committed) {
-  const std::string filter = resetSearch ? std::string{} : browser_.filter;
-  const int selected = resetSearch ? 0 : browser_.selected;
-  return prepare(
-      target, initialName, filter, selected,
-      [this, target, selection, resetSearch,
-       committed = std::move(committed)](
-          PreparedBrowserContent prepared) mutable {
-        commit(target, std::move(prepared), resetSearch);
-        if (selection && selectBrowserEntry(browser_, *selection)) {
-          requestBrowserSelectionReveal(browser_);
-        }
-        if (committed) {
-          committed();
-        }
-        notifyChanged();
-      });
+                                CommitEffect effect) {
+  return prepare(PendingCommit{target, selection, resetSearch, std::nullopt,
+                               std::move(effect)},
+                 initialName);
 }
 
 bool BrowserNavigator::beginContext(
@@ -274,12 +345,7 @@ bool BrowserNavigator::beginContext(
 
   const BrowserState::Location origin = captureBrowserLocation(browser_);
   return activate(target, initialName, selection, true,
-                  [this, target, origin]() {
-                    BrowserState::NavigationContext context;
-                    context.kind = target.kind();
-                    context.origin = origin;
-                    browser_.navigationContext = std::move(context);
-                  });
+                  BeginContextEffect{target, origin});
 }
 
 bool BrowserNavigator::navigateFromContext(
@@ -291,25 +357,15 @@ bool BrowserNavigator::navigateFromContext(
 
   if (target.kind() == browser_.navigationContext->kind) {
     const BrowserState::Location from = captureBrowserLocation(browser_);
-    return activate(target, initialName, selection, true, [this, from]() {
-      BrowserState::NavigationContext& context = *browser_.navigationContext;
-      recordNavigation(context.backHistory, context.forwardHistory, from,
-                       captureBrowserLocation(browser_));
-    });
+    return activate(target, initialName, selection, true,
+                    RecordContextNavigationEffect{from});
   }
 
   const BrowserState::Location origin = browser_.navigationContext->origin;
-  return activate(
-      target, initialName, selection, true,
-      [this, origin, initialName, selection]() {
-        if (browser_.location == origin.route && initialName.empty() &&
-            !selection) {
-          restoreBrowserLocation(browser_, origin);
-        }
-        browser_.navigationContext.reset();
-        recordBrowserNavigation(browser_, origin,
-                                captureBrowserLocation(browser_));
-      });
+  const bool restoreOriginViewport =
+      target == origin.route && initialName.empty() && !selection;
+  return activate(target, initialName, selection, true,
+                  LeaveContextEffect{origin, restoreOriginViewport});
 }
 
 bool BrowserNavigator::navigate(const BrowserLocation& target,
@@ -327,9 +383,8 @@ bool BrowserNavigator::navigate(const BrowserLocation& target,
     return beginContext(target, initialName, selection);
   }
   const BrowserState::Location from = captureBrowserLocation(browser_);
-  return activate(target, initialName, selection, true, [this, from]() {
-    recordBrowserNavigation(browser_, from, captureBrowserLocation(browser_));
-  });
+  return activate(target, initialName, selection, true,
+                  RecordNavigationEffect{from});
 }
 
 bool BrowserNavigator::initialize(const BrowserLocation& target,
@@ -350,33 +405,29 @@ bool BrowserNavigator::reveal(
   return activate(target, initialName, selection, true);
 }
 
-bool BrowserNavigator::restoreLocation(
-    const BrowserState::Location& location, std::function<void()> committed) {
-  return activate(
-      location.route, {}, std::nullopt, true,
-      [this, location, committed = std::move(committed)]() mutable {
-        restoreBrowserLocation(browser_, location);
-        if (committed) {
-          committed();
-        }
-      });
+bool BrowserNavigator::restoreLocation(const BrowserState::Location& location,
+                                       CommitEffect effect) {
+  return prepare(PendingCommit{location.route, std::nullopt, true, location,
+                               std::move(effect)},
+                 {});
 }
 
 bool BrowserNavigator::restore(const BrowserState::Location& location) {
-  return restoreLocation(location, [this, location]() {
-    if (browser_.navigationContext &&
-        location.route.kind() != browser_.navigationContext->kind) {
-      browser_.navigationContext.reset();
-    }
-  });
+  return restoreLocation(location,
+                         RestoreContextBoundaryEffect{location.route});
 }
 
 bool BrowserNavigator::traverseHistory(bool contextual, bool backward) {
-  auto* source = contextual ? &browser_.navigationContext->backHistory
-                            : &browser_.backHistory;
+  BrowserState::NavigationContext* context =
+      contextual && browser_.navigationContext
+          ? &*browser_.navigationContext
+          : nullptr;
+  if (contextual && !context) {
+    return false;
+  }
+  auto* source = context ? &context->backHistory : &browser_.backHistory;
   if (!backward) {
-    source = contextual ? &browser_.navigationContext->forwardHistory
-                        : &browser_.forwardHistory;
+    source = context ? &context->forwardHistory : &browser_.forwardHistory;
   }
   if (source->empty()) {
     return false;
@@ -385,26 +436,9 @@ bool BrowserNavigator::traverseHistory(bool contextual, bool backward) {
   BrowserState::NavigationHistoryEntry entry = source->back();
   const BrowserState::Location current = captureBrowserLocation(browser_);
   const BrowserState::Location target = backward ? entry.from : entry.to;
-  return restoreLocation(
-      target, [this, contextual, backward, entry = std::move(entry),
-               current]() mutable {
-        auto* committedSource =
-            contextual ? &browser_.navigationContext->backHistory
-                       : &browser_.backHistory;
-        auto* committedDestination =
-            contextual ? &browser_.navigationContext->forwardHistory
-                       : &browser_.forwardHistory;
-        if (!backward) {
-          std::swap(committedSource, committedDestination);
-        }
-        committedSource->pop_back();
-        if (backward) {
-          entry.to = current;
-        } else {
-          entry.from = current;
-        }
-        committedDestination->push_back(std::move(entry));
-      });
+  return restoreLocation(target,
+                         TraverseHistoryEffect{contextual, backward,
+                                               std::move(entry), current});
 }
 
 bool BrowserNavigator::back() {
@@ -434,7 +468,7 @@ bool BrowserNavigator::closeContext() {
   }
 
   const BrowserState::Location origin = browser_.navigationContext->origin;
-  return restoreLocation(origin, [this]() { browser_.navigationContext.reset(); });
+  return restoreLocation(origin, CloseContextEffect{});
 }
 
 bool BrowserNavigator::contextActive() const {
@@ -453,8 +487,8 @@ bool BrowserNavigator::completePreparation(
     return false;
   }
 
-  CommitPrepared commitPrepared = std::move(pendingCommit_);
-  pendingCommit_ = {};
+  PendingCommit pending = std::move(*pendingCommit_);
+  pendingCommit_.reset();
   pendingPreparationId_.reset();
   browser_.contentLoading = false;
   if (auto* error = std::get_if<BrowserPreparationError>(&result)) {
@@ -464,7 +498,8 @@ bool BrowserNavigator::completePreparation(
     return false;
   }
 
-  commitPrepared(std::move(std::get<PreparedBrowserContent>(result)));
+  commitPrepared(std::move(pending),
+                 std::move(std::get<PreparedBrowserContent>(result)));
   return true;
 }
 
@@ -473,7 +508,7 @@ bool BrowserNavigator::cancelPreparation() {
     return false;
   }
 
-  pendingCommit_ = {};
+  pendingCommit_.reset();
   pendingPreparationId_.reset();
   browser_.contentLoading = false;
   const BrowserPreparationId cancellationId = allocatePreparationId();

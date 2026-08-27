@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <optional>
 #include <string>
 #include <utility>
@@ -128,19 +127,57 @@ class BrowserNavigator {
   std::vector<Event> drainEvents();
 
  private:
-  using CommitPrepared =
-      std::function<void(PreparedBrowserContent prepared)>;
+  struct NoCommitEffect {};
+  struct BeginContextEffect {
+    BrowserLocation target;
+    BrowserState::Location origin;
+  };
+  struct RecordNavigationEffect {
+    BrowserState::Location from;
+  };
+  struct RecordContextNavigationEffect {
+    BrowserState::Location from;
+  };
+  struct LeaveContextEffect {
+    BrowserState::Location origin;
+    bool restoreOriginViewport = false;
+  };
+  struct RestoreContextBoundaryEffect {
+    BrowserLocation target;
+  };
+  struct TraverseHistoryEffect {
+    bool contextual = false;
+    bool backward = false;
+    BrowserState::NavigationHistoryEntry entry;
+    BrowserState::Location current;
+  };
+  struct CloseContextEffect {};
+  using CommitEffect =
+      std::variant<NoCommitEffect, BeginContextEffect,
+                   RecordNavigationEffect, RecordContextNavigationEffect,
+                   LeaveContextEffect, RestoreContextBoundaryEffect,
+                   TraverseHistoryEffect, CloseContextEffect>;
 
-  bool prepare(
-      const BrowserLocation& target, const std::string& initialName,
-      const std::string& filter, int selected, CommitPrepared commitPrepared);
+  struct PendingCommit {
+    BrowserLocation target;
+    std::optional<BrowserState::EntryIdentity> selection;
+    bool resetSearch = false;
+    std::optional<BrowserState::Location> restoreLocation;
+    CommitEffect effect;
+  };
+
+  bool prepare(PendingCommit pending, const std::string& initialName);
   void commit(const BrowserLocation& target,
               PreparedBrowserContent prepared,
               bool resetSearch);
+  void applyCommitEffect(CommitEffect effect);
+  void commitPrepared(PendingCommit pending,
+                      PreparedBrowserContent prepared);
   bool activate(const BrowserLocation& target,
                 const std::string& initialName,
                 const std::optional<BrowserState::EntryIdentity>& selection,
-                bool resetSearch, std::function<void()> committed = {});
+                bool resetSearch,
+                CommitEffect effect = NoCommitEffect{});
   bool beginContext(
       const BrowserLocation& target, const std::string& initialName,
       const std::optional<BrowserState::EntryIdentity>& selection);
@@ -149,7 +186,7 @@ class BrowserNavigator {
       const std::optional<BrowserState::EntryIdentity>& selection);
   bool traverseHistory(bool contextual, bool backward);
   bool restoreLocation(const BrowserState::Location& location,
-                       std::function<void()> committed = {});
+                       CommitEffect effect = NoCommitEffect{});
   void notifyChanged();
   BrowserPreparationId allocatePreparationId();
 
@@ -158,7 +195,7 @@ class BrowserNavigator {
   std::vector<Event> events_;
   BrowserPreparationId nextPreparationId_ = 1;
   std::optional<BrowserPreparationId> pendingPreparationId_;
-  CommitPrepared pendingCommit_;
+  std::optional<PendingCommit> pendingCommit_;
 };
 
 void requestBrowserSelectionReveal(BrowserState& browser);
