@@ -14,6 +14,7 @@
 #include "playback/control/transport.h"
 #include "playback/media_processing_actions.h"
 #include "playback/ascii/frame_output.h"
+#include "playback/session/event.h"
 #include "playback/session/state.h"
 #include "log.h"
 #include "playback/video/playback.h"
@@ -47,11 +48,8 @@ class PlaybackLoopRunner {
     std::filesystem::path file;
     bool enableAudio;
     bool hasSubtitles = false;
-    std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
-    std::function<bool(const std::vector<std::filesystem::path>&)>
-        requestOpenFiles;
+    playback_session::Capabilities capabilities;
     playback_media_processing::Actions mediaProcessingActions;
-    std::function<void()> activateBrowserSurface;
     PlaybackSessionContinuationState continuityState;
     PlaybackSessionIntent sessionIntent = PlaybackSessionIntent::View;
   };
@@ -79,7 +77,10 @@ class PlaybackLoopRunner {
   bool togglePictureInPicture();
   bool toggleFullscreen();
   bool activatePresentation();
-  bool requestHandoff(std::function<void(bool)> completion);
+  std::optional<playback_session_exit::RequestId> requestHandoff();
+  bool resolveHandoff(playback_session_exit::RequestId requestId,
+                      bool accepted);
+  std::vector<playback_session::Event> drainEvents();
   void subtitleGenerationFinished(
       const std::filesystem::path& preferredSubtitleTrack, bool success,
       std::string status);

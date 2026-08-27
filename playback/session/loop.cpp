@@ -24,6 +24,7 @@
 #include "playback/video/timeline_preview_model.h"
 #include "playback/ascii/frame_output.h"
 #include "playback/ascii/screen_renderer.h"
+#include "core/wakeable_mailbox.h"
 #include "playback/framebuffer/presenter.h"
 #include "playback/session/osd_timeline.h"
 #include "playback/session/context_menu_controller.h"
@@ -31,7 +32,6 @@
 #include "core/windows_console_window.h"
 #include "core/runtime_helpers.h"
 #include "core.h"
-#include "handoff.h"
 #include "input.h"
 #include "output.h"
 #include "presentation_controller.h"
@@ -78,23 +78,6 @@ struct PlaybackLoopRunner::Impl {
       std::chrono::milliseconds(1500);
   static constexpr auto kEditMessageDuration = std::chrono::milliseconds(2200);
 
-  struct PendingExit {
-    enum class Kind : uint8_t {
-      Session,
-      QuitApplication,
-      Transport,
-      OpenFiles,
-      ExternalHandoff,
-    };
-
-    Kind kind = Kind::Session;
-    PlaybackTransportCommand transport = PlaybackTransportCommand::Next;
-    std::vector<std::filesystem::path> files;
-    std::function<void(bool)> externalHandoffCompletion;
-    bool exitWhenExportSucceeds = false;
-    bool resumePlaybackOnCancel = false;
-  };
-
   ConsoleScreen& screen;
   const VideoPlaybackConfig config;
   SubtitleManager& subtitleManager;
@@ -111,10 +94,8 @@ struct PlaybackLoopRunner::Impl {
   std::atomic<bool>& enableSubtitlesShared;
   const std::string windowTitle;
   const std::filesystem::path file;
-  std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
-  std::function<bool(const std::vector<std::filesystem::path>&)> requestOpenFiles;
+  const playback_session::Capabilities capabilities;
   playback_media_processing::Actions mediaProcessingActions;
-  std::function<void()> activateBrowserSurface;
   const PlaybackSessionIntent sessionIntent;
   PlaybackSessionContinuationState capturedContinuationState;
   bool quitApplicationRequested = false;
@@ -150,7 +131,9 @@ struct PlaybackLoopRunner::Impl {
   mutable std::mutex publishedWindowUiMutex;
   playback_framebuffer_presenter::PlaybackFramebufferUiSnapshot
       publishedWindowUi;
-  std::optional<PendingExit> pendingExit;
+  playback_session_exit::ExitCoordinator exitCoordinator;
+  WakeableMailbox<playback_session::Event> events;
+  bool exitWhenExportSucceeds = false;
   std::atomic<int> overlayControlHover{-1};
   bool loopStopRequested = false;
   bool initialized = false;
@@ -183,10 +166,8 @@ struct PlaybackLoopRunner::Impl {
         enableSubtitlesShared(args.enableSubtitlesShared),
         windowTitle(std::move(args.windowTitle)),
         file(std::move(args.file)),
-        requestTransportCommand(std::move(args.requestTransportCommand)),
-        requestOpenFiles(std::move(args.requestOpenFiles)),
+        capabilities(args.capabilities),
         mediaProcessingActions(std::move(args.mediaProcessingActions)),
-        activateBrowserSurface(std::move(args.activateBrowserSurface)),
         sessionIntent(args.sessionIntent),
         enableAudio(args.enableAudio),
         hasSubtitles(args.hasSubtitles),
@@ -265,134 +246,127 @@ struct PlaybackLoopRunner::Impl {
   }
 
   playback_video_edit::Prompt videoEditPrompt() const {
-    if (pendingExit) return playback_video_edit::Prompt::LeavePlayback;
+    if (exitCoordinator.confirmationVisible()) {
+      return playback_video_edit::Prompt::LeavePlayback;
+    }
     return videoEditWorkspace.prompt();
   }
 
-  bool beginPendingExit(PendingExit request) {
-    if (!exitNeedsConfirmation()) return true;
-    if (!pendingExit) {
-      if (videoEditWorkspace.prompt() != playback_video_edit::Prompt::None) {
-        videoEditWorkspace.execute(playback_video_edit::Command::CancelPrompt);
-      }
-      request.resumePlaybackOnCancel =
-          inputView.playbackState &&
-          *inputView.playbackState == PlaybackSessionState::Active;
-      pendingExit = std::move(request);
+  bool applyExitTransition(
+      const playback_session_exit::Transition& transition) {
+    if (!transition.handled) return false;
+    if (transition.handoffRequest) {
+      events.publish(playback_session::Event{*transition.handoffRequest});
+    }
+    if (transition.handoffCancellation) {
+      events.publish(
+          playback_session::Event{*transition.handoffCancellation});
+    }
+    if (transition.resumePlayback) {
+      playback_session_input::setPlaybackPaused(inputView, inputSignals,
+                                                seekState, false);
+    }
+    if (transition.finishSession) {
+      finishLoopExit(transition.quitApplication);
+    }
+    return true;
+  }
+
+  playback_session_exit::Transition beginExit(
+      playback_session_exit::Intent intent) {
+    if (finished || exitCoordinator.pending()) return {};
+
+    const bool confirmationRequired = exitNeedsConfirmation();
+    if (confirmationRequired &&
+        videoEditWorkspace.prompt() != playback_video_edit::Prompt::None) {
+      videoEditWorkspace.execute(playback_video_edit::Command::CancelPrompt);
+    }
+    const bool playbackActive =
+        inputView.playbackState &&
+        *inputView.playbackState == PlaybackSessionState::Active;
+    playback_session_exit::Transition transition = exitCoordinator.request(
+        std::move(intent), confirmationRequired, playbackActive);
+    if (transition.handled && exitCoordinator.confirmationVisible()) {
+      exitWhenExportSucceeds = false;
       overlayControlHover.store(-1, std::memory_order_relaxed);
       playback_session_input::setPlaybackPaused(inputView, inputSignals,
                                                 seekState, true);
       syncVideoEditPresentation();
     }
-    return false;
+    applyExitTransition(transition);
+    return transition;
   }
 
   void requestPlaybackExit(bool quitApplication) {
-    PendingExit request;
-    request.kind = quitApplication ? PendingExit::Kind::QuitApplication
-                                   : PendingExit::Kind::Session;
-    if (beginPendingExit(std::move(request))) {
-      finishLoopExit(quitApplication);
-    }
+    beginExit(quitApplication
+                  ? playback_session_exit::Intent{
+                        playback_session_exit::QuitApplication{}}
+                  : playback_session_exit::Intent{
+                        playback_session_exit::StopSession{}});
   }
 
   bool requestTransportExit(PlaybackTransportCommand command) {
-    if (!requestTransportCommand) return false;
-    PendingExit request;
-    request.kind = PendingExit::Kind::Transport;
-    request.transport = command;
-    if (!beginPendingExit(std::move(request))) return false;
-    return requestTransportCommand(command);
+    if (!capabilities.transportHandoff) return false;
+    return beginExit(playback_session_exit::Transport{command}).handled;
   }
 
   bool requestOpenFilesExit(
       const std::vector<std::filesystem::path>& files) {
-    if (!requestOpenFiles) return false;
-    PendingExit request;
-    request.kind = PendingExit::Kind::OpenFiles;
-    request.files = files;
-    if (!beginPendingExit(std::move(request))) return false;
-    return requestOpenFiles(files);
+    if (!capabilities.openFilesHandoff || files.empty()) return false;
+    return beginExit(playback_session_exit::OpenFiles{files}).handled;
   }
 
   bool completePendingExit() {
-    if (!pendingExit || videoEditWorkspace.exitContext().exportRunning) {
+    if (!exitCoordinator.confirmationVisible() ||
+        videoEditWorkspace.exitContext().exportRunning) {
       return false;
     }
-    PendingExit request = std::move(*pendingExit);
-    pendingExit.reset();
+    exitWhenExportSucceeds = false;
     overlayControlHover.store(-1, std::memory_order_relaxed);
-    bool accepted = true;
-    switch (request.kind) {
-      case PendingExit::Kind::Session:
-        finishLoopExit(false);
-        break;
-      case PendingExit::Kind::QuitApplication:
-        finishLoopExit(true);
-        break;
-      case PendingExit::Kind::Transport:
-        accepted = requestTransportCommand &&
-                   requestTransportCommand(request.transport);
-        if (accepted) finishLoopExit(false);
-        break;
-      case PendingExit::Kind::OpenFiles:
-        accepted = requestOpenFiles && requestOpenFiles(request.files);
-        if (accepted) finishLoopExit(false);
-        break;
-      case PendingExit::Kind::ExternalHandoff:
-        if (request.externalHandoffCompletion) {
-          request.externalHandoffCompletion(true);
-        }
-        finishLoopExit(false);
-        break;
-    }
-    if (!accepted) {
-      if (request.resumePlaybackOnCancel) {
-        playback_session_input::setPlaybackPaused(inputView, inputSignals,
-                                                  seekState, false);
-      }
+    const playback_session_exit::Transition transition =
+        exitCoordinator.confirm();
+    const bool handled = applyExitTransition(transition);
+    if (handled && !transition.finishSession) {
       syncVideoEditPresentation();
-      showEditMessage("Could not complete the requested playback change");
     }
-    return accepted;
+    return handled;
   }
 
   bool cancelPendingExit() {
-    if (!pendingExit) return false;
-    PendingExit request = std::move(*pendingExit);
-    pendingExit.reset();
-    if (request.kind == PendingExit::Kind::ExternalHandoff &&
-        request.externalHandoffCompletion) {
-      request.externalHandoffCompletion(false);
-    }
+    const playback_session_exit::Transition transition =
+        exitCoordinator.cancel();
+    if (!transition.handled) return false;
+    exitWhenExportSucceeds = false;
     overlayControlHover.store(-1, std::memory_order_relaxed);
-    if (request.resumePlaybackOnCancel) {
-      playback_session_input::setPlaybackPaused(inputView, inputSignals,
-                                                seekState, false);
-    }
+    applyExitTransition(transition);
     syncVideoEditPresentation();
     showEditMessage("Exit cancelled; edits retained");
     return true;
   }
 
-  bool requestExternalHandoff(std::function<void(bool)> completion) {
-    if (!completion || pendingExit || finished) {
-      return false;
+  std::optional<playback_session_exit::RequestId> requestExternalHandoff() {
+    const playback_session_exit::Transition transition =
+        beginExit(playback_session_exit::ExternalHandoff{});
+    return transition.handled ? transition.requestId : std::nullopt;
+  }
+
+  bool resolveHandoff(playback_session_exit::RequestId requestId,
+                      bool accepted) {
+    const playback_session_exit::Transition transition =
+        exitCoordinator.resolve(requestId, accepted);
+    if (!transition.handled) return false;
+    exitWhenExportSucceeds = false;
+    overlayControlHover.store(-1, std::memory_order_relaxed);
+    applyExitTransition(transition);
+    if (!accepted) {
+      syncVideoEditPresentation();
+      showEditMessage("Could not complete the requested playback change");
     }
-    PendingExit request;
-    request.kind = PendingExit::Kind::ExternalHandoff;
-    request.externalHandoffCompletion = std::move(completion);
-    if (!exitNeedsConfirmation()) {
-      request.externalHandoffCompletion(true);
-      finishLoopExit(false);
-      return true;
-    }
-    (void)beginPendingExit(std::move(request));
     return true;
   }
 
   void navigateBack() {
-    if (pendingExit) {
+    if (exitCoordinator.confirmationVisible()) {
       cancelPendingExit();
       return;
     }
@@ -457,10 +431,10 @@ struct PlaybackLoopRunner::Impl {
     overlayControlHover.store(-1, std::memory_order_relaxed);
     syncVideoEditPresentation();
     if (!result.message.empty()) showEditMessage(result.message);
-    if (pendingExit && pendingExit->exitWhenExportSucceeds &&
+    if (exitCoordinator.confirmationVisible() && exitWhenExportSucceeds &&
         result.completion !=
             playback_session::VideoEditExportCompletion::None) {
-      pendingExit->exitWhenExportSucceeds = false;
+      exitWhenExportSucceeds = false;
       if (result.completion ==
               playback_session::VideoEditExportCompletion::Succeeded &&
           !videoEditWorkspace.hasUnexportedChanges()) {
@@ -471,7 +445,7 @@ struct PlaybackLoopRunner::Impl {
 
   void pollVideoEditBoundaryCommit() {
     if (!seekState.pendingVideoEditBoundaryCommit) return;
-    if (!videoEditWorkspace.active() || pendingExit ||
+    if (!videoEditWorkspace.active() || exitCoordinator.pending() ||
         videoEditWorkspace.prompt() != playback_video_edit::Prompt::None) {
       seekState.pendingVideoEditBoundaryCommit.reset();
       return;
@@ -506,7 +480,7 @@ struct PlaybackLoopRunner::Impl {
                                bool announce = true) {
     seekState.pendingVideoEditBoundaryCommit.reset();
     const bool startForPendingExit =
-        pendingExit &&
+        exitCoordinator.confirmationVisible() &&
         command == playback_video_edit::Command::StartExport &&
         playback_video_edit::exitExportAction(
             videoEditWorkspace.exitContext()) ==
@@ -524,7 +498,7 @@ struct PlaybackLoopRunner::Impl {
       const playback_video_edit::ExitContext context =
           videoEditWorkspace.exitContext();
       if (result.exportStarted) {
-        pendingExit->exitWhenExportSucceeds = true;
+        exitWhenExportSucceeds = true;
         message = "Exporting; will exit after success";
       } else if (!context.hasUnexportedChanges && !context.exportRunning) {
         return completePendingExit();
@@ -573,7 +547,7 @@ struct PlaybackLoopRunner::Impl {
   }
 
   bool waitForVideoEditExportAndExit() {
-    if (!pendingExit) return false;
+    if (!exitCoordinator.confirmationVisible()) return false;
     const playback_video_edit::ExitExportAction action =
         playback_video_edit::exitExportAction(
             videoEditWorkspace.exitContext());
@@ -583,7 +557,7 @@ struct PlaybackLoopRunner::Impl {
     // Arm the exact rendered intent before inspecting the worker again. A
     // short export may reach a terminal state between the click and this UI
     // turn; the next poll must still resolve that completion as Wait requested.
-    pendingExit->exitWhenExportSucceeds = true;
+    exitWhenExportSucceeds = true;
     syncVideoEditPresentation();
     showEditMessage("Will exit after export succeeds");
     return true;
@@ -729,7 +703,7 @@ struct PlaybackLoopRunner::Impl {
     inputSignals.moveVideoEditBoundary =
         [this](playback_video_edit::EditBoundary boundary,
                int64_t timelineUs) {
-          if (pendingExit ||
+          if (exitCoordinator.pending() ||
               !videoEditWorkspace.moveBoundary(boundary, timelineUs)) {
             return false;
           }
@@ -783,14 +757,18 @@ struct PlaybackLoopRunner::Impl {
         [this](bool quitApplication) {
           requestPlaybackExit(quitApplication);
         };
-    inputSignals.requestTransportCommand =
-        [this](PlaybackTransportCommand cmd) {
-          return requestTransportExit(cmd);
-        };
-    inputSignals.requestOpenFiles =
-        [this](const std::vector<std::filesystem::path>& files) {
-      return requestOpenFilesExit(files);
-    };
+    if (capabilities.transportHandoff) {
+      inputSignals.requestTransportCommand =
+          [this](PlaybackTransportCommand cmd) {
+            return requestTransportExit(cmd);
+          };
+    }
+    if (capabilities.openFilesHandoff) {
+      inputSignals.requestOpenFiles =
+          [this](const std::vector<std::filesystem::path>& files) {
+        return requestOpenFilesExit(files);
+      };
+    }
     inputSignals.osd = &osd;
     inputSignals.loopStopRequested = &loopStopRequested;
     inputSignals.redraw = &redraw;
@@ -849,8 +827,8 @@ struct PlaybackLoopRunner::Impl {
     return playback_framebuffer_presenter::buildPlaybackFramebufferUiState(
         windowTitle, output.window(), core.player(), subtitleManager,
         core.playbackState(), core.audioOk(),
-        requestTransportCommand != nullptr,
-        requestTransportCommand != nullptr, hasSubtitles,
+        capabilities.transportHandoff, capabilities.transportHandoff,
+        hasSubtitles,
         enableSubtitlesShared, overlayControlHover, snapshot,
         config.debugOverlay);
   }
@@ -967,8 +945,10 @@ struct PlaybackLoopRunner::Impl {
   }
 
   void activateBrowser() {
-    if (activateBrowserSurface) {
-      activateBrowserSurface();
+    if (capabilities.browserSurfaceActivation) {
+      events.publish(
+          playback_session::Event{
+              playback_session::BrowserSurfaceActivationRequested{}});
     } else {
       activateWindowsConsoleWindow();
     }
@@ -1014,8 +994,8 @@ struct PlaybackLoopRunner::Impl {
     renderInputs.debugOverlay = config.debugOverlay;
     renderInputs.visualMode = presentationController.state().visual();
     renderInputs.enableAudio = enableAudio;
-    renderInputs.canPlayPrevious = requestTransportCommand != nullptr;
-    renderInputs.canPlayNext = requestTransportCommand != nullptr;
+    renderInputs.canPlayPrevious = capabilities.transportHandoff;
+    renderInputs.canPlayNext = capabilities.transportHandoff;
     renderInputs.nativeWindowActive = output.windowOpen();
     renderInputs.hasSubtitles = hasSubtitles;
     renderInputs.allowAsciiCpuFallback = false;
@@ -1118,8 +1098,7 @@ struct PlaybackLoopRunner::Impl {
       redraw = true;
     } else if (event.type == InputEvent::Type::FileDrop &&
                isCommittedFileDropEvent(event.fileDrop)) {
-      playback_session_handoff::requestOpenFilesHandoff(
-          inputView, inputSignals, event.fileDrop.files);
+      requestOpenFilesExit(event.fileDrop.files);
     } else if (event.type == InputEvent::Type::Key ||
                event.type == InputEvent::Type::Action) {
       playback_session_input::handlePlaybackInputEvent(
@@ -1154,8 +1133,8 @@ struct PlaybackLoopRunner::Impl {
     state.canPlay = true;
     state.canPause = true;
     state.canStop = true;
-    state.canPrevious = requestTransportCommand != nullptr;
-    state.canNext = requestTransportCommand != nullptr;
+    state.canPrevious = capabilities.transportHandoff;
+    state.canNext = capabilities.transportHandoff;
 
     const PlaybackSessionState playbackState = core.playbackState();
     if (playbackState == PlaybackSessionState::Ended) {
@@ -1339,7 +1318,7 @@ struct PlaybackLoopRunner::Impl {
 
   std::vector<NativeWaitHandle> activityWaitHandles() const {
     std::vector<NativeWaitHandle> handles;
-    handles.reserve(6);
+    handles.reserve(7);
     const auto append = [&](NativeWaitHandle handle) {
       if (handle) handles.push_back(handle);
     };
@@ -1353,6 +1332,7 @@ struct PlaybackLoopRunner::Impl {
       append(timelinePreviewProvider.changedWaitHandle());
     }
     append(videoEditWorkspace.waitHandle());
+    append(events.nativeWaitHandle());
     return handles;
   }
 
@@ -1483,8 +1463,12 @@ struct PlaybackLoopRunner::Impl {
     if (!status.empty()) showEditMessage(status);
   }
 
-  bool requestHandoff(std::function<void(bool)> completion) {
-    return requestExternalHandoff(std::move(completion));
+  std::optional<playback_session_exit::RequestId> requestHandoff() {
+    return requestExternalHandoff();
+  }
+
+  std::vector<playback_session::Event> drainEvents() {
+    return events.drain();
   }
 
   void requestStop() {
@@ -1562,9 +1546,18 @@ bool PlaybackLoopRunner::activatePresentation() {
   return impl_->activatePresentation();
 }
 
-bool PlaybackLoopRunner::requestHandoff(
-    std::function<void(bool)> completion) {
-  return impl_->requestHandoff(std::move(completion));
+std::optional<playback_session_exit::RequestId>
+PlaybackLoopRunner::requestHandoff() {
+  return impl_->requestHandoff();
+}
+
+bool PlaybackLoopRunner::resolveHandoff(
+    playback_session_exit::RequestId requestId, bool accepted) {
+  return impl_->resolveHandoff(requestId, accepted);
+}
+
+std::vector<playback_session::Event> PlaybackLoopRunner::drainEvents() {
+  return impl_->drainEvents();
 }
 
 void PlaybackLoopRunner::subtitleGenerationFinished(

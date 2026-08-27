@@ -1,7 +1,6 @@
 #pragma once
 
 #include <filesystem>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -12,6 +11,7 @@
 #include "playback/control/system_control_state.h"
 #include "playback/control/transport.h"
 #include "playback/media_processing_actions.h"
+#include "playback/session/event.h"
 #include "playback/session/presentation_policy.h"
 #include "playback/session/state.h"
 #include "playback/video/playback.h"
@@ -56,11 +56,8 @@ class PlaybackSession {
     VideoPlaybackConfig config;
     PlaybackSessionContinuationState continuityState;
     PlaybackSessionIntent sessionIntent = PlaybackSessionIntent::View;
-    std::function<bool(PlaybackTransportCommand)> requestTransportCommand;
-    std::function<bool(const std::vector<std::filesystem::path>&)>
-        requestOpenFiles;
+    playback_session::Capabilities capabilities;
     playback_media_processing::Actions mediaProcessingActions;
-    std::function<void()> activateBrowserSurface;
   };
 
   // Input and screen are borrowed and must outlive the session. Appearance is
@@ -95,7 +92,10 @@ class PlaybackSession {
   bool togglePictureInPicture();
   bool toggleFullscreen();
   bool activatePresentation();
-  bool requestHandoff(std::function<void(bool)> completion);
+  std::optional<playback_session_exit::RequestId> requestHandoff();
+  bool resolveHandoff(playback_session_exit::RequestId requestId,
+                      bool accepted);
+  std::vector<playback_session::Event> drainEvents();
   void subtitleGenerationFinished(
       const std::filesystem::path& preferredSubtitleTrack, bool success,
       std::string status);

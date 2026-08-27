@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <cassert>
-#include <functional>
 #include <memory>
 #include <utility>
 
@@ -79,10 +78,8 @@ struct PlaybackSession::Impl {
         std::move(request.file),
         enableAudio,
         hasSubtitles,
-        std::move(request.requestTransportCommand),
-        std::move(request.requestOpenFiles),
+        request.capabilities,
         std::move(request.mediaProcessingActions),
-        std::move(request.activateBrowserSurface),
         std::move(request.continuityState),
         request.sessionIntent});
   }
@@ -251,10 +248,21 @@ bool PlaybackSession::activatePresentation() {
   return impl_->canControl() && impl_->loop->activatePresentation();
 }
 
-bool PlaybackSession::requestHandoff(
-    std::function<void(bool)> completion) {
+std::optional<playback_session_exit::RequestId>
+PlaybackSession::requestHandoff() {
+  if (!impl_->canControl()) return std::nullopt;
+  return impl_->loop->requestHandoff();
+}
+
+bool PlaybackSession::resolveHandoff(
+    playback_session_exit::RequestId requestId, bool accepted) {
   return impl_->canControl() &&
-         impl_->loop->requestHandoff(std::move(completion));
+         impl_->loop->resolveHandoff(requestId, accepted);
+}
+
+std::vector<playback_session::Event> PlaybackSession::drainEvents() {
+  if (!impl_->canControl()) return {};
+  return impl_->loop->drainEvents();
 }
 
 void PlaybackSession::subtitleGenerationFinished(

@@ -613,6 +613,15 @@ radioify_link_repo_target(presentation_policy_tests)
 add_test(NAME presentation_policy_tests
          COMMAND $<TARGET_FILE:presentation_policy_tests>)
 
+add_executable(playback_exit_coordinator_tests)
+target_sources(playback_exit_coordinator_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_playback_exit_coordinator_tests>
+  ${CMAKE_SOURCE_DIR}/playback/session/exit_coordinator.cpp
+)
+radioify_link_repo_target(playback_exit_coordinator_tests)
+add_test(NAME playback_exit_coordinator_tests
+         COMMAND $<TARGET_FILE:playback_exit_coordinator_tests>)
+
 add_executable(video_output_color_tests)
 target_sources(video_output_color_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_video_output_color_tests>

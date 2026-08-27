@@ -123,11 +123,15 @@ struct TuiMediaCoordinator::Impl {
   PollResult poll() {
     bool playbackChanged = false;
     if (videoSession_) {
+      drainVideoSessionEvents();
       if (std::optional<PlaybackSessionCompletion> completion =
               videoSession_->pump()) {
+        drainVideoSessionEvents();
         finishVideoSession(std::move(*completion));
         drainPendingCommands();
         playbackChanged = true;
+      } else {
+        drainVideoSessionEvents();
       }
     }
     return PollResult{playbackChanged, events_.drain()};
@@ -177,11 +181,18 @@ struct TuiMediaCoordinator::Impl {
   }
 
   bool handleVideoInputEvent(const InputEvent& event) {
-    return videoSession_ && videoSession_->handleInputEvent(event);
+    if (!videoSession_) return false;
+    const bool handled = videoSession_->handleInputEvent(event);
+    drainVideoSessionEvents();
+    return handled;
   }
 
   bool handleControlCommand(PlaybackControlCommand command) {
-    if (videoSession_) return videoSession_->handleControlCommand(command);
+    if (videoSession_) {
+      const bool handled = videoSession_->handleControlCommand(command);
+      drainVideoSessionEvents();
+      return handled;
+    }
 
     const AudioPlaybackSnapshot audio = services_.audioPlayback.snapshot();
     const bool hasAudioTarget =
@@ -221,19 +232,31 @@ struct TuiMediaCoordinator::Impl {
   }
 
   bool toggleWindowPresentation() {
-    return videoSession_ && videoSession_->toggleWindowPresentation();
+    if (!videoSession_) return false;
+    const bool handled = videoSession_->toggleWindowPresentation();
+    drainVideoSessionEvents();
+    return handled;
   }
 
   bool togglePictureInPicture() {
-    return videoSession_ && videoSession_->togglePictureInPicture();
+    if (!videoSession_) return false;
+    const bool handled = videoSession_->togglePictureInPicture();
+    drainVideoSessionEvents();
+    return handled;
   }
 
   bool toggleFullscreen() {
-    return videoSession_ && videoSession_->toggleFullscreen();
+    if (!videoSession_) return false;
+    const bool handled = videoSession_->toggleFullscreen();
+    drainVideoSessionEvents();
+    return handled;
   }
 
   bool activateVideoPresentation() {
-    return videoSession_ && videoSession_->activatePresentation();
+    if (!videoSession_) return false;
+    const bool handled = videoSession_->activatePresentation();
+    drainVideoSessionEvents();
+    return handled;
   }
 
   void handleMediaTaskCompletion(
@@ -362,22 +385,74 @@ struct TuiMediaCoordinator::Impl {
     if (!pendingCommand_) pendingCommand_.emplace(Quit{});
   }
 
+  bool acceptSessionHandoff(
+      const playback_session_exit::HandoffRequest& request) {
+    if (pendingCommand_) return false;
+
+    if (const auto* transport =
+            std::get_if<playback_session_exit::Transport>(&request.intent)) {
+      std::optional<playback_queue::Queue::PreparedActivation> successor =
+          services_.queue.prepareTransport(
+              transportDirection(transport->command));
+      if (!successor) return false;
+      pendingCommand_.emplace(PreparedPlayback{std::move(*successor)});
+      return true;
+    }
+    if (const auto* openFiles =
+            std::get_if<playback_session_exit::OpenFiles>(&request.intent)) {
+      OpenFilesRequest openRequest;
+      openRequest.files = openFiles->files;
+      return enqueueOpenFiles(openRequest).accepted();
+    }
+    if (!std::holds_alternative<playback_session_exit::ExternalHandoff>(
+            request.intent) ||
+        !handoffCommand_ || handoffRequestId_ != request.id) {
+      return false;
+    }
+    pendingCommand_.emplace(std::move(*handoffCommand_));
+    handoffCommand_.reset();
+    handoffRequestId_.reset();
+    return true;
+  }
+
+  void drainVideoSessionEvents() {
+    if (!videoSession_) return;
+    std::vector<playback_session::Event> sessionEvents =
+        videoSession_->drainEvents();
+    for (const playback_session::Event& event : sessionEvents) {
+      if (const auto* request =
+              std::get_if<playback_session_exit::HandoffRequest>(&event)) {
+        const bool accepted = acceptSessionHandoff(*request);
+        videoSession_->resolveHandoff(request->id, accepted);
+        continue;
+      }
+      if (const auto* cancellation =
+              std::get_if<playback_session_exit::HandoffCancellation>(
+                  &event)) {
+        if (handoffRequestId_ == cancellation->id) {
+          handoffCommand_.reset();
+          handoffRequestId_.reset();
+        }
+        continue;
+      }
+      publishEvent(ActivateBrowserSurface{});
+    }
+  }
+
   MediaCommandResult requestVideoHandoff(Command command) {
-    if (!videoSession_ || pendingCommand_ || handoffCommand_) {
+    if (!videoSession_ || pendingCommand_ || handoffCommand_ ||
+        handoffRequestId_) {
       return reject(MediaCommandFailureKind::Busy, {});
     }
     handoffCommand_.emplace(std::move(command));
-    const bool requested = videoSession_->requestHandoff([this](bool accepted) {
-      if (!handoffCommand_) return;
-      if (accepted && !pendingCommand_) {
-        pendingCommand_.emplace(std::move(*handoffCommand_));
-      }
-      handoffCommand_.reset();
-    });
-    if (!requested) {
+    const std::optional<playback_session_exit::RequestId> requestId =
+        videoSession_->requestHandoff();
+    if (!requestId) {
       handoffCommand_.reset();
       return reject(MediaCommandFailureKind::Busy, {});
     }
+    handoffRequestId_ = requestId;
+    drainVideoSessionEvents();
     clearCommandError();
     return MediaCommandResult::deferred();
   }
@@ -472,32 +547,16 @@ struct TuiMediaCoordinator::Impl {
       return MediaCommandResult::applied();
     }
 
-    auto requestTransport = [this](PlaybackTransportCommand command) {
-      if (!videoSession_ || pendingCommand_) return false;
-      std::optional<playback_queue::Queue::PreparedActivation> successor =
-          services_.queue.prepareTransport(transportDirection(command));
-      if (!successor) return false;
-      pendingCommand_.emplace(PreparedPlayback{std::move(*successor)});
-      return true;
-    };
-    auto requestDroppedFiles =
-        [this](const std::vector<std::filesystem::path>& files) {
-          OpenFilesRequest request;
-          request.files = files;
-          return enqueueOpenFiles(request).accepted();
-        };
-
     PlaybackSession::Request sessionRequest;
     sessionRequest.file = targetFile;
     sessionRequest.config = sessionConfig(services_.videoConfig,
                                           continuationState_);
     sessionRequest.continuityState = continuationState_;
     sessionRequest.sessionIntent = route.sessionIntent;
-    sessionRequest.requestTransportCommand = std::move(requestTransport);
-    sessionRequest.requestOpenFiles = std::move(requestDroppedFiles);
+    sessionRequest.capabilities.transportHandoff = true;
+    sessionRequest.capabilities.openFilesHandoff = true;
+    sessionRequest.capabilities.browserSurfaceActivation = true;
     sessionRequest.mediaProcessingActions = services_.mediaProcessingActions;
-    sessionRequest.activateBrowserSurface =
-        [this]() { publishEvent(ActivateBrowserSurface{}); };
     videoSession_.emplace(std::move(sessionRequest),
                           services_.sessionDependencies);
 
@@ -534,6 +593,8 @@ struct TuiMediaCoordinator::Impl {
     continuationState_ = std::move(completion.continuityState);
     videoSession_.reset();
     videoTarget_.reset();
+    handoffCommand_.reset();
+    handoffRequestId_.reset();
     if (completion.intent == PlaybackSessionExitIntent::QuitApplication) {
       enqueueQuit();
     }
@@ -613,6 +674,7 @@ struct TuiMediaCoordinator::Impl {
   std::optional<PlaybackTarget> videoTarget_;
   std::optional<Command> pendingCommand_;
   std::optional<Command> handoffCommand_;
+  std::optional<playback_session_exit::RequestId> handoffRequestId_;
   std::string commandError_;
   WakeableMailbox<Event> events_;
   bool driving_ = false;
