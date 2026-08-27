@@ -1,9 +1,9 @@
 #pragma once
 
 #include <filesystem>
-#include <functional>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "audio/playback_snapshot.h"
@@ -37,10 +37,19 @@ class AudioPictureInPictureWindow {
     AudioPlaybackSnapshot playback;
   };
 
-  struct Callbacks {
-    std::function<void(playback_input::Command)> dispatchPlaybackCommand;
-    std::function<bool(const std::vector<std::filesystem::path>&)> onPlayFiles;
-    std::function<void()> onClose;
+  struct PlaybackCommand {
+    playback_input::Command command;
+  };
+  struct OpenFiles {
+    std::vector<std::filesystem::path> files;
+    WindowPlacementState sourcePlacement;
+  };
+  struct Closed {};
+  using Event = std::variant<PlaybackCommand, OpenFiles, Closed>;
+
+  struct PollResult {
+    bool windowChanged = false;
+    std::vector<Event> events;
   };
 
   bool isOpen() const;
@@ -51,7 +60,7 @@ class AudioPictureInPictureWindow {
   bool toggle();
   NativeWaitHandle inputWaitHandle() const;
   NativeWaitHandle closeRequestedWaitHandle() const;
-  bool pollEvents(const Callbacks& callbacks);
+  PollResult pollEvents();
   bool render(const Styles& styles, const Context& context);
   WindowPlacementState capturePlacement() const;
 
@@ -60,9 +69,9 @@ class AudioPictureInPictureWindow {
   void refreshGridSize();
   void refreshArtwork(const Context& context, int width, int height);
   void drawArtworkBackground(const Styles& styles, int width, int height);
-  void handleInput(const InputEvent& ev, const Callbacks& callbacks);
-  bool clickControl(playback_overlay::OverlayControlId control,
-                    const Callbacks& callbacks);
+  void handleInput(const InputEvent& ev);
+  bool clickControl(playback_overlay::OverlayControlId control);
+  void publish(Event event);
 
   VideoWindow window_;
   ConsoleScreen screen_;
@@ -81,5 +90,6 @@ class AudioPictureInPictureWindow {
   int cellWidth_ = 1;
   int cellHeight_ = 1;
   playback_overlay::InteractionMap interactions_;
+  std::vector<Event> events_;
   std::string lastError_;
 };

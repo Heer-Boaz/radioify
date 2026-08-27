@@ -10,7 +10,7 @@
 #include "browser_model.h"
 #include "input_event.h"
 #include "playback/input/command.h"
-#include "playback/input/shortcut_types.h"
+#include "playback/input/shortcuts.h"
 
 namespace browser_input {
 
@@ -49,6 +49,33 @@ enum class PlaybackInputResult : uint8_t {
   Handled,
   HandledWithoutOverlayRefresh,
 };
+
+struct PlaybackInputMatch {
+  playback_input::Command command;
+  PlaybackInputResult result = PlaybackInputResult::Ignored;
+};
+
+inline std::optional<PlaybackInputMatch> matchPlaybackInput(
+    const InputEvent& ev,
+    uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
+                                kPlaybackShortcutContextShared) {
+  const std::optional<PlaybackAction> action =
+      resolvePlaybackAction(ev, shortcutContexts);
+  if (!action) return std::nullopt;
+
+  PlaybackInputResult result = PlaybackInputResult::Handled;
+  switch (*action) {
+    case PlaybackAction::CopyVideoFrame:
+    case PlaybackAction::ExitPlaybackSession:
+    case PlaybackAction::DismissPictureInPicture:
+    case PlaybackAction::CloseViewer:
+      result = PlaybackInputResult::HandledWithoutOverlayRefresh;
+      break;
+    default:
+      break;
+  }
+  return PlaybackInputMatch{playback_input::Command{*action}, result};
+}
 
 enum class BrowserSearchFocus {
   None,

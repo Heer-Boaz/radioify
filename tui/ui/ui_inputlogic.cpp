@@ -938,18 +938,9 @@ void handleInputEvent(const InputEvent& ev, BrowserNavigator& navigator,
 PlaybackInputResult handlePlaybackInput(const InputEvent& ev,
                                         const InputCallbacks& callbacks,
                                         uint32_t shortcutContexts) {
-  const std::optional<PlaybackAction> action =
-      resolvePlaybackAction(ev, shortcutContexts);
-  if (!action) return PlaybackInputResult::Ignored;
-
-  dispatchPlaybackCommand(callbacks, *action);
-  switch (*action) {
-    case PlaybackAction::CopyVideoFrame:
-    case PlaybackAction::ExitPlaybackSession:
-    case PlaybackAction::DismissPictureInPicture:
-    case PlaybackAction::CloseViewer:
-      return PlaybackInputResult::HandledWithoutOverlayRefresh;
-    default:
-      return PlaybackInputResult::Handled;
-  }
+  std::optional<PlaybackInputMatch> match =
+      matchPlaybackInput(ev, shortcutContexts);
+  if (!match) return PlaybackInputResult::Ignored;
+  dispatchPlaybackCommand(callbacks, std::move(match->command));
+  return match->result;
 }

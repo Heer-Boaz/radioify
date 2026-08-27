@@ -1060,23 +1060,34 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     audioPictureInPicture.render(audioPictureInPictureStyles,
                                  buildAudioPictureInPictureContext());
   };
-  AudioPictureInPictureWindow::Callbacks audioPictureInPictureCallbacks;
-  audioPictureInPictureCallbacks.dispatchPlaybackCommand =
-      callbacks.dispatchPlaybackCommand;
-  audioPictureInPictureCallbacks.onPlayFiles =
-      [&](const std::vector<std::filesystem::path>& files) {
-    WindowPlacementState sourcePlacement =
-        audioPictureInPicture.capturePlacement();
-    PlaybackPresentationState videoPresentation =
-        videoConfig.enableAscii
-            ? PlaybackPresentationState::terminalAscii()
-            : PlaybackPresentationState::nativeWindowed();
-    videoPresentation = videoPresentation.togglePictureInPicture();
-    return mediaCoordinator.startDroppedFiles(files, &sourcePlacement,
-                                              videoPresentation);
-  };
-  audioPictureInPictureCallbacks.onClose =
-      [&]() { markDirty(UiDirtyFlags::Async); };
+  auto handleAudioPictureInPictureEvent =
+      [&](AudioPictureInPictureWindow::Event event) {
+        std::visit(
+            [&](auto&& value) {
+              using Event = std::decay_t<decltype(value)>;
+              if constexpr (std::is_same_v<
+                                Event,
+                                AudioPictureInPictureWindow::PlaybackCommand>) {
+                callbacks.dispatchPlaybackCommand(std::move(value.command));
+              } else if constexpr (
+                  std::is_same_v<Event,
+                                 AudioPictureInPictureWindow::OpenFiles>) {
+                PlaybackPresentationState videoPresentation =
+                    videoConfig.enableAscii
+                        ? PlaybackPresentationState::terminalAscii()
+                        : PlaybackPresentationState::nativeWindowed();
+                videoPresentation =
+                    videoPresentation.togglePictureInPicture();
+                mediaCoordinator.startDroppedFiles(
+                    value.files, &value.sourcePlacement, videoPresentation);
+              } else if constexpr (
+                  std::is_same_v<Event,
+                                 AudioPictureInPictureWindow::Closed>) {
+                markDirty(UiDirtyFlags::Async);
+              }
+            },
+            std::move(event));
+      };
 
   auto activateRadioifySurface = [&]() {
     if (mediaCoordinator.videoActive()) {
@@ -1361,9 +1372,13 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     if (windowTuiEnabled && tuiWindow.IsOpen()) {
       tuiWindow.PollEvents();
     }
-    if (audioPictureInPicture.isOpen() &&
-        audioPictureInPicture.pollEvents(audioPictureInPictureCallbacks)) {
-      markDirty(UiDirtyFlags::Async);
+    if (audioPictureInPicture.isOpen()) {
+      AudioPictureInPictureWindow::PollResult update =
+          audioPictureInPicture.pollEvents();
+      for (AudioPictureInPictureWindow::Event& event : update.events) {
+        handleAudioPictureInPictureEvent(std::move(event));
+      }
+      if (update.windowChanged) markDirty(UiDirtyFlags::Async);
     }
     processShellPlaybackCommands();
     if (!running) break;

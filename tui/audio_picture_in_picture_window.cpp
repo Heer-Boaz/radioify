@@ -49,6 +49,7 @@ NativeWaitHandle AudioPictureInPictureWindow::closeRequestedWaitHandle() const {
 bool AudioPictureInPictureWindow::open() {
   lastError_.clear();
   if (window_.IsOpen()) return true;
+  events_.clear();
   if (!window_.Open(kDefaultWindowWidth, kDefaultWindowHeight,
                     RADIOIFY_APP_NAME " Picture-in-Picture")) {
     lastError_ = "The picture-in-picture window could not be created.";
@@ -180,21 +181,25 @@ void AudioPictureInPictureWindow::drawArtworkBackground(const Styles& styles,
   }
 }
 
-bool AudioPictureInPictureWindow::pollEvents(const Callbacks& callbacks) {
-  if (!window_.IsOpen()) return false;
-  bool handled = window_.PollEvents();
+AudioPictureInPictureWindow::PollResult
+AudioPictureInPictureWindow::pollEvents() {
+  PollResult result;
+  if (!window_.IsOpen()) return result;
+  result.windowChanged = window_.PollEvents();
   if (window_.ConsumeCloseRequested()) {
     close();
-    if (callbacks.onClose) callbacks.onClose();
-    return true;
+    publish(Closed{});
+    result.windowChanged = true;
   }
 
   InputEvent ev{};
   while (window_.PollInput(ev)) {
-    handled = true;
-    handleInput(ev, callbacks);
+    result.windowChanged = true;
+    handleInput(ev);
   }
-  return handled;
+  result.events = std::move(events_);
+  events_.clear();
+  return result;
 }
 
 bool AudioPictureInPictureWindow::render(const Styles& styles,
@@ -326,41 +331,36 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   return true;
 }
 
-void AudioPictureInPictureWindow::handleInput(const InputEvent& ev,
-                                  const Callbacks& callbacks) {
+void AudioPictureInPictureWindow::handleInput(const InputEvent& ev) {
   if (ev.type == InputEvent::Type::Resize) {
     refreshGridSize();
     return;
   }
 
   if (ev.type == InputEvent::Type::FileDrop &&
-      isCommittedFileDropEvent(ev.fileDrop) && callbacks.onPlayFiles &&
-      callbacks.onPlayFiles(ev.fileDrop.files)) {
+      isCommittedFileDropEvent(ev.fileDrop)) {
+    publish(OpenFiles{ev.fileDrop.files, capturePlacement()});
     return;
   }
 
   if (ev.type == InputEvent::Type::Key) {
-    InputCallbacks playbackCallbacks;
-    playbackCallbacks.dispatchPlaybackCommand =
-        [&](playback_input::Command command) {
+    const uint32_t shortcutContexts = kPlaybackShortcutContextShared |
+                                      kPlaybackShortcutContextGlobal |
+                                      kPlaybackShortcutContextPictureInPicture;
+    if (std::optional<PlaybackInputMatch> match =
+            matchPlaybackInput(ev, shortcutContexts)) {
+      playback_input::Command command = std::move(match->command);
       if (const auto* action = std::get_if<PlaybackAction>(&command)) {
         if (*action == PlaybackAction::ToggleWindow ||
             *action == PlaybackAction::TogglePictureInPicture ||
             *action == PlaybackAction::DismissPictureInPicture) {
           close();
-          if (callbacks.onClose) callbacks.onClose();
+          publish(Closed{});
           return;
         }
       }
-      if (callbacks.dispatchPlaybackCommand) {
-        callbacks.dispatchPlaybackCommand(std::move(command));
-      }
-    };
-
-    const uint32_t shortcutContexts = kPlaybackShortcutContextShared |
-                      kPlaybackShortcutContextGlobal |
-                      kPlaybackShortcutContextPictureInPicture;
-    handlePlaybackInput(ev, playbackCallbacks, shortcutContexts);
+      publish(PlaybackCommand{std::move(command)});
+    }
     return;
   }
 
@@ -388,9 +388,9 @@ void AudioPictureInPictureWindow::handleInput(const InputEvent& ev,
 
   if (mouse.kind == MouseEventKind::VerticalWheel) {
     const int delta = wheelDelta(mouse);
-    if (delta != 0 && callbacks.dispatchPlaybackCommand) {
-      callbacks.dispatchPlaybackCommand(
-          playback_input::AdjustVolume{delta > 0 ? 0.05f : -0.05f});
+    if (delta != 0) {
+      publish(PlaybackCommand{playback_input::AdjustVolume{
+          delta > 0 ? 0.05f : -0.05f}});
     }
     return;
   }
@@ -403,23 +403,22 @@ void AudioPictureInPictureWindow::handleInput(const InputEvent& ev,
 
   if (mouse.kind == MouseEventKind::Press) {
     if (hitControl) {
-      clickControl(*hitControl, callbacks);
+      clickControl(*hitControl);
       return;
     }
   }
 
   const auto& progressHit = interactionHit.progressBar;
-  if (progressHit && callbacks.dispatchPlaybackCommand) {
-    callbacks.dispatchPlaybackCommand(
-        playback_input::SeekToRatio{progressHit->ratio});
+  if (progressHit) {
+    publish(PlaybackCommand{
+        playback_input::SeekToRatio{progressHit->ratio}});
   }
 }
 
 bool AudioPictureInPictureWindow::clickControl(
-    playback_overlay::OverlayControlId control, const Callbacks& callbacks) {
+    playback_overlay::OverlayControlId control) {
   auto dispatch = [&](PlaybackAction action) {
-    if (!callbacks.dispatchPlaybackCommand) return false;
-    callbacks.dispatchPlaybackCommand(action);
+    publish(PlaybackCommand{action});
     return true;
   };
 
@@ -434,8 +433,12 @@ bool AudioPictureInPictureWindow::clickControl(
       [&]() { return dispatch(PlaybackAction::Toggle50Hz); };
   actions.pictureInPicture = [&]() {
     close();
-    if (callbacks.onClose) callbacks.onClose();
+    publish(Closed{});
     return true;
   };
   return playback_overlay::dispatchOverlayControl(control, actions);
+}
+
+void AudioPictureInPictureWindow::publish(Event event) {
+  events_.push_back(std::move(event));
 }

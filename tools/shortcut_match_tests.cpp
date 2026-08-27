@@ -175,6 +175,17 @@ int main() {
                    makeKey('P'), kPlaybackShortcutContextPictureInPicture)
                    .value() == PlaybackAction::DismissPictureInPicture,
                "Bare P must still dismiss the PiP window");
+  const std::optional<PlaybackInputMatch> pictureInPictureMatch =
+      matchPlaybackInput(makeKeyEvent('P', 'p'),
+                         kPlaybackShortcutContextPictureInPicture);
+  ok &= expect(
+      pictureInPictureMatch &&
+          std::get<PlaybackAction>(pictureInPictureMatch->command) ==
+              PlaybackAction::DismissPictureInPicture &&
+      pictureInPictureMatch->result ==
+              PlaybackInputResult::HandledWithoutOverlayRefresh,
+      "shortcut matching must return typed intent before a surface "
+      "dispatches it");
   ok &= expect(resolvePlaybackAction(
                    makeKey(VK_LEFT), kPlaybackShortcutContextShared)
                    .value() == PlaybackAction::SeekBackward,
