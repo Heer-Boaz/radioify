@@ -173,6 +173,12 @@ JobSnapshot Job::snapshot() const {
   return impl_->state;
 }
 
+bool Job::configured() const {
+  if (!impl_) return false;
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  return static_cast<bool>(impl_->operation);
+}
+
 std::optional<JobSnapshot> Job::takeCompletion() {
   if (!impl_) return std::nullopt;
   std::optional<JobSnapshot> completion;

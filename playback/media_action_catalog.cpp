@@ -15,7 +15,8 @@ std::vector<Item> build(const Context& context) {
     if (context.subtitleGenerationRunningForSource) {
       items.push_back(
           {Action::CancelSubtitleGeneration, "Cancel subtitle generation"});
-    } else if (!context.backgroundTaskRunning) {
+    } else if (!context.backgroundTaskRunning &&
+               context.canGenerateSubtitles) {
       items.push_back(
           {Action::GenerateSubtitles,
            context.hasGeneratedSubtitles ? "Regenerate subtitles..."

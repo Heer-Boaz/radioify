@@ -45,44 +45,68 @@ class FakeMediaProcessingService final
                : playback_media_processing::SourceState{};
   }
 
-  bool requestSubtitles(
+  playback_media_processing::RequestResult requestSubtitles(
       const std::filesystem::path& sourceFile) override {
     subtitleRequested = acceptRequests && sourceFile == "source.mp4";
-    return subtitleRequested;
+    return requestResult(subtitleRequested,
+                         playback_media_processing::RequestFailure::
+                             BackendUnavailable);
   }
 
-  bool requestSubtitleCancellation() override {
+  playback_media_processing::RequestResult requestSubtitleCancellation()
+      override {
     subtitleCancelled = acceptRequests;
-    return subtitleCancelled;
+    return requestResult(subtitleCancelled,
+                         playback_media_processing::RequestFailure::
+                             NotRunning);
   }
 
-  bool requestAudioExport(
+  playback_media_processing::RequestResult requestAudioExport(
       const std::filesystem::path& sourceFile) override {
     audioExportRequested = acceptRequests && sourceFile == "source.mp4";
-    return audioExportRequested;
+    return requestResult(audioExportRequested,
+                         playback_media_processing::RequestFailure::
+                             BackendUnavailable);
   }
 
-  bool requestTranscriptTextExport(
+  playback_media_processing::RequestResult requestTranscriptTextExport(
       const std::filesystem::path& sourceFile) override {
     transcriptExportRequested =
         acceptRequests && sourceFile == "source.mp4";
-    return transcriptExportRequested;
+    return requestResult(transcriptExportRequested,
+                         playback_media_processing::RequestFailure::
+                             MissingTranscript);
   }
 
-  bool requestMediaExportCancellation() override {
+  playback_media_processing::RequestResult requestMediaExportCancellation()
+      override {
     exportCancelled = acceptRequests;
-    return exportCancelled;
+    return requestResult(exportCancelled,
+                         playback_media_processing::RequestFailure::
+                             NotRunning);
   }
 
-  bool requestAudioSeparation(
+  playback_media_processing::RequestResult requestAudioSeparation(
       const std::filesystem::path& sourceFile) override {
     separationRequested = acceptRequests && sourceFile == "source.mp4";
-    return separationRequested;
+    return requestResult(separationRequested,
+                         playback_media_processing::RequestFailure::
+                             BackendUnavailable);
   }
 
-  bool requestAudioSeparationCancellation() override {
+  playback_media_processing::RequestResult
+  requestAudioSeparationCancellation() override {
     separationCancelled = acceptRequests;
-    return separationCancelled;
+    return requestResult(separationCancelled,
+                         playback_media_processing::RequestFailure::
+                             NotRunning);
+  }
+
+  static playback_media_processing::RequestResult requestResult(
+      bool accepted, playback_media_processing::RequestFailure failure) {
+    return accepted
+               ? playback_media_processing::RequestResult::accepted()
+               : playback_media_processing::RequestResult::rejected(failure);
   }
 
   playback_media_processing::SourceState state;
@@ -118,6 +142,7 @@ int main() {
 
   actions::Context video;
   video.mediaKind = actions::MediaKind::Video;
+  video.canGenerateSubtitles = true;
   video.canSeparateAudio = true;
   video.canExportAudio = true;
   const std::vector<actions::Item> browserVideo = actions::build(video);
@@ -252,6 +277,7 @@ int main() {
 
   FakeMediaProcessingService processingService;
   processingService.state.backgroundTaskRunning = true;
+  processingService.state.subtitleGenerationAvailable = true;
   processingService.state.subtitleGenerationRunning = true;
   processingService.state.hasGeneratedSubtitles = true;
   processingService.state.audioSeparationAvailable = true;
@@ -265,6 +291,7 @@ int main() {
       processingActions.contextForSource("source.mp4");
   ok &= expect(projected.mediaKind == actions::MediaKind::Video &&
                    projected.backgroundTaskRunning &&
+                   projected.canGenerateSubtitles &&
                    projected.subtitleGenerationRunningForSource &&
                    projected.hasGeneratedSubtitles &&
                    projected.canSeparateAudio &&
@@ -332,12 +359,23 @@ int main() {
       unavailable.execute(actions::Action::CancelAudioSeparation,
                           "source.mp4");
   ok &= expect(rejectedGeneration && !rejectedGeneration->accepted &&
+                   rejectedGeneration->error &&
+                   rejectedGeneration->error->failure ==
+                       playback_media_processing::RequestFailure::
+                           BackendUnavailable &&
                    rejectedGeneration->feedback ==
-                       "Could not start subtitle generation" &&
+                       "Subtitle generation could not start: the required "
+                       "processing backend is unavailable. Source: "
+                       "\"source.mp4\"." &&
                    rejectedCancellation && !rejectedCancellation->accepted &&
+                   rejectedCancellation->error &&
+                   rejectedCancellation->error->failure ==
+                       playback_media_processing::RequestFailure::NotRunning &&
                    rejectedCancellation->feedback ==
-                       "Could not cancel audio separation",
-               "a rejecting application service must surface failure");
+                       "Audio separation could not be cancelled: there is no "
+                       "matching task to cancel. Source: \"source.mp4\".",
+               "a rejecting application service must preserve and explain "
+               "the concrete failure");
 
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

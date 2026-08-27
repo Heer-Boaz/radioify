@@ -1,5 +1,5 @@
 #include "audio/separation/artifact.h"
-#include "audio/separation/separator.h"
+#include "audio/separation/job.h"
 
 #include <atomic>
 #include <chrono>
@@ -23,13 +23,20 @@ int main(int argc, char** argv) {
   int lastPercent = -1;
   const auto started = std::chrono::steady_clock::now();
   std::string error;
-  const bool succeeded = audio_separation::separateMediaAudio(
+  const audio_separation::Job::Operation operation =
+      audio_separation::Job::productionOperation();
+  if (!operation) {
+    std::cerr << "Audio separation failed: production operation is not "
+                 "configured\n";
+    return EXIT_FAILURE;
+  }
+  const bool succeeded = operation(
       media, outputs,
-      [&](const audio_separation::Progress& progress) {
-        const int percent = static_cast<int>(progress.fraction * 100.0f);
+      [&](float fraction, const std::string& phase) {
+        const int percent = static_cast<int>(fraction * 100.0f);
         if (percent == lastPercent) return;
         lastPercent = percent;
-        std::cout << std::setw(3) << percent << "%  " << progress.phase
+        std::cout << std::setw(3) << percent << "%  " << phase
                   << '\n';
       },
       &cancelRequested, &error);

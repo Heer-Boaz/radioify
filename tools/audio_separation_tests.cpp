@@ -198,6 +198,7 @@ bool testFlacWriter(const std::filesystem::path& directory) {
 
 bool testJobLifecycle() {
   namespace separation = audio_separation;
+  separation::Job unconfigured(separation::Job::Operation{});
   separation::Job job(
       [](const std::filesystem::path&, const separation::ArtifactPaths&,
          const separation::Job::ProgressReporter& progress,
@@ -206,6 +207,10 @@ bool testJobLifecycle() {
         return true;
       });
   bool ok = true;
+  ok &= expect(!unconfigured.configured() && job.configured() &&
+                   static_cast<bool>(separation::Job::productionOperation()),
+               "job availability must derive from an actual operation and "
+               "the production adapter must be constructible");
   ok &= expect(job.tryStart("clip.mp4"),
                "a valid media path must start a separation job");
   std::optional<separation::JobSnapshot> completion;

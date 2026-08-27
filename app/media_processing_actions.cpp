@@ -9,12 +9,6 @@
 namespace media_processing {
 namespace {
 
-playback_media_processing::ActionResult actionResult(
-    bool accepted, const char* acceptedFeedback,
-    const char* rejectedFeedback) {
-  return {accepted, accepted ? acceptedFeedback : rejectedFeedback};
-}
-
 bool validTrackIndex(const std::optional<int>& trackIndex) {
   return !trackIndex || *trackIndex >= 0;
 }
@@ -34,8 +28,10 @@ std::optional<playback_media_processing::ActionResult> Actions::execute(
   switch (request.action) {
     case playback_media_actions::Action::AnalyzeAudio: {
       if (!validTrackIndex(request.trackIndex)) {
-        return actionResult(false, "Analyzing melody",
-                            "Could not start melody analysis");
+        return playback_media_processing::makeActionResult(
+            request.action, request.sourceFile,
+            playback_media_processing::RequestResult::rejected(
+                playback_media_processing::RequestFailure::InvalidSelection));
       }
       const std::filesystem::path outputFile =
           request.trackIndex
@@ -43,25 +39,27 @@ std::optional<playback_media_processing::ActionResult> Actions::execute(
                     request.sourceFile,
                     static_cast<std::uint32_t>(*request.trackIndex))
               : defaultMelodyArtifactPath(request.sourceFile);
-      return actionResult(
+      return playback_media_processing::makeActionResult(
+          request.action, request.sourceFile,
           coordinator_.tryStartMelodyAnalysis(
-              request.sourceFile, request.trackIndex.value_or(0), outputFile),
-          "Analyzing melody", "Could not start melody analysis");
+              request.sourceFile, request.trackIndex.value_or(0), outputFile));
     }
     case playback_media_actions::Action::SplitLoop: {
       if (!validTrackIndex(request.trackIndex)) {
-        return actionResult(false, "Splitting loop",
-                            "Could not start loop split");
+        return playback_media_processing::makeActionResult(
+            request.action, request.sourceFile,
+            playback_media_processing::RequestResult::rejected(
+                playback_media_processing::RequestFailure::InvalidSelection));
       }
       LoopSplitConfig config = request.loopSplitConfig;
       config.trackIndex = request.trackIndex.value_or(0);
       const LoopSplitOutputPaths outputPaths = resolveLoopSplitOutputPaths(
           request.sourceFile, request.outputArgument);
-      return actionResult(
+      return playback_media_processing::makeActionResult(
+          request.action, request.sourceFile,
           coordinator_.tryStartLoopSplit(request.sourceFile,
                                          outputPaths.stinger,
-                                         outputPaths.loop, config),
-          "Splitting loop", "Could not start loop split");
+                                         outputPaths.loop, config));
     }
     case playback_media_actions::Action::Play:
     case playback_media_actions::Action::BrowseTracks:

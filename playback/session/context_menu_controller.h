@@ -50,8 +50,6 @@ class ContextMenuController {
  public:
   bool visible() const { return visible_; }
   void refresh(const playback_video_edit::EditSnapshot& edit,
-               const playback_video_edit::ExportProgress& editExport);
-  void refresh(const playback_video_edit::EditSnapshot& edit,
                const playback_video_edit::ExportProgress& editExport,
                playback_media_actions::Context sourceContext);
   bool open(ContextMenuSurface surface, double xRatio, double yRatio);

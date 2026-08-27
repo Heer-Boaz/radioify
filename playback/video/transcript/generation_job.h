@@ -59,6 +59,7 @@ class GenerationJob {
 
   // Uses Radioify's configured Whisper/Vulkan transcription operation.
   GenerationJob();
+  static Operation productionOperation();
   // The operation boundary also permits another transcription backend without
   // changing lifecycle, cancellation, or UI coordination code.
   explicit GenerationJob(Operation operation);
@@ -72,6 +73,7 @@ class GenerationJob {
   bool requestCancel();
   void cancelAndJoin();
   GenerationJobSnapshot snapshot() const;
+  bool configured() const;
   std::optional<GenerationJobSnapshot> takeCompletion();
   bool consumeChanged();
   NativeWaitHandle nativeWaitHandle() const;

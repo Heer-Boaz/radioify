@@ -17,6 +17,20 @@
 namespace media_processing {
 namespace {
 
+using playback_media_processing::RequestFailure;
+using playback_media_processing::RequestResult;
+
+RequestResult rejected(RequestFailure failure, std::string detail = {}) {
+  return RequestResult::rejected(failure, std::move(detail));
+}
+
+RequestResult rejected(
+    const playback_media_processing::RequestError& error) {
+  return RequestResult::rejected(
+      error.failure, error.detail, error.blockingOperation,
+      error.blockingSourceFile);
+}
+
 TaskOutcome outcomeFor(
     const playback_video_transcript::GenerationJobSnapshot& snapshot) {
   using State = playback_video_transcript::GenerationJobState;
@@ -249,24 +263,15 @@ std::optional<playback_media_processing::Completion> completionForPlayback(
     const TaskCompletion& completion) {
   playback_media_processing::Completion projected;
   switch (completion.kind) {
-    case TaskKind::SubtitleGeneration:
-      projected.operation =
-          playback_media_processing::Operation::SubtitleGeneration;
-      break;
-    case TaskKind::AudioSeparation:
-      projected.operation =
-          playback_media_processing::Operation::AudioSeparation;
-      break;
-    case TaskKind::AudioExport:
-      projected.operation = playback_media_processing::Operation::AudioExport;
-      break;
-    case TaskKind::TranscriptTextExport:
-      projected.operation =
-          playback_media_processing::Operation::TranscriptTextExport;
-      break;
     case TaskKind::MelodyAnalysis:
     case TaskKind::LoopSplit:
       return std::nullopt;
+    case TaskKind::SubtitleGeneration:
+    case TaskKind::AudioSeparation:
+    case TaskKind::AudioExport:
+    case TaskKind::TranscriptTextExport:
+      projected.operation = completion.kind;
+      break;
   }
   projected.outcome = playbackOutcomeFor(completion.outcome);
   projected.sourceFile = completion.sourceFile;
@@ -287,8 +292,7 @@ struct Coordinator::Impl {
             std::make_unique<playback_video_transcript::GenerationJob>(
                 std::move(backends.generateSubtitles), wakeEvent.notifier())),
         audioSeparation(std::make_unique<audio_separation::Job>(
-            std::move(backends.separateAudio), wakeEvent.notifier())),
-        audioSeparationAvailable(backends.audioSeparationAvailable) {}
+            std::move(backends.separateAudio), wakeEvent.notifier())) {}
 
   WakeEvent wakeEvent;
   WorkerTask workerTask;
@@ -298,9 +302,9 @@ struct Coordinator::Impl {
   FileExportOperation exportTranscriptText;
   std::unique_ptr<playback_video_transcript::GenerationJob> subtitles;
   std::unique_ptr<audio_separation::Job> audioSeparation;
-  bool audioSeparationAvailable = false;
   bool subtitleCompletionPending = false;
   bool audioSeparationCompletionPending = false;
+  std::vector<TaskCompletion> queuedCompletions;
   std::optional<TaskCompletion> latestCompletion;
 
   bool completionPending() const {
@@ -320,8 +324,6 @@ Coordinator::Coordinator(Operations operations)
         backends.exportAudio = std::move(operations.exportAudio);
         backends.exportTranscriptText =
             std::move(operations.exportTranscriptText);
-        backends.audioSeparationAvailable =
-            operations.audioSeparationAvailable;
         return backends;
       }()) {}
 
@@ -376,14 +378,89 @@ std::optional<TaskCompletion> Coordinator::latestCompletion() const {
   return impl_ ? impl_->latestCompletion : std::nullopt;
 }
 
-bool Coordinator::tryStartMelodyAnalysis(
+bool Coordinator::collectReadyCompletions() {
+  if (!impl_) return false;
+  bool collected = false;
+
+  if (std::optional<TaskCompletion> completion =
+          impl_->workerTask.takeCompletion()) {
+    impl_->latestCompletion = *completion;
+    impl_->queuedCompletions.push_back(std::move(*completion));
+    collected = true;
+  }
+
+  if (impl_->subtitles) {
+    if (auto completion = impl_->subtitles->takeCompletion()) {
+      TaskCompletion taskCompletion;
+      taskCompletion.kind = TaskKind::SubtitleGeneration;
+      taskCompletion.outcome = outcomeFor(*completion);
+      taskCompletion.sourceFile = completion->sourceFile;
+      taskCompletion.outputFile = completion->outputFile;
+      taskCompletion.detail = completion->error;
+      impl_->subtitleCompletionPending = false;
+      impl_->latestCompletion = taskCompletion;
+      impl_->queuedCompletions.push_back(std::move(taskCompletion));
+      collected = true;
+    }
+  }
+
+  if (impl_->audioSeparation) {
+    if (auto completion = impl_->audioSeparation->takeCompletion()) {
+      TaskCompletion taskCompletion;
+      taskCompletion.kind = TaskKind::AudioSeparation;
+      taskCompletion.outcome = outcomeFor(*completion);
+      taskCompletion.sourceFile = completion->sourceFile;
+      taskCompletion.outputFile = completion->outputFiles.front();
+      taskCompletion.detail = completion->error;
+      impl_->audioSeparationCompletionPending = false;
+      impl_->latestCompletion = taskCompletion;
+      impl_->queuedCompletions.push_back(std::move(taskCompletion));
+      collected = true;
+    }
+  }
+  return collected;
+}
+
+std::optional<playback_media_processing::RequestError>
+Coordinator::startConflict() {
+  if (!impl_) return std::nullopt;
+  collectReadyCompletions();
+  if (const std::optional<TaskActivity> current = activity()) {
+    playback_media_processing::RequestError error;
+    error.failure = RequestFailure::Busy;
+    error.blockingOperation = current->kind;
+    error.blockingSourceFile = current->sourceFile;
+    return error;
+  }
+  if (impl_->completionPending()) {
+    // A worker can finish between the first collection and activity snapshot.
+    // Collect once more before exposing an owner-thread race to the user.
+    collectReadyCompletions();
+  }
+  if (impl_->completionPending()) {
+    playback_media_processing::RequestError error;
+    error.failure = RequestFailure::CompletionPending;
+    return error;
+  }
+  return std::nullopt;
+}
+
+RequestResult Coordinator::tryStartMelodyAnalysis(
     const std::filesystem::path& sourceFile, int trackIndex,
     const std::filesystem::path& outputFile) {
-  if (!impl_ || !impl_->analyzeMelody || sourceFile.empty() ||
-      outputFile.empty() || !isSupportedAudioExt(sourceFile) || running() ||
-      impl_->completionPending()) {
-    return false;
+  if (!impl_ || !impl_->analyzeMelody) {
+    return rejected(RequestFailure::BackendUnavailable,
+                    "the melody-analysis backend is not configured");
   }
+  if (sourceFile.empty()) return rejected(RequestFailure::InvalidSource);
+  if (!isSupportedAudioExt(sourceFile)) {
+    return rejected(RequestFailure::UnsupportedSource);
+  }
+  if (trackIndex < 0) return rejected(RequestFailure::InvalidSelection);
+  if (outputFile.empty()) {
+    return rejected(RequestFailure::InvalidDestination);
+  }
+  if (const auto conflict = startConflict()) return rejected(*conflict);
 
   const MelodyOperation operation = impl_->analyzeMelody;
   TaskActivity activity;
@@ -420,20 +497,33 @@ bool Coordinator::tryStartMelodyAnalysis(
         }
         return completion;
       });
-  if (started) impl_->latestCompletion.reset();
-  return started;
+  if (!started) {
+    return rejected(RequestFailure::InternalError,
+                    "the melody-analysis worker rejected the request");
+  }
+  impl_->latestCompletion.reset();
+  return RequestResult::accepted();
 }
 
-bool Coordinator::tryStartLoopSplit(
+RequestResult Coordinator::tryStartLoopSplit(
     const std::filesystem::path& sourceFile,
     const std::filesystem::path& stingerOutput,
     const std::filesystem::path& loopOutput, const LoopSplitConfig& config) {
-  if (!impl_ || !impl_->splitLoop || sourceFile.empty() ||
-      stingerOutput.empty() || loopOutput.empty() ||
-      !isSupportedAudioExt(sourceFile) || running() ||
-      impl_->completionPending()) {
-    return false;
+  if (!impl_ || !impl_->splitLoop) {
+    return rejected(RequestFailure::BackendUnavailable,
+                    "the loop-splitting backend is not configured");
   }
+  if (sourceFile.empty()) return rejected(RequestFailure::InvalidSource);
+  if (!isSupportedAudioExt(sourceFile)) {
+    return rejected(RequestFailure::UnsupportedSource);
+  }
+  if (config.trackIndex < 0) {
+    return rejected(RequestFailure::InvalidSelection);
+  }
+  if (stingerOutput.empty() || loopOutput.empty()) {
+    return rejected(RequestFailure::InvalidDestination);
+  }
+  if (const auto conflict = startConflict()) return rejected(*conflict);
 
   const LoopSplitOperation operation = impl_->splitLoop;
   TaskActivity activity;
@@ -471,19 +561,27 @@ bool Coordinator::tryStartLoopSplit(
         }
         return completion;
       });
-  if (started) impl_->latestCompletion.reset();
-  return started;
+  if (!started) {
+    return rejected(RequestFailure::InternalError,
+                    "the loop-splitting worker rejected the request");
+  }
+  impl_->latestCompletion.reset();
+  return RequestResult::accepted();
 }
 
-bool Coordinator::tryStartFileExport(
+RequestResult Coordinator::tryStartFileExport(
     TaskKind kind, const std::filesystem::path& sourceFile,
     const std::filesystem::path& outputFile,
     const FileExportOperation& operation, const char* initialPhase,
     const char* fallbackError) {
-  if (!impl_ || !operation || sourceFile.empty() || outputFile.empty() ||
-      running() || impl_->completionPending()) {
-    return false;
+  if (!impl_ || !operation) {
+    return rejected(RequestFailure::BackendUnavailable);
   }
+  if (sourceFile.empty()) return rejected(RequestFailure::InvalidSource);
+  if (outputFile.empty()) {
+    return rejected(RequestFailure::InvalidDestination);
+  }
+  if (const auto conflict = startConflict()) return rejected(*conflict);
   TaskActivity activity;
   activity.kind = kind;
   activity.sourceFile = sourceFile;
@@ -512,8 +610,12 @@ bool Coordinator::tryStartFileExport(
         }
         return completion;
       });
-  if (started) impl_->latestCompletion.reset();
-  return started;
+  if (!started) {
+    return rejected(RequestFailure::InternalError,
+                    "the export worker rejected the request");
+  }
+  impl_->latestCompletion.reset();
+  return RequestResult::accepted();
 }
 
 playback_media_processing::SourceState Coordinator::sourceStateFor(
@@ -521,6 +623,9 @@ playback_media_processing::SourceState Coordinator::sourceStateFor(
   playback_media_processing::SourceState state;
   const std::optional<TaskActivity> currentActivity = activity();
   state.backgroundTaskRunning = currentActivity.has_value();
+  state.subtitleGenerationAvailable =
+      impl_ && impl_->subtitles && impl_->subtitles->configured() &&
+      isSupportedVideoExt(sourceFile);
   state.hasGeneratedSubtitles =
       !playback_video_transcript::activeTranscriptPathForVideo(sourceFile)
            .empty();
@@ -544,33 +649,66 @@ playback_media_processing::SourceState Coordinator::sourceStateFor(
   return state;
 }
 
-bool Coordinator::requestSubtitles(
+RequestResult Coordinator::requestSubtitles(
     const std::filesystem::path& sourceFile) {
-  if (!impl_ || !impl_->subtitles || !isSupportedVideoExt(sourceFile) ||
-      running() || impl_->completionPending() ||
-      !impl_->subtitles->tryStart(sourceFile)) {
-    return false;
+  if (!impl_ || !impl_->subtitles || !impl_->subtitles->configured()) {
+    return rejected(RequestFailure::BackendUnavailable,
+                    "the Vulkan subtitle-generation backend is not "
+                    "configured");
+  }
+  if (sourceFile.empty()) return rejected(RequestFailure::InvalidSource);
+  if (!isSupportedVideoExt(sourceFile)) {
+    return rejected(RequestFailure::UnsupportedSource);
+  }
+  if (const auto conflict = startConflict()) return rejected(*conflict);
+  if (!impl_->subtitles->tryStart(sourceFile)) {
+    return rejected(RequestFailure::InternalError,
+                    "the subtitle-generation worker rejected the request");
   }
   impl_->subtitleCompletionPending = true;
   impl_->latestCompletion.reset();
-  return true;
+  return RequestResult::accepted();
 }
 
-bool Coordinator::requestAudioSeparation(
+RequestResult Coordinator::requestAudioSeparation(
     const std::filesystem::path& sourceFile) {
-  if (!audioSeparationAvailableFor(sourceFile) || running() ||
-      impl_->completionPending() ||
-      !impl_->audioSeparation->tryStart(sourceFile)) {
-    return false;
+  if (!impl_ || !impl_->audioSeparation ||
+      !impl_->audioSeparation->configured()) {
+    return rejected(RequestFailure::BackendUnavailable,
+                    "the DirectML audio-separation backend is not "
+                    "configured");
+  }
+  if (sourceFile.empty()) return rejected(RequestFailure::InvalidSource);
+  if (!isSupportedVideoExt(sourceFile) &&
+      !isSupportedAudioExt(sourceFile)) {
+    return rejected(RequestFailure::UnsupportedSource);
+  }
+  if (audio_separation::isManagedArtifactPath(sourceFile)) {
+    return rejected(RequestFailure::ManagedArtifact);
+  }
+  if (const auto conflict = startConflict()) return rejected(*conflict);
+  if (!impl_->audioSeparation->tryStart(sourceFile)) {
+    return rejected(RequestFailure::InternalError,
+                    "the audio-separation worker rejected the request");
   }
   impl_->audioSeparationCompletionPending = true;
   impl_->latestCompletion.reset();
-  return true;
+  return RequestResult::accepted();
 }
 
-bool Coordinator::requestAudioExport(
+RequestResult Coordinator::requestAudioExport(
     const std::filesystem::path& sourceFile) {
-  if (!audioExportAvailableFor(sourceFile)) return false;
+  if (!impl_ || !impl_->exportAudio) {
+    return rejected(RequestFailure::BackendUnavailable,
+                    "the lossless audio-export backend is not configured");
+  }
+  if (sourceFile.empty()) return rejected(RequestFailure::InvalidSource);
+  if (!supportsAudioExport(sourceFile)) {
+    return rejected(RequestFailure::UnsupportedSource);
+  }
+  if (audio_separation::isManagedArtifactPath(sourceFile)) {
+    return rejected(RequestFailure::ManagedArtifact);
+  }
   const std::filesystem::path outputFile = file_output::uniqueSiblingPath(
       sourceFile, L" - audio", L".flac");
   return tryStartFileExport(TaskKind::AudioExport, sourceFile, outputFile,
@@ -578,9 +716,20 @@ bool Coordinator::requestAudioExport(
                             "Audio export failed.");
 }
 
-bool Coordinator::requestTranscriptTextExport(
+RequestResult Coordinator::requestTranscriptTextExport(
     const std::filesystem::path& sourceFile) {
-  if (!transcriptTextExportAvailableFor(sourceFile)) return false;
+  if (!impl_ || !impl_->exportTranscriptText) {
+    return rejected(RequestFailure::BackendUnavailable,
+                    "the transcript-export backend is not configured");
+  }
+  if (sourceFile.empty()) return rejected(RequestFailure::InvalidSource);
+  if (!isSupportedVideoExt(sourceFile)) {
+    return rejected(RequestFailure::UnsupportedSource);
+  }
+  if (playback_video_transcript::activeTranscriptPathForVideo(sourceFile)
+          .empty()) {
+    return rejected(RequestFailure::MissingTranscript);
+  }
   const std::filesystem::path outputFile = file_output::uniqueSiblingPath(
       sourceFile, L" - transcript", L".txt");
   return tryStartFileExport(
@@ -599,7 +748,7 @@ bool Coordinator::subtitleGenerationRunningFor(
 bool Coordinator::audioSeparationAvailableFor(
     const std::filesystem::path& sourceFile) const {
   return impl_ && impl_->audioSeparation &&
-         impl_->audioSeparationAvailable &&
+         impl_->audioSeparation->configured() &&
          (isSupportedVideoExt(sourceFile) ||
           isSupportedAudioExt(sourceFile)) &&
          !audio_separation::isManagedArtifactPath(sourceFile);
@@ -631,25 +780,54 @@ bool Coordinator::transcriptTextExportAvailableFor(
               .empty();
 }
 
-bool Coordinator::requestSubtitleCancellation() {
-  return impl_ && impl_->subtitles && impl_->subtitles->requestCancel();
+RequestResult Coordinator::requestSubtitleCancellation() {
+  if (!impl_ || !impl_->subtitles || !impl_->subtitles->configured()) {
+    return rejected(RequestFailure::BackendUnavailable);
+  }
+  const auto snapshot = impl_->subtitles->snapshot();
+  if (snapshot.cancelling()) {
+    return rejected(RequestFailure::AlreadyCancelling);
+  }
+  if (!snapshot.running()) return rejected(RequestFailure::NotRunning);
+  return impl_->subtitles->requestCancel()
+             ? RequestResult::accepted()
+             : rejected(RequestFailure::InternalError,
+                        "the subtitle-generation worker rejected "
+                        "cancellation");
 }
 
-bool Coordinator::requestAudioSeparationCancellation() {
-  return impl_ && impl_->audioSeparation &&
-         impl_->audioSeparation->requestCancel();
+RequestResult Coordinator::requestAudioSeparationCancellation() {
+  if (!impl_ || !impl_->audioSeparation ||
+      !impl_->audioSeparation->configured()) {
+    return rejected(RequestFailure::BackendUnavailable);
+  }
+  const auto snapshot = impl_->audioSeparation->snapshot();
+  if (snapshot.cancelling()) {
+    return rejected(RequestFailure::AlreadyCancelling);
+  }
+  if (!snapshot.running()) return rejected(RequestFailure::NotRunning);
+  return impl_->audioSeparation->requestCancel()
+             ? RequestResult::accepted()
+             : rejected(RequestFailure::InternalError,
+                        "the audio-separation worker rejected cancellation");
 }
 
-bool Coordinator::requestMediaExportCancellation() {
-  if (!impl_) return false;
+RequestResult Coordinator::requestMediaExportCancellation() {
+  if (!impl_) return rejected(RequestFailure::BackendUnavailable);
   const std::optional<TaskActivity> current =
       impl_->workerTask.activity();
   if (!current ||
       (current->kind != TaskKind::AudioExport &&
        current->kind != TaskKind::TranscriptTextExport)) {
-    return false;
+    return rejected(RequestFailure::NotRunning);
   }
-  return impl_->workerTask.requestCancel();
+  if (current->cancelling) {
+    return rejected(RequestFailure::AlreadyCancelling);
+  }
+  return impl_->workerTask.requestCancel()
+             ? RequestResult::accepted()
+             : rejected(RequestFailure::InternalError,
+                        "the export worker rejected cancellation");
 }
 
 bool Coordinator::cancelActive() {
@@ -658,11 +836,11 @@ bool Coordinator::cancelActive() {
     return impl_->workerTask.requestCancel();
   }
   if (impl_->subtitles && impl_->subtitles->snapshot().running()) {
-    return requestSubtitleCancellation();
+    return requestSubtitleCancellation().wasAccepted();
   }
   if (impl_->audioSeparation &&
       impl_->audioSeparation->snapshot().running()) {
-    return requestAudioSeparationCancellation();
+    return requestAudioSeparationCancellation().wasAccepted();
   }
   return false;
 }
@@ -673,44 +851,18 @@ PollResult Coordinator::poll() {
 
   result.changed = impl_->wakeEvent.consume();
   result.changed = impl_->workerTask.consumeChanged() || result.changed;
-  if (std::optional<TaskCompletion> completion =
-          impl_->workerTask.takeCompletion()) {
-    result.changed = true;
-    impl_->latestCompletion = *completion;
-    result.completions.push_back(std::move(*completion));
-  }
-
   if (impl_->subtitles) {
     result.changed = impl_->subtitles->consumeChanged() || result.changed;
-    if (auto completion = impl_->subtitles->takeCompletion()) {
-      TaskCompletion taskCompletion;
-      taskCompletion.kind = TaskKind::SubtitleGeneration;
-      taskCompletion.outcome = outcomeFor(*completion);
-      taskCompletion.sourceFile = completion->sourceFile;
-      taskCompletion.outputFile = completion->outputFile;
-      taskCompletion.detail = completion->error;
-      impl_->subtitleCompletionPending = false;
-      impl_->latestCompletion = taskCompletion;
-      result.completions.push_back(std::move(taskCompletion));
-      result.changed = true;
-    }
   }
-
   if (impl_->audioSeparation) {
     result.changed =
         impl_->audioSeparation->consumeChanged() || result.changed;
-    if (auto completion = impl_->audioSeparation->takeCompletion()) {
-      TaskCompletion taskCompletion;
-      taskCompletion.kind = TaskKind::AudioSeparation;
-      taskCompletion.outcome = outcomeFor(*completion);
-      taskCompletion.sourceFile = completion->sourceFile;
-      taskCompletion.outputFile = completion->outputFiles.front();
-      taskCompletion.detail = completion->error;
-      impl_->audioSeparationCompletionPending = false;
-      impl_->latestCompletion = taskCompletion;
-      result.completions.push_back(std::move(taskCompletion));
-      result.changed = true;
-    }
+  }
+
+  result.changed = collectReadyCompletions() || result.changed;
+  if (!impl_->queuedCompletions.empty()) {
+    result.changed = true;
+    result.completions.swap(impl_->queuedCompletions);
   }
   return result;
 }

@@ -13,6 +13,7 @@
 #include "tui/ui/media_task_controller.h"
 #include "tui/ui/media_task_presentation.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -203,7 +204,6 @@ int main() {
             true, std::memory_order_release);
         return false;
       };
-  operations.audioSeparationAvailable = true;
   processing::Coordinator coordinator(std::move(operations));
 
   processing::Actions applicationActions(coordinator);
@@ -221,7 +221,69 @@ int main() {
                "the presenter must not invent inactive task state");
   ok &= expect(!unsupportedAction,
                "surface-specific actions must remain outside processing");
-  ok &= expect(!coordinator.tryStartMelodyAnalysis({}, 0, "clip.melody") &&
+
+  processing::Coordinator unavailableCoordinator(
+      processing::Coordinator::Operations{});
+  playback_media_processing::Actions unavailableActions(
+      unavailableCoordinator);
+  const auto unavailableContext =
+      unavailableActions.contextForSource("movie.mp4");
+  const auto unavailableSeparation = unavailableActions.execute(
+      playback_media_actions::Action::SeparateAudio, "movie.mp4");
+  ok &= expect(
+      !unavailableContext.canGenerateSubtitles &&
+          !unavailableContext.canSeparateAudio && unavailableSeparation &&
+          !unavailableSeparation->accepted && unavailableSeparation->error &&
+          unavailableSeparation->error->failure ==
+              playback_media_processing::RequestFailure::BackendUnavailable &&
+          unavailableSeparation->feedback ==
+              "Audio separation could not start: the DirectML "
+              "audio-separation backend is not configured. Source: "
+              "\"movie.mp4\".",
+      "availability and start diagnostics must derive from the same injected "
+      "backend");
+
+  processing::Coordinator::Operations completionQueueOperations;
+  completionQueueOperations.analyzeMelody =
+      [](const std::filesystem::path&, int, const std::filesystem::path&,
+         const processing::Coordinator::ProgressReporter&,
+         const processing::Coordinator::CancellationRequested&,
+         std::string*) { return true; };
+  completionQueueOperations.splitLoop =
+      [](const std::filesystem::path&, const std::filesystem::path&,
+         const std::filesystem::path&, const LoopSplitConfig&,
+         LoopSplitResult* result,
+         const processing::Coordinator::ProgressReporter&,
+         const processing::Coordinator::CancellationRequested&,
+         std::string*) {
+        if (result) result->hasStinger = true;
+        return true;
+      };
+  processing::Coordinator completionQueueCoordinator(
+      std::move(completionQueueOperations));
+  const auto firstQueuedStart =
+      completionQueueCoordinator.tryStartMelodyAnalysis(
+          "queued.flac", 0, "queued.melody");
+  const bool firstQueuedFinished = waitUntil(
+      [&]() { return !completionQueueCoordinator.running(); });
+  const auto secondQueuedStart = completionQueueCoordinator.tryStartLoopSplit(
+      "next.flac", "next_stinger.wav", "next_loop.wav", {});
+  const processing::PollResult queuedUpdate =
+      completionQueueCoordinator.poll();
+  const bool retainedFirstCompletion = std::any_of(
+      queuedUpdate.completions.begin(), queuedUpdate.completions.end(),
+      [](const processing::TaskCompletion& completion) {
+        return completion.kind == processing::TaskKind::MelodyAnalysis &&
+               completion.sourceFile == "queued.flac";
+      });
+  ok &= expect(firstQueuedStart.wasAccepted() && firstQueuedFinished &&
+                   secondQueuedStart.wasAccepted() && retainedFirstCompletion,
+               "a completed result must be queued without rejecting the next "
+               "request before the UI polls");
+  completionQueueCoordinator.shutdown();
+
+  ok &= expect(!coordinator.tryStartMelodyAnalysis({}, 0, "clip.melody")
+                    .wasAccepted() &&
                    !coordinator.running(),
                "invalid work must not change coordinator state");
   ok &= expect(coordinator.audioSeparationAvailableFor("clip.mp4") &&
@@ -232,7 +294,7 @@ int main() {
                "availability must be centralized and reject managed stems");
 
   ok &= expect(coordinator.tryStartMelodyAnalysis(
-                   "clip.flac", 0, "clip.melody") &&
+                   "clip.flac", 0, "clip.melody").wasAccepted() &&
                    wakeIsSignaled(coordinator) &&
                    waitUntil([&]() {
                      return melodyStarted.load(std::memory_order_acquire);
@@ -242,6 +304,10 @@ int main() {
       coordinator.activity();
   const std::optional<MediaTaskCardModel> melodyCard =
       presenter.activeCard();
+  const auto busyLoop = coordinator.tryStartLoopSplit(
+      "other.flac", "other_stinger.wav", "other_loop.wav", {});
+  const auto busySeparation = playbackActions.execute(
+      playback_media_actions::Action::SeparateAudio, "other.mp4");
   ok &= expect(melody &&
                    melody->kind == processing::TaskKind::MelodyAnalysis &&
                    melody->progress && *melody->progress == 0.4f &&
@@ -250,10 +316,19 @@ int main() {
                    melodyCard->cancelAction &&
                    melodyCard->cancelAction->shortcut == "F8" &&
                    melodyCard->cancelAction->label == "Cancel" &&
-                   !coordinator.tryStartLoopSplit(
-                       "other.flac", "other_stinger.wav", "other_loop.wav",
-                       {}),
-               "one generic activity must enforce mutual exclusion");
+                   !busyLoop.wasAccepted() && busyLoop.error() &&
+                   busyLoop.error()->failure ==
+                       playback_media_processing::RequestFailure::Busy &&
+                   busyLoop.error()->blockingOperation ==
+                       playback_media_processing::Operation::MelodyAnalysis &&
+                   busyLoop.error()->blockingSourceFile == "clip.flac" &&
+                   busySeparation && !busySeparation->accepted &&
+                   busySeparation->feedback ==
+                       "Audio separation could not start: melody analysis is "
+                       "already running for \"clip.flac\". Source: "
+                       "\"other.mp4\".",
+               "one generic activity must explain which task enforces mutual "
+               "exclusion");
   releaseMelody.store(true, std::memory_order_release);
   const auto melodyCompletion = waitForCompletion(coordinator);
   const std::optional<MediaTaskStatusModel> melodyStatus =
@@ -265,7 +340,8 @@ int main() {
                "melody completion must use the shared result contract");
 
   ok &= expect(coordinator.tryStartLoopSplit(
-                   "loop.flac", "loop_stinger.wav", "loop_loop.wav", {}) &&
+                   "loop.flac", "loop_stinger.wav", "loop_loop.wav", {})
+                   .wasAccepted() &&
                    !coordinator.latestCompletion() &&
                    waitUntil([&]() {
                      return loopStarted.load(std::memory_order_acquire);
@@ -294,7 +370,8 @@ int main() {
   loopStarted.store(false, std::memory_order_release);
   releaseLoop.store(true, std::memory_order_release);
   ok &= expect(coordinator.tryStartLoopSplit(
-                   "loop.flac", "loop_stinger.wav", "loop_loop.wav", {}) &&
+                   "loop.flac", "loop_stinger.wav", "loop_loop.wav", {})
+                   .wasAccepted() &&
                    waitUntil([&]() {
                      return loopStarted.load(std::memory_order_acquire);
                    }),

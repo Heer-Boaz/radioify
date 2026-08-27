@@ -1616,9 +1616,12 @@ int main() {
                "inside its visible viewport");
 
   playback_session::ContextMenuController playbackMenu;
+  playback_media_actions::Context playbackSourceContext;
+  playbackSourceContext.mediaKind = playback_media_actions::MediaKind::Video;
+  playbackSourceContext.canGenerateSubtitles = true;
   playback_video_edit::EditSnapshot cleanEdit;
   playback_video_edit::ExportProgress idleExport;
-  playbackMenu.refresh(cleanEdit, idleExport);
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
   ok &= expect(playbackMenu.open(
                    playback_session::ContextMenuSurface::Terminal, 0.25, 0.75),
                "ordinary playback must expose an explicit edit command");
@@ -1638,7 +1641,7 @@ int main() {
                "a playback context menu must expose unique opaque source "
                "action identities on exactly one presentation surface");
   cleanEdit.hasEdits = true;
-  playbackMenu.refresh(cleanEdit, idleExport);
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
   const auto retainedMenu = playbackMenu.snapshotFor(
       playback_session::ContextMenuSurface::Terminal);
   ok &= expect(retainedMenu.items.size() == 4 &&
@@ -1665,7 +1668,7 @@ int main() {
   cleanEdit.canToggleSmoothCut = true;
   cleanEdit.selectedCutTransition =
       playback_video_edit::CutTransition::hard();
-  playbackMenu.refresh(cleanEdit, idleExport);
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
   const auto dirtyMenu = playbackMenu.snapshotFor(
       playback_session::ContextMenuSurface::Terminal);
   const auto clearAllItem = std::find_if(
@@ -1734,7 +1737,7 @@ int main() {
   menuSuggestion.spans.push_back({0, 1'000'000});
   cleanEdit.suggestionReview.suggestions = {menuSuggestion};
   cleanEdit.suggestionReview.selectedId = menuSuggestion.id;
-  playbackMenu.refresh(cleanEdit, idleExport);
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
   const auto analysedMenu = playbackMenu.snapshotFor(
       playback_session::ContextMenuSurface::Terminal);
   ok &= expect(std::any_of(
@@ -1756,7 +1759,7 @@ int main() {
                "hiding, and no destructive edit");
   cleanEdit.selectedCutTransition =
       playback_video_edit::CutTransition::motionSmooth();
-  playbackMenu.refresh(cleanEdit, idleExport);
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
   const auto smoothEnabledMenu = playbackMenu.snapshotFor(
       playback_session::ContextMenuSurface::Terminal);
   ok &= expect(std::any_of(
@@ -1803,7 +1806,7 @@ int main() {
 
   playback_video_edit::ExportProgress runningExport;
   runningExport.status = playback_video_edit::ExportStatus::Running;
-  playbackMenu.refresh(cleanEdit, runningExport);
+  playbackMenu.refresh(cleanEdit, runningExport, playbackSourceContext);
   ok &= expect(playbackMenu.open(
                    playback_session::ContextMenuSurface::Terminal, 0.25,
                    0.75),
@@ -1832,7 +1835,7 @@ int main() {
   }
 
   playbackMenu.dismiss();
-  playbackMenu.refresh(cleanEdit, failedExport);
+  playbackMenu.refresh(cleanEdit, failedExport, playbackSourceContext);
   ok &= expect(playbackMenu.open(
                    playback_session::ContextMenuSurface::Terminal, 0.25,
                    0.75),

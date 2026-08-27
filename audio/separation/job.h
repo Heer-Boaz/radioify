@@ -54,6 +54,7 @@ class Job {
 
   // Uses Radioify's DirectML BandIt v2 operation.
   Job();
+  static Operation productionOperation();
   explicit Job(Operation operation);
   Job(Operation operation, WakeNotifier ownerWake);
   ~Job();
@@ -65,6 +66,7 @@ class Job {
   bool requestCancel();
   void cancelAndJoin();
   JobSnapshot snapshot() const;
+  bool configured() const;
   std::optional<JobSnapshot> takeCompletion();
   bool consumeChanged();
   NativeWaitHandle nativeWaitHandle() const;

@@ -42,15 +42,6 @@ playback_overlay::ContextMenuItemToken ContextMenuController::tokenFor(
 
 void ContextMenuController::refresh(
     const playback_video_edit::EditSnapshot& edit,
-    const playback_video_edit::ExportProgress& editExport) {
-  playback_media_actions::Context sourceContext;
-  sourceContext.mediaKind = playback_media_actions::MediaKind::Video;
-  sourceContext.currentPlayback = true;
-  refresh(edit, editExport, std::move(sourceContext));
-}
-
-void ContextMenuController::refresh(
-    const playback_video_edit::EditSnapshot& edit,
     const playback_video_edit::ExportProgress& editExport,
     playback_media_actions::Context sourceContext) {
   std::optional<ContextMenuCommand> selectedCommand;

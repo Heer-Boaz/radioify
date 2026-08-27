@@ -173,6 +173,12 @@ GenerationJobSnapshot GenerationJob::snapshot() const {
   return impl_->state;
 }
 
+bool GenerationJob::configured() const {
+  if (!impl_) return false;
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  return static_cast<bool>(impl_->operation);
+}
+
 std::optional<GenerationJobSnapshot> GenerationJob::takeCompletion() {
   if (!impl_) return std::nullopt;
   std::optional<GenerationJobSnapshot> completion;

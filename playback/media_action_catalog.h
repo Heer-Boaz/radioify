@@ -40,6 +40,7 @@ struct Context {
   bool canSeparateAudio = false;
   bool canExportAudio = false;
   bool canExportTranscriptText = false;
+  bool canGenerateSubtitles = false;
   bool backgroundTaskRunning = false;
   bool hasGeneratedSubtitles = false;
   bool subtitleGenerationRunningForSource = false;

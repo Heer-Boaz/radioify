@@ -10,6 +10,10 @@ std::string mediaTaskFeedback(
   using Outcome = playback_media_processing::Outcome;
   if (completion.outcome == Outcome::Cancelled) {
     switch (completion.operation) {
+      case Operation::MelodyAnalysis:
+        return "Melody analysis cancelled.";
+      case Operation::LoopSplit:
+        return "Loop splitting cancelled.";
       case Operation::SubtitleGeneration:
         return "Subtitle generation cancelled.";
       case Operation::AudioSeparation:
@@ -23,6 +27,10 @@ std::string mediaTaskFeedback(
   if (completion.outcome == Outcome::Failed) {
     if (!completion.detail.empty()) return completion.detail;
     switch (completion.operation) {
+      case Operation::MelodyAnalysis:
+        return "Melody analysis failed.";
+      case Operation::LoopSplit:
+        return "Loop splitting failed.";
       case Operation::SubtitleGeneration:
         return "Subtitle generation failed.";
       case Operation::AudioSeparation:
@@ -39,6 +47,12 @@ std::string mediaTaskFeedback(
   const std::string filename =
       toUtf8String(completion.outputFile.filename());
   switch (completion.operation) {
+    case Operation::MelodyAnalysis:
+      return filename.empty() ? "Melody analysis complete."
+                              : "Melody analysis ready: " + filename;
+    case Operation::LoopSplit:
+      return filename.empty() ? "Loop split complete."
+                              : "Loop split ready: " + filename;
     case Operation::SubtitleGeneration:
       return filename.empty() ? "Subtitles ready."
                               : "Subtitles ready: " + filename;

@@ -41,10 +41,11 @@ Coordinator::Coordinator(AudioPlaybackRuntime& audioPlayback)
         operations.exportAudio = audio_export::exportToFlac;
         operations.exportTranscriptText =
             playback_video_transcript::exportTranscriptText;
+        operations.generateSubtitles =
+            playback_video_transcript::GenerationJob::productionOperation();
 #if RADIOIFY_HAS_AUDIO_SEPARATION
-        operations.audioSeparationAvailable = true;
-#else
-        operations.audioSeparationAvailable = false;
+        operations.separateAudio =
+            audio_separation::Job::productionOperation();
 #endif
         return operations;
       }()) {}

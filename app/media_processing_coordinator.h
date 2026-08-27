@@ -18,14 +18,7 @@ class AudioPlaybackRuntime;
 
 namespace media_processing {
 
-enum class TaskKind {
-  MelodyAnalysis,
-  LoopSplit,
-  SubtitleGeneration,
-  AudioSeparation,
-  AudioExport,
-  TranscriptTextExport,
-};
+using TaskKind = playback_media_processing::Operation;
 
 enum class TaskOutcome {
   Succeeded,
@@ -90,7 +83,6 @@ class Coordinator final : public playback_media_processing::Service {
     audio_separation::Job::Operation separateAudio;
     FileExportOperation exportAudio;
     FileExportOperation exportTranscriptText;
-    bool audioSeparationAvailable = false;
   };
 
   // Uses Radioify's production melody, loop-split, Vulkan transcript, and
@@ -108,27 +100,31 @@ class Coordinator final : public playback_media_processing::Service {
   std::optional<TaskActivity> activity() const;
   std::optional<TaskCompletion> latestCompletion() const;
 
-  bool tryStartMelodyAnalysis(const std::filesystem::path& sourceFile,
-                              int trackIndex,
-                              const std::filesystem::path& outputFile);
-  bool tryStartLoopSplit(const std::filesystem::path& sourceFile,
-                         const std::filesystem::path& stingerOutput,
-                         const std::filesystem::path& loopOutput,
-                         const LoopSplitConfig& config);
+  playback_media_processing::RequestResult tryStartMelodyAnalysis(
+      const std::filesystem::path& sourceFile, int trackIndex,
+      const std::filesystem::path& outputFile);
+  playback_media_processing::RequestResult tryStartLoopSplit(
+      const std::filesystem::path& sourceFile,
+      const std::filesystem::path& stingerOutput,
+      const std::filesystem::path& loopOutput,
+      const LoopSplitConfig& config);
 
   playback_media_processing::SourceState sourceStateFor(
       const std::filesystem::path& sourceFile) const override;
-  bool requestSubtitles(
+  playback_media_processing::RequestResult requestSubtitles(
       const std::filesystem::path& sourceFile) override;
-  bool requestSubtitleCancellation() override;
-  bool requestAudioExport(
+  playback_media_processing::RequestResult requestSubtitleCancellation()
+      override;
+  playback_media_processing::RequestResult requestAudioExport(
       const std::filesystem::path& sourceFile) override;
-  bool requestTranscriptTextExport(
+  playback_media_processing::RequestResult requestTranscriptTextExport(
       const std::filesystem::path& sourceFile) override;
-  bool requestMediaExportCancellation() override;
-  bool requestAudioSeparation(
+  playback_media_processing::RequestResult requestMediaExportCancellation()
+      override;
+  playback_media_processing::RequestResult requestAudioSeparation(
       const std::filesystem::path& sourceFile) override;
-  bool requestAudioSeparationCancellation() override;
+  playback_media_processing::RequestResult requestAudioSeparationCancellation()
+      override;
 
   bool subtitleGenerationRunningFor(
       const std::filesystem::path& sourceFile) const;
@@ -158,16 +154,16 @@ class Coordinator final : public playback_media_processing::Service {
     audio_separation::Job::Operation separateAudio;
     FileExportOperation exportAudio;
     FileExportOperation exportTranscriptText;
-    bool audioSeparationAvailable = false;
   };
   explicit Coordinator(Backends backends);
 
-  bool tryStartFileExport(TaskKind kind,
-                          const std::filesystem::path& sourceFile,
-                          const std::filesystem::path& outputFile,
-                          const FileExportOperation& operation,
-                          const char* initialPhase,
-                          const char* fallbackError);
+  playback_media_processing::RequestResult tryStartFileExport(
+      TaskKind kind, const std::filesystem::path& sourceFile,
+      const std::filesystem::path& outputFile,
+      const FileExportOperation& operation, const char* initialPhase,
+      const char* fallbackError);
+  bool collectReadyCompletions();
+  std::optional<playback_media_processing::RequestError> startConflict();
 
   struct Impl;
   std::unique_ptr<Impl> impl_;

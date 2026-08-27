@@ -114,6 +114,8 @@ int main() {
   namespace transcript = playback_video_transcript;
   bool ok = true;
   ControlledOperation controlled;
+  transcript::GenerationJob unconfigured(
+      transcript::GenerationJob::Operation{});
   transcript::GenerationJob job(
       [&](const std::filesystem::path& source,
           const std::filesystem::path& output,
@@ -123,6 +125,8 @@ int main() {
                               error);
       });
 
+  ok &= expect(!unconfigured.configured() && job.configured(),
+               "job availability must derive from an injected operation");
   ok &= expect(static_cast<bool>(job.nativeWaitHandle()),
                "the job must expose a valid activity handle");
   ok &= expect(!job.tryStart({}) &&
