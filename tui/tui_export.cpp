@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "app_common.h"
+#include "audio/analysis/melody_artifact_paths.h"
 #include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
 #include "audiofilter/radio1938/radio_buffer_io.h"
 #include "calibration_report.h"
@@ -388,33 +389,6 @@ int runRenderRadioCli(const Options& o) {
   return 0;
 }
 
-static std::filesystem::path defaultMelodyOutputFor(
-    const std::filesystem::path& input) {
-  std::string base = toUtf8String(input.stem());
-  return input.parent_path() / (base + ".melody");
-}
-
-static std::filesystem::path resolveExtractOutputPath(
-    const std::filesystem::path& input, const std::string& outArg) {
-  if (outArg.empty()) {
-    return defaultMelodyOutputFor(input);
-  }
-
-  std::filesystem::path outPath = pathFromUtf8String(outArg);
-  bool directoryHint =
-      !outArg.empty() && (outArg.back() == '/' || outArg.back() == '\\');
-  if (directoryHint ||
-      (std::filesystem::exists(outPath) &&
-       std::filesystem::is_directory(outPath))) {
-    return outPath / (toUtf8String(input.stem()) + ".melody");
-  }
-
-  if (!outPath.has_extension()) {
-    outPath += ".melody";
-  }
-  return outPath;
-}
-
 int runExtractSheetCli(const Options& o,
                        const AudioPlaybackConfig& audioConfig) {
   if (o.input.empty()) {
@@ -423,7 +397,8 @@ int runExtractSheetCli(const Options& o,
 
   std::filesystem::path inputPath = pathFromUtf8String(o.input);
   requireSupportedAudioInputFile(inputPath);
-  std::filesystem::path outputPath = resolveExtractOutputPath(inputPath, o.output);
+  std::filesystem::path outputPath =
+      resolveMelodyArtifactPath(inputPath, o.output);
 
   audioInit(audioConfig);
 

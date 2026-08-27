@@ -13,7 +13,6 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <filesystem>
@@ -33,6 +32,7 @@
 #include "app_common.h"
 #include "app/playback_queue.h"
 #include "app/playback_route.h"
+#include "audio/analysis/melody_artifact_paths.h"
 #include "audio_picture_in_picture_window.h"
 #include "audioplayback.h"
 #include "browser_action_strip.h"
@@ -1351,28 +1351,20 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     return commands;
   };
 
-  auto buildMelodyOutputPath = [&](const BrowserEntry& entry) {
-    std::filesystem::path output = entry.path;
-    if (const auto* track = entry.actionAs<browser_entry::PlayTrack>()) {
-      char suffix[32];
-      std::snprintf(suffix, sizeof(suffix), ".track%03d.melody",
-                    track->trackIndex);
-      output += suffix;
-      return output;
-    }
-    output.replace_extension(".melody");
-    return output;
-  };
-
   auto startMelodyExport = [&](const BrowserEntry& entry) {
     if (!entry.isMedia() || !isSupportedAudioExt(entry.path)) {
       return;
     }
 
     const auto* track = entry.actionAs<browser_entry::PlayTrack>();
+    if (track && track->trackIndex < 0) return;
     const int trackIndex = track ? track->trackIndex : 0;
+    const std::filesystem::path outputPath =
+        track ? melodyArtifactPathForTrack(
+                    entry.path, static_cast<std::uint32_t>(trackIndex))
+              : defaultMelodyArtifactPath(entry.path);
     if (mediaTasks.tryStartMelodyAnalysis(
-            entry.path, trackIndex, buildMelodyOutputPath(entry))) {
+            entry.path, trackIndex, outputPath)) {
       markLayoutDirty();
       markDirty(UiDirtyFlags::Async);
     }

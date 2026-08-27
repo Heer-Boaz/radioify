@@ -26,6 +26,10 @@ radioify_add_module_object_library(radioify_tool_loop_split_output_paths_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/loop_split_output_paths_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_melody_artifact_paths_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/melody_artifact_paths_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_ffmpeg_audio_decoder_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/ffmpeg_audio_decoder_tests.cpp
 )
