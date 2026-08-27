@@ -1,6 +1,5 @@
 #include "tui/media_coordinator.h"
 
-#include <cmath>
 #include <cstdint>
 #include <utility>
 #include <variant>
@@ -152,46 +151,10 @@ struct TuiMediaCoordinator::Impl {
     return playbackFileTarget(source->file);
   }
 
-  static PlaybackControlState controlStateForAudio(
-      const AudioPlaybackSnapshot& audio, PlaybackTarget target) {
-    PlaybackControlState state(std::move(target), false);
-    state.positionSec = audio.positionSec;
-    if (std::isfinite(audio.durationSec) && audio.durationSec > 0.0) {
-      state.durationSec = audio.durationSec;
-    }
-    state.canPlay = true;
-    state.canPause = true;
-    state.canStop = true;
-    state.canPrevious = true;
-    state.canNext = true;
-    if (audio.finished) {
-      state.status = PlaybackControlStatus::Stopped;
-    } else if (audio.paused) {
-      state.status = PlaybackControlStatus::Paused;
-    } else {
-      state.status = PlaybackControlStatus::Playing;
-    }
-    return state;
-  }
-
-  PresentationSnapshot presentationSnapshot() const {
-    PresentationSnapshot snapshot;
-    snapshot.audio = audioGetPlaybackSnapshot();
-    snapshot.audioTarget = playbackTargetForAudio(snapshot.audio.source);
-
-    if (videoSession_) {
-      snapshot.control = videoSession_->controlState();
-      snapshot.currentTarget = snapshot.control->target;
-      snapshot.videoPresentation = videoSession_->presentationState();
-      return snapshot;
-    }
-
-    snapshot.currentTarget = snapshot.audioTarget;
-    if (snapshot.audioTarget) {
-      snapshot.control =
-          controlStateForAudio(snapshot.audio, *snapshot.audioTarget);
-    }
-    return snapshot;
+  std::optional<VideoSnapshot> videoSnapshot() const {
+    if (!videoSession_) return std::nullopt;
+    return VideoSnapshot{videoSession_->controlState(),
+                         videoSession_->presentationState()};
   }
 
   std::vector<NativeWaitHandle> waitHandles() const {
@@ -214,8 +177,9 @@ struct TuiMediaCoordinator::Impl {
   bool handleControlCommand(PlaybackControlCommand command) {
     if (videoSession_) return videoSession_->handleControlCommand(command);
 
-    const PresentationSnapshot presentation = presentationSnapshot();
-    const bool hasAudioTarget = presentation.audioTarget.has_value();
+    const AudioPlaybackSnapshot audio = audioGetPlaybackSnapshot();
+    const bool hasAudioTarget =
+        playbackTargetForAudio(audio.source).has_value();
     switch (command) {
       case PlaybackControlCommand::Play:
         if (!hasAudioTarget) return false;
@@ -230,7 +194,7 @@ struct TuiMediaCoordinator::Impl {
         audioTogglePause();
         return true;
       case PlaybackControlCommand::Stop:
-        if (!presentation.audio.ready) return false;
+        if (!audio.ready) return false;
         audioStop();
         return true;
       case PlaybackControlCommand::Previous:
@@ -245,7 +209,7 @@ struct TuiMediaCoordinator::Impl {
 
   bool seekToRatio(double ratio) {
     if (videoSession_) return videoSession_->seekToRatio(ratio);
-    if (!presentationSnapshot().audio.ready) return false;
+    if (!audioGetPlaybackSnapshot().ready) return false;
     audioSeekToRatio(ratio);
     return true;
   }
@@ -705,9 +669,9 @@ PlaybackShellTerminalRole TuiMediaCoordinator::terminalRole() const {
   return impl_->terminalRole();
 }
 
-TuiMediaCoordinator::PresentationSnapshot
-TuiMediaCoordinator::presentationSnapshot() const {
-  return impl_->presentationSnapshot();
+std::optional<TuiMediaCoordinator::VideoSnapshot>
+TuiMediaCoordinator::videoSnapshot() const {
+  return impl_->videoSnapshot();
 }
 
 std::vector<NativeWaitHandle> TuiMediaCoordinator::waitHandles() const {

@@ -9,6 +9,7 @@ radioify_add_module_object_library(radioify_tui
   ${CMAKE_CURRENT_SOURCE_DIR}/image_viewer_sequence.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_activation_plan.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_coordinator.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/playback_presenter.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/terminal_input_sequence.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/terminal_cell_metrics.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/tui.cpp

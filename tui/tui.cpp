@@ -58,6 +58,7 @@
 #include "core/windows_console_window.h"
 #include "core/windows_shell_open.h"
 #include "media_coordinator.h"
+#include "playback_presenter.h"
 #include "m4adecoder.h"
 #include "miniaudio.h"
 #include "optionsbrowser.h"
@@ -657,6 +658,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   TuiMediaCoordinator mediaCoordinator(
       {playbackQueue, mediaProcessingActions, mediaSessionDependencies,
        videoConfig, openFileRequests, std::move(mediaCallbacks)});
+  TuiPlaybackPresenter playbackPresenter(mediaCoordinator);
   auto mediaWaitHandles = [&]() {
     std::vector<NativeWaitHandle> handles = mediaCoordinator.waitHandles();
     std::vector<NativeWaitHandle> taskHandles = mediaProcessing.waitHandles();
@@ -673,8 +675,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     return accepted;
   };
   auto currentPlaybackFile = [&]() {
-    const TuiMediaCoordinator::PresentationSnapshot presentation =
-        mediaCoordinator.presentationSnapshot();
+    const PlaybackPresentationModel presentation = playbackPresenter.model();
     return presentation.currentTarget
                ? playbackTargetFile(*presentation.currentTarget)
                : std::filesystem::path{};
@@ -749,8 +750,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   };
 
   auto buildBrowserChrome = [&]() {
-    const TuiMediaCoordinator::PresentationSnapshot presentation =
-        mediaCoordinator.presentationSnapshot();
+    const PlaybackPresentationModel presentation = playbackPresenter.model();
     browser_chrome::Input chromeInput;
     chromeInput.audio = presentation.audio;
     chromeInput.playback = presentation.control;
@@ -904,8 +904,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
   };
   callbacks.onTogglePitchMonitor = [&]() {
-    const TuiMediaCoordinator::PresentationSnapshot presentation =
-        mediaCoordinator.presentationSnapshot();
+    const PlaybackPresentationModel presentation = playbackPresenter.model();
     const AudioPlaybackSnapshot& audio = presentation.audio;
     if (!melodyVisualization.active() && !audio.source && !audio.ready) {
       return;
@@ -940,8 +939,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     markDirty();
   };
   callbacks.onToggleWindow = [&]() {
-    const TuiMediaCoordinator::PresentationSnapshot presentation =
-        mediaCoordinator.presentationSnapshot();
+    const PlaybackPresentationModel presentation = playbackPresenter.model();
     if (presentation.control && presentation.control->isVideo) {
       if (mediaCoordinator.toggleWindowPresentation()) markLayoutDirty();
       return;
@@ -958,8 +956,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     markDirty();
   };
   callbacks.onTogglePictureInPicture = [&]() {
-    const TuiMediaCoordinator::PresentationSnapshot presentation =
-        mediaCoordinator.presentationSnapshot();
+    const PlaybackPresentationModel presentation = playbackPresenter.model();
     if (presentation.control && presentation.control->isVideo) {
       if (mediaCoordinator.togglePictureInPicture()) markLayoutDirty();
       return;
@@ -984,8 +981,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   const AudioPictureInPictureWindow::Styles audioPictureInPictureStyles =
       theme.audioPictureInPictureStyles();
   auto buildAudioPictureInPictureContext = [&]() {
-    const TuiMediaCoordinator::PresentationSnapshot presentation =
-        mediaCoordinator.presentationSnapshot();
+    const PlaybackPresentationModel presentation = playbackPresenter.model();
     AudioPictureInPictureWindow::Context context;
     context.nowPlayingTarget = presentation.audioTarget;
     context.nowPlayingLabel = buildPlaybackLabel(context.nowPlayingTarget);
@@ -1062,8 +1058,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   };
 
   auto syncShellControls = [&]() {
-    const TuiMediaCoordinator::PresentationSnapshot presentation =
-        mediaCoordinator.presentationSnapshot();
+    const PlaybackPresentationModel presentation = playbackPresenter.model();
     if (!presentation.control) {
       systemControls.clear();
       notificationAreaControls.clear();
@@ -1108,8 +1103,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       theme.commandPaletteStyles();
 
   auto buildCommands = [&]() {
-    const TuiMediaCoordinator::PresentationSnapshot presentation =
-        mediaCoordinator.presentationSnapshot();
+    const PlaybackPresentationModel presentation = playbackPresenter.model();
     const AudioPlaybackSnapshot& audio = presentation.audio;
     const bool videoActive =
         presentation.control && presentation.control->isVideo;
@@ -1182,8 +1176,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       }
       if (presentation.currentTarget) {
         commands.emplace_back("Show Playing File", "", [&]() {
-          const TuiMediaCoordinator::PresentationSnapshot current =
-              mediaCoordinator.presentationSnapshot();
+          const PlaybackPresentationModel current = playbackPresenter.model();
           if (current.currentTarget) {
             browserPlaybackRevealer.reveal(*current.currentTarget);
           }
@@ -1638,8 +1631,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
 
     auto now = std::chrono::steady_clock::now();
     auto computeWakeDeadline = [&](wake_schedule::TimePoint nowTime) {
-      const TuiMediaCoordinator::PresentationSnapshot presentation =
-          mediaCoordinator.presentationSnapshot();
+      const PlaybackPresentationModel presentation = playbackPresenter.model();
       browser_wake_schedule::Activity activity;
       activity.searchCaretVisible =
           viewport.browserInteractionEnabled &&
@@ -1679,8 +1671,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       rebuildLayout();
     }
     if (dirty) {
-      const TuiMediaCoordinator::PresentationSnapshot presentation =
-          mediaCoordinator.presentationSnapshot();
+      const PlaybackPresentationModel presentation = playbackPresenter.model();
       const AudioPlaybackSnapshot& audio = presentation.audio;
       bool optionsMode = optionsBrowserIsActive(browser);
       bool trackMode = isTrackBrowserActive(browser);

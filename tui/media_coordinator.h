@@ -9,7 +9,6 @@
 
 #include "app/playback_queue.h"
 #include "app/playback_route.h"
-#include "audio/playback_snapshot.h"
 #include "core/native_wait_handle.h"
 #include "core/open_file_requests.h"
 #include "core/wake_deadline.h"
@@ -29,14 +28,9 @@ struct TaskCompletion;
 // owning the playback state machine itself.
 class TuiMediaCoordinator {
  public:
-  // One immutable observation of every playback surface. Consumers retain it
-  // for a complete presentation update instead of mixing timed getters.
-  struct PresentationSnapshot {
-    AudioPlaybackSnapshot audio;
-    std::optional<PlaybackTarget> audioTarget;
-    std::optional<PlaybackTarget> currentTarget;
-    std::optional<PlaybackControlState> control;
-    std::optional<PlaybackPresentationState> videoPresentation;
+  struct VideoSnapshot {
+    PlaybackControlState control;
+    PlaybackPresentationState presentation;
   };
 
   struct Callbacks {
@@ -81,7 +75,7 @@ class TuiMediaCoordinator {
 
   bool videoActive() const;
   PlaybackShellTerminalRole terminalRole() const;
-  PresentationSnapshot presentationSnapshot() const;
+  std::optional<VideoSnapshot> videoSnapshot() const;
   std::vector<NativeWaitHandle> waitHandles() const;
   wake_schedule::Deadline nextWakeDeadline() const;
   bool capturesBrowserInput() const;

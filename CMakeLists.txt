@@ -930,6 +930,15 @@ radioify_link_repo_target(browser_wake_schedule_tests)
 add_test(NAME browser_wake_schedule_tests
          COMMAND $<TARGET_FILE:browser_wake_schedule_tests>)
 
+add_executable(playback_presentation_tests)
+target_sources(playback_presentation_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_playback_presentation_tests>
+  ${CMAKE_SOURCE_DIR}/tui/ui/playback_presentation.cpp
+)
+radioify_link_repo_target(playback_presentation_tests)
+add_test(NAME playback_presentation_tests
+         COMMAND $<TARGET_FILE:playback_presentation_tests>)
+
 add_executable(melody_visualization_tests)
 target_sources(melody_visualization_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_melody_visualization_tests>
