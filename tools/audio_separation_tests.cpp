@@ -1,5 +1,5 @@
 #include "audio/separation/artifact.h"
-#include "audio/separation/flac_writer.h"
+#include "audio/flac_writer.h"
 #include "audio/separation/job.h"
 #include "audio/separation/spectral_transform.h"
 #include "audio/ffmpegaudio.h"
@@ -153,7 +153,7 @@ bool testFlacWriter(const std::filesystem::path& directory) {
   bool ok = true;
   std::string error;
   const std::filesystem::path path = directory / "writer.flac";
-  audio_separation::FlacWriter writer;
+  audio_file::FlacWriter writer;
   ok &= expect(writer.open(path, kSampleRate, kChannels, &error) &&
                    writer.writeFrames(samples.data(), 123, &error) &&
                    writer.writeFrames(samples.data() + 123 * kChannels,

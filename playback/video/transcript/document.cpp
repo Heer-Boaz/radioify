@@ -1,18 +1,7 @@
 #include "playback/video/transcript/document.h"
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifdef _WIN32
-#include <windows.h>
-#endif
-
 #include <algorithm>
 #include <cctype>
-#include <chrono>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -20,6 +9,7 @@
 #include <system_error>
 #include <utility>
 
+#include "core/file_output.h"
 #include "playback/video/transcript/cue_semantics.h"
 #include "runtime_helpers.h"
 
@@ -124,51 +114,6 @@ std::string srtTimestamp(int64_t timestampUs) {
       << minutes << ':' << std::setw(2) << seconds << ',' << std::setw(3)
       << milliseconds;
   return out.str();
-}
-
-std::filesystem::path temporarySiblingPath(
-    const std::filesystem::path& outputPath) {
-  const uint64_t stamp = static_cast<uint64_t>(
-      std::chrono::steady_clock::now().time_since_epoch().count());
-  for (uint32_t attempt = 0; attempt < 100; ++attempt) {
-    std::filesystem::path candidate = outputPath;
-    candidate += ".radioify-" + std::to_string(stamp) + "-" +
-                 std::to_string(attempt) + ".tmp";
-    std::error_code ec;
-    if (!std::filesystem::exists(candidate, ec) && !ec) return candidate;
-  }
-  return {};
-}
-
-bool publishFile(const std::filesystem::path& source,
-                 const std::filesystem::path& destination,
-                 TranscriptPublishMode publishMode,
-                 std::string* error) {
-#ifdef _WIN32
-  DWORD flags = MOVEFILE_WRITE_THROUGH;
-  if (publishMode == TranscriptPublishMode::ReplaceExisting) {
-    flags |= MOVEFILE_REPLACE_EXISTING;
-  }
-  if (MoveFileExW(source.c_str(), destination.c_str(), flags)) {
-    return true;
-  }
-  setError(error, "Could not publish transcript (Windows error " +
-                      std::to_string(GetLastError()) + ").");
-  return false;
-#else
-  if (publishMode == TranscriptPublishMode::CreateNew) {
-    std::error_code existsError;
-    if (std::filesystem::exists(destination, existsError) || existsError) {
-      setError(error, "Transcript destination already exists.");
-      return false;
-    }
-  }
-  std::error_code ec;
-  std::filesystem::rename(source, destination, ec);
-  if (!ec) return true;
-  setError(error, "Could not publish transcript: " + ec.message());
-  return false;
-#endif
 }
 
 }  // namespace
@@ -306,15 +251,17 @@ bool writeIndexedTranscript(const std::filesystem::path& outputPath,
     }
   }
 
-  const std::filesystem::path temporaryPath =
-      temporarySiblingPath(outputPath);
-  if (temporaryPath.empty()) {
-    setError(error, "Could not reserve a temporary transcript file.");
-    return false;
-  }
+  const file_output::PublishMode outputMode =
+      publishMode == TranscriptPublishMode::ReplaceExisting
+          ? file_output::PublishMode::ReplaceExisting
+          : file_output::PublishMode::CreateNew;
+  std::optional<file_output::Transaction> transaction =
+      file_output::Transaction::begin(outputPath, outputMode, error);
+  if (!transaction) return false;
 
   {
-    std::ofstream output(temporaryPath, std::ios::binary | std::ios::trunc);
+    std::ofstream output(transaction->temporaryPath(),
+                         std::ios::binary | std::ios::trunc);
     if (!output) {
       setError(error, "Could not create transcript: " +
                           toUtf8String(outputPath));
@@ -329,20 +276,13 @@ bool writeIndexedTranscript(const std::filesystem::path& outputPath,
     output.flush();
     if (!output) {
       output.close();
-      std::error_code ignored;
-      std::filesystem::remove(temporaryPath, ignored);
       setError(error, "Could not finish writing transcript: " +
                           toUtf8String(outputPath));
       return false;
     }
   }
 
-  if (!publishFile(temporaryPath, outputPath, publishMode, error)) {
-    std::error_code ignored;
-    std::filesystem::remove(temporaryPath, ignored);
-    return false;
-  }
-  return true;
+  return transaction->publish(error);
 }
 
 }  // namespace playback_video_transcript

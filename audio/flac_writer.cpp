@@ -1,4 +1,4 @@
-#include "audio/separation/flac_writer.h"
+#include "audio/flac_writer.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -16,7 +16,7 @@ extern "C" {
 
 #include "runtime_helpers.h"
 
-namespace audio_separation {
+namespace audio_file {
 namespace {
 
 void setError(std::string* error, std::string message) {
@@ -273,4 +273,4 @@ bool FlacWriter::finish(std::string* error) {
   return true;
 }
 
-}  // namespace audio_separation
+}  // namespace audio_file

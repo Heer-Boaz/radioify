@@ -6,7 +6,7 @@
 #include <memory>
 #include <string>
 
-namespace audio_separation {
+namespace audio_file {
 
 class FlacWriter {
  public:
@@ -27,4 +27,4 @@ class FlacWriter {
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace audio_separation
+}  // namespace audio_file

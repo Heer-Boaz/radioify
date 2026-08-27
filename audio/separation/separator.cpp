@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "audio/ffmpegaudio.h"
-#include "audio/separation/flac_writer.h"
+#include "audio/flac_writer.h"
 #include "audio/separation/mask_model.h"
 #include "audio/separation/spectral_transform.h"
 #include "runtime_helpers.h"
@@ -357,7 +357,7 @@ std::vector<float> chunkWindow() {
 
 bool writeCroppedHop(std::uint64_t globalStart, std::uint64_t sourceFrames,
                      const std::array<std::vector<float>, kStemCount>& overlap,
-                     std::array<FlacWriter, kStemCount>* writers,
+                     std::array<audio_file::FlacWriter, kStemCount>* writers,
                      std::uint64_t* writtenFrames, std::string* error) {
   if (!writers || !writtenFrames) return false;
   const std::uint64_t globalEnd = globalStart + kChunkHopFrames;
@@ -441,7 +441,7 @@ bool separateMediaAudio(const std::filesystem::path& mediaPath,
     }
   } cleanup{temporaryPaths};
 
-  std::array<FlacWriter, kStemCount> writers;
+  std::array<audio_file::FlacWriter, kStemCount> writers;
   for (std::size_t stem = 0; stem < kStemCount; ++stem) {
     if (!writers[stem].open(temporaryPaths[stem], kSampleRate, kChannels,
                             error)) {
@@ -515,7 +515,7 @@ bool separateMediaAudio(const std::filesystem::path& mediaPath,
     return false;
   }
   report(onProgress, 0.97f, "Finalizing lossless audio stems");
-  for (FlacWriter& writer : writers) {
+  for (audio_file::FlacWriter& writer : writers) {
     if (!writer.finish(error)) return false;
   }
   if (!publishArtifactSet(temporaryPaths, outputPaths, error)) return false;

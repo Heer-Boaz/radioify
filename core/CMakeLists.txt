@@ -4,6 +4,7 @@ radioify_add_module_object_library(radioify_core_runtime
 )
 
 radioify_add_module_object_library(radioify_core
+  ${CMAKE_CURRENT_SOURCE_DIR}/file_output.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_artwork_sidecar.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/open_file_requests.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/path_identity.cpp

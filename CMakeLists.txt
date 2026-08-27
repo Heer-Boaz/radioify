@@ -1053,6 +1053,7 @@ target_sources(indexed_transcript_tests PRIVATE
   $<TARGET_OBJECTS:radioify_transcript_device_policy>
   ${CMAKE_SOURCE_DIR}/playback/video/transcript/subtitle_cues.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/transcript/whisper_model_config.cpp
+  ${CMAKE_SOURCE_DIR}/core/file_output.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
@@ -1126,6 +1127,17 @@ radioify_link_repo_target(media_processing_coordinator_tests)
 add_test(NAME media_processing_coordinator_tests
          COMMAND $<TARGET_FILE:media_processing_coordinator_tests>)
 
+add_executable(file_output_tests)
+target_sources(file_output_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_file_output_tests>
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+  ${CMAKE_SOURCE_DIR}/core/file_output.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/core/utf8.cpp
+)
+radioify_link_repo_target(file_output_tests)
+add_test(NAME file_output_tests COMMAND $<TARGET_FILE:file_output_tests>)
+
 add_executable(whisper_gpu_contract_tests)
 target_sources(whisper_gpu_contract_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_whisper_gpu_contract_tests>
@@ -1147,6 +1159,7 @@ target_sources(indexed_transcript_smoke PRIVATE
   $<TARGET_OBJECTS:radioify_transcript_engine>
   ${CMAKE_SOURCE_DIR}/audio/ffmpegaudio.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+  ${CMAKE_SOURCE_DIR}/core/file_output.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
   ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
@@ -1198,6 +1211,7 @@ target_sources(scene_analysis_smoke PRIVATE
   $<TARGET_OBJECTS:radioify_transcript_cue_semantics>
   ${CMAKE_SOURCE_DIR}/playback/video/decoder.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/timing/timeline.cpp
+  ${CMAKE_SOURCE_DIR}/core/file_output.cpp
   ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
@@ -1210,6 +1224,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
     $<TARGET_OBJECTS:radioify_tool_audio_separation_tests>
     $<TARGET_OBJECTS:radioify_audio_separation>
     ${CMAKE_SOURCE_DIR}/audio/ffmpegaudio.cpp
+    ${CMAKE_SOURCE_DIR}/audio/flac_writer.cpp
     ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
     ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
     ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
@@ -1230,6 +1245,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
     $<TARGET_OBJECTS:radioify_tool_audio_separation_smoke>
     $<TARGET_OBJECTS:radioify_audio_separation>
     ${CMAKE_SOURCE_DIR}/audio/ffmpegaudio.cpp
+    ${CMAKE_SOURCE_DIR}/audio/flac_writer.cpp
     ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
     ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
     ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
