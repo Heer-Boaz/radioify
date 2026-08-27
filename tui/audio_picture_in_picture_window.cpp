@@ -5,7 +5,6 @@
 #include <filesystem>
 #include <utility>
 
-#include "audioplayback.h"
 #include "core/windows_app_resources.h"
 #include "playback/framebuffer/mini_player_tui.h"
 #include "playback/framebuffer/window_presentation.h"
@@ -213,14 +212,13 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   const std::string title =
       context.nowPlayingLabel.empty() ? "(none)" : context.nowPlayingLabel;
 
-  const bool audioReady = audioIsReady();
-  const bool audioSeeking = audioIsSeeking();
-  const bool audioFinished = audioIsFinished();
-  const double totalSec = audioReady ? audioGetTotalSec() : -1.0;
-  const double currentSec = audioReady ? audioGetTimeSec() : 0.0;
+  const AudioPlaybackSnapshot& playback = context.playback;
+  const bool audioReady = playback.ready;
+  const double totalSec = playback.durationSec;
+  const double currentSec = playback.positionSec;
   double displaySec = currentSec;
-  if (audioReady && audioSeeking) {
-    const double seekSec = audioGetSeekTargetSec();
+  if (audioReady && playback.seeking) {
+    const double seekSec = playback.seekTargetSec;
     if (seekSec >= 0.0 && std::isfinite(seekSec)) {
       displaySec = seekSec;
     }
@@ -235,17 +233,17 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   overlayInputs.audioOk = audioReady;
   overlayInputs.playPauseAvailable = audioReady;
   overlayInputs.audioSupports50HzToggle =
-      audioReady && audioSupports50HzToggle();
+      audioReady && playback.supports50HzToggle;
   overlayInputs.canPlayPrevious = true;
   overlayInputs.canPlayNext = true;
-  overlayInputs.radioEnabled = audioIsRadioEnabled();
-  overlayInputs.radioLabel = std::string(audioGetRadioFilterLabel());
-  overlayInputs.hz50Enabled = audioIs50HzEnabled();
+  overlayInputs.radioEnabled = playback.radioEnabled;
+  overlayInputs.radioLabel = playback.radioFilterLabel;
+  overlayInputs.hz50Enabled = playback.hz50Enabled;
   overlayInputs.displaySec = displaySec;
   overlayInputs.totalSec = totalSec;
   overlayInputs.volPct =
-      static_cast<int>(std::round(audioGetVolume() * 100.0f));
-  overlayInputs.paused = audioIsPaused() || audioFinished;
+      static_cast<int>(std::round(playback.volume * 100.0f));
+  overlayInputs.paused = playback.paused || playback.finished;
   overlayInputs.osd.controlsVisible = true;
   overlayInputs.pictureInPictureAvailable = true;
   overlayInputs.pictureInPictureActive = true;
@@ -302,7 +300,7 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   footerInput.progressY = layout_.progressBarY;
   footerInput.peakY =
       audioReady && layout_.progressBarY > 0 ? layout_.progressBarY - 1 : -1;
-  footerInput.unclippedOutputPeak = audioGetUnclippedOutputPeak();
+  footerInput.unclippedOutputPeak = playback.unclippedOutputPeak;
   ProgressFooterRenderResult footerResult =
       renderProgressFooter(screen_, footerInput, footerStyles);
   interactions_ = playback_overlay::buildOverlayInteractionMap(layout_);

@@ -751,29 +751,29 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   auto buildActionStripItems = [&](bool browserInteractionEnabled) {
     browser_action_strip::Input stripInput;
     playback_overlay::PlaybackOverlayInputs overlayInputs;
+    const AudioPlaybackSnapshot audio = audioGetPlaybackSnapshot();
     const std::filesystem::path nowPlaying = currentPlaybackFile();
     const std::optional<PlaybackControlState> controlState =
         mediaCoordinator.playbackControlState();
     const bool videoActive = controlState && controlState->isVideo;
-    const bool audioTargetAvailable =
-        mediaCoordinator.audioPlaybackTarget().has_value();
-    overlayInputs.audioOk = videoActive || audioIsReady();
+    const bool audioTargetAvailable = audio.source.has_value();
+    overlayInputs.audioOk = videoActive || audio.ready;
     overlayInputs.playPauseAvailable = overlayInputs.audioOk;
     overlayInputs.audioSupports50HzToggle =
-        audioIsReady() && audioSupports50HzToggle();
+        audio.ready && audio.supports50HzToggle;
     overlayInputs.canPlayPrevious =
         controlState ? controlState->canPrevious
                      : overlayInputs.audioOk || !nowPlaying.empty();
     overlayInputs.canPlayNext =
         controlState ? controlState->canNext
                      : overlayInputs.audioOk || !nowPlaying.empty();
-    overlayInputs.radioEnabled = audioIsRadioEnabled();
-    overlayInputs.radioLabel = std::string(audioGetRadioFilterLabel());
-    overlayInputs.hz50Enabled = audioIs50HzEnabled();
+    overlayInputs.radioEnabled = audio.radioEnabled;
+    overlayInputs.radioLabel = audio.radioFilterLabel;
+    overlayInputs.hz50Enabled = audio.hz50Enabled;
     overlayInputs.paused =
         controlState
             ? controlState->status != PlaybackControlStatus::Playing
-            : audioIsPaused() || audioIsFinished();
+            : audio.paused || audio.finished;
     overlayInputs.pictureInPictureAvailable =
         videoActive || audioPictureInPicture.isOpen() ||
         overlayInputs.audioOk || !nowPlaying.empty();
@@ -787,7 +787,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     stripInput.playback =
         playback_overlay::buildPlaybackOverlayState(overlayInputs);
     stripInput.pitchMonitorAvailable =
-        !videoActive && (melodyVisualization.active() || audioIsReady() ||
+        !videoActive && (melodyVisualization.active() || audio.ready ||
                          audioTargetAvailable);
     stripInput.pitchMonitorActive = melodyVisualization.active();
     stripInput.browserControlsAvailable = browserInteractionEnabled;
@@ -801,14 +801,14 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   };
 
   auto buildFooterLayout = [&]() {
+    const AudioPlaybackSnapshot audio = audioGetPlaybackSnapshot();
     const std::optional<media_processing::TaskCompletion> completion =
         mediaTasks.latestCompletion();
     const bool hasMediaTaskStatus =
         completion && !mediaTaskStatusModel(*completion).text.empty();
     const std::filesystem::path nowPlaying = currentPlaybackFile();
     const bool showNowPlaying =
-        !nowPlaying.empty() || audioIsReady() || audioIsSeeking() ||
-        audioIsHolding();
+        !nowPlaying.empty() || audio.ready || audio.seeking || audio.holding;
     BrowserFooterLayoutInput layoutInput;
     layoutInput.browserInteractionEnabled = !melodyVisualization.active();
     layoutInput.showWarning =
@@ -816,7 +816,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     layoutInput.showMediaTaskStatus = hasMediaTaskStatus;
     layoutInput.enableTransportUi = o.play;
     layoutInput.showNowPlaying = showNowPlaying;
-    layoutInput.showPeakMeter = o.play && audioIsReady();
+    layoutInput.showPeakMeter = o.play && audio.ready;
     BrowserFooterLayout layout = computeBrowserFooterLayout(layoutInput);
     if (layout.showNowPlaying) {
       const int nowPlayingLines = std::max(
@@ -960,9 +960,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     }
   };
   callbacks.onTogglePitchMonitor = [&]() {
-    if (!melodyVisualization.active() &&
-        !mediaCoordinator.audioPlaybackTarget() &&
-        !audioIsReady()) {
+    const AudioPlaybackSnapshot audio = audioGetPlaybackSnapshot();
+    if (!melodyVisualization.active() && !audio.source && !audio.ready) {
       return;
     }
     const bool active = melodyVisualization.toggle();
@@ -999,9 +998,8 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       if (mediaCoordinator.toggleWindowPresentation()) markLayoutDirty();
       return;
     }
-    if (!audioPictureInPicture.isOpen() &&
-        !mediaCoordinator.audioPlaybackTarget() &&
-        !audioIsReady()) {
+    const AudioPlaybackSnapshot audio = audioGetPlaybackSnapshot();
+    if (!audioPictureInPicture.isOpen() && !audio.source && !audio.ready) {
       return;
     }
     if (audioPictureInPicture.toggle()) {
@@ -1039,6 +1037,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     AudioPictureInPictureWindow::Context context;
     context.nowPlayingTarget = mediaCoordinator.audioPlaybackTarget();
     context.nowPlayingLabel = buildPlaybackLabel(context.nowPlayingTarget);
+    context.playback = audioGetPlaybackSnapshot();
     return context;
   };
   auto renderAudioPictureInPicture = [&]() {
@@ -1157,6 +1156,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       theme.commandPaletteStyles();
 
   auto buildCommands = [&]() {
+    const AudioPlaybackSnapshot audio = audioGetPlaybackSnapshot();
     std::vector<tui_command_palette::Command> commands;
     commands.emplace_back("Play/Pause", "Space", [&]() {
       if (callbacks.onTogglePause) {
@@ -1174,7 +1174,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       });
     }
     if (mediaCoordinator.videoActive() || audioPictureInPicture.isOpen() ||
-        mediaCoordinator.audioPlaybackTarget() || audioIsReady()) {
+        audio.source || audio.ready) {
       commands.emplace_back("Picture-in-Picture", "Ctrl+P", [&]() {
         if (callbacks.onTogglePictureInPicture) {
           callbacks.onTogglePictureInPicture();
@@ -1192,9 +1192,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         markDirty();
       });
     }
-    if (melodyVisualization.active() ||
-        mediaCoordinator.audioPlaybackTarget() ||
-        audioIsReady()) {
+    if (melodyVisualization.active() || audio.source || audio.ready) {
       commands.emplace_back(
           melodyVisualization.active() ? "Hide Pitch Monitor"
                                        : "Show Pitch Monitor",
@@ -1853,6 +1851,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       }
       const std::optional<PlaybackTarget> nowPlayingTarget =
           mediaCoordinator.currentPlaybackTarget();
+      const AudioPlaybackSnapshot audio = audioGetPlaybackSnapshot();
       const std::filesystem::path nowPlaying =
           nowPlayingTarget ? playbackTargetFile(*nowPlayingTarget)
                            : std::filesystem::path{};
@@ -1881,7 +1880,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       melodyObservation.pitch = audioGetMelodyInfo();
       melodyObservation.analysis = audioGetMelodyAnalysisState();
       melodyObservation.playbackAdvancing =
-          !audioIsPaused() && !audioIsHolding();
+          !audio.paused && !audio.holding;
       melodyVisualization.update(std::move(melodyObservation));
       if (browserInteractionEnabled) {
         const int playingEntryIndex =
@@ -2026,21 +2025,22 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       const std::optional<PlaybackControlState> controlState =
           mediaCoordinator.playbackControlState();
       const bool videoActive = controlState && controlState->isVideo;
-      bool audioReady = audioIsReady();
+      const bool audioReady = audio.ready;
       double currentSec = controlState
                               ? controlState->positionSec
-                              : (audioReady ? audioGetTimeSec() : 0.0);
+                              : audio.positionSec;
       double totalSec = controlState
                             ? controlState->durationSec.value_or(-1.0)
-                            : (audioReady ? audioGetTotalSec() : -1.0);
+                            : audio.durationSec;
       double displaySec = currentSec;
-      if (!videoActive && audioReady && audioIsSeeking()) {
-        double seekSec = audioGetSeekTargetSec();
+      if (!videoActive && audioReady && audio.seeking) {
+        const double seekSec = audio.seekTargetSec;
         if (seekSec >= 0.0 && std::isfinite(seekSec)) {
           displaySec = seekSec;
         }
       }
-      int volPct = static_cast<int>(std::round(audioGetVolume() * 100.0f));
+      const int volPct =
+          static_cast<int>(std::round(audio.volume * 100.0f));
       double ratio = 0.0;
       if (totalSec > 0.0 && std::isfinite(totalSec)) {
         ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
@@ -2054,7 +2054,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       footerInput.width = width;
       footerInput.progressY = line;
       footerInput.peakY = peakMeterY;
-      footerInput.unclippedOutputPeak = audioGetUnclippedOutputPeak();
+      footerInput.unclippedOutputPeak = audio.unclippedOutputPeak;
       ProgressFooterRenderResult footerResult =
           renderProgressFooter(screen, footerInput, footerStyles);
       progressBarX = footerResult.progressBarX;

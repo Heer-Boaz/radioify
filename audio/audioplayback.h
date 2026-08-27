@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "audio/analysis/melody_types.h"
+#include "audio/playback_snapshot.h"
 #include "audiofilter/radio1938/radio_reception_profile.h"
 #include "core/runtime_defaults.h"
 #include "kssoptions.h"
@@ -52,11 +53,6 @@ struct KssInstrumentProfile {
   uint32_t hash = 0;
   std::vector<uint8_t> data;
   uint8_t volume = 0;
-};
-
-struct AudioPlaybackSource {
-  std::filesystem::path file;
-  std::optional<int> trackIndex;
 };
 
 // Owns the process-wide audio playback state. Keep this object alive for every
@@ -108,6 +104,7 @@ uint64_t audioStreamWaitForUpdate(uint64_t lastCounter, int timeoutMs);
 uint64_t audioStreamUpdateCounter();
 
 std::optional<AudioPlaybackSource> audioGetPlaybackSource();
+AudioPlaybackSnapshot audioGetPlaybackSnapshot();
 
 double audioGetTimeSec();
 double audioGetTotalSec();

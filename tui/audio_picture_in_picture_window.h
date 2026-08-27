@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "audio/playback_snapshot.h"
 #include "asciiart.h"
 #include "input_event.h"
 #include "consolescreen.h"
@@ -32,6 +33,7 @@ class AudioPictureInPictureWindow {
   struct Context {
     std::string nowPlayingLabel;
     std::optional<PlaybackTarget> nowPlayingTarget;
+    AudioPlaybackSnapshot playback;
   };
 
   struct Callbacks {

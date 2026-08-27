@@ -416,6 +416,27 @@ std::optional<AudioPlaybackSource> audioGetPlaybackSource() {
   return source;
 }
 
+AudioPlaybackSnapshot audioGetPlaybackSnapshot() {
+  AudioPlaybackSnapshot snapshot;
+  snapshot.source = audioGetPlaybackSource();
+  snapshot.ready = audioIsReady();
+  snapshot.seeking = audioIsSeeking();
+  snapshot.paused = audioIsPaused();
+  snapshot.finished = audioIsFinished();
+  snapshot.holding = audioIsHolding();
+  snapshot.radioEnabled = audioIsRadioEnabled();
+  snapshot.hz50Enabled = audioIs50HzEnabled();
+  snapshot.supports50HzToggle = audioSupports50HzToggle();
+  snapshot.positionSec = snapshot.ready ? audioGetTimeSec() : 0.0;
+  snapshot.durationSec = snapshot.ready ? audioGetTotalSec() : -1.0;
+  snapshot.seekTargetSec =
+      snapshot.seeking ? audioGetSeekTargetSec() : -1.0;
+  snapshot.volume = audioGetVolume();
+  snapshot.unclippedOutputPeak = audioGetUnclippedOutputPeak();
+  snapshot.radioFilterLabel = audioGetRadioFilterLabel();
+  return snapshot;
+}
+
 double audioGetTimeSec() {
   if (!gAudio.decoderReady) {
     return 0.0;

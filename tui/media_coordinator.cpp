@@ -138,9 +138,8 @@ struct TuiMediaCoordinator::Impl {
                          : PlaybackShellTerminalRole::Browser;
   }
 
-  std::optional<PlaybackTarget> audioPlaybackTarget() const {
-    const std::optional<AudioPlaybackSource> source =
-        audioGetPlaybackSource();
+  static std::optional<PlaybackTarget> playbackTargetForAudio(
+      const std::optional<AudioPlaybackSource>& source) {
     if (!source) return std::nullopt;
     if (source->trackIndex) {
       if (std::optional<PlaybackTarget> trackTarget =
@@ -149,6 +148,10 @@ struct TuiMediaCoordinator::Impl {
       }
     }
     return playbackFileTarget(source->file);
+  }
+
+  std::optional<PlaybackTarget> audioPlaybackTarget() const {
+    return playbackTargetForAudio(audioGetPlaybackSource());
   }
 
   std::optional<PlaybackTarget> currentPlaybackTarget() const {
@@ -167,23 +170,24 @@ struct TuiMediaCoordinator::Impl {
   std::optional<PlaybackControlState> playbackControlState() const {
     if (videoSession_) return videoSession_->controlState();
 
-    std::optional<PlaybackTarget> target = audioPlaybackTarget();
+    const AudioPlaybackSnapshot audio = audioGetPlaybackSnapshot();
+    std::optional<PlaybackTarget> target =
+        playbackTargetForAudio(audio.source);
     if (!target) return std::nullopt;
 
     PlaybackControlState state(std::move(*target), false);
-    state.positionSec = audioGetTimeSec();
-    const double durationSec = audioGetTotalSec();
-    if (std::isfinite(durationSec) && durationSec > 0.0) {
-      state.durationSec = durationSec;
+    state.positionSec = audio.positionSec;
+    if (std::isfinite(audio.durationSec) && audio.durationSec > 0.0) {
+      state.durationSec = audio.durationSec;
     }
     state.canPlay = true;
     state.canPause = true;
     state.canStop = true;
     state.canPrevious = true;
     state.canNext = true;
-    if (audioIsFinished()) {
+    if (audio.finished) {
       state.status = PlaybackControlStatus::Stopped;
-    } else if (audioIsPaused()) {
+    } else if (audio.paused) {
       state.status = PlaybackControlStatus::Paused;
     } else {
       state.status = PlaybackControlStatus::Playing;
