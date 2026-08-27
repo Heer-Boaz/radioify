@@ -417,26 +417,34 @@ void AudioPictureInPictureWindow::handleInput(const InputEvent& ev) {
 
 bool AudioPictureInPictureWindow::clickControl(
     playback_overlay::OverlayControlId control) {
-  auto dispatch = [&](PlaybackAction action) {
-    publish(PlaybackCommand{action});
-    return true;
-  };
+  const playback_overlay::OverlayControlIntent intent =
+      playback_overlay::intentForOverlayControl(control);
+  const auto* action =
+      std::get_if<playback_overlay::OverlayAction>(&intent);
+  if (!action) return false;
 
-  playback_overlay::OverlayControlActions actions;
-  actions.previous = [&]() { return dispatch(PlaybackAction::Previous); };
-  actions.playPause =
-      [&]() { return dispatch(PlaybackAction::TogglePause); };
-  actions.next = [&]() { return dispatch(PlaybackAction::Next); };
-  actions.radio =
-      [&]() { return dispatch(PlaybackAction::ToggleRadio); };
-  actions.hz50 =
-      [&]() { return dispatch(PlaybackAction::Toggle50Hz); };
-  actions.pictureInPicture = [&]() {
-    close();
-    publish(Closed{});
+  const auto dispatch = [this](PlaybackAction playbackAction) {
+    publish(PlaybackCommand{playbackAction});
     return true;
   };
-  return playback_overlay::dispatchOverlayControl(control, actions);
+  switch (*action) {
+    case playback_overlay::OverlayAction::Previous:
+      return dispatch(PlaybackAction::Previous);
+    case playback_overlay::OverlayAction::TogglePlayPause:
+      return dispatch(PlaybackAction::TogglePause);
+    case playback_overlay::OverlayAction::Next:
+      return dispatch(PlaybackAction::Next);
+    case playback_overlay::OverlayAction::ToggleRadio:
+      return dispatch(PlaybackAction::ToggleRadio);
+    case playback_overlay::OverlayAction::Toggle50Hz:
+      return dispatch(PlaybackAction::Toggle50Hz);
+    case playback_overlay::OverlayAction::TogglePictureInPicture:
+      close();
+      publish(Closed{});
+      return true;
+    default:
+      return false;
+  }
 }
 
 void AudioPictureInPictureWindow::publish(Event event) {

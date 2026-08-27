@@ -2,10 +2,10 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "consolescreen.h"
@@ -37,20 +37,22 @@ struct OverlayControlSpecOptions {
   bool includePictureInPicture = true;
 };
 
-struct OverlayControlActions {
-  std::function<bool()> previous;
-  std::function<bool()> playPause;
-  std::function<bool()> next;
-  std::function<bool()> radio;
-  std::function<bool()> hz50;
-  std::function<bool()> audioTrack;
-  std::function<bool()> subtitles;
-  std::function<bool()> pictureInPicture;
-  std::function<bool(playback_video_edit::Command)> videoEdit;
-  std::function<bool()> waitForVideoEditExport;
-  std::function<bool()> confirmPendingExit;
-  std::function<bool()> cancelPendingExit;
+enum class OverlayAction : std::uint8_t {
+  Previous,
+  TogglePlayPause,
+  Next,
+  ToggleRadio,
+  Toggle50Hz,
+  CycleAudioTrack,
+  ToggleSubtitles,
+  TogglePictureInPicture,
+  WaitForVideoEditExport,
+  ConfirmPendingExit,
+  CancelPendingExit,
 };
+
+using OverlayControlIntent =
+    std::variant<OverlayAction, playback_video_edit::Command>;
 
 struct OverlayCellControlInput {
   OverlayControlId id = OverlayControlId::Radio;
@@ -207,8 +209,7 @@ OverlayControlSpec makeOverlayTextControlSpec(OverlayControlId id,
                                               bool enabled = true);
 std::vector<OverlayCellControlInput> buildOverlayCellControlInputs(
     const std::vector<OverlayControlSpec>& specs, int hoverControlToken);
-bool dispatchOverlayControl(OverlayControlId id,
-                            const OverlayControlActions& actions);
+OverlayControlIntent intentForOverlayControl(OverlayControlId id);
 
 OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input);
 OverlayCellLayout layoutOverlayControlCells(

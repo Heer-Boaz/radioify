@@ -1,6 +1,7 @@
 #include "playback/overlay/overlay.h"
 
 #include <algorithm>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -81,76 +82,66 @@ std::vector<OverlayCellControlInput> buildOverlayCellControlInputs(
   return controls;
 }
 
-bool dispatchOverlayControl(OverlayControlId id,
-                            const OverlayControlActions& actions) {
-  auto invoke = [](const std::function<bool()>& action) {
-    return action ? action() : false;
-  };
-  const auto invokeEdit = [&](playback_video_edit::Command command) {
-    return actions.videoEdit ? actions.videoEdit(command) : false;
-  };
+OverlayControlIntent intentForOverlayControl(OverlayControlId id) {
   switch (id) {
     case OverlayControlId::Previous:
-      return invoke(actions.previous);
+      return OverlayAction::Previous;
     case OverlayControlId::PlayPause:
-      return invoke(actions.playPause);
+      return OverlayAction::TogglePlayPause;
     case OverlayControlId::Next:
-      return invoke(actions.next);
+      return OverlayAction::Next;
     case OverlayControlId::Radio:
-      return invoke(actions.radio);
+      return OverlayAction::ToggleRadio;
     case OverlayControlId::Hz50:
-      return invoke(actions.hz50);
+      return OverlayAction::Toggle50Hz;
     case OverlayControlId::AudioTrack:
-      return invoke(actions.audioTrack);
+      return OverlayAction::CycleAudioTrack;
     case OverlayControlId::Subtitles:
-      return invoke(actions.subtitles);
+      return OverlayAction::ToggleSubtitles;
     case OverlayControlId::PictureInPicture:
-      return invoke(actions.pictureInPicture);
+      return OverlayAction::TogglePictureInPicture;
     case OverlayControlId::EditMarkIn:
-      return invokeEdit(playback_video_edit::Command::ToggleIn);
+      return playback_video_edit::Command::ToggleIn;
     case OverlayControlId::EditMarkOut:
-      return invokeEdit(playback_video_edit::Command::ToggleOut);
+      return playback_video_edit::Command::ToggleOut;
     case OverlayControlId::EditClearSelection:
-      return invokeEdit(playback_video_edit::Command::ClearInAndOut);
+      return playback_video_edit::Command::ClearInAndOut;
     case OverlayControlId::EditRippleDelete:
-      return invokeEdit(playback_video_edit::Command::RippleDelete);
+      return playback_video_edit::Command::RippleDelete;
     case OverlayControlId::EditTrim:
-      return invokeEdit(playback_video_edit::Command::Trim);
+      return playback_video_edit::Command::Trim;
     case OverlayControlId::EditSuggestions:
-      return invokeEdit(playback_video_edit::Command::ToggleSceneSuggestions);
+      return playback_video_edit::Command::ToggleSceneSuggestions;
     case OverlayControlId::EditSuggestionFilter:
-      return invokeEdit(
-          playback_video_edit::Command::CycleSceneSuggestionFilter);
+      return playback_video_edit::Command::CycleSceneSuggestionFilter;
     case OverlayControlId::EditPreviousSuggestion:
-      return invokeEdit(
-          playback_video_edit::Command::PreviousSceneSuggestion);
+      return playback_video_edit::Command::PreviousSceneSuggestion;
     case OverlayControlId::EditNextSuggestion:
-      return invokeEdit(playback_video_edit::Command::NextSceneSuggestion);
+      return playback_video_edit::Command::NextSceneSuggestion;
     case OverlayControlId::EditSelectSuggestion:
-      return invokeEdit(playback_video_edit::Command::SelectSceneSuggestion);
+      return playback_video_edit::Command::SelectSceneSuggestion;
     case OverlayControlId::EditHideSuggestion:
-      return invokeEdit(playback_video_edit::Command::DismissSceneSuggestion);
+      return playback_video_edit::Command::DismissSceneSuggestion;
     case OverlayControlId::EditUndoHideSuggestion:
-      return invokeEdit(
-          playback_video_edit::Command::UndoDismissSceneSuggestion);
+      return playback_video_edit::Command::UndoDismissSceneSuggestion;
     case OverlayControlId::EditDone:
-      return invokeEdit(playback_video_edit::Command::Finish);
+      return playback_video_edit::Command::Finish;
     case OverlayControlId::EditStartExport:
-      return invokeEdit(playback_video_edit::Command::StartExport);
+      return playback_video_edit::Command::StartExport;
     case OverlayControlId::EditWaitForExport:
-      return invoke(actions.waitForVideoEditExport);
+      return OverlayAction::WaitForVideoEditExport;
     case OverlayControlId::EditCancelExport:
-      return invokeEdit(playback_video_edit::Command::CancelExport);
+      return playback_video_edit::Command::CancelExport;
     case OverlayControlId::EditConfirmPrompt:
-      return invokeEdit(playback_video_edit::Command::ConfirmPrompt);
+      return playback_video_edit::Command::ConfirmPrompt;
     case OverlayControlId::EditCancelPrompt:
-      return invokeEdit(playback_video_edit::Command::CancelPrompt);
+      return playback_video_edit::Command::CancelPrompt;
     case OverlayControlId::EditDiscardAndExit:
-      return invoke(actions.confirmPendingExit);
+      return OverlayAction::ConfirmPendingExit;
     case OverlayControlId::EditCancelExit:
-      return invoke(actions.cancelPendingExit);
+      return OverlayAction::CancelPendingExit;
   }
-  return false;
+  throw std::invalid_argument("Unknown playback overlay control.");
 }
 
 std::vector<OverlayControlSpec> buildOverlayControlSpecs(

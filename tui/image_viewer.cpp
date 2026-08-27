@@ -125,14 +125,19 @@ Exit run(image_viewer_sequence::Sequence sequence, ConsoleInput& input,
   };
 
   auto clickOverlayControl = [&](playback_overlay::OverlayControlId control) {
-    playback_overlay::OverlayControlActions actions;
-    actions.previous = [&]() {
-      return navigateImage(image_viewer_sequence::Direction::Previous);
-    };
-    actions.next = [&]() {
-      return navigateImage(image_viewer_sequence::Direction::Next);
-    };
-    return playback_overlay::dispatchOverlayControl(control, actions);
+    const playback_overlay::OverlayControlIntent intent =
+        playback_overlay::intentForOverlayControl(control);
+    const auto* action =
+        std::get_if<playback_overlay::OverlayAction>(&intent);
+    if (!action) return false;
+    switch (*action) {
+      case playback_overlay::OverlayAction::Previous:
+        return navigateImage(image_viewer_sequence::Direction::Previous);
+      case playback_overlay::OverlayAction::Next:
+        return navigateImage(image_viewer_sequence::Direction::Next);
+      default:
+        return false;
+    }
   };
 
   screen.updateSize();

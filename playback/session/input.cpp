@@ -265,38 +265,41 @@ bool executeOverlayControl(const PlaybackInputView& view,
                            CommandTarget& signals,
                            PlaybackSeekGestureState& seekState,
                            playback_overlay::OverlayControlId control) {
-  playback_overlay::OverlayControlActions actions;
-  actions.previous = [&]() {
-    return requestTransport(signals, PlaybackTransportCommand::Previous);
-  };
-  actions.playPause = [&]() {
-    setPlaybackPaused(view, signals, seekState, pauseRequestedByToggle(view));
-    return true;
-  };
-  actions.next = [&]() {
-    return requestTransport(signals, PlaybackTransportCommand::Next);
-  };
-  actions.radio = [&]() { return cycleRadioFilter(view); };
-  actions.hz50 = [&]() { return toggle50Hz(view); };
-  actions.audioTrack = [&]() { return toggleAudioTrack(view); };
-  actions.subtitles = [&]() { return toggleSubtitles(view); };
-  actions.pictureInPicture = [&]() {
-    return togglePictureInPicture(view, signals);
-  };
-  actions.videoEdit = [&](playback_video_edit::Command command) {
-    return signals.dispatch(VideoEditRequest{command});
-  };
-  actions.waitForVideoEditExport = [&]() {
-    return signals.dispatch(
-        CommandAction::WaitForVideoEditExportAndExit);
-  };
-  actions.confirmPendingExit = [&]() {
-    return signals.dispatch(CommandAction::ConfirmPendingExit);
-  };
-  actions.cancelPendingExit = [&]() {
-    return signals.dispatch(CommandAction::CancelPendingExit);
-  };
-  return playback_overlay::dispatchOverlayControl(control, actions);
+  const playback_overlay::OverlayControlIntent intent =
+      playback_overlay::intentForOverlayControl(control);
+  if (const auto* edit =
+          std::get_if<playback_video_edit::Command>(&intent)) {
+    return signals.dispatch(VideoEditRequest{*edit});
+  }
+
+  using Action = playback_overlay::OverlayAction;
+  switch (std::get<Action>(intent)) {
+    case Action::Previous:
+      return requestTransport(signals, PlaybackTransportCommand::Previous);
+    case Action::TogglePlayPause:
+      setPlaybackPaused(view, signals, seekState,
+                        pauseRequestedByToggle(view));
+      return true;
+    case Action::Next:
+      return requestTransport(signals, PlaybackTransportCommand::Next);
+    case Action::ToggleRadio:
+      return cycleRadioFilter(view);
+    case Action::Toggle50Hz:
+      return toggle50Hz(view);
+    case Action::CycleAudioTrack:
+      return toggleAudioTrack(view);
+    case Action::ToggleSubtitles:
+      return toggleSubtitles(view);
+    case Action::TogglePictureInPicture:
+      return togglePictureInPicture(view, signals);
+    case Action::WaitForVideoEditExport:
+      return signals.dispatch(CommandAction::WaitForVideoEditExportAndExit);
+    case Action::ConfirmPendingExit:
+      return signals.dispatch(CommandAction::ConfirmPendingExit);
+    case Action::CancelPendingExit:
+      return signals.dispatch(CommandAction::CancelPendingExit);
+  }
+  return false;
 }
 
 bool dispatchContextMenuInput(

@@ -40,6 +40,28 @@ std::vector<playback_video_composition::SourceFrameTiming> observedTiming(
   return frames;
 }
 
+std::optional<playback_video_edit::Command> editCommandForControl(
+    playback_overlay::OverlayControlId control) {
+  const playback_overlay::OverlayControlIntent intent =
+      playback_overlay::intentForOverlayControl(control);
+  if (const auto* command =
+          std::get_if<playback_video_edit::Command>(&intent)) {
+    return *command;
+  }
+  return std::nullopt;
+}
+
+std::optional<playback_overlay::OverlayAction> overlayActionForControl(
+    playback_overlay::OverlayControlId control) {
+  const playback_overlay::OverlayControlIntent intent =
+      playback_overlay::intentForOverlayControl(control);
+  if (const auto* action =
+          std::get_if<playback_overlay::OverlayAction>(&intent)) {
+    return *action;
+  }
+  return std::nullopt;
+}
+
 }  // namespace
 
 int main() {
@@ -1103,33 +1125,19 @@ int main() {
   ok &= expect(controlIds(exportingEditControls) ==
                    expectedCompleteControls,
                "background export state must not repurpose the monitor bar");
-  std::optional<playback_video_edit::Command> dispatchedEditCommand;
-  playback_overlay::OverlayControlActions editControlActions;
-  editControlActions.videoEdit = [&](playback_video_edit::Command command) {
-    dispatchedEditCommand = command;
-    return true;
-  };
-  ok &= expect(playback_overlay::dispatchOverlayControl(
-                   playback_overlay::OverlayControlId::EditDone,
-                   editControlActions) &&
-                   dispatchedEditCommand ==
-                       playback_video_edit::Command::Finish,
+  ok &= expect(editCommandForControl(
+                   playback_overlay::OverlayControlId::EditDone) ==
+                   playback_video_edit::Command::Finish,
                "Done must only leave the edit tools instead of entering the "
                "Escape confirmation path or implying an export");
-  ok &= expect(playback_overlay::dispatchOverlayControl(
-                   playback_overlay::OverlayControlId::EditMarkIn,
-                   editControlActions) &&
-                   dispatchedEditCommand ==
+  ok &= expect(editCommandForControl(
+                   playback_overlay::OverlayControlId::EditMarkIn) ==
                        playback_video_edit::Command::ToggleIn &&
-                   playback_overlay::dispatchOverlayControl(
-                       playback_overlay::OverlayControlId::EditMarkOut,
-                       editControlActions) &&
-                   dispatchedEditCommand ==
+                   editCommandForControl(
+                       playback_overlay::OverlayControlId::EditMarkOut) ==
                        playback_video_edit::Command::ToggleOut &&
-                   playback_overlay::dispatchOverlayControl(
-                       playback_overlay::OverlayControlId::EditClearSelection,
-                       editControlActions) &&
-                   dispatchedEditCommand ==
+                   editCommandForControl(playback_overlay::OverlayControlId::
+                                             EditClearSelection) ==
                        playback_video_edit::Command::ClearInAndOut,
                "endpoint buttons must toggle and Cancel must clear only the "
                "local range-selection tool");
@@ -1198,35 +1206,21 @@ int main() {
                playback_overlay::OverlayControlId::EditUndoHideSuggestion,
                playback_video_edit::Command::UndoDismissSceneSuggestion},
        }) {
-    dispatchedEditCommand.reset();
-    ok &= expect(playback_overlay::dispatchOverlayControl(
-                     control, editControlActions) &&
-                     dispatchedEditCommand == command,
+    ok &= expect(editCommandForControl(control) == command,
                  "each suggestion control must dispatch through the shared "
                  "editor command boundary");
   }
-  ok &= expect(playback_overlay::dispatchOverlayControl(
-                   playback_overlay::OverlayControlId::EditStartExport,
-                   editControlActions) &&
-                   dispatchedEditCommand ==
+  ok &= expect(editCommandForControl(
+                   playback_overlay::OverlayControlId::EditStartExport) ==
                        playback_video_edit::Command::StartExport &&
-                   playback_overlay::dispatchOverlayControl(
-                       playback_overlay::OverlayControlId::EditCancelExport,
-                       editControlActions) &&
-                   dispatchedEditCommand ==
+                   editCommandForControl(playback_overlay::OverlayControlId::
+                                             EditCancelExport) ==
                        playback_video_edit::Command::CancelExport,
                "rendered export and cancel controls must dispatch distinct "
                "commands rather than a worker-state toggle");
-  bool waitedForExport = false;
-  editControlActions.waitForVideoEditExport = [&]() {
-    waitedForExport = true;
-    return true;
-  };
-  dispatchedEditCommand.reset();
-  ok &= expect(playback_overlay::dispatchOverlayControl(
-                   playback_overlay::OverlayControlId::EditWaitForExport,
-                   editControlActions) &&
-                   waitedForExport && !dispatchedEditCommand,
+  ok &= expect(overlayActionForControl(
+                   playback_overlay::OverlayControlId::EditWaitForExport) ==
+                   playback_overlay::OverlayAction::WaitForVideoEditExport,
                "waiting for an exit export must remain a session action, not "
                "an encoder command");
 
