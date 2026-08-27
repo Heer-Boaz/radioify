@@ -42,7 +42,6 @@
 #include "browser_chrome.h"
 #include "browser_wake_schedule.h"
 #include "browser_media_menu.h"
-#include "browser_media_menu_renderer.h"
 #include "browser_playback_reveal.h"
 #include "browser_playback_source.h"
 #include "browser_thumbnail_cache.h"
@@ -50,8 +49,6 @@
 #include "browser_navigation.h"
 #include "browser_model.h"
 #include "browsermeta.h"
-#include "command_palette.h"
-#include "command_palette_renderer.h"
 #include "consoleinput.h"
 #include "consolescreen.h"
 #include "core/open_file_requests.h"
@@ -104,6 +101,8 @@
 #include "media_formats.h"
 #include "runtime_helpers.h"
 #include "shell_command_catalog.h"
+#include "shell_overlay_stack.h"
+#include "shell_overlay_stack_renderer.h"
 #include "shell_shortcuts.h"
 
 #include "tui.h"
@@ -697,9 +696,9 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
   }
 
-  tui_browser_media_menu::Model fileContextMenu;
-  const tui_popup_menu::Styles fileContextStyles = theme.popupMenuStyles();
-  auto dismissFileContextMenu = [&]() { return fileContextMenu.dismiss(); };
+  shell_overlay_stack::Model shellOverlays;
+  const shell_overlay_stack::Styles shellOverlayStyles{
+      theme.popupMenuStyles(), theme.commandPaletteStyles()};
 
   auto selectedOptionsSubject = [&]()
       -> std::optional<OptionsBrowserSubject> {
@@ -824,7 +823,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     tui_popup_menu::Anchor anchor;
     anchor.x = x;
     anchor.y = y;
-    fileContextMenu.open(entry, std::move(items), anchor);
+    shellOverlays.openMediaMenu(entry, std::move(items), anchor);
     markDirty();
   };
   auto renderInputFile = [&](const std::filesystem::path& file) {
@@ -853,7 +852,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       browserInteraction.breadcrumbHover = -1;
       browserInteraction.actionHover = -1;
     }
-    dismissFileContextMenu();
+    shellOverlays.dismiss();
     markLayoutDirty();
   };
   auto toggleOptions = [&]() {
@@ -1119,10 +1118,6 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         },
         std::move(command));
   };
-
-  tui_command_palette::Model commandPalette;
-  const tui_command_palette::Styles commandPaletteStyles =
-      theme.commandPaletteStyles();
 
   auto buildCommands = [&]() {
     const PlaybackPresentationModel presentation = playbackPresenter.model();
@@ -1411,9 +1406,40 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         ev.mouse.pos.X = static_cast<SHORT>(gx);
         ev.mouse.pos.Y = static_cast<SHORT>(gy);
       }
+      const auto browserShellAction = tui_shell_shortcuts::resolve(
+          ev, tui_shell_shortcuts::context(
+                  tui_shell_shortcuts::Context::Browser));
+      if (browserShellAction ==
+          tui_shell_shortcuts::Action::ToggleCommandPalette) {
+        shellOverlays.toggleCommandPalette();
+        dirty =
+            setBrowserSearchFocus(browser, BrowserSearchFocus::None) || dirty;
+        markDirty();
+        return;
+      }
+      if (shellOverlays.active()) {
+        const shell_command_catalog::Catalog catalog = buildCommands();
+        const shell_overlay_stack::Interaction interaction =
+            shellOverlays.handle(
+                ev, shell_overlay_stack::Bounds{width, height, listTop},
+                catalog);
+        if (interaction.mediaCommand) {
+          runFileContextAction(std::move(*interaction.mediaCommand));
+        }
+        if (interaction.paletteIntent) {
+          dispatchPaletteIntent(*interaction.paletteIntent);
+        }
+        if (interaction.changed) {
+          dirty = true;
+        }
+        if (interaction.consumed) {
+          return;
+        }
+      }
       const bool browserInteractionEnabled = !melodyVisualization.active();
-      bool isLeftClick = (ev.type == InputEvent::Type::Mouse) &&
-                         isMouseButtonDown(ev.mouse, MouseButton::Left);
+      const bool isLeftClick = ev.type == InputEvent::Type::Mouse &&
+                               isMouseButtonDown(ev.mouse,
+                                                 MouseButton::Left);
       bool clearBtnHover = false;
       if (ev.type == InputEvent::Type::Mouse) {
         clearBtnHover =
@@ -1426,22 +1452,6 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           searchBarClearHover = clearBtnHover;
           markDirty();
         }
-      }
-      const auto browserShellAction = tui_shell_shortcuts::resolve(
-          ev, tui_shell_shortcuts::context(
-                  tui_shell_shortcuts::Context::Browser));
-      if (browserShellAction ==
-          tui_shell_shortcuts::Action::ToggleCommandPalette) {
-        if (commandPalette.active()) {
-          commandPalette.dismiss();
-        } else {
-          commandPalette.open();
-          dismissFileContextMenu();
-        }
-        dirty =
-            setBrowserSearchFocus(browser, BrowserSearchFocus::None) || dirty;
-        markDirty();
-        return;
       }
       if (ev.type == InputEvent::Type::Mouse && clearBtnHover && isLeftClick) {
         if (browserFilterFocused(browser)) {
@@ -1462,58 +1472,6 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         browserNavigator.reload();
         markDirty();
         return;
-      }
-      if (ev.type == InputEvent::Type::Action &&
-          ev.action == InputAction::Back) {
-        if (fileContextMenu.active()) {
-          dismissFileContextMenu();
-          dirty = true;
-          return;
-        }
-        if (commandPalette.active()) {
-          commandPalette.dismiss();
-          dirty = true;
-          return;
-        }
-      }
-      if (fileContextMenu.active()) {
-        tui_popup_menu::Bounds popupBounds;
-        popupBounds.width = width;
-        popupBounds.height = height;
-        popupBounds.topInset = listTop;
-        const tui_browser_media_menu::Interaction interaction =
-            fileContextMenu.handle(ev, popupBounds);
-        if (interaction.command) {
-          runFileContextAction(std::move(*interaction.command));
-        }
-        if (interaction.changed) {
-          dirty = true;
-        }
-        if (interaction.consumed) {
-          return;
-        }
-      }
-      if (commandPalette.active()) {
-        const shell_command_catalog::Catalog catalog =
-            buildCommands();
-        tui_command_palette::Bounds paletteBounds;
-        paletteBounds.width = width;
-        paletteBounds.height = height;
-        paletteBounds.topInset = listTop;
-        const tui_command_palette::Interaction interaction =
-            commandPalette.handle(ev, catalog.commands(), paletteBounds);
-        if (interaction.activatedCommand) {
-          if (const shell_command_catalog::Intent* intent =
-                  catalog.intentAt(*interaction.activatedCommand)) {
-            dispatchPaletteIntent(*intent);
-          }
-        }
-        if (interaction.changed) {
-          dirty = true;
-        }
-        if (interaction.consumed) {
-          return;
-        }
       }
       if (mediaCoordinator.videoActive() && !browserSearchFocused(browser) &&
           (ev.type == InputEvent::Type::Key ||
@@ -1976,24 +1934,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       progressBarY = footerResult.progressBarY;
       progressBarWidth = footerResult.progressBarWidth;
 
-      if (commandPalette.active()) {
-        const shell_command_catalog::Catalog catalog =
-            buildCommands();
-        tui_command_palette::Bounds paletteBounds;
-        paletteBounds.width = width;
-        paletteBounds.height = height;
-        paletteBounds.topInset = listTop;
-        tui_command_palette::draw(screen, commandPalette, catalog.commands(),
-                                  paletteBounds, commandPaletteStyles);
-      }
-
-      if (fileContextMenu.active()) {
-        tui_popup_menu::Bounds popupBounds;
-        popupBounds.width = width;
-        popupBounds.height = height;
-        popupBounds.topInset = listTop;
-        tui_browser_media_menu::draw(screen, fileContextMenu, popupBounds,
-                                     fileContextStyles);
+      if (shellOverlays.active()) {
+        const shell_command_catalog::Catalog catalog = buildCommands();
+        shell_overlay_stack::draw(
+            screen, shellOverlays, catalog,
+            shell_overlay_stack::Bounds{width, height, listTop},
+            shellOverlayStyles);
       }
 
       if (const std::optional<MediaTaskCardModel> taskCard =

@@ -927,6 +927,22 @@ radioify_link_repo_target(shell_command_catalog_tests)
 add_test(NAME shell_command_catalog_tests
          COMMAND $<TARGET_FILE:shell_command_catalog_tests>)
 
+add_executable(shell_overlay_stack_tests)
+target_sources(shell_overlay_stack_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_shell_overlay_stack_tests>
+  ${CMAKE_SOURCE_DIR}/tui/ui/shell_overlay_stack.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/browser_media_menu.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/popup_menu.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/shell_command_catalog.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/command_palette.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/single_line_text_input.cpp
+  ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
+  ${CMAKE_SOURCE_DIR}/core/unicode_display_width.cpp
+)
+radioify_link_repo_target(shell_overlay_stack_tests)
+add_test(NAME shell_overlay_stack_tests
+         COMMAND $<TARGET_FILE:shell_overlay_stack_tests>)
+
 add_executable(browser_action_strip_tests)
 target_sources(browser_action_strip_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_browser_action_strip_tests>
