@@ -1,10 +1,14 @@
 #include "presentation_model.h"
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 #include "audio/audioplayback.h"
 #include "playback/ascii/screen_renderer.h"
+#include "playback/debug/lines.h"
 #include "playback/video/player.h"
+#include "playback/video/state/machine.h"
 #include "playback/video/subtitle/manager.h"
 
 namespace playback_session {
@@ -16,6 +20,85 @@ struct PublishedState {
 };
 
 }  // namespace
+
+WindowUiState projectWindowUiState(
+    const playback_screen_renderer::PlaybackScreenResources& resources,
+    VideoWindow& videoWindow,
+    const playback_screen_renderer::PlaybackScreenModel& playback,
+    const WindowPresentationModel& window) {
+  Player& player = resources.player;
+  const AudioPlaybackSnapshot audio = resources.audioPlayback.snapshot();
+  const PlayerTimelineSnapshot timeline = player.timelineSnapshot();
+  double displaySec = timeline.positionUs > 0
+                          ? static_cast<double>(timeline.positionUs) /
+                                1000000.0
+                          : 0.0;
+  const int64_t durationUs = player.durationUs();
+  double totalSec = durationUs > 0
+                        ? static_cast<double>(durationUs) / 1000000.0
+                        : (playback.audioOk ? audio.durationSec : -1.0);
+  if (totalSec > 0.0) {
+    displaySec = std::clamp(displaySec, 0.0, totalSec);
+  }
+  const bool playerPaused =
+      playback_video_state_machine::project(player.state()).transport ==
+      playback_video_state_machine::TransportState::Paused;
+
+  playback_overlay::PlaybackOverlayInputs inputs;
+  inputs.windowTitle = resources.windowTitle;
+  inputs.audioOk = playback.audioOk;
+  inputs.playPauseAvailable =
+      playback.playbackState == PlaybackSessionState::Active ||
+      playback.playbackState == PlaybackSessionState::Paused ||
+      playback.playbackState == PlaybackSessionState::Ended;
+  inputs.audioSupports50HzToggle =
+      playback.audioOk && audio.supports50HzToggle;
+  inputs.canPlayPrevious = playback.canPlayPrevious;
+  inputs.canPlayNext = playback.canPlayNext;
+  inputs.radioEnabled = audio.radioEnabled;
+  inputs.radioLabel = std::string(audio.radioFilterLabel);
+  inputs.hz50Enabled = audio.hz50Enabled;
+  inputs.canCycleAudioTracks =
+      playback.audioOk && player.canCycleAudioTracks();
+  inputs.activeAudioTrackLabel =
+      playback.audioOk ? player.activeAudioTrackLabel() : "N/A";
+  inputs.subtitleManager = &resources.subtitleManager;
+  inputs.hasSubtitles = playback.hasSubtitles;
+  inputs.subtitlesEnabled =
+      resources.subtitlesEnabled.load(std::memory_order_relaxed);
+  inputs.subtitleClockUs = timeline.sourcePositionUs;
+  inputs.seekingOverlay = timeline.seekPending();
+  inputs.displaySec = displaySec;
+  inputs.totalSec = totalSec;
+  inputs.volPct =
+      static_cast<int>(std::round(audio.volume * 100.0f));
+  inputs.osd = window.osd;
+  inputs.paused = playback.playbackState == PlaybackSessionState::Paused ||
+                  playback.playbackState == PlaybackSessionState::Ended ||
+                  player.isEnded() || playerPaused;
+  inputs.pictureInPictureAvailable = videoWindow.IsOpen();
+  inputs.pictureInPictureActive =
+      inputs.pictureInPictureAvailable && videoWindow.IsPictureInPicture();
+  inputs.subtitleRenderError = videoWindow.GetSubtitleRenderError();
+  inputs.contextMenu = window.contextMenu;
+  inputs.videoEdit = window.videoEdit;
+  if (inputs.videoEdit.active) {
+    inputs.videoEdit.playheadTimelineUs = timeline.positionUs;
+  }
+  inputs.videoEditExport = window.videoEditExport;
+  inputs.videoEditPrompt = window.videoEditPrompt;
+
+  WindowUiState ui = playback_overlay::buildWindowUiState(
+      playback_overlay::buildPlaybackOverlayState(inputs),
+      resources.controlHover.load(std::memory_order_relaxed));
+  ui.timelinePreview = window.timelinePreview;
+  if (playback.debugOverlay) {
+    ui.debugLines.push_back(videoWindow.OutputColorDebugLine());
+    ui.debugLines.push_back(
+        playback_debug_lines::videoFrameDebugLine(player.debugInfo()));
+  }
+  return ui;
+}
 
 struct PresentationModel::Impl {
   explicit Impl(Dependencies dependencies) : dependencies(dependencies) {}
@@ -48,21 +131,10 @@ void PresentationModel::publish(Revision revision) {
   impl_->published.available = true;
 }
 
-WindowUiState PresentationModel::buildWindowUiState(
-    VideoWindow& videoWindow) {
+WindowUiState PresentationModel::windowUiState() {
   const PublishedState state = impl_->snapshot();
   if (!state.available) return {};
-  const auto& model = state.revision.textGrid;
-  const auto& renderer = impl_->dependencies.renderer;
-  const AudioPlaybackSnapshot audio = renderer.audioPlayback.snapshot();
-  std::lock_guard<std::mutex> subtitleLock(
-      impl_->dependencies.subtitleMutex);
-  return playback_framebuffer_presenter::buildPlaybackFramebufferUiState(
-      renderer.windowTitle, videoWindow, renderer.player,
-      renderer.subtitleManager, audio, model.playbackState, model.audioOk,
-      model.canPlayPrevious, model.canPlayNext, model.hasSubtitles,
-      renderer.subtitlesEnabled, renderer.controlHover,
-      state.revision.window, model.debugOverlay);
+  return state.revision.window;
 }
 
 bool PresentationModel::renderTextGrid(
@@ -98,16 +170,16 @@ bool PresentationModel::renderTextGrid(
   const auto& renderer = impl_->dependencies.renderer;
   const bool audioOnlyPlayback = renderer.player.sourceWidth() <= 0 ||
                                  renderer.player.sourceHeight() <= 0;
-  model.osd = state.revision.window.osd;
-  model.timelinePreview = state.revision.window.timelinePreview;
-  model.videoEdit = state.revision.window.videoEdit;
+  model.osd = state.revision.windowModel.osd;
+  model.timelinePreview = state.revision.windowModel.timelinePreview;
+  model.videoEdit = state.revision.windowModel.videoEdit;
   if (model.videoEdit.active) {
     model.videoEdit.playheadTimelineUs =
         renderer.player.timelineSnapshot().positionUs;
   }
-  model.videoEditExport = state.revision.window.videoEditExport;
-  model.videoEditPrompt = state.revision.window.videoEditPrompt;
-  model.contextMenu = state.revision.window.contextMenu;
+  model.videoEditExport = state.revision.windowModel.videoEditExport;
+  model.videoEditPrompt = state.revision.windowModel.videoEditPrompt;
+  model.contextMenu = state.revision.windowModel.contextMenu;
   model.osd.controlsVisible = model.osd.controlsVisible || audioOnlyPlayback;
   model.clearHistory = false;
   model.frameChanged = request.frameChanged;

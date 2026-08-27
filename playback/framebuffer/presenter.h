@@ -5,7 +5,6 @@
 #include <string>
 #include <vector>
 
-#include "audio/playback_snapshot.h"
 #include "core/native_wait_handle.h"
 #include "consolescreen.h"
 #include "playback/video/gpu/gpu_shared.h"
@@ -22,18 +21,6 @@ enum class WindowThreadState : uint8_t {
   Disabled,
   Enabled,
   Stopping,
-};
-
-// Immutable session-owned state published to the presenter thread as one
-// revision. Controls are projected only after this complete snapshot exists.
-struct PlaybackFramebufferUiSnapshot {
-  playback_overlay::PlaybackOsdSnapshot osd;
-  playback_video_timeline_preview::Snapshot timelinePreview;
-  playback_video_edit::EditSnapshot videoEdit;
-  playback_video_edit::ExportProgress videoEditExport;
-  playback_video_edit::Prompt videoEditPrompt =
-      playback_video_edit::Prompt::None;
-  playback_overlay::ContextMenuSnapshot contextMenu;
 };
 
 struct TextGridPresentationRequest {
@@ -62,19 +49,10 @@ class PresentationSource {
  public:
   virtual ~PresentationSource() = default;
 
-  virtual WindowUiState buildWindowUiState(VideoWindow& videoWindow) = 0;
+  virtual WindowUiState windowUiState() = 0;
   virtual bool renderTextGrid(const TextGridPresentationRequest& request,
                               TextGridPresentationTarget target) = 0;
 };
-
-WindowUiState buildPlaybackFramebufferUiState(
-    const std::string& windowTitle, VideoWindow& videoWindow, Player& player,
-    SubtitleManager& subtitleManager, const AudioPlaybackSnapshot& audio,
-    PlaybackSessionState playbackState, bool audioOk,
-    bool canPlayPrevious, bool canPlayNext, bool hasSubtitles,
-    std::atomic<bool>& enableSubtitlesShared,
-    std::atomic<int>& overlayControlHover,
-    const PlaybackFramebufferUiSnapshot& snapshot, bool debugOverlay);
 
 void runFramebufferPresenterLoop(
     Player& player, VideoWindow& videoWindow, GpuVideoFrameCache& frameCache,

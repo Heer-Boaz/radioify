@@ -2,16 +2,12 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <cstdio>
 #include <string>
 
 #include "core/thread_dispatch_queue.h"
 #include "core/windows_message_pump.h"
-#include "playback/debug/lines.h"
 #include "playback/frame/refresh.h"
-#include "playback/session/state.h"
-#include "playback/video/state/machine.h"
 #include "video_pipeline.h"
 #include "mini_player_tui.h"
 
@@ -56,94 +52,6 @@ void waitForPresenterActivity(NativeWaitHandle wakeEvent,
 }
 
 }  // namespace
-
-WindowUiState buildPlaybackFramebufferUiState(
-    const std::string& windowTitle, VideoWindow& videoWindow, Player& player,
-    SubtitleManager& subtitleManager, const AudioPlaybackSnapshot& audio,
-    PlaybackSessionState playbackState, bool audioOk,
-    bool canPlayPrevious, bool canPlayNext, bool hasSubtitles,
-    std::atomic<bool>& enableSubtitlesShared,
-    std::atomic<int>& overlayControlHover,
-    const PlaybackFramebufferUiSnapshot& snapshot, bool debugOverlay) {
-  const PlayerTimelineSnapshot timeline = player.timelineSnapshot();
-  const int64_t clockUs = timeline.positionUs;
-  double displaySec = 0.0;
-  if (clockUs > 0) {
-    displaySec = static_cast<double>(clockUs) / 1000000.0;
-  }
-  int64_t durUs = player.durationUs();
-  double totalSec = -1.0;
-  if (durUs > 0) {
-    totalSec = static_cast<double>(durUs) / 1000000.0;
-  } else if (audioOk) {
-    totalSec = audio.durationSec;
-  }
-  if (totalSec > 0.0) {
-    displaySec = std::clamp(displaySec, 0.0, totalSec);
-  }
-  const bool seekingOverlay = timeline.seekPending();
-  const bool subtitlesEnabledNow =
-      enableSubtitlesShared.load(std::memory_order_relaxed);
-  const bool playerTransportPaused =
-      playback_video_state_machine::project(player.state()).transport ==
-      playback_video_state_machine::TransportState::Paused;
-  bool pausedNow =
-      playbackState == PlaybackSessionState::Paused ||
-      playbackState == PlaybackSessionState::Ended || player.isEnded() ||
-      playerTransportPaused;
-
-  playback_overlay::PlaybackOverlayInputs overlayInputs;
-  overlayInputs.windowTitle = windowTitle;
-  overlayInputs.audioOk = audioOk;
-  overlayInputs.playPauseAvailable =
-      playbackState == PlaybackSessionState::Active ||
-      playbackState == PlaybackSessionState::Paused ||
-      playbackState == PlaybackSessionState::Ended;
-  overlayInputs.audioSupports50HzToggle =
-      audioOk && audio.supports50HzToggle;
-  overlayInputs.canPlayPrevious = canPlayPrevious;
-  overlayInputs.canPlayNext = canPlayNext;
-  overlayInputs.radioEnabled = audio.radioEnabled;
-  overlayInputs.radioLabel = std::string(audio.radioFilterLabel);
-  overlayInputs.hz50Enabled = audio.hz50Enabled;
-  overlayInputs.canCycleAudioTracks = audioOk && player.canCycleAudioTracks();
-  overlayInputs.activeAudioTrackLabel =
-      audioOk ? player.activeAudioTrackLabel() : "N/A";
-  overlayInputs.subtitleManager = &subtitleManager;
-  overlayInputs.hasSubtitles = hasSubtitles;
-  overlayInputs.subtitlesEnabled = subtitlesEnabledNow;
-  overlayInputs.subtitleClockUs = timeline.sourcePositionUs;
-  overlayInputs.seekingOverlay = seekingOverlay;
-  overlayInputs.displaySec = displaySec;
-  overlayInputs.totalSec = totalSec;
-  overlayInputs.volPct =
-      static_cast<int>(std::round(audio.volume * 100.0f));
-  overlayInputs.osd = snapshot.osd;
-  overlayInputs.paused = pausedNow;
-  overlayInputs.pictureInPictureAvailable = videoWindow.IsOpen();
-  overlayInputs.pictureInPictureActive =
-      overlayInputs.pictureInPictureAvailable &&
-      videoWindow.IsPictureInPicture();
-  overlayInputs.subtitleRenderError = videoWindow.GetSubtitleRenderError();
-  overlayInputs.contextMenu = snapshot.contextMenu;
-  overlayInputs.videoEdit = snapshot.videoEdit;
-  if (overlayInputs.videoEdit.active) {
-    overlayInputs.videoEdit.playheadTimelineUs = timeline.positionUs;
-  }
-  overlayInputs.videoEditExport = snapshot.videoEditExport;
-  overlayInputs.videoEditPrompt = snapshot.videoEditPrompt;
-  playback_overlay::PlaybackOverlayState overlayState =
-      playback_overlay::buildPlaybackOverlayState(overlayInputs);
-  WindowUiState ui = playback_overlay::buildWindowUiState(
-      overlayState, overlayControlHover.load(std::memory_order_relaxed));
-  ui.timelinePreview = snapshot.timelinePreview;
-  if (debugOverlay) {
-    ui.debugLines.push_back(videoWindow.OutputColorDebugLine());
-    ui.debugLines.push_back(
-        playback_debug_lines::videoFrameDebugLine(player.debugInfo()));
-  }
-  return ui;
-}
 
 void runFramebufferPresenterLoop(
     Player& player, VideoWindow& videoWindow, GpuVideoFrameCache& frameCache,
@@ -261,7 +169,7 @@ void runFramebufferPresenterLoop(
     const bool seekingNow = player.timelineSnapshot().seekPending();
     WindowUiState ui;
     if (!textGridPresentationActive) {
-      ui = presentationSource.buildWindowUiState(videoWindow);
+      ui = presentationSource.windowUiState();
     }
     if (textGridPresentationActive) {
       const int windowWidth = videoWindow.GetWidth();

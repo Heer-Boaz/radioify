@@ -1017,14 +1017,20 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       const playback_screen_renderer::PlaybackScreenModel& model) {
     playback_session::PresentationModel::Revision revision;
     revision.textGrid = model;
-    revision.window.osd = osdSnapshot();
-    revision.window.timelinePreview = timelinePreviewModel.snapshotFor(
+    revision.windowModel.osd = osdSnapshot();
+    revision.windowModel.timelinePreview = timelinePreviewModel.snapshotFor(
         playback_video_timeline_preview::PresentationSurface::VideoWindow);
-    revision.window.videoEdit = videoEditWorkspace.edit();
-    revision.window.videoEditExport = videoEditWorkspace.exportProgress();
-    revision.window.videoEditPrompt = videoEditPrompt();
-    revision.window.contextMenu = contextMenuController.snapshotFor(
+    revision.windowModel.videoEdit = videoEditWorkspace.edit();
+    revision.windowModel.videoEditExport =
+        videoEditWorkspace.exportProgress();
+    revision.windowModel.videoEditPrompt = videoEditPrompt();
+    revision.windowModel.contextMenu = contextMenuController.snapshotFor(
         playback_session::ContextMenuSurface::VideoWindow);
+    {
+      std::lock_guard<std::mutex> subtitleLock(subtitleMutex);
+      revision.window = playback_session::projectWindowUiState(
+          screenResources, output.window(), model, revision.windowModel);
+    }
     presentationModel->publish(std::move(revision));
   }
 
@@ -1040,6 +1046,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   void renderPlaybackFrame(bool presented, PlaybackLoopState& loopState) {
     if (presentationController.terminalRole() ==
         PlaybackShellTerminalRole::Browser) {
+      publishPresentation(buildScreenModel(false, presented));
       redraw = false;
       forceRefreshArt = false;
       copiedFrameNeedsRender = false;

@@ -280,7 +280,7 @@ struct WindowPresenter::Impl {
         return;
       }
       result = window.CaptureCurrentFrame(
-          frameCache, presentationSource->buildWindowUiState(window));
+          frameCache, presentationSource->windowUiState());
     });
     if (!executed) {
       unavailable.error = "The video presenter stopped before frame capture.";
