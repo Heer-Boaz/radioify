@@ -297,6 +297,7 @@ static std::vector<std::filesystem::path> imageFilesFromBrowserEntries(
 
 int runTui(Options o, ApplicationRuntime& runtime) {
   AudioPlaybackRuntime& audioPlayback = runtime.audioPlayback();
+  GpuRuntime& gpu = runtime.gpu();
   const ShellOpenMode shellOpenMode = resolveWindowsShellOpenMode(o);
   const bool acceptShellOpenHandoffs =
       shellOpenMode == ShellOpenMode::SameInstance;
@@ -402,7 +403,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   screen.init();
   input.enableTerminalMouseInput();
 
-  VideoWindow tuiWindow;
+  VideoWindow tuiWindow(gpu);
   bool windowTuiEnabled = o.enableWindow;
   if (windowTuiEnabled) {
     const WindowClientSize clientSize = initialWindowTuiClientSize(screen);
@@ -540,7 +541,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   const tui_melody_visualization::Styles melodyVisualizationStyles =
       theme.pitchMonitorStyles();
   std::vector<ScreenCell> windowCells;
-  AudioPictureInPictureWindow audioPictureInPicture;
+  AudioPictureInPictureWindow audioPictureInPicture(gpu);
   ConsoleInputPump consoleInputPump;
   pointer_input::MouseDoubleClickTracker browserDoubleClickTracker;
   browser_input::EntryClickTracker browserEntryClickTracker;
@@ -581,7 +582,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   std::string mediaCommandError;
 
   PlaybackSession::Dependencies mediaSessionDependencies{
-      audioPlayback, input, screen, theme.playbackSessionAppearance()};
+      audioPlayback, gpu, input, screen, theme.playbackSessionAppearance()};
   playback_queue::Queue& playbackQueue = runtime.playbackQueue();
   media_processing::Coordinator& mediaProcessing = runtime.mediaProcessing();
   playback_media_processing::Actions mediaProcessingActions(mediaProcessing);

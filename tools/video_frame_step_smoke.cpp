@@ -1,4 +1,5 @@
 #include "playback/video/player.h"
+#include "playback/video/gpu/gpu_runtime.h"
 
 #include <algorithm>
 #include <atomic>
@@ -529,7 +530,8 @@ int main(int argc, char** argv) {
     std::cerr << "video_frame_step_smoke: failed to mute audio output\n";
     return 1;
   }
-  Player player(audioRuntime);
+  GpuRuntime gpu;
+  Player player(audioRuntime, gpu);
   PlayerConfig config;
   config.file = std::filesystem::path(argv[1]);
   config.logPath =

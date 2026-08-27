@@ -7,7 +7,7 @@
 
 #include "core/native_wait_handle.h"
 #include "consolescreen.h"
-#include "playback/video/gpu/gpu_shared.h"
+#include "playback/video/gpu/gpu_runtime.h"
 #include "playback/overlay/overlay.h"
 #include "playback/video/player.h"
 #include "playback/video/framebuffer/window/window.h"
@@ -55,7 +55,8 @@ class PresentationSource {
 };
 
 void runFramebufferPresenterLoop(
-    Player& player, VideoWindow& videoWindow, GpuVideoFrameCache& frameCache,
+    Player& player, GpuRuntime& gpu, VideoWindow& videoWindow,
+    GpuVideoFrameCache& frameCache,
     std::atomic<WindowThreadState>& threadState,
     std::atomic<bool>& forcePresent, NativeWaitHandle wakeEvent,
     ThreadDispatchQueue& dispatch,

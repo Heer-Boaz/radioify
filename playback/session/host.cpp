@@ -5,7 +5,7 @@
 #include <string>
 
 #include "consolescreen.h"
-#include "playback/video/gpu/gpu_shared.h"
+#include "playback/video/gpu/gpu_runtime.h"
 #include "playback_dialog.h"
 #include "runtime_helpers.h"
 #include "playback/video/subtitle/manager.h"
@@ -16,13 +16,14 @@
 PlaybackSessionHost::PlaybackSessionHost(const Args& args)
     : input_(args.input),
       screen_(args.screen),
+      gpu_(args.gpu),
       baseStyle_(args.baseStyle),
       accentStyle_(args.accentStyle),
       dimStyle_(args.dimStyle),
       fullRedrawEnabled_(args.enableAscii),
       logPath_(radioifyLogPath()),
       windowTitle_(toUtf8String(args.file.filename())) {
-  sharedGpuRenderer().ResetSessionState();
+  gpu_.resetSessionState();
   if (fullRedrawEnabled_) {
     screen_.setAlwaysFullRedraw(true);
   }
@@ -30,7 +31,7 @@ PlaybackSessionHost::PlaybackSessionHost(const Args& args)
 
 PlaybackSessionHost::~PlaybackSessionHost() {
   finalizeVideoPlayback(screen_, fullRedrawEnabled_, &perfLog_);
-  sharedGpuRenderer().ResetSessionState();
+  gpu_.resetSessionState();
 }
 
 bool PlaybackSessionHost::initialize() {

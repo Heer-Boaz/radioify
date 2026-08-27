@@ -66,7 +66,7 @@ extern "C" {
 #include "playback/video/frame_cursor.h"
 #include "playback/video/frame_step_prefetch.h"
 #include "playback/video/frame_step_seek.h"
-#include "playback/video/gpu/gpu_shared.h"
+#include "playback/video/gpu/gpu_runtime.h"
 #include "playback/video/state/machine.h"
 #include "playback/video/timing/main_clock.h"
 #include "playback/video/timing/sync.h"
@@ -1039,7 +1039,8 @@ bool initDemuxer(const std::filesystem::path& path, DemuxContext* out,
   return true;
 }
 
-bool initVideoDecoder(const DemuxContext& demux, bool preferHardware,
+bool initVideoDecoder(const DemuxContext& demux, GpuRuntime& gpu,
+                      bool preferHardware,
                       VideoDecodeContext* out, std::string* error) {
   if (!out || demux.videoStreamIndex < 0) return false;
   AVStream* stream = demux.fmt->streams[demux.videoStreamIndex];
@@ -1069,7 +1070,7 @@ bool initVideoDecoder(const DemuxContext& demux, bool preferHardware,
   AVBufferRef* hwDeviceCtx = nullptr;
   bool usingSharedDevice = false;
   if (preferHardware) {
-    ID3D11Device* sharedDevice = getSharedGpuDevice();
+    ID3D11Device* sharedDevice = gpu.device();
     if (!sharedDevice) {
       avcodec_free_context(&ctx);
       if (error) {
@@ -1102,7 +1103,7 @@ bool initVideoDecoder(const DemuxContext& demux, bool preferHardware,
     d3d11Ctx->device_context = immediateContext.Get();
     d3d11Ctx->lock = d3d11_lock;
     d3d11Ctx->unlock = d3d11_unlock;
-    d3d11Ctx->lock_ctx = &getSharedGpuMutex();
+    d3d11Ctx->lock_ctx = &gpu.mutex();
 
     int hwInit = av_hwdevice_ctx_init(sharedCtx);
     if (hwInit < 0) {
@@ -1558,6 +1559,7 @@ struct Player::Impl {
   };
 
   AudioPlaybackRuntime& audioPlayback;
+  GpuRuntime& gpu;
   PlayerConfig config;
   std::atomic<bool> running{false};
   std::atomic<bool> ctrlRunning{false};
@@ -1656,8 +1658,9 @@ struct Player::Impl {
 
   std::filesystem::path logPath;
 
-  explicit Impl(AudioPlaybackRuntime& audioPlaybackIn)
+  Impl(AudioPlaybackRuntime& audioPlaybackIn, GpuRuntime& gpuIn)
       : audioPlayback(audioPlaybackIn),
+        gpu(gpuIn),
         audioOutputTimeline(audioPlaybackIn),
         frameReadyEvent(CreateEventW(nullptr, FALSE, FALSE, nullptr)),
         statusChangedEvent(CreateEventW(nullptr, FALSE, FALSE, nullptr)) {
@@ -3058,7 +3061,7 @@ struct Player::Impl {
       failInit("No video stream found.");
       return;
     }
-    if (!initVideoDecoder(demux, true, &videoDec, &error)) {
+    if (!initVideoDecoder(demux, gpu, true, &videoDec, &error)) {
       failInit(error.empty() ? "Failed to open video decoder." : error);
       return;
     }
@@ -3164,8 +3167,7 @@ struct Player::Impl {
 
     frameStepPrefetchStarted =
         frameStepPrefetch.start(config.file, demux.videoStreamIndex,
-                                getSharedGpuDevice(),
-                                &getSharedGpuMutex());
+                                gpu.device(), &gpu.mutex());
     appendTimingFmt("frame_step_prefetch_start ok=%d",
                     frameStepPrefetchStarted ? 1 : 0);
 
@@ -4646,8 +4648,8 @@ struct Player::Impl {
   ~Impl() = default;
 };
 
-Player::Player(AudioPlaybackRuntime& audioPlayback)
-    : impl_(std::make_unique<Impl>(audioPlayback)) {}
+Player::Player(AudioPlaybackRuntime& audioPlayback, GpuRuntime& gpu)
+    : impl_(std::make_unique<Impl>(audioPlayback, gpu)) {}
 
 Player::~Player() { close(); }
 

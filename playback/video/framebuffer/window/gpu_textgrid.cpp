@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "playback/video/gpu/gpu_shared.h"
+#include "playback/video/gpu/gpu_runtime.h"
 #include "playback/video/framebuffer/terminal_font.h"
 #include "present.h"
 
@@ -390,7 +390,7 @@ bool VideoWindow::DrawGpuTextGridFrame(ID3D11Device* device,
 void VideoWindow::PresentGpuTextGrid(
     const GpuTextGridFrame& frame,
     const playback_overlay::InteractionMap& interactions) {
-    std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::unique_lock<std::recursive_mutex> lock(m_gpu.mutex());
     if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
     if (frame.cols <= 0 || frame.rows <= 0) return;
     m_textGridCols.store(frame.cols, std::memory_order_relaxed);
@@ -412,7 +412,7 @@ void VideoWindow::PresentGpuTextGrid(
     const int cellWidth = std::max(1, static_cast<int>(cellSize.cx));
     const int cellHeight = std::max(1, static_cast<int>(cellSize.cy));
 
-    ID3D11Device* device = getSharedGpuDevice();
+    ID3D11Device* device = m_gpu.device();
     if (!device) return;
 
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;

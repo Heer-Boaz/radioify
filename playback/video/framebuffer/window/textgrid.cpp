@@ -1,6 +1,6 @@
 #include "window.h"
 
-#include "playback/video/gpu/gpu_shared.h"
+#include "playback/video/gpu/gpu_runtime.h"
 #include "playback/video/framebuffer/text_grid_bitmap_renderer.h"
 #include "internal.h"
 #include "present.h"
@@ -9,7 +9,7 @@
 
 void VideoWindow::PresentTextGrid(const std::vector<ScreenCell>& cells, int cols,
                                   int rows) {
-    std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::unique_lock<std::recursive_mutex> lock(m_gpu.mutex());
     if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
     if (cols <= 0 || rows <= 0 || cells.empty()) return;
     m_textGridCols.store(cols, std::memory_order_relaxed);
@@ -24,7 +24,7 @@ void VideoWindow::PresentTextGrid(const std::vector<ScreenCell>& cells, int cols
     }
     if (m_width <= 0 || m_height <= 0) return;
 
-    ID3D11Device* device = getSharedGpuDevice();
+    ID3D11Device* device = m_gpu.device();
     if (!device) return;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     device->GetImmediateContext(&context);

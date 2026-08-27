@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -1462,7 +1463,8 @@ RenderedVariant renderVariant(const HarnessConfig& config,
                           config.maxRows, 2.0, 4.0);
     rendered.art.width = layout.width;
     rendered.art.height = layout.height;
-    GpuAsciiRenderer renderer;
+    std::recursive_mutex gpuMutex;
+    GpuAsciiRenderer renderer(gpuMutex);
     std::string error;
     if (!renderer.Initialize(&error)) {
       fail("GPU renderer init failed: " + error);

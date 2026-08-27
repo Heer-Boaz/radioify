@@ -14,7 +14,7 @@
 #include "asciiart.h"
 #include "asciiart_gpu.h"
 #include "audioplayback.h"
-#include "playback/video/gpu/gpu_shared.h"
+#include "playback/video/gpu/gpu_runtime.h"
 #include "playback/video/player.h"
 #include "playback/video/edit/overlay_model.h"
 #include "playback/video/state/machine.h"
@@ -82,6 +82,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
 
   ConsoleScreen& screen;
   AudioPlaybackRuntime& audioPlayback;
+  GpuRuntime& gpu;
   const VideoPlaybackConfig config;
   SubtitleManager& subtitleManager;
   PerfLog& perfLog;
@@ -109,7 +110,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
 
   PlaybackPresentationController presentationController;
   PlaybackSessionCore core;
-  GpuAsciiRenderer& gpuRenderer;
   playback_screen_renderer::PlaybackScreenResources screenResources;
   std::shared_ptr<playback_session::PresentationModel> presentationModel;
   AsciiArt art;
@@ -144,6 +144,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   explicit Impl(PlaybackLoopRunner::Args args)
       : screen(args.screen),
         audioPlayback(args.audioPlayback),
+        gpu(args.gpu),
         config(std::move(args.config)),
         subtitleManager(args.subtitleManager),
         perfLog(args.perfLog),
@@ -170,8 +171,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         core({args.player, audioPlayback, args.perfLog, args.enableAudio,
               initialPlaybackPresentation(config, args.continuityState)
                   .usesAsciiGrid()}),
-        gpuRenderer(sharedGpuRenderer()),
-        screenResources{gpuRenderer,
+        screenResources{gpu,
                         baseStyle,
                         accentStyle,
                         dimStyle,
@@ -185,7 +185,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
                 screenResources})),
         videoEditWorkspace(file, core.player(), timelinePreviewModel,
                            timelinePreviewProvider),
-        output(args.player, windowTitle, presentationModel) {
+        output(args.player, gpu, windowTitle, presentationModel) {
     hasGeneratedSubtitles =
         !playback_video_transcript::activeTranscriptPathForVideo(file).empty();
     core.initialize(screen);

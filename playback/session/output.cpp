@@ -9,10 +9,10 @@
 #include "playback/framebuffer/window_presenter.h"
 
 struct PlaybackOutputController::Impl {
-  Impl(Player& player, std::string mediaTitle,
+  Impl(Player& player, GpuRuntime& gpu, std::string mediaTitle,
        std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
            presentationSource)
-      : windowPresenter(player, std::move(mediaTitle),
+      : windowPresenter(player, gpu, std::move(mediaTitle),
                         std::move(presentationSource)) {}
 
   WindowPresenter windowPresenter;
@@ -20,11 +20,12 @@ struct PlaybackOutputController::Impl {
 };
 
 PlaybackOutputController::PlaybackOutputController(
-    Player& player, std::string mediaTitle,
+    Player& player, GpuRuntime& gpu, std::string mediaTitle,
     std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
         presentationSource)
     : impl_(std::make_unique<Impl>(
-          player, std::move(mediaTitle), std::move(presentationSource))) {}
+          player, gpu, std::move(mediaTitle),
+          std::move(presentationSource))) {}
 
 PlaybackOutputController::~PlaybackOutputController() = default;
 

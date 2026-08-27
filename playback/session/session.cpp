@@ -26,10 +26,11 @@ struct PlaybackSession::Impl {
         enableAudio(request.config.enableAudio &&
                     dependencies.audioPlayback.enabled()),
         host({request.file, dependencies.input, dependencies.screen,
+              dependencies.gpu,
               dependencies.appearance.baseStyle,
               dependencies.appearance.accentStyle,
               dependencies.appearance.dimStyle, enableAscii}),
-        player(dependencies.audioPlayback) {}
+        player(dependencies.audioPlayback, dependencies.gpu) {}
 
   ~Impl() { shutdownLoop(); }
 
@@ -61,6 +62,7 @@ struct PlaybackSession::Impl {
     loop = std::make_unique<PlaybackLoopRunner>(PlaybackLoopRunner::Args{
         dependencies.screen,
         dependencies.audioPlayback,
+        dependencies.gpu,
         std::move(request.config),
         player,
         subtitleManager,

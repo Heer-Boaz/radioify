@@ -10,7 +10,7 @@ radioify_add_module_object_library(radioify_ascii_cpu
 
 radioify_add_module_object_library(radioify_ascii_gpu
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_gpu.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/gpu_shared.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/gpu_runtime.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/gpu/videoprocessor.cpp
 )
 
@@ -89,7 +89,7 @@ radioify_add_module_object_library(radioify_video
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_layout.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/asciiart_gpu.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/gpu_shared.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/gpu_runtime.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/gpu/videoprocessor.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/subtitle/ass/parser.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/subtitle/ass/script.cpp

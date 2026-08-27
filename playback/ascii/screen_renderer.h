@@ -9,7 +9,7 @@
 #include "asciiart.h"
 #include "asciiart_gpu.h"
 #include "consolescreen.h"
-#include "playback/video/gpu/gpu_shared.h"
+#include "playback/video/gpu/gpu_runtime.h"
 #include "playback/video/player.h"
 #include "frame_output.h"
 #include "playback/overlay/overlay.h"
@@ -27,7 +27,7 @@ struct TimelinePreviewAsciiCache {
 };
 
 struct PlaybackScreenResources {
-  GpuAsciiRenderer& gpuRenderer;
+  GpuRuntime& gpu;
   const Style& baseStyle;
   const Style& accentStyle;
   const Style& dimStyle;

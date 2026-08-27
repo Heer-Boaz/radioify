@@ -6,7 +6,7 @@
 
 #include "core/native_wait_handle.h"
 #include "playback/framebuffer/window_presentation.h"
-#include "playback/video/gpu/gpu_shared.h"
+#include "playback/video/gpu/gpu_runtime.h"
 #include "presenter.h"
 #include "playback/video/player.h"
 #include "playback/video/framebuffer/window/window.h"
@@ -14,7 +14,7 @@
 class WindowPresenter {
  public:
   WindowPresenter(
-      Player& player, std::string mediaTitle,
+      Player& player, GpuRuntime& gpu, std::string mediaTitle,
       std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
           presentationSource);
   ~WindowPresenter();

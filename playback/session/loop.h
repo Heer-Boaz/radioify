@@ -20,6 +20,7 @@
 
 class ConsoleScreen;
 class AudioPlaybackRuntime;
+class GpuRuntime;
 class Player;
 class SubtitleManager;
 struct Color;
@@ -31,6 +32,7 @@ class PlaybackLoopRunner {
   struct Args {
     ConsoleScreen& screen;
     AudioPlaybackRuntime& audioPlayback;
+    GpuRuntime& gpu;
     VideoPlaybackConfig config;
     Player& player;
     SubtitleManager& subtitleManager;

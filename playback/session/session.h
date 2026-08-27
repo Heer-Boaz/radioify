@@ -21,6 +21,7 @@
 class ConsoleInput;
 class ConsoleScreen;
 class AudioPlaybackRuntime;
+class GpuRuntime;
 struct InputEvent;
 
 enum class PlaybackSessionOpenOutcome {
@@ -71,6 +72,7 @@ class PlaybackSession {
   // lifetime contract.
   struct Dependencies {
     AudioPlaybackRuntime& audioPlayback;
+    GpuRuntime& gpu;
     ConsoleInput& input;
     ConsoleScreen& screen;
     Appearance appearance;

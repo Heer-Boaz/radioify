@@ -32,6 +32,8 @@
 #include <vector>
 #include <mutex>
 
+class GpuRuntime;
+
 struct WindowUiState {
     struct ControlButton {
         playback_overlay::OverlayControlId id =
@@ -136,7 +138,7 @@ public:
     static constexpr int kDefaultVideoClientWidth = 1280;
     static constexpr int kDefaultVideoClientHeight = 720;
 
-    VideoWindow();
+    explicit VideoWindow(GpuRuntime& gpu);
     ~VideoWindow();
 
     // Creates the native resources without exposing an intermediate window.
@@ -228,6 +230,7 @@ public:
     void Cleanup();
 
 private:
+    GpuRuntime& m_gpu;
     struct WindowRestoreState {
         LONG style = 0;
         LONG exStyle = 0;

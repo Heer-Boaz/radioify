@@ -1,5 +1,5 @@
 #include "asciiart_gpu.h"
-#include "playback/video/gpu/gpu_shared.h"
+#include "playback/video/gpu/gpu_runtime.h"
 #include <d3d11.h>
 #include <d3d10.h>
 #include <dxgi.h>
@@ -111,7 +111,8 @@ bool GpuAsciiRenderer::ReadOutputBuffer(AsciiArt& out, int outW, int outH) {
     return readbackReady;
 }
 
-GpuAsciiRenderer::GpuAsciiRenderer() {}
+GpuAsciiRenderer::GpuAsciiRenderer(std::recursive_mutex& gpuMutex)
+    : m_gpuMutex(gpuMutex) {}
 
 GpuAsciiRenderer::~GpuAsciiRenderer() {}
 
@@ -196,7 +197,7 @@ void GpuAsciiRenderer::EndAsciiGpuTiming(
 }
 
 void GpuAsciiRenderer::ClearHistory() {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(m_gpuMutex);
     if (m_context && m_historyUAV) {
         UINT clearValues[4] = { 0, 0, 0, 0 };
         m_context->ClearUnorderedAccessViewUint(m_historyUAV.Get(), clearValues);
@@ -209,7 +210,7 @@ void GpuAsciiRenderer::ClearHistory() {
 }
 
 void GpuAsciiRenderer::ResetSessionState() {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(m_gpuMutex);
     m_frameCache.Reset();
     m_outputBuffer.Reset();
     m_outputUAV.Reset();
@@ -536,7 +537,7 @@ void GpuAsciiRenderer::RefineOutputAndSyncHistory(UINT dispatchX,
 bool GpuAsciiRenderer::RenderNV12(const uint8_t* yuv, int width, int height, int stride, int planeHeight, 
                                 bool fullRange, YuvMatrix yuvMatrix, YuvTransfer yuvTransfer,
                                 bool is10Bit, AsciiArt& out, std::string* error) {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(m_gpuMutex);
     if (!m_device) {
         std::string initErr;
         if (!Initialize(&initErr)) {
@@ -760,7 +761,7 @@ bool GpuAsciiRenderer::CreateBuffers(int width, int height, int outW, int outH) 
 }
 
 bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiArt& out, std::string* error) {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(m_gpuMutex);
     if (!m_device) {
         std::string initErr;
         if (!Initialize(&initErr)) {
@@ -863,7 +864,7 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
                                          int width, int height,
                                          bool fullRange, YuvMatrix yuvMatrix, YuvTransfer yuvTransfer,
                                          bool is10Bit, AsciiArt& out, std::string* error) {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(m_gpuMutex);
     if (!texture) {
         if (error) *error = "Null texture provided";
         return false;
@@ -996,7 +997,7 @@ bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayInde
 
 bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
                                        std::string* error) {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(m_gpuMutex);
     if (!m_device || !m_context) {
         if (error) *error = "GPU renderer not initialized";
         return false;

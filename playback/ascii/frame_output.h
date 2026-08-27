@@ -9,7 +9,7 @@
 #include "asciiart_gpu.h"
 #include "consolescreen.h"
 #include "playback/overlay/interaction.h"
-#include "playback/video/gpu/gpu_shared.h"
+#include "playback/video/gpu/gpu_runtime.h"
 #include "playback/video/decoder.h"
 
 namespace playback_frame_output {
@@ -78,7 +78,7 @@ inline int centerContentTop(int top, int containerHeight, int contentHeight) {
   return top + (containerHeight - contentHeight) / 2;
 }
 
-bool prepareAsciiModeFrame(AsciiModePrepareInput& input);
+bool prepareAsciiModeFrame(GpuRuntime& gpu, AsciiModePrepareInput& input);
 
 void prepareNonAsciiModeFrame(bool allowFrame, int width, int maxHeight,
                              int frameWidth, int frameHeight,

@@ -14,6 +14,7 @@
 #include "playback/video/sequence.h"
 
 class AudioPlaybackRuntime;
+class GpuRuntime;
 
 struct PlayerConfig {
   std::filesystem::path file;
@@ -78,7 +79,7 @@ struct PlayerTimelineSnapshot {
 
 class Player {
  public:
-  explicit Player(AudioPlaybackRuntime& audioPlayback);
+  Player(AudioPlaybackRuntime& audioPlayback, GpuRuntime& gpu);
   ~Player();
 
   bool open(const PlayerConfig& config, std::string* error);

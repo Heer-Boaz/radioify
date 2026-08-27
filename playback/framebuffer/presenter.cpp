@@ -54,12 +54,13 @@ void waitForPresenterActivity(NativeWaitHandle wakeEvent,
 }  // namespace
 
 void runFramebufferPresenterLoop(
-    Player& player, VideoWindow& videoWindow, GpuVideoFrameCache& frameCache,
+    Player& player, GpuRuntime& gpu, VideoWindow& videoWindow,
+    GpuVideoFrameCache& frameCache,
     std::atomic<WindowThreadState>& threadState,
     std::atomic<bool>& forcePresent, NativeWaitHandle wakeEvent,
     ThreadDispatchQueue& dispatch, PresentationSource& presentationSource) {
   playback_frame_refresh::PlaybackFrameRefreshState frameRefresh;
-  playback_framebuffer_video_pipeline::Pipeline videoPipeline;
+  playback_framebuffer_video_pipeline::Pipeline videoPipeline(gpu);
   std::vector<ScreenCell> textGridPresentationCells;
   GpuTextGridFrame textGridPresentationFrame;
   auto lastSeekingPresent = std::chrono::steady_clock::time_point::min();

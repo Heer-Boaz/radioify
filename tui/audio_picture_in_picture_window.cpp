@@ -36,6 +36,9 @@ int wheelDelta(const MouseEvent& mouse) {
 
 }  // namespace
 
+AudioPictureInPictureWindow::AudioPictureInPictureWindow(GpuRuntime& gpu)
+    : window_(gpu) {}
+
 bool AudioPictureInPictureWindow::isOpen() const { return window_.IsOpen(); }
 
 NativeWaitHandle AudioPictureInPictureWindow::inputWaitHandle() const {

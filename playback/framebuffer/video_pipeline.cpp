@@ -4,7 +4,7 @@
 
 #include <wrl/client.h>
 
-#include "playback/video/gpu/gpu_shared.h"
+#include "playback/video/gpu/gpu_runtime.h"
 #include "playback/video/frame_cache/update.h"
 
 namespace playback_framebuffer_video_pipeline {
@@ -24,6 +24,8 @@ bool needsFrameProcessing(const FrameRequest& request) {
 }
 
 }  // namespace
+
+Pipeline::Pipeline(GpuRuntime& gpu) : gpu_(gpu) {}
 
 FrameResult Pipeline::process(const FrameRequest& request) {
   const bool targetChanged =
@@ -45,7 +47,7 @@ FrameResult Pipeline::process(const FrameRequest& request) {
   ID3D11Device* device = nullptr;
   Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
   if (needsFrameProcessing(request) || (request.frame && targetChanged)) {
-    device = getSharedGpuDevice();
+    device = gpu_.device();
     if (device) {
       device->GetImmediateContext(&context);
     }
@@ -56,7 +58,7 @@ FrameResult Pipeline::process(const FrameRequest& request) {
   playback_video_enhancement::VideoEnhancementResult enhancementResult;
   bool framebufferFrameChanged = false;
   if (context) {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(gpu_.mutex());
     enhancementResult = enhancement_.process(enhancementRequest);
     if (!request.textGridPresentationActive && enhancementResult.frameChanged &&
         request.frameCache && enhancementResult.frame) {

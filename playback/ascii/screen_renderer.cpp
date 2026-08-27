@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "playback/debug/lines.h"
+#include "playback/video/gpu/gpu_runtime.h"
 #include "playback/video/image.h"
 #include "playback/video/state/machine.h"
 #include "subtitles.h"
@@ -127,7 +128,7 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
                           PlaybackScreenTarget& target,
                           const PlaybackScreenModel& model) {
   auto& screen = target.screen;
-  auto& gpuRenderer = resources.gpuRenderer;
+  auto& gpuRenderer = resources.gpu.asciiRenderer();
   auto& frameCache = target.frameCache;
   auto& art = target.art;
   VideoFrame* frame = &target.frame;
@@ -333,7 +334,7 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
     asciiInput.state = &frameOutput;
     asciiInput.warningSink = warningSink;
     asciiInput.timingSink = timingSink;
-    playback_frame_output::prepareAsciiModeFrame(asciiInput);
+    playback_frame_output::prepareAsciiModeFrame(resources.gpu, asciiInput);
   } else {
     playback_frame_output::prepareNonAsciiModeFrame(
         allowFrame, width, maxHeight, frame->width, frame->height,

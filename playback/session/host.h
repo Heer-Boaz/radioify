@@ -8,6 +8,7 @@
 
 class ConsoleInput;
 class ConsoleScreen;
+class GpuRuntime;
 class SubtitleManager;
 struct Style;
 
@@ -17,6 +18,7 @@ class PlaybackSessionHost {
     const std::filesystem::path& file;
     ConsoleInput& input;
     ConsoleScreen& screen;
+    GpuRuntime& gpu;
     const Style& baseStyle;
     const Style& accentStyle;
     const Style& dimStyle;
@@ -41,6 +43,7 @@ class PlaybackSessionHost {
  private:
   ConsoleInput& input_;
   ConsoleScreen& screen_;
+  GpuRuntime& gpu_;
   const Style& baseStyle_;
   const Style& accentStyle_;
   const Style& dimStyle_;

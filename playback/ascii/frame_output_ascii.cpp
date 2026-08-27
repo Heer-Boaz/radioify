@@ -167,7 +167,7 @@ std::pair<int, int> computeAsciiOutputSize(int maxWidth, int maxHeight,
                                       cellPixelWidth, cellPixelHeight);
 }
 
-bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
+bool prepareAsciiModeFrame(GpuRuntime& gpu, AsciiModePrepareInput& input) {
   if (!input.state) {
     return false;
   }
@@ -229,7 +229,7 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
   std::string gpuErr;
 
   try {
-    ID3D11Device* device = getSharedGpuDevice();
+    ID3D11Device* device = gpu.device();
     if (!device) {
       setFailure(input, "GPU device unavailable.",
                  "Shared GPU device was not initialized.");
@@ -245,7 +245,7 @@ bool prepareAsciiModeFrame(AsciiModePrepareInput& input) {
 
     const auto start = std::chrono::steady_clock::now();
     {
-      std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+      std::lock_guard<std::recursive_mutex> lock(gpu.mutex());
       hadCachedFrame = input.frameCache->HasFrame();
       if (input.clearHistory) {
         input.gpuRenderer->ClearHistory();

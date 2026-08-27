@@ -61,6 +61,7 @@ std::string nativePlaybackWindowTitle(const std::string& mediaTitle) {
 
 struct WindowPresenter::Impl {
   Player& player;
+  GpuRuntime& gpu;
   const std::string nativeWindowTitle;
   const std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
       presentationSource;
@@ -73,12 +74,14 @@ struct WindowPresenter::Impl {
   std::atomic<HWND> windowHandle{nullptr};
   UniqueWindowsHandle wakeEvent{CreateEventW(nullptr, FALSE, FALSE, nullptr)};
   std::thread thread;
-  Impl(Player& player, std::string mediaTitle,
+  Impl(Player& player, GpuRuntime& gpu, std::string mediaTitle,
        std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
            presentationSource)
       : player(player),
+        gpu(gpu),
         nativeWindowTitle(nativePlaybackWindowTitle(mediaTitle)),
-        presentationSource(std::move(presentationSource)) {
+        presentationSource(std::move(presentationSource)),
+        window(gpu) {
     if (!this->presentationSource) {
       throw std::invalid_argument(
           "WindowPresenter requires a presentation source");
@@ -134,7 +137,7 @@ struct WindowPresenter::Impl {
 
       if (opened) {
         playback_framebuffer_presenter::runFramebufferPresenterLoop(
-            player, window, frameCache, threadState, forcePresent,
+            player, gpu, window, frameCache, threadState, forcePresent,
             NativeWaitHandle(wakeEvent.get()), dispatch, *presentationSource);
         dispatch.close();
         window.Close();
@@ -191,7 +194,7 @@ struct WindowPresenter::Impl {
     windowHandle.store(nullptr, std::memory_order_release);
     cursorVisible.store(true, std::memory_order_relaxed);
     {
-      std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+      std::lock_guard<std::recursive_mutex> lock(gpu.mutex());
       frameCache.Reset();
     }
     appendWindowPresenterTimingLog("window_presenter_stop end");
@@ -295,11 +298,12 @@ struct WindowPresenter::Impl {
 };
 
 WindowPresenter::WindowPresenter(
-    Player& player, std::string mediaTitle,
+    Player& player, GpuRuntime& gpu, std::string mediaTitle,
     std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
         presentationSource)
     : impl_(std::make_unique<Impl>(
-          player, std::move(mediaTitle), std::move(presentationSource))) {}
+          player, gpu, std::move(mediaTitle),
+          std::move(presentationSource))) {}
 
 WindowPresenter::~WindowPresenter() = default;
 

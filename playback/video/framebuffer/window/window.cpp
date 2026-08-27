@@ -4,7 +4,7 @@
 #include "core/windows_console_window.h"
 #include "core/windows_message_pump.h"
 #include "core/utf8.h"
-#include "playback/video/gpu/gpu_shared.h"
+#include "playback/video/gpu/gpu_runtime.h"
 #include "playback/video/image.h"
 #include "internal.h"
 #include "present.h"
@@ -888,7 +888,7 @@ float4 PS_UI(PS_INPUT input) : SV_Target {
     #endif
 }
 
-VideoWindow::VideoWindow() = default;
+VideoWindow::VideoWindow(GpuRuntime& gpu) : m_gpu(gpu) {}
 
 VideoWindow::~VideoWindow() {
     Close();
@@ -946,13 +946,13 @@ void VideoWindow::SetOutputColorAttemptStatus(const std::string& status) {
 }
 
 std::string VideoWindow::OutputColorDebugLine() const {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
     return VideoOutputColorStateDebugLine(m_outputColorState,
                                           m_outputColorAttemptStatus);
 }
 
 bool VideoWindow::OutputUsesHdr() const {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
     return VideoOutputUsesHdr(m_outputColorState);
 }
 
@@ -1331,7 +1331,7 @@ VideoWindow::WindowRestoreState VideoWindow::WindowRestoreStateFor(
 
 bool VideoWindow::ApplyWindowRestoreState(const WindowRestoreState& state,
                                           VideoWindowFocus focus) {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
     if (!m_hWnd || !m_swapChain) {
         return false;
     }
@@ -1376,7 +1376,7 @@ bool VideoWindow::ApplyWindowRestoreState(const WindowRestoreState& state,
 
 bool VideoWindow::EnterPictureInPicture(
     VideoWindowFocus focus, const WindowRestoreState* restoreState) {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
     if (!m_hWnd || !m_swapChain) return false;
     if (m_pictureInPicture.load(std::memory_order_relaxed)) {
         if (focus == VideoWindowFocus::TakeForegroundFocus) {
@@ -1425,7 +1425,7 @@ bool VideoWindow::EnterPictureInPicture(
 
 bool VideoWindow::ExitPictureInPicture(PictureInPictureExitTarget target,
                                        VideoWindowFocus focus) {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
     if (!m_hWnd || !m_swapChain) return false;
     if (!m_pictureInPicture.load(std::memory_order_relaxed)) {
         return target == PictureInPictureExitTarget::Fullscreen && !m_isFullscreen
@@ -1513,7 +1513,7 @@ bool VideoWindow::SetWindowBounds(const RECT& rect) {
 }
 
 bool VideoWindow::ApplyWindowBounds(const RECT& rect) {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
     if (!m_hWnd) {
         return false;
     }
@@ -1585,7 +1585,7 @@ bool VideoWindow::RestorePictureInPicture(
 
 bool VideoWindow::MakeFullscreen(VideoWindowFocus focus,
                                  const WindowRestoreState* restoreState) {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
     if (!m_hWnd || !m_swapChain) return false;
     if (m_isFullscreen) {
         if (restoreState) {
@@ -1651,15 +1651,15 @@ bool VideoWindow::MakeFullscreen(VideoWindowFocus focus,
 }
 
 bool VideoWindow::ExitFullscreen(VideoWindowFocus focus) {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
     if (!m_hWnd || !m_swapChain) return false;
     m_isFullscreen = false;
     return ApplyWindowRestoreState(m_fullscreenRestoreState, focus);
 }
 
 void VideoWindow::Cleanup() {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
-    ID3D11Device* device = getSharedGpuDevice();
+    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
+    ID3D11Device* device = m_gpu.device();
     if (!device) return;
 
     ID3D11DeviceContext* context = nullptr;
@@ -1719,7 +1719,7 @@ void VideoWindow::Cleanup() {
 }
 
 bool VideoWindow::Open(int width, int height, const std::string& title) {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
     if (m_hWnd) {
         return false;
     }
@@ -1776,7 +1776,7 @@ bool VideoWindow::Open(int width, int height, const std::string& title) {
         return false;
     }
 
-    ID3D11Device* device = getSharedGpuDevice();
+    ID3D11Device* device = m_gpu.device();
     if (!device) {
         std::fprintf(stderr, "VideoWindow: no device in Open()\n");
         Close();
@@ -1850,7 +1850,7 @@ void VideoWindow::ResetSwapChain() {
 }
 
 void VideoWindow::ReleaseSwapChainBackBufferReferences() {
-    ID3D11Device* device = getSharedGpuDevice();
+    ID3D11Device* device = m_gpu.device();
     if (!device) {
         m_renderTargetView.Reset();
         return;
@@ -1871,7 +1871,7 @@ void VideoWindow::ReleaseSwapChainBackBufferReferences() {
 }
 
 bool VideoWindow::RecreateSwapChainForCurrentDisplay(const char* reason) {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
     if (!m_hWnd) return false;
     RECT rect{};
     if (!GetClientRect(m_hWnd, &rect)) return false;
@@ -1943,8 +1943,8 @@ HRESULT VideoWindow::PresentSwapChain(IDXGISwapChain* swapChain,
 }
 
 bool VideoWindow::CreateSwapChain(int width, int height) {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
-    ID3D11Device* device = getSharedGpuDevice();
+    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
+    ID3D11Device* device = m_gpu.device();
     if (!device) {
         std::fprintf(stderr, "VideoWindow: no shared GPU device available\n");
         return false;
@@ -2033,7 +2033,7 @@ bool VideoWindow::CreateSwapChain(int width, int height) {
 }
 
 void VideoWindow::Resize(int width, int height) {
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
     if (!m_swapChain) return;
     if (width == m_width && height == m_height && m_renderTargetView) {
         return;
@@ -2054,7 +2054,7 @@ void VideoWindow::Resize(int width, int height) {
     hr = m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
     if (FAILED(hr) || !backBuffer) return;
 
-    ID3D11Device* device = getSharedGpuDevice();
+    ID3D11Device* device = m_gpu.device();
     if (!device) return;
     hr = device->CreateRenderTargetView(backBuffer.Get(), NULL, &m_renderTargetView);
     if (FAILED(hr)) {
@@ -2317,7 +2317,7 @@ bool VideoWindow::DrawVideoFrame(
 
 void VideoWindow::Present(GpuVideoFrameCache& frameCache,
                           const WindowUiState& ui) {
-    std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::unique_lock<std::recursive_mutex> lock(m_gpu.mutex());
 #if RADIOIFY_ENABLE_TIMING_LOG
     fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present enter (wnd=%p swap=%p visible=%d)\n", now_ms().c_str(), thread_id_str().c_str(), (void*)m_hWnd, (void*)m_swapChain.Get(), m_hWnd ? IsWindowVisible(m_hWnd) : 0);
 #endif
@@ -2341,7 +2341,7 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache,
     }
 
     Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
-    ID3D11Device* device = getSharedGpuDevice();
+    ID3D11Device* device = m_gpu.device();
     if (!device) return;
 
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
@@ -2397,14 +2397,14 @@ void VideoWindow::Present(GpuVideoFrameCache& frameCache,
 VideoFrameSnapshotResult VideoWindow::CaptureCurrentFrame(
     GpuVideoFrameCache& frameCache, const WindowUiState& ui) {
     assert(m_windowThreadId != 0 && GetCurrentThreadId() == m_windowThreadId);
-    std::lock_guard<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
     VideoFrameSnapshotResult result;
     if (!m_hWnd || !frameCache.HasFrame()) {
         result.error = "No rendered video frame is available.";
         return result;
     }
 
-    ID3D11Device* device = getSharedGpuDevice();
+    ID3D11Device* device = m_gpu.device();
     if (!device) {
         result.error = "The shared D3D11 device is unavailable.";
         return result;
@@ -3045,7 +3045,7 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
 }
 
 void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui) {
-    std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::unique_lock<std::recursive_mutex> lock(m_gpu.mutex());
 #if RADIOIFY_ENABLE_TIMING_LOG
     fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay enter (wnd=%p swap=%p visible=%d)\n", now_ms().c_str(), thread_id_str().c_str(), (void*)m_hWnd, (void*)m_swapChain.Get(), m_hWnd ? IsWindowVisible(m_hWnd) : 0);
 #endif
@@ -3070,7 +3070,7 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
 
     Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
 
-    ID3D11Device* device = getSharedGpuDevice();
+    ID3D11Device* device = m_gpu.device();
     if (!device) return;
 
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
@@ -3119,7 +3119,7 @@ void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiS
 }
 
 void VideoWindow::PresentBackbuffer() {
-    std::unique_lock<std::recursive_mutex> lock(getSharedGpuMutex());
+    std::unique_lock<std::recursive_mutex> lock(m_gpu.mutex());
     if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
     Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
     UINT presentInterval = m_presentInterval.load(std::memory_order_relaxed);

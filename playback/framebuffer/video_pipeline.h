@@ -6,6 +6,8 @@
 
 #include <string>
 
+class GpuRuntime;
+
 namespace playback_framebuffer_video_pipeline {
 
 struct FrameRequest {
@@ -29,9 +31,12 @@ struct FrameResult {
 
 class Pipeline {
  public:
+  explicit Pipeline(GpuRuntime& gpu);
+
   FrameResult process(const FrameRequest& request);
 
  private:
+  GpuRuntime& gpu_;
   playback_video_enhancement::VideoEnhancementPipeline enhancement_;
   int lastTargetWidth_ = 0;
   int lastTargetHeight_ = 0;

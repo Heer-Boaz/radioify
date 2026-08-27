@@ -5,13 +5,14 @@
 #include <vector>
 #include <string>
 #include <memory>
+#include <mutex>
 #include <d3d11.h>
 #include "playback/video/gpu/videoprocessor.h"
 #include "asciiart.h"
 
 class GpuAsciiRenderer {
 public:
-    GpuAsciiRenderer();
+    explicit GpuAsciiRenderer(std::recursive_mutex& gpuMutex);
     ~GpuAsciiRenderer();
 
     bool Initialize(std::string* error = nullptr);
@@ -60,6 +61,7 @@ public:
     void ClearHistory();
 
 private:
+    std::recursive_mutex& m_gpuMutex;
     static constexpr int kOutputStagingBufferCount = 4;
 
     bool CreateDevice();

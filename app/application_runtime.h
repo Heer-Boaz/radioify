@@ -4,6 +4,7 @@
 #include "app/media_processing_coordinator.h"
 #include "app/playback_queue.h"
 #include "audio/audioplayback.h"
+#include "playback/video/gpu/gpu_runtime.h"
 
 // Process-wide application services. The UI borrows these services; it does
 // not decide their lifetime or shutdown order.
@@ -16,11 +17,14 @@ class ApplicationRuntime {
   ApplicationRuntime& operator=(const ApplicationRuntime&) = delete;
 
   AudioPlaybackRuntime& audioPlayback() { return audioPlayback_; }
+  GpuRuntime& gpu() { return gpu_; }
   playback_queue::Queue& playbackQueue() { return playbackQueue_; }
   media_processing::Coordinator& mediaProcessing() { return mediaProcessing_; }
 
  private:
-  // Audio must outlive media-processing workers that can call audio analysis.
+  // GPU and audio must outlive every surface/session and media worker that
+  // borrows them.
+  GpuRuntime gpu_;
   AudioPlaybackRuntime audioPlayback_;
   playback_queue::Queue playbackQueue_;
   media_processing::Coordinator mediaProcessing_;

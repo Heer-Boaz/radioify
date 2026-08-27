@@ -9,6 +9,7 @@
 #include "state.h"
 
 class Player;
+class GpuRuntime;
 class VideoWindow;
 class GpuVideoFrameCache;
 struct InputEvent;
@@ -17,7 +18,7 @@ struct WindowUiState;
 class PlaybackOutputController {
  public:
   PlaybackOutputController(
-      Player& player, std::string mediaTitle,
+      Player& player, GpuRuntime& gpu, std::string mediaTitle,
       std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
           presentationSource);
   ~PlaybackOutputController();

@@ -19,7 +19,8 @@ AudioPlaybackConfig audioPlaybackConfigFor(const Options& options) {
 }
 
 ApplicationRuntime::ApplicationRuntime(const Options& options)
-    : audioPlayback_(audioPlaybackConfigFor(options)),
+    : gpu_(),
+      audioPlayback_(audioPlaybackConfigFor(options)),
       playbackQueue_(
           {[](const std::filesystem::path& file) {
              return playback_target_resolver::resolvePlaybackTarget(file);

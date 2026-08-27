@@ -19,6 +19,8 @@
 
 class AudioPictureInPictureWindow {
  public:
+  explicit AudioPictureInPictureWindow(GpuRuntime& gpu);
+
   struct Styles {
     Style normal;
     Style accent;
