@@ -91,5 +91,24 @@ int main() {
                    browser_action_strip::wrappedLineCount(items, 1000) == 1,
                "action wrapping must be deterministic at narrow and wide widths");
 
+  const browser_action_strip::Layout narrow =
+      browser_action_strip::layout(items, 1, 7);
+  ok &= expect(narrow.lineCount == static_cast<int>(items.size()) &&
+                   narrow.placements.size() == items.size() &&
+                   narrow.placements.front().x == 0 &&
+                   narrow.placements.front().y == 7 &&
+                   narrow.placements.back().y ==
+                       7 + static_cast<int>(items.size()) - 1,
+               "measurement and hit geometry must share narrow wrapping");
+
+  const browser_action_strip::Layout wide =
+      browser_action_strip::layout(items, 1000, 3);
+  ok &= expect(wide.lineCount == 1 &&
+                   wide.placements.size() == items.size() &&
+                   wide.placements.front().y == 3 &&
+                   wide.placements[1].x ==
+                       wide.placements.front().width + 2,
+               "wide action geometry must preserve the canonical gap");
+
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

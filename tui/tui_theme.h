@@ -2,6 +2,7 @@
 
 #include "audio_picture_in_picture_window.h"
 #include "playback/session/session.h"
+#include "tui/ui/browser_action_strip_renderer.h"
 #include "tui/ui/command_palette_renderer.h"
 #include "tui/ui/media_task_card.h"
 #include "tui/ui/melody_visualization_renderer.h"
@@ -34,6 +35,7 @@ struct TuiTheme {
   tui_melody_visualization::Styles pitchMonitorStyles() const;
   tui_popup_menu::Styles popupMenuStyles() const;
   tui_command_palette::Styles commandPaletteStyles() const;
+  browser_action_strip::Styles browserActionStripStyles() const;
   ProgressFooterStyles progressFooterStyles() const;
   MediaTaskCardStyles mediaTaskCardStyles() const;
 };

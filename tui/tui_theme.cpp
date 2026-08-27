@@ -71,6 +71,13 @@ tui_command_palette::Styles TuiTheme::commandPaletteStyles() const {
   return result;
 }
 
+browser_action_strip::Styles TuiTheme::browserActionStripStyles() const {
+  browser_action_strip::Styles result;
+  result.normal = normal;
+  result.active = actionActive;
+  return result;
+}
+
 ProgressFooterStyles TuiTheme::progressFooterStyles() const {
   ProgressFooterStyles result;
   result.normal = normal;

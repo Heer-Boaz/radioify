@@ -38,6 +38,7 @@
 #include "audio_picture_in_picture_window.h"
 #include "audioplayback.h"
 #include "browser_action_strip.h"
+#include "browser_action_strip_renderer.h"
 #include "browser_chrome.h"
 #include "browser_wake_schedule.h"
 #include "browser_media_menu.h"
@@ -1801,41 +1802,10 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       actionStrip.buttons.clear();
       actionStrip.y = -1;
       if (browserChrome.footer.showActionStrip && line < height) {
-        actionStrip.y = line;
-        const int gapWidth = 2;
-        int x = 0;
-        int itemLine = line;
-        for (const browser_action_strip::Item& item : browserChrome.actions) {
-          int widthUsed = std::min(std::max(1, item.width), width);
-          const int gap = x > 0 ? gapWidth : 0;
-          if (x > 0 && x + gap + widthUsed > width) {
-            ++itemLine;
-            x = 0;
-          } else {
-            x += gap;
-          }
-          if (itemLine >= height) break;
-          bool hovered = (browserInteraction.actionHover ==
-                          static_cast<int>(actionStrip.buttons.size()));
-          std::string text = hovered ? item.hoverLabel : item.label;
-          int textWidth = utf8DisplayWidth(text);
-          widthUsed = std::min(widthUsed, width - x);
-          if (widthUsed <= 0) break;
-          if (textWidth > widthUsed) {
-            text = utf8TakeDisplayWidth(text, widthUsed);
-            textWidth = utf8DisplayWidth(text);
-          }
-          if (textWidth <= 0) break;
-          if (textWidth < widthUsed) {
-            text.append(static_cast<size_t>(widthUsed - textWidth), ' ');
-            textWidth = widthUsed;
-          }
-          ActionStripButton btn{item.id, x, x + widthUsed, itemLine};
-          actionStrip.buttons.push_back(btn);
-          Style style = item.active ? theme.actionActive : theme.normal;
-          screen.writeText(x, itemLine, text, style);
-          x += widthUsed;
-        }
+        actionStrip = browser_action_strip::draw(
+            screen, browserChrome.actions, width, height, line,
+            browserInteraction.actionHover,
+            theme.browserActionStripStyles());
         if (browserInteraction.actionHover >=
             static_cast<int>(actionStrip.buttons.size())) {
           browserInteraction.actionHover = -1;

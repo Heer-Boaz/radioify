@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -51,7 +52,20 @@ struct Item {
   int width = 0;
 };
 
+struct Placement {
+  std::size_t itemIndex = 0;
+  int x = 0;
+  int y = 0;
+  int width = 0;
+};
+
+struct Layout {
+  std::vector<Placement> placements;
+  int lineCount = 0;
+};
+
 std::vector<Item> build(const Input& input);
+Layout layout(const std::vector<Item>& items, int width, int top = 0);
 int wrappedLineCount(const std::vector<Item>& items, int width);
 
 }  // namespace browser_action_strip

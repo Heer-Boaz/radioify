@@ -116,24 +116,34 @@ std::vector<Item> build(const Input& input) {
   return items;
 }
 
-int wrappedLineCount(const std::vector<Item>& items, int width) {
+Layout layout(const std::vector<Item>& items, int width, int top) {
+  Layout result;
   if (items.empty() || width <= 0) {
-    return 0;
+    return result;
   }
   constexpr int kGapWidth = 2;
-  int lines = 1;
+  result.placements.reserve(items.size());
+  result.lineCount = 1;
   int x = 0;
-  for (const Item& item : items) {
+  for (std::size_t itemIndex = 0; itemIndex < items.size(); ++itemIndex) {
+    const Item& item = items[itemIndex];
     const int itemWidth = std::min(std::max(1, item.width), width);
     const int gap = x > 0 ? kGapWidth : 0;
     if (x > 0 && x + gap + itemWidth > width) {
-      ++lines;
-      x = itemWidth;
+      ++result.lineCount;
+      x = 0;
     } else {
-      x += gap + itemWidth;
+      x += gap;
     }
+    result.placements.push_back(
+        {itemIndex, x, top + result.lineCount - 1, itemWidth});
+    x += itemWidth;
   }
-  return lines;
+  return result;
+}
+
+int wrappedLineCount(const std::vector<Item>& items, int width) {
+  return layout(items, width).lineCount;
 }
 
 }  // namespace browser_action_strip
