@@ -15,6 +15,7 @@
 #include "playback/control/system_control_state.h"
 #include "playback/media_processing_actions.h"
 #include "playback/session/session.h"
+#include "playback/target.h"
 
 struct InputEvent;
 
@@ -67,8 +68,7 @@ class TuiMediaCoordinator {
 
   bool videoActive() const;
   PlaybackShellTerminalRole terminalRole() const;
-  std::filesystem::path currentPlaybackFile() const;
-  std::optional<int> currentPlaybackTrackIndex() const;
+  std::optional<PlaybackTarget> currentPlaybackTarget() const;
   std::vector<NativeWaitHandle> activityWaitHandles() const;
   int nextWakeTimeoutMs() const;
   std::optional<PlaybackControlState> videoControlState() const;

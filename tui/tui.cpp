@@ -17,7 +17,6 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <functional>
 #include <iostream>
 #include <mutex>
 #include <memory>
@@ -594,33 +593,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   BrowserPointerState browserPointerState;
   BrowserViewport viewport;
   BrowserFooterLayout footerLayout;
-  std::function<std::filesystem::path()> currentPlaybackFile =
-      []() { return audioGetNowPlaying(); };
-  std::function<std::optional<int>()> currentPlaybackTrackIndex = []() {
-    const int trackIndex = audioGetTrackIndex();
-    return trackIndex >= 0 ? std::optional<int>(trackIndex) : std::nullopt;
-  };
-  auto buildNowPlayingLabel = [&]() {
-    std::filesystem::path nowPlaying = currentPlaybackFile();
-    std::string label =
-        nowPlaying.empty() ? std::string("(none)")
-                           : toUtf8String(nowPlaying.filename());
-    const std::optional<int> trackIndex = currentPlaybackTrackIndex();
-    if (!nowPlaying.empty() && trackIndex) {
-      int digits = 3;
-      const TrackEntry* track = nullptr;
-      const TrackBrowserContent* content = trackBrowserContent(browser);
-      if (content && samePath(nowPlaying, content->file) &&
-          !content->tracks.empty()) {
-        digits = trackLabelDigits(content->tracks.size());
-        track = findTrackEntry(browser, *trackIndex);
-      }
-      label += "  |  " +
-               (track ? formatTrackLabel(*track, digits)
-                      : formatTrackIndexLabel(*trackIndex, digits));
-    }
-    return label;
-  };
   auto showAudioPictureInPictureOpenError = [&]() {
     const std::string detail = audioPictureInPicture.lastError().empty()
                                    ? "The picture-in-picture window did not open."
@@ -694,8 +666,36 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   TuiMediaCoordinator mediaCoordinator(
       {playbackQueue, mediaSessionDependencies, videoConfig, openFileRequests,
        mediaProcessingActions, std::move(mediaCallbacks)});
-  currentPlaybackFile =
-      [&]() { return mediaCoordinator.currentPlaybackFile(); };
+  auto currentPlaybackFile = [&]() {
+    const std::optional<PlaybackTarget> target =
+        mediaCoordinator.currentPlaybackTarget();
+    return target ? playbackTargetFile(*target) : std::filesystem::path{};
+  };
+  auto buildNowPlayingLabel = [&]() {
+    const std::optional<PlaybackTarget> target =
+        mediaCoordinator.currentPlaybackTarget();
+    const std::filesystem::path nowPlaying =
+        target ? playbackTargetFile(*target) : std::filesystem::path{};
+    std::string label =
+        nowPlaying.empty() ? std::string("(none)")
+                           : toUtf8String(nowPlaying.filename());
+    const std::optional<int> trackIndex =
+        target ? playbackTargetTrackIndex(*target) : std::nullopt;
+    if (!nowPlaying.empty() && trackIndex) {
+      int digits = 3;
+      const TrackEntry* track = nullptr;
+      const TrackBrowserContent* content = trackBrowserContent(browser);
+      if (content && samePath(nowPlaying, content->file) &&
+          !content->tracks.empty()) {
+        digits = trackLabelDigits(content->tracks.size());
+        track = findTrackEntry(browser, *trackIndex);
+      }
+      label += "  |  " +
+               (track ? formatTrackLabel(*track, digits)
+                      : formatTrackIndexLabel(*trackIndex, digits));
+    }
+    return label;
+  };
   auto mediaActivityWaitHandles = [&]() {
     std::vector<NativeWaitHandle> handles =
         mediaCoordinator.activityWaitHandles();
@@ -703,19 +703,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     handles.insert(handles.end(), taskHandles.begin(), taskHandles.end());
     return handles;
   };
-  currentPlaybackTrackIndex =
-      [&]() { return mediaCoordinator.currentPlaybackTrackIndex(); };
-  auto currentPlaybackTarget = [&]() {
-    const std::filesystem::path file = currentPlaybackFile();
-    if (const std::optional<int> trackIndex = currentPlaybackTrackIndex()) {
-      if (const std::optional<PlaybackTarget> trackTarget =
-              playbackTrackTarget(file, *trackIndex)) {
-        return *trackTarget;
-      }
-    }
-    return playbackFileTarget(file);
-  };
-
   auto startPlayback = [&](playback_route::Route route,
                            playback_queue::Source source) {
     return mediaCoordinator.startPlayback(std::move(route),
@@ -1341,7 +1328,10 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       }
       if (!currentPlaybackFile().empty()) {
         commands.emplace_back("Show Playing File", "", [&]() {
-          browserPlaybackRevealer.reveal(currentPlaybackTarget());
+          if (const std::optional<PlaybackTarget> target =
+                  mediaCoordinator.currentPlaybackTarget()) {
+            browserPlaybackRevealer.reveal(*target);
+          }
         });
       }
     }
@@ -1964,9 +1954,14 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
       } else {
         breadcrumbHover = -1;
       }
-      std::filesystem::path nowPlaying = currentPlaybackFile();
+      const std::optional<PlaybackTarget> nowPlayingTarget =
+          mediaCoordinator.currentPlaybackTarget();
+      const std::filesystem::path nowPlaying =
+          nowPlayingTarget ? playbackTargetFile(*nowPlayingTarget)
+                           : std::filesystem::path{};
       const std::optional<int> nowPlayingTrackIndex =
-          currentPlaybackTrackIndex();
+          nowPlayingTarget ? playbackTargetTrackIndex(*nowPlayingTarget)
+                           : std::nullopt;
       std::string showingLabel;
       if (!browserInteractionEnabled) {
         showingLabel.clear();
@@ -1992,8 +1987,11 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
           !audioIsPaused() && !audioIsHolding();
       melodyVisualization.update(std::move(melodyObservation));
       if (browserInteractionEnabled) {
-        const int playingEntryIndex = findBrowserPlaybackTargetEntry(
-            browser.entries, currentPlaybackTarget());
+        const int playingEntryIndex =
+            nowPlayingTarget
+                ? findBrowserPlaybackTargetEntry(browser.entries,
+                                                 *nowPlayingTarget)
+                : -1;
         drawBrowserEntries(screen, browser, layout, listTop, listHeight,
                            theme.normal, theme.normal, theme.directory,
                            theme.highlight, theme.browserHover, theme.dim,

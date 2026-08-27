@@ -136,15 +136,18 @@ struct TuiMediaCoordinator::Impl {
                          : PlaybackShellTerminalRole::Browser;
   }
 
-  std::filesystem::path currentPlaybackFile() const {
-    return videoTarget_ ? playbackTargetFile(*videoTarget_)
-                        : audioGetNowPlaying();
-  }
-
-  std::optional<int> currentPlaybackTrackIndex() const {
-    if (videoTarget_) return playbackTargetTrackIndex(*videoTarget_);
+  std::optional<PlaybackTarget> currentPlaybackTarget() const {
+    if (videoTarget_) return *videoTarget_;
+    const std::filesystem::path file = audioGetNowPlaying();
+    if (file.empty()) return std::nullopt;
     const int trackIndex = audioGetTrackIndex();
-    return trackIndex >= 0 ? std::optional<int>(trackIndex) : std::nullopt;
+    if (trackIndex >= 0) {
+      if (std::optional<PlaybackTarget> trackTarget =
+              playbackTrackTarget(file, trackIndex)) {
+        return trackTarget;
+      }
+    }
+    return playbackFileTarget(file);
   }
 
   std::vector<NativeWaitHandle> activityWaitHandles() const {
@@ -639,12 +642,9 @@ PlaybackShellTerminalRole TuiMediaCoordinator::terminalRole() const {
   return impl_->terminalRole();
 }
 
-std::filesystem::path TuiMediaCoordinator::currentPlaybackFile() const {
-  return impl_->currentPlaybackFile();
-}
-
-std::optional<int> TuiMediaCoordinator::currentPlaybackTrackIndex() const {
-  return impl_->currentPlaybackTrackIndex();
+std::optional<PlaybackTarget> TuiMediaCoordinator::currentPlaybackTarget()
+    const {
+  return impl_->currentPlaybackTarget();
 }
 
 std::vector<NativeWaitHandle>
