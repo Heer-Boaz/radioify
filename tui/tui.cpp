@@ -753,39 +753,40 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
 
   auto buildActionStripItems = [&](bool browserInteractionEnabled) {
     browser_action_strip::Input stripInput;
-    playback_overlay::PlaybackOverlayState actionOverlayState;
+    playback_overlay::PlaybackOverlayInputs overlayInputs;
     const std::filesystem::path nowPlaying = currentPlaybackFile();
     const std::optional<PlaybackControlState> controlState =
         mediaCoordinator.playbackControlState();
     const bool videoActive = controlState && controlState->isVideo;
-    actionOverlayState.audioOk = videoActive || audioIsReady();
-    actionOverlayState.playPauseAvailable = actionOverlayState.audioOk;
-    actionOverlayState.audioSupports50HzToggle =
+    overlayInputs.audioOk = videoActive || audioIsReady();
+    overlayInputs.playPauseAvailable = overlayInputs.audioOk;
+    overlayInputs.audioSupports50HzToggle =
         audioIsReady() && audioSupports50HzToggle();
-    actionOverlayState.canPlayPrevious =
+    overlayInputs.canPlayPrevious =
         controlState ? controlState->canPrevious
-                     : actionOverlayState.audioOk || !nowPlaying.empty();
-    actionOverlayState.canPlayNext =
+                     : overlayInputs.audioOk || !nowPlaying.empty();
+    overlayInputs.canPlayNext =
         controlState ? controlState->canNext
-                     : actionOverlayState.audioOk || !nowPlaying.empty();
-    actionOverlayState.radioEnabled = audioIsRadioEnabled();
-    actionOverlayState.radioLabel = std::string(audioGetRadioFilterLabel());
-    actionOverlayState.hz50Enabled = audioIs50HzEnabled();
-    actionOverlayState.paused =
+                     : overlayInputs.audioOk || !nowPlaying.empty();
+    overlayInputs.radioEnabled = audioIsRadioEnabled();
+    overlayInputs.radioLabel = std::string(audioGetRadioFilterLabel());
+    overlayInputs.hz50Enabled = audioIs50HzEnabled();
+    overlayInputs.paused =
         controlState
             ? controlState->status != PlaybackControlStatus::Playing
             : audioIsPaused() || audioIsFinished();
-    actionOverlayState.pictureInPictureAvailable =
+    overlayInputs.pictureInPictureAvailable =
         videoActive || audioPictureInPicture.isOpen() ||
-        actionOverlayState.audioOk || !nowPlaying.empty();
+        overlayInputs.audioOk || !nowPlaying.empty();
     const std::optional<PlaybackPresentationState> videoPresentation =
         mediaCoordinator.videoPresentationState();
-    actionOverlayState.pictureInPictureActive =
+    overlayInputs.pictureInPictureActive =
         videoPresentation
             ? videoPresentation->layer() ==
                   PlaybackPresentationLayer::PictureInPicture
             : audioPictureInPicture.isOpen();
-    stripInput.playback = std::move(actionOverlayState);
+    stripInput.playback =
+        playback_overlay::buildPlaybackOverlayState(overlayInputs);
     stripInput.pitchMonitorAvailable =
         !videoActive && (melodyVisualization.active() || audioIsReady() ||
                          !audioGetNowPlaying().empty());
