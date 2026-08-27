@@ -1,6 +1,6 @@
 #pragma once
 
-#include <functional>
+#include <optional>
 
 #include "core/open_file_requests.h"
 #include "tui/image_viewer_sequence.h"
@@ -16,12 +16,14 @@ enum class Exit {
   QuitRequested,
 };
 
-using OpenFilesHandler = std::function<bool(const OpenFilesRequest&)>;
+struct Result {
+  Exit exit = Exit::Closed;
+  std::optional<OpenFilesRequest> openFiles;
+};
 
-Exit run(image_viewer_sequence::Sequence sequence, ConsoleInput& input,
-         ConsoleScreen& screen, const Style& baseStyle,
-         const Style& accentStyle, const Style& dimStyle,
-         OpenFileRequests& openFileRequests,
-         OpenFilesHandler requestOpenFiles);
+Result run(image_viewer_sequence::Sequence sequence, ConsoleInput& input,
+           ConsoleScreen& screen, const Style& baseStyle,
+           const Style& accentStyle, const Style& dimStyle,
+           OpenFileRequests& openFileRequests);
 
 }  // namespace image_viewer

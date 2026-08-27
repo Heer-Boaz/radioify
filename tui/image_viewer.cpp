@@ -17,11 +17,10 @@
 
 namespace image_viewer {
 
-Exit run(image_viewer_sequence::Sequence sequence, ConsoleInput& input,
-         ConsoleScreen& screen, const Style& baseStyle,
-         const Style& accentStyle, const Style& dimStyle,
-         OpenFileRequests& openFileRequests,
-         OpenFilesHandler requestOpenFiles) {
+Result run(image_viewer_sequence::Sequence sequence, ConsoleInput& input,
+           ConsoleScreen& screen, const Style& baseStyle,
+           const Style& accentStyle, const Style& dimStyle,
+           OpenFileRequests& openFileRequests) {
   AsciiArt art;
   std::string error;
   int hoverControlToken = -1;
@@ -147,7 +146,7 @@ Exit run(image_viewer_sequence::Sequence sequence, ConsoleInput& input,
   OpenFilesRequest openRequest;
   while (true) {
     while (openFileRequests.poll(openRequest)) {
-      if (requestOpenFiles(openRequest)) return Exit::Closed;
+      return {Exit::Closed, std::move(openRequest)};
     }
     while (input.poll(event)) {
       if (event.type == InputEvent::Type::Resize) {
@@ -160,7 +159,7 @@ Exit run(image_viewer_sequence::Sequence sequence, ConsoleInput& input,
         if (mouse.kind == MouseEventKind::Press &&
             (mouse.button == MouseButton::Right ||
              mouse.button == MouseButton::Middle)) {
-          return Exit::Closed;
+          return {Exit::Closed, std::nullopt};
         }
 
         const int width = std::max(1, screen.width());
@@ -197,9 +196,8 @@ Exit run(image_viewer_sequence::Sequence sequence, ConsoleInput& input,
         continue;
       }
       if (event.type == InputEvent::Type::FileDrop &&
-          isCommittedFileDropEvent(event.fileDrop) &&
-          requestOpenFiles({event.fileDrop.files})) {
-        return Exit::Closed;
+          isCommittedFileDropEvent(event.fileDrop)) {
+        return {Exit::Closed, OpenFilesRequest{event.fileDrop.files}};
       }
       if (event.type == InputEvent::Type::Key ||
           event.type == InputEvent::Type::Action) {
@@ -209,9 +207,9 @@ Exit run(image_viewer_sequence::Sequence sequence, ConsoleInput& input,
                            kPlaybackShortcutContextImageViewer)) {
           switch (*shortcut) {
             case PlaybackAction::Quit:
-              return Exit::QuitRequested;
+              return {Exit::QuitRequested, std::nullopt};
             case PlaybackAction::CloseViewer:
-              return Exit::Closed;
+              return {Exit::Closed, std::nullopt};
             case PlaybackAction::Previous:
               if (navigateImage(image_viewer_sequence::Direction::Previous)) {
                 renderFrame();

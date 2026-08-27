@@ -611,18 +611,13 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           } else if constexpr (
               std::is_same_v<Event, TuiMediaCoordinator::ShowImages>) {
             applyAudioPictureInPicturePlan(value.audioPictureInPicture);
-            std::optional<OpenFilesRequest> deferredOpenRequest;
-            const image_viewer::Exit exit = image_viewer::run(
+            image_viewer::Result result = image_viewer::run(
                 std::move(value.sequence), input, screen, theme.normal,
-                theme.accent, theme.dim, openFileRequests,
-                [&](const OpenFilesRequest& request) {
-                  deferredOpenRequest = request;
-                  return true;
-                });
-            if (exit == image_viewer::Exit::QuitRequested) {
+                theme.accent, theme.dim, openFileRequests);
+            if (result.exit == image_viewer::Exit::QuitRequested) {
               mediaCoordinator.requestQuit();
-            } else if (deferredOpenRequest) {
-              mediaCoordinator.openFiles(*deferredOpenRequest);
+            } else if (result.openFiles) {
+              mediaCoordinator.openFiles(*result.openFiles);
             }
             markDirty();
           } else if constexpr (
