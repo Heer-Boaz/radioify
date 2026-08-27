@@ -150,8 +150,9 @@ bool recordBrowserNavigation(BrowserState& browser,
                           to);
 }
 
-BrowserNavigator::BrowserNavigator(BrowserState& browser, Callbacks callbacks)
-    : browser_(browser), callbacks_(std::move(callbacks)) {}
+BrowserNavigator::BrowserNavigator(
+    BrowserState& browser, BrowserPreparationService& preparationService)
+    : browser_(browser), preparationService_(preparationService) {}
 
 BrowserContentPreparation BrowserContentPreparation::pending() {
   return {BrowserPreparationPending{}};
@@ -171,12 +172,6 @@ bool BrowserNavigator::prepare(
     const BrowserLocation& target, const std::string& initialName,
     const std::string& filter, int selected,
     CommitPrepared commitPrepared) {
-  if (!callbacks_.prepare) {
-    browser_.contentError = "Browser preparation service is unavailable.";
-    notifyChanged();
-    return false;
-  }
-
   BrowserContentRequest request;
   request.location = target;
   request.previousContent = browser_.content;
@@ -187,8 +182,8 @@ bool BrowserNavigator::prepare(
   request.sortDescending = browser_.sortDescending;
 
   const BrowserPreparationId preparationId = allocatePreparationId();
-  if (pendingPreparationId_ && callbacks_.cancelPreparation) {
-    callbacks_.cancelPreparation(preparationId);
+  if (pendingPreparationId_) {
+    preparationService_.cancelThrough(preparationId);
   }
   pendingPreparationId_ = preparationId;
   pendingCommit_ = std::move(commitPrepared);
@@ -196,7 +191,7 @@ bool BrowserNavigator::prepare(
 
   BrowserContentPreparation preparation;
   try {
-    preparation = callbacks_.prepare(preparationId, request);
+    preparation = preparationService_.prepare(preparationId, request);
   } catch (const std::exception& error) {
     return completePreparation(
         preparationId,
@@ -464,9 +459,7 @@ bool BrowserNavigator::completePreparation(
   browser_.contentLoading = false;
   if (auto* error = std::get_if<BrowserPreparationError>(&result)) {
     browser_.contentError = error->message;
-    if (callbacks_.failed) {
-      callbacks_.failed(*error);
-    }
+    events_.push_back(PreparationFailed{*error});
     notifyChanged();
     return false;
   }
@@ -484,17 +477,27 @@ bool BrowserNavigator::cancelPreparation() {
   pendingPreparationId_.reset();
   browser_.contentLoading = false;
   const BrowserPreparationId cancellationId = allocatePreparationId();
-  if (callbacks_.cancelPreparation) {
-    callbacks_.cancelPreparation(cancellationId);
-  }
+  preparationService_.cancelThrough(cancellationId);
   notifyChanged();
   return true;
 }
 
 void BrowserNavigator::notifyChanged() {
-  if (callbacks_.changed) {
-    callbacks_.changed();
-  }
+  events_.push_back(Changed{});
+}
+
+bool BrowserNavigator::select(
+    const BrowserState::EntryIdentity& selection) {
+  if (!selectBrowserEntry(browser_, selection)) return false;
+  requestBrowserSelectionReveal(browser_);
+  notifyChanged();
+  return true;
+}
+
+std::vector<BrowserNavigator::Event> BrowserNavigator::drainEvents() {
+  std::vector<Event> events;
+  events.swap(events_);
+  return events;
 }
 
 BrowserPreparationId BrowserNavigator::allocatePreparationId() {

@@ -1,5 +1,6 @@
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <iostream>
 #include <mutex>
 #include <optional>
@@ -62,6 +63,44 @@ bool hasTrackContent(
       std::get_if<std::shared_ptr<const TrackBrowserContent>>(
           &browser.content);
   return content && content->get() == expected.get();
+}
+
+class FakeBrowserPreparationService final
+    : public BrowserPreparationService {
+ public:
+  using Prepare = std::function<BrowserContentPreparation(
+      BrowserPreparationId, const BrowserContentRequest&)>;
+  using Cancel = std::function<void(BrowserPreparationId)>;
+
+  BrowserContentPreparation prepare(
+      BrowserPreparationId preparationId,
+      const BrowserContentRequest& request) override {
+    return prepareRequest(preparationId, request);
+  }
+
+  void cancelThrough(BrowserPreparationId generation) override {
+    if (cancelGeneration) cancelGeneration(generation);
+  }
+
+  Prepare prepareRequest;
+  Cancel cancelGeneration;
+};
+
+struct NavigationEventCounts {
+  int changed = 0;
+  int failed = 0;
+};
+
+NavigationEventCounts drainNavigationEvents(BrowserNavigator& navigator) {
+  NavigationEventCounts counts;
+  for (const BrowserNavigator::Event& event : navigator.drainEvents()) {
+    if (std::holds_alternative<BrowserNavigator::Changed>(event)) {
+      ++counts.changed;
+    } else {
+      ++counts.failed;
+    }
+  }
+  return counts;
 }
 
 }  // namespace
@@ -280,9 +319,9 @@ int main() {
 
   bool rejectDirectory = false;
   bool rejectTracks = false;
-  BrowserNavigator::Callbacks historyCallbacks;
-  historyCallbacks.prepare = [&](BrowserPreparationId,
-                                 const BrowserContentRequest& request) {
+  FakeBrowserPreparationService historyPreparation;
+  historyPreparation.prepareRequest =
+      [&](BrowserPreparationId, const BrowserContentRequest& request) {
     if ((request.location.kind() == BrowserLocationKind::Directory &&
          rejectDirectory) ||
         (request.location.kind() == BrowserLocationKind::TrackBrowser &&
@@ -297,8 +336,7 @@ int main() {
     prepared.selected = request.selected;
     return BrowserContentPreparation::complete(std::move(prepared));
   };
-  BrowserNavigator historyNavigator(historyBrowser,
-                                    std::move(historyCallbacks));
+  BrowserNavigator historyNavigator(historyBrowser, historyPreparation);
   ok &= expect(historyNavigator.navigate(browserTrackLocation(songA)),
                "a real location change must create one history entry");
   ok &= expect(historyBrowser.backHistory.size() == 1 &&
@@ -371,9 +409,9 @@ int main() {
   routedBrowser.scrollRow = 4;
   int preparedCount = 0;
   bool rejectRoutedDirectory = false;
-  BrowserNavigator::Callbacks navigatorCallbacks;
-  navigatorCallbacks.prepare = [&](BrowserPreparationId,
-                                   const BrowserContentRequest& request) {
+  FakeBrowserPreparationService routedPreparation;
+  routedPreparation.prepareRequest =
+      [&](BrowserPreparationId, const BrowserContentRequest& request) {
     ++preparedCount;
     if (request.location.kind() == BrowserLocationKind::Directory &&
         rejectRoutedDirectory) {
@@ -385,7 +423,7 @@ int main() {
     prepared.selected = request.selected;
     return BrowserContentPreparation::complete(std::move(prepared));
   };
-  BrowserNavigator navigator(routedBrowser, std::move(navigatorCallbacks));
+  BrowserNavigator navigator(routedBrowser, routedPreparation);
   const BrowserLocation otherDirectory = browserDirectoryLocation("C:/Other");
   ok &= expect(navigator.navigate(otherDirectory) && navigator.back(),
                "the main navigator must create a Forward destination");
@@ -480,23 +518,21 @@ int main() {
   asynchronousBrowser.entries = files;
   asynchronousBrowser.selected = 1;
   asynchronousBrowser.scrollRow = 3;
-  int asynchronousChangedCount = 0;
   std::vector<BrowserPreparationId> asynchronousPreparationIds;
   std::vector<BrowserPreparationId> asynchronousCancellationIds;
-  BrowserNavigator::Callbacks asynchronousCallbacks;
-  asynchronousCallbacks.prepare =
+  FakeBrowserPreparationService asynchronousPreparation;
+  asynchronousPreparation.prepareRequest =
       [&](BrowserPreparationId preparationId,
           const BrowserContentRequest&) {
         asynchronousPreparationIds.push_back(preparationId);
         return BrowserContentPreparation::pending();
       };
-  asynchronousCallbacks.cancelPreparation =
+  asynchronousPreparation.cancelGeneration =
       [&](BrowserPreparationId cancellationId) {
         asynchronousCancellationIds.push_back(cancellationId);
       };
-  asynchronousCallbacks.changed = [&]() { ++asynchronousChangedCount; };
   BrowserNavigator asynchronousNavigator(asynchronousBrowser,
-                                          std::move(asynchronousCallbacks));
+                                          asynchronousPreparation);
 
   ok &= expect(
       asynchronousNavigator.navigate(browserTrackLocation(songA)) &&
@@ -525,13 +561,17 @@ int main() {
 
   PreparedBrowserContent newestPrepared;
   newestPrepared.entries = {directoryEntry("Archive", "C:/Other/Archive")};
-  ok &= expect(
+  const bool newestPreparationCommitted =
       asynchronousNavigator.completePreparation(
-          asynchronousPreparationIds[1], std::move(newestPrepared)) &&
+          asynchronousPreparationIds[1], std::move(newestPrepared));
+  const NavigationEventCounts asynchronousEvents =
+      drainNavigationEvents(asynchronousNavigator);
+  ok &= expect(
+      newestPreparationCommitted &&
           !asynchronousBrowser.contentLoading &&
           asynchronousBrowser.location == otherDirectory &&
           asynchronousBrowser.backHistory.size() == 1 &&
-          asynchronousChangedCount == 3,
+          asynchronousEvents.changed == 3 && asynchronousEvents.failed == 0,
       "only the newest preparation may atomically commit content and history");
 
   const size_t asynchronousHistorySize =
@@ -579,15 +619,15 @@ int main() {
   revealBrowser.pathSearchActive = true;
   BrowserPreparationId revealPreparationId = 0;
   std::optional<BrowserContentRequest> revealRequest;
-  BrowserNavigator::Callbacks revealCallbacks;
-  revealCallbacks.prepare =
+  FakeBrowserPreparationService revealPreparation;
+  revealPreparation.prepareRequest =
       [&](BrowserPreparationId preparationId,
           const BrowserContentRequest& request) {
         revealPreparationId = preparationId;
         revealRequest = request;
         return BrowserContentPreparation::pending();
       };
-  BrowserNavigator revealNavigator(revealBrowser, std::move(revealCallbacks));
+  BrowserNavigator revealNavigator(revealBrowser, revealPreparation);
   const BrowserState::EntryIdentity revealIdentity =
       browserEntryIdentity(files.front());
   ok &= expect(
@@ -668,19 +708,21 @@ int main() {
   rejectedBrowser.content =
       std::shared_ptr<const TrackBrowserContent>(committedTrackContent);
   int rejectedChangedCount = 0;
-  BrowserNavigator::Callbacks rejectedCallbacks;
   int rejectedFailureCount = 0;
-  rejectedCallbacks.prepare = [](BrowserPreparationId,
-                                 const BrowserContentRequest& request) {
+  FakeBrowserPreparationService rejectedPreparation;
+  rejectedPreparation.prepareRequest =
+      [](BrowserPreparationId, const BrowserContentRequest& request) {
     return BrowserContentPreparation::failed(
         unavailableBrowserContent(request.location));
   };
-  rejectedCallbacks.failed =
-      [&](const BrowserPreparationError&) { ++rejectedFailureCount; };
-  rejectedCallbacks.changed = [&]() { ++rejectedChangedCount; };
-  BrowserNavigator rejectedNavigator(rejectedBrowser,
-                                     std::move(rejectedCallbacks));
-  ok &= expect(!rejectedNavigator.navigate(browserTrackLocation(songA)) &&
+  BrowserNavigator rejectedNavigator(rejectedBrowser, rejectedPreparation);
+  const bool rejectedNavigation =
+      rejectedNavigator.navigate(browserTrackLocation(songA));
+  NavigationEventCounts rejectedEvents =
+      drainNavigationEvents(rejectedNavigator);
+  rejectedChangedCount += rejectedEvents.changed;
+  rejectedFailureCount += rejectedEvents.failed;
+  ok &= expect(!rejectedNavigation &&
                    rejectedBrowser.location ==
                        browserDirectoryLocation("C:/Media") &&
                    rejectedBrowser.entries.size() == files.size() &&
@@ -694,7 +736,11 @@ int main() {
                    !rejectedBrowser.contentError.empty() &&
                    rejectedFailureCount == 1 && rejectedChangedCount == 1,
                "a rejected content snapshot must not mutate browser state");
-  ok &= expect(!rejectedNavigator.reload() &&
+  const bool rejectedReload = rejectedNavigator.reload();
+  rejectedEvents = drainNavigationEvents(rejectedNavigator);
+  rejectedChangedCount += rejectedEvents.changed;
+  rejectedFailureCount += rejectedEvents.failed;
+  ok &= expect(!rejectedReload &&
                    rejectedBrowser.entries.size() == files.size() &&
                    rejectedBrowser.selected == 1 &&
                    rejectedBrowser.scrollRow == 3 &&

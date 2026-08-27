@@ -6,6 +6,8 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
+#include <vector>
 
 #include "browser_model.h"
 #include "optionsbrowser.h"
@@ -74,18 +76,29 @@ struct BrowserContentPreparation {
       result;
 };
 
+class BrowserPreparationService {
+ public:
+  virtual ~BrowserPreparationService() = default;
+
+  virtual BrowserContentPreparation prepare(
+      BrowserPreparationId preparationId,
+      const BrowserContentRequest& request) = 0;
+  // Advances the worker generation so older work and completions become
+  // stale. The supplied generation is intentionally newer than the request
+  // being invalidated.
+  virtual void cancelThrough(BrowserPreparationId generation) = 0;
+};
+
 class BrowserNavigator {
  public:
-  struct Callbacks {
-    std::function<BrowserContentPreparation(
-        BrowserPreparationId, const BrowserContentRequest&)>
-        prepare;
-    std::function<void(BrowserPreparationId)> cancelPreparation;
-    std::function<void(const BrowserPreparationError&)> failed;
-    std::function<void()> changed;
+  struct Changed {};
+  struct PreparationFailed {
+    BrowserPreparationError error;
   };
+  using Event = std::variant<Changed, PreparationFailed>;
 
-  BrowserNavigator(BrowserState& browser, Callbacks callbacks);
+  BrowserNavigator(BrowserState& browser,
+                   BrowserPreparationService& preparationService);
 
   BrowserState& state() { return browser_; }
   const BrowserState& state() const { return browser_; }
@@ -108,6 +121,11 @@ class BrowserNavigator {
       BrowserPreparationId preparationId,
       BrowserPreparationResult result);
   bool cancelPreparation();
+  bool select(const BrowserState::EntryIdentity& selection);
+  std::optional<BrowserPreparationId> pendingPreparationId() const {
+    return pendingPreparationId_;
+  }
+  std::vector<Event> drainEvents();
 
  private:
   using CommitPrepared =
@@ -136,7 +154,8 @@ class BrowserNavigator {
   BrowserPreparationId allocatePreparationId();
 
   BrowserState& browser_;
-  Callbacks callbacks_;
+  BrowserPreparationService& preparationService_;
+  std::vector<Event> events_;
   BrowserPreparationId nextPreparationId_ = 1;
   std::optional<BrowserPreparationId> pendingPreparationId_;
   CommitPrepared pendingCommit_;

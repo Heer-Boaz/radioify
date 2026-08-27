@@ -5,6 +5,7 @@ radioify_add_module_object_library(radioify_ui
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_chrome.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_wake_schedule.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_content_preparation.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/browser_content_service.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_content_view.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_directory_listing.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_input_state.cpp

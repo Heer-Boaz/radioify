@@ -45,7 +45,7 @@
 #include "browser_media_menu_renderer.h"
 #include "browser_playback_reveal.h"
 #include "browser_playback_source.h"
-#include "browser_content_preparation.h"
+#include "browser_content_service.h"
 #include "browser_navigation.h"
 #include "browser_model.h"
 #include "browsermeta.h"
@@ -54,7 +54,6 @@
 #include "consoleinput.h"
 #include "consolescreen.h"
 #include "core/open_file_requests.h"
-#include "core/latest_request_worker.h"
 #include "core/windows_app_resources.h"
 #include "core/windows_message_pump.h"
 #include "core/windows_console_window.h"
@@ -218,9 +217,6 @@ static bool isVideoExt(const std::filesystem::path& p) {
   return isSupportedVideoExt(p);
 }
 
-using BrowserContentWorker =
-    LatestRequestWorker<BrowserContentRequest, BrowserPreparationResult>;
-
 static std::string buildTrackSelectionMeta(const BrowserState& browser) {
   if (browser.entries.empty()) return "";
   int idx = std::clamp(browser.selected, 0,
@@ -357,59 +353,15 @@ int runTui(Options o, ApplicationRuntime& runtime) {
 
   BrowserState browser;
   browser.location = browserDirectoryLocation({});
-  bool capturingInitialBrowserPreparation = true;
   std::optional<BrowserPreparationId> initialBrowserPreparationId;
-  BrowserContentWorker browserContentWorker(
-      [](BrowserContentRequest request,
-         const BrowserContentWorker::Cancellation& cancellation) {
-        browser_content_preparation::Result result =
-            browser_content_preparation::prepare(
-                request, [&cancellation]() {
-                  return cancellation.requested();
-                });
-        if (std::holds_alternative<
-                browser_content_preparation::Cancelled>(result)) {
-          return std::optional<BrowserPreparationResult>{};
-        }
-        if (auto* error = std::get_if<BrowserPreparationError>(&result)) {
-          return std::optional<BrowserPreparationResult>(std::move(*error));
-        }
-        return std::optional<BrowserPreparationResult>(
-            std::move(std::get<PreparedBrowserContent>(result)));
-      });
-  BrowserNavigator::Callbacks browserNavigationCallbacks;
-  browserNavigationCallbacks.prepare =
-      [&](BrowserPreparationId preparationId,
-          const BrowserContentRequest& request) {
-        if (capturingInitialBrowserPreparation) {
-          initialBrowserPreparationId = preparationId;
-        }
-        BrowserContentRequest workerRequest = request;
-        if (request.location.kind() == BrowserLocationKind::OptionsBrowser) {
-          workerRequest.optionsRuntime = captureOptionsBrowserRuntimeSnapshot(
-              request.location, audioPlayback, sampleRate,
-              o.mono ? 1u : 2u);
-        }
-        if (!browserContentWorker.submit(preparationId,
-                                         std::move(workerRequest))) {
-          return BrowserContentPreparation::failed(BrowserPreparationError{
-              BrowserPreparationErrorKind::Internal, request.location,
-              "The browser preparation worker is unavailable."});
-        }
-        return BrowserContentPreparation::pending();
-      };
-  browserNavigationCallbacks.cancelPreparation =
-      [&](BrowserPreparationId cancellationId) {
-        browserContentWorker.cancel(cancellationId);
-      };
-  browserNavigationCallbacks.changed = [&]() { markLayoutDirty(); };
-  BrowserNavigator browserNavigator(browser,
-                                    std::move(browserNavigationCallbacks));
+  BrowserContentService browserContentService(
+      {audioPlayback, sampleRate, o.mono ? 1u : 2u});
+  BrowserNavigator browserNavigator(browser, browserContentService);
   BrowserSelectionMetadata browserSelectionMetadata(isVideoExt);
   const bool initialBrowserPreparationAccepted =
       browserNavigator.initialize(browserDirectoryLocation(startDir),
                                   initialName);
-  capturingInitialBrowserPreparation = false;
+  initialBrowserPreparationId = browserNavigator.pendingPreparationId();
   if (!initialBrowserPreparationAccepted) {
     initialBrowserPreparationId.reset();
     browserNavigator.initialize(browserDirectoryLocation({}));
@@ -589,11 +541,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
   };
 
-  BrowserPlaybackRevealer::Callbacks browserPlaybackCallbacks;
-  browserPlaybackCallbacks.markDirty = [&]() { markDirty(); };
-  browserPlaybackCallbacks.markLayoutDirty = [&]() { markLayoutDirty(); };
-  BrowserPlaybackRevealer browserPlaybackRevealer(
-      browserNavigator, std::move(browserPlaybackCallbacks));
+  BrowserPlaybackRevealer browserPlaybackRevealer(browserNavigator);
+  auto consumeBrowserNavigationEvents = [&]() {
+    const std::vector<BrowserNavigator::Event> events =
+        browserNavigator.drainEvents();
+    if (!events.empty()) markLayoutDirty();
+  };
 
   std::string mediaCommandError;
 
@@ -1354,8 +1307,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       markLayoutDirty();
       forceFullRedraw = true;
     }
-    while (std::optional<BrowserContentWorker::Completion>
-               browserContentCompletion = browserContentWorker.poll()) {
+    while (std::optional<BrowserContentService::Completion>
+               browserContentCompletion = browserContentService.poll()) {
       const bool initialCompletion =
           initialBrowserPreparationId &&
           *initialBrowserPreparationId == browserContentCompletion->generation;
@@ -1379,6 +1332,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         browserNavigator.initialize(browserDirectoryLocation({}));
       }
     }
+    consumeBrowserNavigationEvents();
     if (browserSelectionMetadata.poll()) {
       markDirty(UiDirtyFlags::Async);
     }
@@ -1432,7 +1386,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           mediaWaitHandles();
       waitForBrowserWake(
           input, openFileRequests, browserThumbnailWakeHandle(),
-          browserContentWorker.nativeWaitHandle(),
+          browserContentService.nativeWaitHandle(),
           browserSelectionMetadata.nativeWaitHandle(),
           notificationAreaControls.nativeWaitHandle(), tuiWindow,
           audioPictureInPicture, activityHandles,
@@ -1621,6 +1575,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     };
 
     auto flushLayoutIfNeeded = [&]() {
+      consumeBrowserNavigationEvents();
       if (layoutDirty && hasDirtyFlag(dirtyFlags, UiDirtyFlags::Layout)) {
         rebuildLayout();
       }
@@ -1676,6 +1631,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
 
     processShellPlaybackCommands();
     if (!running) break;
+    consumeBrowserNavigationEvents();
     browser_chrome::Model nextBrowserChrome = buildBrowserChrome();
     if (nextBrowserChrome.footer != browserChrome.footer) {
       markLayoutDirty();
@@ -1716,7 +1672,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           mediaWaitHandles();
       DWORD waitResult = waitForBrowserWake(
           input, openFileRequests, browserThumbnailWakeHandle(),
-          browserContentWorker.nativeWaitHandle(),
+          browserContentService.nativeWaitHandle(),
           browserSelectionMetadata.nativeWaitHandle(),
           notificationAreaControls.nativeWaitHandle(), tuiWindow,
           audioPictureInPicture, activityHandles, wakeDeadline);
