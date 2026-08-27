@@ -426,7 +426,7 @@ struct PlaybackLoopRunner::Impl {
     sourceContext.mediaKind = playback_media_actions::MediaKind::Video;
     sourceContext.currentPlayback = true;
     sourceContext.hasGeneratedSubtitles = hasGeneratedSubtitles;
-    mediaProcessingActions.applySourceState(file, &sourceContext);
+    mediaProcessingActions.applySourceState(file, sourceContext);
     contextMenuController.refresh(videoEditWorkspace.edit(),
                                   videoEditWorkspace.exportProgress(),
                                   std::move(sourceContext));
@@ -531,11 +531,11 @@ struct PlaybackLoopRunner::Impl {
   }
 
   bool executeMediaAction(playback_media_actions::Action action) {
-    const playback_media_processing::ActionExecution processing =
+    const std::optional<playback_media_processing::ActionResult> processing =
         mediaProcessingActions.execute(action, file);
-    if (processing.recognized) {
+    if (processing) {
       syncVideoEditPresentation();
-      showEditMessage(processing.feedback);
+      showEditMessage(processing->feedback);
       return true;
     }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 
 #include "playback/media_action_catalog.h"
@@ -15,8 +16,7 @@ struct SourceState {
   bool separatedAudioExists = false;
 };
 
-struct ActionExecution {
-  bool recognized = false;
+struct ActionResult {
   bool accepted = false;
   std::string feedback;
 };
@@ -45,18 +45,13 @@ class Actions {
   Actions() = default;
   explicit Actions(Service& service) : service_(&service) {}
 
-  ActionExecution execute(
+  std::optional<ActionResult> execute(
       playback_media_actions::Action action,
       const std::filesystem::path& sourceFile) const;
   void applySourceState(const std::filesystem::path& sourceFile,
-                        playback_media_actions::Context* context) const;
+                        playback_media_actions::Context& context) const;
 
  private:
-  bool requestSubtitles(const std::filesystem::path& sourceFile) const;
-  bool requestSubtitleCancellation() const;
-  bool requestAudioSeparation(const std::filesystem::path& sourceFile) const;
-  bool requestAudioSeparationCancellation() const;
-
   Service* service_ = nullptr;
 };
 

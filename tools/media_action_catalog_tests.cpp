@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -204,56 +205,59 @@ int main() {
   processingService.state.separatedAudioExists = true;
   playback_media_processing::Actions processingActions(processingService);
   actions::Context projected;
-  processingActions.applySourceState("source.mp4", &projected);
+  processingActions.applySourceState("source.mp4", projected);
   ok &= expect(projected.backgroundTaskRunning &&
                    projected.subtitleGenerationRunningForSource &&
                    projected.canSeparateAudio &&
                    projected.audioSeparationRunningForSource &&
                    projected.hasSeparatedAudio,
                "browser and player must share one processing-state projection");
-  const playback_media_processing::ActionExecution generateSubtitles =
+  const std::optional<playback_media_processing::ActionResult>
+      generateSubtitles =
       processingActions.execute(actions::Action::GenerateSubtitles,
                                 "source.mp4");
-  const playback_media_processing::ActionExecution separateAudio =
+  const std::optional<playback_media_processing::ActionResult> separateAudio =
       processingActions.execute(actions::Action::SeparateAudio,
                                 "source.mp4");
-  const playback_media_processing::ActionExecution cancelSubtitles =
+  const std::optional<playback_media_processing::ActionResult>
+      cancelSubtitles =
       processingActions.execute(actions::Action::CancelSubtitleGeneration,
                                 "source.mp4");
-  const playback_media_processing::ActionExecution cancelSeparation =
+  const std::optional<playback_media_processing::ActionResult>
+      cancelSeparation =
       processingActions.execute(actions::Action::CancelAudioSeparation,
                                 "source.mp4");
-  const playback_media_processing::ActionExecution surfaceAction =
+  const std::optional<playback_media_processing::ActionResult> surfaceAction =
       processingActions.execute(actions::Action::EditVideo, "source.mp4");
   ok &= expect(
-      generateSubtitles.recognized && generateSubtitles.accepted &&
-          generateSubtitles.feedback ==
+      generateSubtitles && generateSubtitles->accepted &&
+          generateSubtitles->feedback ==
               "Generating subtitles (F8 to cancel)" &&
-          separateAudio.recognized && separateAudio.accepted &&
-          separateAudio.feedback == "Separating audio (F8 to cancel)" &&
-          cancelSubtitles.recognized && cancelSubtitles.accepted &&
-          cancelSubtitles.feedback == "Cancelling subtitle generation" &&
-          cancelSeparation.recognized && cancelSeparation.accepted &&
-          cancelSeparation.feedback == "Cancelling audio separation" &&
+          separateAudio && separateAudio->accepted &&
+          separateAudio->feedback == "Separating audio (F8 to cancel)" &&
+          cancelSubtitles && cancelSubtitles->accepted &&
+          cancelSubtitles->feedback == "Cancelling subtitle generation" &&
+          cancelSeparation && cancelSeparation->accepted &&
+          cancelSeparation->feedback == "Cancelling audio separation" &&
           processingService.subtitleRequested &&
           processingService.subtitleCancelled &&
           processingService.separationRequested &&
           processingService.separationCancelled &&
-          !surfaceAction.recognized && surfaceAction.feedback.empty(),
+          !surfaceAction,
       "browser and player must share processing dispatch and feedback");
   playback_media_processing::Actions unavailable;
-  const playback_media_processing::ActionExecution rejectedGeneration =
+  const std::optional<playback_media_processing::ActionResult>
+      rejectedGeneration =
       unavailable.execute(actions::Action::GenerateSubtitles, "source.mp4");
-  const playback_media_processing::ActionExecution rejectedCancellation =
+  const std::optional<playback_media_processing::ActionResult>
+      rejectedCancellation =
       unavailable.execute(actions::Action::CancelAudioSeparation,
                           "source.mp4");
-  ok &= expect(rejectedGeneration.recognized &&
-                   !rejectedGeneration.accepted &&
-                   rejectedGeneration.feedback ==
+  ok &= expect(rejectedGeneration && !rejectedGeneration->accepted &&
+                   rejectedGeneration->feedback ==
                        "Could not start subtitle generation" &&
-                   rejectedCancellation.recognized &&
-                   !rejectedCancellation.accepted &&
-                   rejectedCancellation.feedback ==
+                   rejectedCancellation && !rejectedCancellation->accepted &&
+                   rejectedCancellation->feedback ==
                        "Could not cancel audio separation",
                "missing application services must fail closed");
 

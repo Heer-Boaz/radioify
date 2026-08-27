@@ -923,7 +923,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     context.hasGeneratedSubtitles =
         !playback_video_transcript::activeTranscriptPathForVideo(entry.path)
              .empty();
-    mediaProcessingActions.applySourceState(entry.path, &context);
+    mediaProcessingActions.applySourceState(entry.path, context);
     std::vector<playback_media_actions::Item> items =
         playback_media_actions::build(context);
     if (items.empty()) return;
@@ -1381,11 +1381,11 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     const BrowserEntry& entry = command.entry;
     const playback_media_actions::Action action = command.action;
     dirty = true;
-    const playback_media_processing::ActionExecution processing =
+    const std::optional<playback_media_processing::ActionResult> processing =
         mediaProcessingActions.execute(action, entry.path);
-    if (processing.recognized) {
+    if (processing) {
       mediaCommandError =
-          processing.accepted ? std::string() : processing.feedback;
+          processing->accepted ? std::string() : processing->feedback;
       markLayoutDirty();
       return;
     }
