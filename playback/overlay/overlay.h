@@ -106,6 +106,14 @@ struct OverlayCellLayout {
   std::vector<OverlayCellControlLayoutItem> controls;
 };
 
+struct SubtitlePresentation {
+  std::string activeTrackLabel = "N/A";
+  std::string text;
+  std::shared_ptr<const std::string> assScript;
+  std::shared_ptr<const SubtitleFontAttachmentList> assFonts;
+  std::vector<WindowUiState::SubtitleCue> cues;
+};
+
 inline int overlayCellCountForPixels(int pixelExtent, int cellExtent) {
   const int safeCellExtent = std::max(1, cellExtent);
   const int safePixelExtent = std::max(0, pixelExtent);
@@ -124,7 +132,7 @@ struct PlaybackOverlayInputs {
   bool hz50Enabled = false;
   bool canCycleAudioTracks = false;
   std::string activeAudioTrackLabel;
-  const SubtitleManager* subtitleManager = nullptr;
+  SubtitlePresentation subtitle;
   bool hasSubtitles = false;
   bool subtitlesEnabled = false;
   int64_t subtitleClockUs = 0;
@@ -188,6 +196,10 @@ struct PlaybackOverlayState {
 
 PlaybackOverlayState buildPlaybackOverlayState(
     const PlaybackOverlayInputs& inputs);
+
+SubtitlePresentation projectSubtitlePresentation(
+    const SubtitleManager& subtitleManager, bool subtitlesEnabled,
+    bool seekingOverlay, int64_t clockUs, bool hasSubtitles);
 
 std::vector<WindowUiState::SubtitleCue> collectSubtitleCues(
     const SubtitleManager& subtitleManager, bool subtitlesEnabled,

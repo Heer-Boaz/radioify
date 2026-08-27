@@ -377,11 +377,13 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
   overlayInputs.canCycleAudioTracks = audioOk && player.canCycleAudioTracks();
   overlayInputs.activeAudioTrackLabel =
       audioOk ? player.activeAudioTrackLabel() : "N/A";
-  overlayInputs.subtitleManager = &subtitleManager;
   overlayInputs.hasSubtitles = hasSubtitles;
   overlayInputs.subtitlesEnabled = subtitlesEnabledNow;
   overlayInputs.subtitleClockUs = timeline.sourcePositionUs;
   overlayInputs.seekingOverlay = seekingOverlay;
+  overlayInputs.subtitle = playback_overlay::projectSubtitlePresentation(
+      subtitleManager, subtitlesEnabledNow, seekingOverlay,
+      timeline.sourcePositionUs, hasSubtitles);
   overlayInputs.displaySec = displaySec;
   overlayInputs.totalSec = totalSec;
   overlayInputs.volPct =

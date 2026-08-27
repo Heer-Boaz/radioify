@@ -84,10 +84,7 @@ PlaybackOverlayState buildPlaybackOverlayState(
   state.activeAudioTrackLabel = inputs.activeAudioTrackLabel;
   state.hasSubtitles = inputs.hasSubtitles;
   state.subtitlesEnabled = inputs.subtitlesEnabled;
-  state.activeSubtitleLabel =
-      (inputs.subtitleManager && inputs.hasSubtitles)
-          ? inputs.subtitleManager->activeTrackLabel()
-          : "N/A";
+  state.activeSubtitleLabel = inputs.subtitle.activeTrackLabel;
   state.subtitleClockUs = inputs.subtitleClockUs;
   state.seekingOverlay = inputs.seekingOverlay;
   state.displaySec = inputs.displaySec;
@@ -98,6 +95,10 @@ PlaybackOverlayState buildPlaybackOverlayState(
   state.paused = inputs.paused;
   state.pictureInPictureAvailable = inputs.pictureInPictureAvailable;
   state.pictureInPictureActive = inputs.pictureInPictureActive;
+  state.subtitleText = inputs.subtitle.text;
+  state.subtitleAssScript = inputs.subtitle.assScript;
+  state.subtitleAssFonts = inputs.subtitle.assFonts;
+  state.subtitleCues = inputs.subtitle.cues;
   state.subtitleRenderError = inputs.subtitleRenderError;
   state.debugLines = inputs.debugLines;
   state.contextMenu = inputs.contextMenu;
@@ -109,28 +110,29 @@ PlaybackOverlayState buildPlaybackOverlayState(
                             state.videoEdit, state.videoEditExport,
                             state.videoEditPrompt);
 
-  if (inputs.subtitleManager) {
-    state.subtitleText = buildSubtitleText(*inputs.subtitleManager,
-                                           inputs.subtitlesEnabled,
-                                           inputs.seekingOverlay,
-                                           inputs.subtitleClockUs,
-                                           inputs.hasSubtitles);
-    state.subtitleCues = collectSubtitleCues(*inputs.subtitleManager,
-                                             inputs.subtitlesEnabled,
-                                             inputs.seekingOverlay,
-                                             inputs.subtitleClockUs,
-                                             inputs.hasSubtitles);
-    if (inputs.subtitlesEnabled && !inputs.seekingOverlay &&
-        inputs.subtitleClockUs >= 0 && inputs.hasSubtitles) {
-      if (const SubtitleTrack* activeTrack =
-              inputs.subtitleManager->activeTrack()) {
-        state.subtitleAssScript = activeTrack->assScript;
-        state.subtitleAssFonts = activeTrack->assFonts;
-      }
+  return state;
+}
+
+SubtitlePresentation projectSubtitlePresentation(
+    const SubtitleManager& subtitleManager, bool subtitlesEnabled,
+    bool seekingOverlay, int64_t clockUs, bool hasSubtitles) {
+  SubtitlePresentation presentation;
+  presentation.activeTrackLabel =
+      hasSubtitles ? subtitleManager.activeTrackLabel() : "N/A";
+  presentation.text = buildSubtitleText(
+      subtitleManager, subtitlesEnabled, seekingOverlay, clockUs,
+      hasSubtitles);
+  presentation.cues = collectSubtitleCues(
+      subtitleManager, subtitlesEnabled, seekingOverlay, clockUs,
+      hasSubtitles);
+  if (subtitlesEnabled && !seekingOverlay && clockUs >= 0 &&
+      hasSubtitles) {
+    if (const SubtitleTrack* activeTrack = subtitleManager.activeTrack()) {
+      presentation.assScript = activeTrack->assScript;
+      presentation.assFonts = activeTrack->assFonts;
     }
   }
-
-  return state;
+  return presentation;
 }
 
 std::vector<WindowUiState::SubtitleCue> collectSubtitleCues(

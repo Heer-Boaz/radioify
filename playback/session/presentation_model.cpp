@@ -62,12 +62,14 @@ WindowUiState projectWindowUiState(
       playback.audioOk && player.canCycleAudioTracks();
   inputs.activeAudioTrackLabel =
       playback.audioOk ? player.activeAudioTrackLabel() : "N/A";
-  inputs.subtitleManager = &resources.subtitleManager;
   inputs.hasSubtitles = playback.hasSubtitles;
   inputs.subtitlesEnabled =
       resources.subtitlesEnabled.load(std::memory_order_relaxed);
   inputs.subtitleClockUs = timeline.sourcePositionUs;
   inputs.seekingOverlay = timeline.seekPending();
+  inputs.subtitle = playback_overlay::projectSubtitlePresentation(
+      resources.subtitleManager, inputs.subtitlesEnabled,
+      inputs.seekingOverlay, inputs.subtitleClockUs, inputs.hasSubtitles);
   inputs.displaySec = displaySec;
   inputs.totalSec = totalSec;
   inputs.volPct =
