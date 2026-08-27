@@ -206,11 +206,40 @@ struct TuiMediaCoordinator::Impl {
   }
 
   bool handleControlCommand(PlaybackControlCommand command) {
-    return videoSession_ && videoSession_->handleControlCommand(command);
+    if (videoSession_) return videoSession_->handleControlCommand(command);
+
+    switch (command) {
+      case PlaybackControlCommand::Play:
+        if (!audioPlaybackTarget()) return false;
+        audioPlay();
+        return true;
+      case PlaybackControlCommand::Pause:
+        if (!audioPlaybackTarget()) return false;
+        audioPause();
+        return true;
+      case PlaybackControlCommand::TogglePause:
+        if (!audioPlaybackTarget()) return false;
+        audioTogglePause();
+        return true;
+      case PlaybackControlCommand::Stop:
+        if (!audioIsReady()) return false;
+        audioStop();
+        return true;
+      case PlaybackControlCommand::Previous:
+        if (!audioPlaybackTarget()) return false;
+        return transport(playback_queue::Direction::Previous).accepted();
+      case PlaybackControlCommand::Next:
+        if (!audioPlaybackTarget()) return false;
+        return transport(playback_queue::Direction::Next).accepted();
+    }
+    return false;
   }
 
-  bool seekVideoToRatio(double ratio) {
-    return videoSession_ && videoSession_->seekToRatio(ratio);
+  bool seekToRatio(double ratio) {
+    if (videoSession_) return videoSession_->seekToRatio(ratio);
+    if (!audioIsReady()) return false;
+    audioSeekToRatio(ratio);
+    return true;
   }
 
   bool toggleWindowPresentation() {
@@ -248,10 +277,6 @@ struct TuiMediaCoordinator::Impl {
       case media_processing::TaskKind::LoopSplit:
         return;
     }
-  }
-
-  void stopVideo() {
-    if (videoSession_) videoSession_->requestStop();
   }
 
   void requestQuit() {
@@ -654,10 +679,6 @@ bool TuiMediaCoordinator::openFiles(const OpenFilesRequest& request) {
   return impl_->openFiles(request).accepted();
 }
 
-bool TuiMediaCoordinator::transport(playback_queue::Direction direction) {
-  return impl_->transport(direction).accepted();
-}
-
 bool TuiMediaCoordinator::pump() { return impl_->pump().has_value(); }
 
 bool TuiMediaCoordinator::videoActive() const { return impl_->videoActive(); }
@@ -703,8 +724,8 @@ bool TuiMediaCoordinator::handleControlCommand(
   return impl_->handleControlCommand(command);
 }
 
-bool TuiMediaCoordinator::seekVideoToRatio(double ratio) {
-  return impl_->seekVideoToRatio(ratio);
+bool TuiMediaCoordinator::seekToRatio(double ratio) {
+  return impl_->seekToRatio(ratio);
 }
 
 bool TuiMediaCoordinator::toggleWindowPresentation() {
@@ -728,7 +749,5 @@ void TuiMediaCoordinator::handleMediaTaskCompletion(
     std::string status) {
   impl_->handleMediaTaskCompletion(completion, std::move(status));
 }
-
-void TuiMediaCoordinator::stopVideo() { impl_->stopVideo(); }
 
 void TuiMediaCoordinator::requestQuit() { impl_->requestQuit(); }

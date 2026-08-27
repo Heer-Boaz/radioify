@@ -63,7 +63,6 @@ class TuiMediaCoordinator {
       const WindowPlacementState* sourcePlacement,
       std::optional<PlaybackPresentationState> videoPresentation);
   bool openFiles(const OpenFilesRequest& request);
-  bool transport(playback_queue::Direction direction);
   bool pump();
 
   bool videoActive() const;
@@ -77,7 +76,7 @@ class TuiMediaCoordinator {
 
   bool handleVideoInputEvent(const InputEvent& event);
   bool handleControlCommand(PlaybackControlCommand command);
-  bool seekVideoToRatio(double ratio);
+  bool seekToRatio(double ratio);
   bool toggleWindowPresentation();
   bool togglePictureInPicture();
   bool toggleFullscreen();
@@ -86,7 +85,6 @@ class TuiMediaCoordinator {
   void handleMediaTaskCompletion(
       const media_processing::TaskCompletion& completion,
       std::string status);
-  void stopVideo();
   void requestQuit();
 
  private:

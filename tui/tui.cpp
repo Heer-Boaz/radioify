@@ -708,9 +708,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     return mediaCoordinator.startPlayback(std::move(route),
                                           std::move(source));
   };
-  auto transportPlayback = [&](playback_queue::Direction direction) {
-    return mediaCoordinator.transport(direction);
-  };
   auto openBrowserMediaTarget = [&](const PlaybackTarget& target) {
     playback_route::Route route = playback_route::resolveTarget(target);
     const std::filesystem::path& targetFile = playbackTargetFile(target);
@@ -875,6 +872,11 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   };
 
   InputCallbacks callbacks;
+  auto handlePlaybackControlCommand = [&](PlaybackControlCommand command) {
+    if (mediaCoordinator.handleControlCommand(command)) {
+      markDirty();
+    }
+  };
   callbacks.onQuit = [&]() { mediaCoordinator.requestQuit(); };
   callbacks.onActivateEntry = [&](const BrowserEntry& entry) {
     OptionsBrowserResult optionsResult =
@@ -927,55 +929,23 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     didRender = true;
   };
   callbacks.onPlay = [&]() {
-    if (mediaCoordinator.videoActive()) {
-      mediaCoordinator.handleControlCommand(PlaybackControlCommand::Play);
-    } else {
-      audioPlay();
-    }
-    markDirty();
+    handlePlaybackControlCommand(PlaybackControlCommand::Play);
   };
   callbacks.onPause = [&]() {
-    if (mediaCoordinator.videoActive()) {
-      mediaCoordinator.handleControlCommand(PlaybackControlCommand::Pause);
-    } else {
-      audioPause();
-    }
-    markDirty();
+    handlePlaybackControlCommand(PlaybackControlCommand::Pause);
   };
   callbacks.onTogglePause = [&]() {
-    if (mediaCoordinator.videoActive()) {
-      mediaCoordinator.handleControlCommand(
-          PlaybackControlCommand::TogglePause);
-    } else {
-      audioTogglePause();
-    }
-    markDirty();
+    handlePlaybackControlCommand(PlaybackControlCommand::TogglePause);
   };
   callbacks.onStopPlayback = [&]() {
-    if (mediaCoordinator.videoActive()) {
-      mediaCoordinator.stopVideo();
-      markDirty();
-    } else if (audioIsReady()) {
-      audioStop();
-      markDirty();
-    }
+    handlePlaybackControlCommand(PlaybackControlCommand::Stop);
   };
   callbacks.onCurrentPlaybackFile = [&]() { return currentPlaybackFile(); };
   callbacks.onPlayPrevious = [&]() {
-    if (currentPlaybackFile().empty()) {
-      return;
-    }
-    if (transportPlayback(playback_queue::Direction::Previous)) {
-      markDirty();
-    }
+    handlePlaybackControlCommand(PlaybackControlCommand::Previous);
   };
   callbacks.onPlayNext = [&]() {
-    if (currentPlaybackFile().empty()) {
-      return;
-    }
-    if (transportPlayback(playback_queue::Direction::Next)) {
-      markDirty();
-    }
+    handlePlaybackControlCommand(PlaybackControlCommand::Next);
   };
   callbacks.onToggleRadio = [&]() {
     audioCycleRadioFilter();
@@ -1015,12 +985,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
     markDirty();
   };
   callbacks.onSeekToRatio = [&](double ratio) {
-    if (mediaCoordinator.videoActive()) {
-      mediaCoordinator.seekVideoToRatio(ratio);
-    } else {
-      audioSeekToRatio(ratio);
-    }
-    markDirty();
+    if (mediaCoordinator.seekToRatio(ratio)) markDirty();
   };
   callbacks.onAdjustVolume = [&](float delta) {
     audioAdjustVolume(delta);
@@ -1132,34 +1097,6 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   audioPictureInPictureCallbacks.onClose =
       [&]() { markDirty(UiDirtyFlags::Async); };
 
-  auto handleSystemPlaybackCommand = [&](PlaybackControlCommand command) {
-    if (mediaCoordinator.videoActive()) {
-      mediaCoordinator.handleControlCommand(command);
-      markDirty();
-      return;
-    }
-    switch (command) {
-      case PlaybackControlCommand::Play:
-        if (callbacks.onPlay) callbacks.onPlay();
-        break;
-      case PlaybackControlCommand::Pause:
-        if (callbacks.onPause) callbacks.onPause();
-        break;
-      case PlaybackControlCommand::TogglePause:
-        if (callbacks.onTogglePause) callbacks.onTogglePause();
-        break;
-      case PlaybackControlCommand::Stop:
-        if (callbacks.onStopPlayback) callbacks.onStopPlayback();
-        break;
-      case PlaybackControlCommand::Previous:
-        if (callbacks.onPlayPrevious) callbacks.onPlayPrevious();
-        break;
-      case PlaybackControlCommand::Next:
-        if (callbacks.onPlayNext) callbacks.onPlayNext();
-        break;
-    }
-  };
-
   auto activateRadioifySurface = [&]() {
     if (mediaCoordinator.videoActive()) {
       mediaCoordinator.activateVideoPresentation();
@@ -1195,7 +1132,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
         activateRadioifySurface();
         break;
       case PlaybackNotificationAreaCommand::Kind::Playback:
-        handleSystemPlaybackCommand(command.playbackCommand);
+        handlePlaybackControlCommand(command.playbackCommand);
         break;
       case PlaybackNotificationAreaCommand::Kind::Quit:
         if (callbacks.onQuit) callbacks.onQuit();
@@ -1206,7 +1143,7 @@ int runTui(Options o, playback_queue::Queue& playbackQueue) {
   auto processShellPlaybackCommands = [&]() {
     PlaybackControlCommand command;
     while (systemControls.pollCommand(&command)) {
-      handleSystemPlaybackCommand(command);
+      handlePlaybackControlCommand(command);
     }
     PlaybackNotificationAreaCommand notificationCommand;
     while (notificationAreaControls.pollCommand(&notificationCommand)) {
