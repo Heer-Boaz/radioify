@@ -12,7 +12,8 @@ std::vector<Item> build(const Context& context) {
       items.push_back({Action::EditVideo,
                        context.hasEdits ? "Resume editing" : "Edit video"});
     }
-    if (context.subtitleGenerationRunningForSource) {
+    if (context.subtitleGenerationRunningForSource &&
+        context.activeTaskCancellable) {
       items.push_back(
           {Action::CancelSubtitleGeneration, "Cancel subtitle generation"});
     } else if (!context.backgroundTaskRunning &&
@@ -22,7 +23,8 @@ std::vector<Item> build(const Context& context) {
            context.hasGeneratedSubtitles ? "Regenerate subtitles..."
                                          : "Generate subtitles..."});
     }
-    if (context.transcriptTextExportRunningForSource) {
+    if (context.transcriptTextExportRunningForSource &&
+        context.activeTaskCancellable) {
       items.push_back({Action::CancelMediaExport,
                        "Cancel transcript export"});
     } else if (!context.backgroundTaskRunning &&
@@ -30,12 +32,14 @@ std::vector<Item> build(const Context& context) {
       items.push_back(
           {Action::ExportTranscriptText, "Export transcript as text"});
     }
-    if (context.audioExportRunningForSource) {
+    if (context.audioExportRunningForSource &&
+        context.activeTaskCancellable) {
       items.push_back({Action::CancelMediaExport, "Cancel audio export"});
     } else if (!context.backgroundTaskRunning && context.canExportAudio) {
       items.push_back({Action::ExportAudio, "Export audio as FLAC"});
     }
-    if (context.audioSeparationRunningForSource) {
+    if (context.audioSeparationRunningForSource &&
+        context.activeTaskCancellable) {
       items.push_back(
           {Action::CancelAudioSeparation, "Cancel audio separation"});
     } else if (!context.backgroundTaskRunning && context.canSeparateAudio) {
@@ -54,12 +58,14 @@ std::vector<Item> build(const Context& context) {
   if (context.canBrowseTracks) {
     items.push_back({Action::BrowseTracks, "Browse tracks"});
   }
-  if (context.audioExportRunningForSource) {
+  if (context.audioExportRunningForSource &&
+      context.activeTaskCancellable) {
     items.push_back({Action::CancelMediaExport, "Cancel audio export"});
   } else if (!context.backgroundTaskRunning && context.canExportAudio) {
     items.push_back({Action::ExportAudio, "Export audio as FLAC"});
   }
-  if (context.audioSeparationRunningForSource) {
+  if (context.audioSeparationRunningForSource &&
+      context.activeTaskCancellable) {
     items.push_back(
         {Action::CancelAudioSeparation, "Cancel audio separation"});
   } else if (!context.backgroundTaskRunning && context.canSeparateAudio) {

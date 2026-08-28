@@ -7,6 +7,7 @@
 #include "playback/video/gpu/gpu_runtime.h"
 #include "playback/video/image.h"
 #include "internal.h"
+#include "input_events.h"
 #include "present.h"
 #include <d3d11_1.h>
 #include <dxgi1_6.h>
@@ -1892,8 +1893,24 @@ bool VideoWindow::RecreateSwapChainForCurrentDisplay(const char* reason) {
 }
 
 void VideoWindow::OnClientResizedByWindow(int width, int height) {
+    if (m_leftMouseCaptureActive) {
+        const bool ownsCapture = GetCapture() == m_hWnd;
+        m_leftMouseCaptureActive = false;
+        m_editBoundaryCaptureActive = false;
+        if (ownsCapture) {
+            ReleaseCapture();
+        }
+        m_input.push(window_input_events::pointerLeaveEvent());
+    }
     SetOverlayInteractionMap({});
     m_displayLifecycle.clientResized(width, height);
+    const SIZE cellSize = TextGridCellSize();
+    if (std::optional<InputEvent> resize =
+            window_input_events::textGridResizeEvent(
+                width, height, static_cast<int>(cellSize.cx),
+                static_cast<int>(cellSize.cy))) {
+        m_input.push(std::move(*resize));
+    }
 }
 
 void VideoWindow::OnDisplayChangedByWindow(int width, int height) {
@@ -2700,7 +2717,8 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
                               contextMenuLayout)
                         : playback_overlay::buildOverlayInteractionMap(
                               windowOverlayLayout, &ui.videoEdit,
-                              ui.videoEditPrompt);
+                              ui.videoEditPrompt,
+                              ui.mediaTaskCancellationPrompt.has_value());
                 if (outInteractions) {
                     *outInteractions =
                         playback_overlay::transformInteractionMap(

@@ -3,70 +3,7 @@
 #include <algorithm>
 #include <utility>
 
-#include "unicode_display_width.h"
-
 namespace tui_dialog {
-namespace {
-
-std::vector<std::string> wrapText(const std::string& text, int width) {
-  std::vector<std::string> lines;
-  if (width <= 0) {
-    return lines;
-  }
-  if (text.empty()) {
-    lines.emplace_back();
-    return lines;
-  }
-
-  std::size_t offset = 0;
-  std::size_t lineStart = 0;
-  std::size_t lineEnd = 0;
-  int lineWidth = 0;
-  while (offset < text.size()) {
-    char32_t codepoint = 0;
-    std::size_t startByte = 0;
-    std::size_t endByte = 0;
-    if (!utf8DecodeCodepoint(text, &offset, &codepoint, &startByte, &endByte)) {
-      break;
-    }
-    if (codepoint == U'\r') {
-      continue;
-    }
-    if (codepoint == U'\n') {
-      lines.emplace_back(text.substr(lineStart, lineEnd - lineStart));
-      lineStart = offset;
-      lineEnd = offset;
-      lineWidth = 0;
-      continue;
-    }
-    const int glyphWidth = unicodeDisplayWidth(codepoint);
-    if (glyphWidth > 0 && lineWidth > 0 && lineWidth + glyphWidth > width) {
-      lines.emplace_back(text.substr(lineStart, lineEnd - lineStart));
-      lineStart = startByte;
-      lineEnd = startByte;
-      lineWidth = 0;
-    }
-    lineEnd = endByte;
-    lineWidth += glyphWidth;
-  }
-  lines.emplace_back(text.substr(lineStart, lineEnd - lineStart));
-  return lines;
-}
-
-std::vector<RenderLine> buildLines(const Content& content, int width) {
-  std::vector<RenderLine> result;
-  for (const TextBlock& block : content.text) {
-    if (!result.empty()) {
-      result.push_back({{}, TextTone::Normal});
-    }
-    for (std::string line : wrapText(block.text, width)) {
-      result.push_back({std::move(line), block.tone});
-    }
-  }
-  return result;
-}
-
-}  // namespace
 
 DialogId Model::open(Content content) {
   if (content.buttons.empty()) {
@@ -114,84 +51,10 @@ bool Model::dismiss(DialogId expectedDialog) {
 }
 
 Layout Model::layout(const Bounds& bounds) {
-  Layout result;
-  if (!active_ || bounds.width < 4 || bounds.height < 4) {
-    return result;
-  }
-
-  const int requestedTopInset =
-      std::clamp(bounds.topInset, 0, std::max(0, bounds.height - 1));
-  // A modal decision takes precedence over persistent browser chrome. On a
-  // short terminal, reclaim those rows before considering the dialog
-  // unrenderable so the user never loses sight of the pending decision.
-  const int topInset =
-      std::min(requestedTopInset, std::max(0, bounds.height - 4));
-  const int availableHeight = bounds.height - topInset;
-  if (availableHeight < 4) {
-    return result;
-  }
-
-  const int desiredWidth = std::clamp(bounds.width - 4, 44, 84);
-  result.width = std::min(bounds.width, desiredWidth);
-  result.x = std::max(0, (bounds.width - result.width) / 2);
-  result.innerWidth = std::max(1, result.width - 4);
-  result.contentLines = buildLines(content_, result.innerWidth);
-
-  const std::size_t selected =
-      content_.buttons.empty()
-          ? 0
-          : std::min(selectedButton_, content_.buttons.size() - 1);
-  auto arrangeButtons = [&](int bottomY, int maximumRows) {
-    tui_button_row::Layout buttons = tui_button_row::responsiveLayout(
-        content_.buttons, result.x, result.width, bottomY, maximumRows);
-    if (!buttons.buttons.empty() || content_.buttons.empty()) {
-      return buttons;
-    }
-
-    // At the smallest usable sizes, retain one complete selected command as
-    // a viewport onto the action group. Left/Right and Tab still move through
-    // every action, and resizing restores the full row or stack.
-    const std::vector<Button> selectedOnly{content_.buttons[selected]};
-    buttons = tui_button_row::responsiveLayout(
-        selectedOnly, result.x, result.width, bottomY, 1);
-    if (!buttons.buttons.empty()) {
-      buttons.buttons.front().index = selected;
-    }
-    return buttons;
-  };
-
-  const int maximumButtonRows = std::max(1, availableHeight - 3);
-  tui_button_row::Layout buttonLayout =
-      arrangeButtons(0, maximumButtonRows);
-  if (buttonLayout.buttons.empty()) {
-    return {};
-  }
-
-  const int buttonRows = std::max(1, buttonLayout.rowCount);
-  const int minimumHeight = buttonRows + 3;
-  const int desiredHeight = std::max(
-      minimumHeight,
-      static_cast<int>(result.contentLines.size()) + buttonRows + 3);
-  result.height = std::min(availableHeight, desiredHeight);
-  result.y = topInset + std::max(0, (availableHeight - result.height) / 2);
-  result.titleY = result.y + 1;
-  result.contentY = result.y + 2;
-  result.buttonY = result.y + result.height - 2;
-  buttonLayout = arrangeButtons(result.buttonY, maximumButtonRows);
-  const int firstButtonY = buttonLayout.buttons.empty()
-                               ? result.buttonY
-                               : buttonLayout.y;
-  result.visibleContentRows =
-      std::max(0, firstButtonY - result.contentY);
-
-  const int maximumFirstLine =
-      std::max(0, static_cast<int>(result.contentLines.size()) -
-                      result.visibleContentRows);
-  firstVisibleLine_ = std::clamp(firstVisibleLine_, 0, maximumFirstLine);
-  result.firstContentLine = firstVisibleLine_;
-
-  result.buttons = std::move(buttonLayout.buttons);
-  result.valid = !result.buttons.empty();
+  if (!active_) return {};
+  Layout result =
+      layoutContent(content_, selectedButton_, firstVisibleLine_, bounds);
+  if (result.valid) firstVisibleLine_ = result.firstContentLine;
   return result;
 }
 
@@ -199,6 +62,13 @@ Interaction Model::handle(const InputEvent& event, const Bounds& bounds) {
   Interaction result;
   if (!active_) {
     return result;
+  }
+
+  if (event.type == InputEvent::Type::Resize) {
+    // Button geometry is no longer the geometry under which a press was
+    // armed. Cancel it before laying out the dialog at its new size.
+    buttonPointer_.reset();
+    result.changed = true;
   }
 
   if (event.type == InputEvent::Type::Action &&
@@ -211,13 +81,11 @@ Interaction Model::handle(const InputEvent& event, const Bounds& bounds) {
 
   Layout currentLayout = layout(bounds);
   if (!currentLayout.valid) {
-    // A modal surface that cannot represent any complete action must never
-    // become an invisible input trap. Dismiss it without activating an action,
-    // but consume the triggering event so it cannot click through to browser
-    // content; persistent failures remain available from Commands.
+    // Resizing is not a user decision. Preserve the modal so it reappears when
+    // the surface becomes large enough, while still consuming input to prevent
+    // click-through. Back/Escape was handled above and remains an explicit
+    // escape hatch even while the dialog cannot be rendered.
     result.consumed = true;
-    result.dismissedDialog = activeDialog_;
-    result.changed = dismiss();
     return result;
   }
 

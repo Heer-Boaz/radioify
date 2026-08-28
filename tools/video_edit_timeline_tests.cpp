@@ -1017,6 +1017,15 @@ int main() {
                    playbackSuffixState).empty(),
                "a modal editor prompt must own its chrome without an "
                "unrelated playback suffix");
+  playback_overlay::MediaTaskCancellationDialog mediaCancellationPrompt;
+  mediaCancellationPrompt.title = "Cancel audio separation?";
+  mediaCancellationPrompt.sourceName = "NTE.mp4";
+  playbackSuffixState.videoEditPrompt = Prompt::None;
+  playbackSuffixState.mediaTaskCancellationPrompt = mediaCancellationPrompt;
+  ok &= expect(playback_overlay::buildWindowOverlayProgressSuffix(
+                   playbackSuffixState).empty(),
+               "a media-task decision must own its modal status row without "
+               "an unrelated playback clock");
   const auto emptyEditControls =
       playback_overlay::buildOverlayControlSpecs(editorControlState, -1);
   const std::vector<playback_overlay::OverlayControlId> expectedEmptyControls{
@@ -1037,6 +1046,103 @@ int main() {
     return std::find_if(specs.begin(), specs.end(),
                         [&](const auto& spec) { return spec.id == id; });
   };
+  const auto mediaCancellationControls =
+      playback_overlay::buildOverlayControlSpecs(playbackSuffixState, -1);
+  ok &= expect(
+      controlIds(mediaCancellationControls) ==
+              std::vector<playback_overlay::OverlayControlId>{
+                  playback_overlay::OverlayControlId::MediaTaskCancel,
+                  playback_overlay::OverlayControlId::MediaTaskKeepRunning} &&
+          !mediaCancellationControls[0].active &&
+          mediaCancellationControls[1].active,
+      "playback surfaces must expose the same destructive and safe choices "
+      "with Keep running selected by default");
+  playback_overlay::OverlayDialogLayoutInput mediaCancellationDialogInput;
+  mediaCancellationDialogInput.width = 120;
+  mediaCancellationDialogInput.height = 40;
+  mediaCancellationDialogInput.title = "Cancel audio separation?";
+  mediaCancellationDialogInput.text = {
+      "Progress on NTE.mp4 will be lost."};
+  mediaCancellationDialogInput.buttons = {
+      {playback_overlay::OverlayControlId::MediaTaskCancel, "Cancel task",
+       "Stop", false, false, true},
+      {playback_overlay::OverlayControlId::MediaTaskKeepRunning,
+       "Keep running", "Keep", true, false, true}};
+  const auto mediaCancellationLayout =
+      playback_overlay::layoutOverlayDialogCells(
+          mediaCancellationDialogInput);
+  ok &= expect(
+      mediaCancellationLayout.dialog &&
+          mediaCancellationLayout.dialog->valid() &&
+          mediaCancellationLayout.dialog->x ==
+              (120 - mediaCancellationLayout.dialog->width) / 2 &&
+          mediaCancellationLayout.dialog->y ==
+              (40 - mediaCancellationLayout.dialog->height) / 2 &&
+          mediaCancellationLayout.dialog->title ==
+              "Cancel audio separation?" &&
+          mediaCancellationLayout.dialog->contentLines.size() == 1 &&
+          mediaCancellationLayout.dialog->contentLines[0].text ==
+              "Progress on NTE.mp4 will be lost." &&
+          mediaCancellationLayout.controls.size() == 2 &&
+          mediaCancellationLayout.controls[1].active &&
+          mediaCancellationLayout.progressBarY < 0,
+      "playback decisions must use the shared centered dialog geometry with "
+      "the safe action selected instead of looking like transport chrome");
+  mediaCancellationDialogInput.width = 20;
+  mediaCancellationDialogInput.height = 4;
+  const auto compactMediaCancellationLayout =
+      playback_overlay::layoutOverlayDialogCells(
+          mediaCancellationDialogInput);
+  mediaCancellationDialogInput.width = 12;
+  mediaCancellationDialogInput.height = 6;
+  const auto stackedMediaCancellationLayout =
+      playback_overlay::layoutOverlayDialogCells(
+          mediaCancellationDialogInput);
+  mediaCancellationDialogInput.width = 1;
+  mediaCancellationDialogInput.height = 8;
+  const auto oneColumnMediaCancellationLayout =
+      playback_overlay::layoutOverlayDialogCells(
+          mediaCancellationDialogInput);
+  mediaCancellationDialogInput.width = 8;
+  mediaCancellationDialogInput.height = 1;
+  const auto oneRowMediaCancellationLayout =
+      playback_overlay::layoutOverlayDialogCells(
+          mediaCancellationDialogInput);
+  mediaCancellationDialogInput.width = 3;
+  mediaCancellationDialogInput.height = 3;
+  const auto threeByThreeMediaCancellationLayout =
+      playback_overlay::layoutOverlayDialogCells(
+          mediaCancellationDialogInput);
+  mediaCancellationDialogInput.width = 4;
+  mediaCancellationDialogInput.height = 4;
+  const auto fourByFourMediaCancellationLayout =
+      playback_overlay::layoutOverlayDialogCells(
+          mediaCancellationDialogInput);
+  mediaCancellationDialogInput.width = 120;
+  mediaCancellationDialogInput.height = 40;
+  const auto restoredMediaCancellationLayout =
+      playback_overlay::layoutOverlayDialogCells(
+          mediaCancellationDialogInput);
+  ok &= expect(
+      compactMediaCancellationLayout.dialog &&
+          compactMediaCancellationLayout.controls.size() == 2 &&
+          compactMediaCancellationLayout.controls[0].y ==
+              compactMediaCancellationLayout.controls[1].y &&
+          stackedMediaCancellationLayout.dialog &&
+          stackedMediaCancellationLayout.controls.size() == 2 &&
+          stackedMediaCancellationLayout.controls[0].y !=
+              stackedMediaCancellationLayout.controls[1].y,
+      "playback dialogs must inherit the browser dialog's compact and "
+      "stacked responsive button layouts");
+  ok &= expect(
+      !oneColumnMediaCancellationLayout.dialog &&
+          !oneRowMediaCancellationLayout.dialog &&
+          !threeByThreeMediaCancellationLayout.dialog &&
+          !fourByFourMediaCancellationLayout.dialog &&
+          restoredMediaCancellationLayout.dialog &&
+          restoredMediaCancellationLayout.dialog->valid(),
+      "playback dialog layout must report unrenderable extreme sizes and "
+      "recover deterministically after a resize");
   const auto startControl = controlFor(
       emptyEditControls, playback_overlay::OverlayControlId::EditMarkIn);
   const auto endControl = controlFor(
@@ -1516,6 +1622,13 @@ int main() {
   ok &= expect(!ordinaryInteractions.modal &&
                    ordinaryInteractions.progressBar.has_value(),
                "ordinary edit mode must restore precise timeline hit-testing");
+  const playback_overlay::InteractionMap mediaCancellationInteractions =
+      playback_overlay::buildOverlayInteractionMap(
+          promptLayout, &overlayEdit, Prompt::None, true);
+  ok &= expect(mediaCancellationInteractions.modal &&
+                   !mediaCancellationInteractions.progressBar,
+               "media-task confirmation must block timeline interaction on "
+               "both playback renderers");
 
   playback_overlay::InteractionMap interactions;
   interactions.progressBar =

@@ -1,5 +1,9 @@
 #include "input_events.h"
 
+#include <algorithm>
+#include <cstdint>
+#include <limits>
+
 #include "playback/input/media_keys.h"
 
 namespace window_input_events {
@@ -172,6 +176,27 @@ InputEvent mouseEvent(int x, int y, MouseEventKind kind, MouseButtons buttons,
 InputEvent pointerLeaveEvent() {
   InputEvent event{};
   event.type = InputEvent::Type::PointerLeave;
+  return event;
+}
+
+std::optional<InputEvent> textGridResizeEvent(int pixelWidth, int pixelHeight,
+                                              int cellWidth, int cellHeight) {
+  if (pixelWidth <= 0 || pixelHeight <= 0 || cellWidth <= 0 ||
+      cellHeight <= 0) {
+    return std::nullopt;
+  }
+
+  const auto cellCount = [](int pixels, int cellExtent) {
+    const std::int64_t count =
+        (static_cast<std::int64_t>(pixels) + cellExtent - 1) / cellExtent;
+    return static_cast<SHORT>(std::clamp<std::int64_t>(
+        count, 1, std::numeric_limits<SHORT>::max()));
+  };
+
+  InputEvent event{};
+  event.type = InputEvent::Type::Resize;
+  event.size.X = cellCount(pixelWidth, cellWidth);
+  event.size.Y = cellCount(pixelHeight, cellHeight);
   return event;
 }
 

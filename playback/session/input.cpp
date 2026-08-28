@@ -242,6 +242,12 @@ bool executeOverlayControl(SessionPort& session,
       return session.dispatch(CommandAction::ConfirmPendingExit);
     case Action::CancelPendingExit:
       return session.dispatch(CommandAction::CancelPendingExit);
+    case Action::ConfirmMediaTaskCancellation:
+      return session.dispatch(
+          CommandAction::ConfirmMediaTaskCancellation);
+    case Action::DismissMediaTaskCancellation:
+      return session.dispatch(
+          CommandAction::DismissMediaTaskCancellation);
   }
   return false;
 }
@@ -380,6 +386,21 @@ void dispatchPlaybackInputCommand(
     case PlaybackAction::CancelVideoEditPrompt:
       session.dispatch(CommandAction::NavigateBack);
       break;
+    case PlaybackAction::SelectPreviousMediaTaskCancellationAction:
+      session.dispatch(
+          CommandAction::SelectPreviousMediaTaskCancellationAction);
+      break;
+    case PlaybackAction::SelectNextMediaTaskCancellationAction:
+      session.dispatch(
+          CommandAction::SelectNextMediaTaskCancellationAction);
+      break;
+    case PlaybackAction::ActivateMediaTaskCancellationAction:
+      session.dispatch(
+          CommandAction::ActivateSelectedMediaTaskCancellationAction);
+      break;
+    case PlaybackAction::DismissMediaTaskCancellation:
+      session.dispatch(CommandAction::DismissMediaTaskCancellation);
+      break;
     case PlaybackAction::ToggleOptions:
     case PlaybackAction::TogglePitchMonitor:
     case PlaybackAction::CloseViewer:
@@ -419,10 +440,14 @@ void handlePlaybackInputEvent(SessionPort& session,
       return;
     }
   }
+  const SessionSnapshot initialState = session.snapshot();
   const playback_video_edit::Prompt editPrompt =
-      session.snapshot().videoEditPrompt;
+      initialState.videoEditPrompt;
   uint32_t shortcutContexts = 0;
-  if (editPrompt == playback_video_edit::Prompt::LeaveEditMode) {
+  if (initialState.mediaTaskCancellationPrompt) {
+    shortcutContexts =
+        kPlaybackShortcutContextMediaTaskCancellationConfirmation;
+  } else if (editPrompt == playback_video_edit::Prompt::LeaveEditMode) {
     shortcutContexts = kPlaybackShortcutContextVideoEditLeaveConfirmation;
   } else if (editPrompt == playback_video_edit::Prompt::DiscardEdits) {
     shortcutContexts = kPlaybackShortcutContextVideoEditDiscardConfirmation;
@@ -433,7 +458,7 @@ void handlePlaybackInputEvent(SessionPort& session,
                        kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextPlaybackSession |
                        kPlaybackShortcutContextVideoPlayback;
-    const SessionSnapshot state = session.snapshot();
+    const SessionSnapshot& state = initialState;
     if (state.videoEditorActive) {
       shortcutContexts |= kPlaybackShortcutContextVideoEditing;
     }
@@ -463,8 +488,9 @@ void handlePlaybackInputEvent(SessionPort& session,
 void handlePlaybackControlCommand(SessionPort& session,
                                   PlaybackSeekGestureState& seekState,
                                   PlaybackControlCommand command) {
-  if (session.snapshot().videoEditPrompt !=
-      playback_video_edit::Prompt::None) {
+  const SessionSnapshot state = session.snapshot();
+  if (state.mediaTaskCancellationPrompt ||
+      state.videoEditPrompt != playback_video_edit::Prompt::None) {
     return;
   }
   switch (command) {
@@ -516,8 +542,9 @@ void handlePlaybackMouseEvent(SessionPort& session,
     commitQueuedSeek(session, seekState);
     session.dispatch(CommandAction::RequestRedraw);
   }
+  const SessionSnapshot interactionState = session.snapshot();
   const playback_video_edit::Prompt editPrompt =
-      session.snapshot().videoEditPrompt;
+      interactionState.videoEditPrompt;
 
   const double pointerX =
       windowEvent && mouse.hasPixelPosition ? mouse.pixelX : mouse.pos.X;
@@ -545,6 +572,7 @@ void handlePlaybackMouseEvent(SessionPort& session,
   const auto& controlHit = interactionHit.control;
   const auto& contextMenuItemHit = interactionHit.contextMenuItem;
   if (rightPressed && mouse.kind == MouseEventKind::Press &&
+      !interactionState.mediaTaskCancellationPrompt &&
       editPrompt == playback_video_edit::Prompt::None) {
     playback_session::ContextMenuInput request;
     request.kind = playback_session::ContextMenuInputKind::Open;
@@ -596,6 +624,26 @@ void handlePlaybackMouseEvent(SessionPort& session,
       dispatchContextMenuInput(session, request);
       return;
     }
+    return;
+  }
+  const playback_session_pointer::Interaction controlPointer =
+      seekState.overlayControlPointer.handle(mouse, previewSurface,
+                                             controlHit);
+  if (controlPointer.activated) {
+    if (executeOverlayControl(session, seekState,
+                              *controlPointer.activated)) {
+      updateOverlayControlHover(session, -1);
+      if (session.snapshot().stopRequested) return;
+      triggerOverlay(session);
+      session.dispatch(CommandAction::RequestRedraw);
+    }
+    return;
+  }
+  if (controlPointer.captured ||
+      interactionState.mediaTaskCancellationPrompt) {
+    updateOverlayControlHover(
+        session,
+        controlHit ? playback_overlay::overlayControlToken(*controlHit) : -1);
     return;
   }
   const bool interactiveHit = progressHit || boundaryHit || controlHit ||
@@ -672,18 +720,6 @@ void handlePlaybackMouseEvent(SessionPort& session,
     triggerOverlay(session);
   }
 
-  if (leftPressed && mouse.kind == MouseEventKind::Press && controlHit) {
-    if (executeOverlayControl(session, seekState, *controlHit)) {
-      updateOverlayControlHover(session, -1);
-      if (session.snapshot().stopRequested) {
-        return;
-      }
-      triggerOverlay(session);
-      session.dispatch(CommandAction::RequestRedraw);
-    }
-    return;
-  }
-
   if (leftPressed && windowEvent) {
     return;
   }
@@ -695,6 +731,7 @@ void handlePlaybackPointerLeave(SessionPort& session,
       session, seekState,
       playback_video_timeline_preview::PresentationSurface::VideoWindow);
   seekState.progressDragSurface.reset();
+  seekState.overlayControlPointer.reset();
   commitQueuedSeek(session, seekState);
   session.dispatch(ClearTimelinePreview{
       playback_video_timeline_preview::PresentationSurface::VideoWindow});

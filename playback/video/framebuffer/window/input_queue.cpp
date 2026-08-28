@@ -13,11 +13,19 @@ bool shouldCoalesceMouseMove(const InputEvent& queuedTail,
          queuedTail.mouse.buttons == incoming.mouse.buttons;
 }
 
+bool shouldCoalesceResize(const InputEvent& queuedTail,
+                          const InputEvent& incoming) {
+  return queuedTail.type == InputEvent::Type::Resize &&
+         incoming.type == InputEvent::Type::Resize;
+}
+
 }  // namespace
 
 void WindowInputQueue::push(InputEvent ev) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!queue_.empty() && shouldCoalesceMouseMove(queue_.back(), ev)) {
+  if (!queue_.empty() &&
+      (shouldCoalesceMouseMove(queue_.back(), ev) ||
+       shouldCoalesceResize(queue_.back(), ev))) {
     queue_.back() = std::move(ev);
     return;
   }

@@ -17,6 +17,7 @@
 #include "input_queue.h"
 
 namespace windows_file_drop {
+class AcceptanceState;
 class DropTargetRegistration;
 }
 
@@ -38,9 +39,11 @@ class WindowInputController {
   void endWindowThread();
   bool enableFileDrop(HWND hwnd);
   void disableFileDrop();
+  void setFileDropAcceptanceEnabled(bool enabled);
 
  private:
   WindowInputQueue events_;
   std::optional<windows_file_drop::OleApartment> fileDropApartment_;
+  std::shared_ptr<windows_file_drop::AcceptanceState> fileDropAcceptance_;
   std::unique_ptr<windows_file_drop::DropTargetRegistration> fileDropTarget_;
 };

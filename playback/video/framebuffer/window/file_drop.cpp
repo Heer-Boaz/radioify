@@ -7,3 +7,7 @@ bool VideoWindow::EnableFileDrop() {
 void VideoWindow::DisableFileDrop() {
   m_input.disableFileDrop();
 }
+
+void VideoWindow::SetFileDropAcceptanceEnabled(bool enabled) {
+  m_input.setFileDropAcceptanceEnabled(enabled);
+}

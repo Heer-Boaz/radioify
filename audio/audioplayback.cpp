@@ -352,7 +352,8 @@ static bool audioAnalyzeFileToMelodyFile(
     const AudioPlaybackState& audio, const std::filesystem::path& file,
     int trackIndex, const std::filesystem::path& outputFile,
     const std::function<void(float)>& progressCallback,
-    const std::function<bool()>& cancellationRequested, std::string* error);
+    const std::function<bool()>& cancellationRequested, std::string* error,
+    const std::function<bool()>& outputCommitStarted);
 static bool audioCanAnalyzeFileToMelodyFile(
     const std::filesystem::path& file);
 static std::string audioGetWarning(const AudioPlaybackState& audio);
@@ -538,10 +539,12 @@ bool AudioPlaybackRuntime::analyzeFileToMelodyFile(
     const std::filesystem::path& outputFile,
     const std::function<void(float)>& progressCallback,
     const std::function<bool()>& cancellationRequested,
-    std::string* error) const {
+    std::string* error,
+    const std::function<bool()>& outputCommitStarted) const {
   return audioAnalyzeFileToMelodyFile(*state_, file, trackIndex, outputFile,
                                       progressCallback,
-                                      cancellationRequested, error);
+                                      cancellationRequested, error,
+                                      outputCommitStarted);
 }
 
 bool AudioPlaybackRuntime::canAnalyzeFile(
@@ -915,7 +918,8 @@ static bool audioAnalyzeFileToMelodyFile(
     const AudioPlaybackState& audio, const std::filesystem::path& file,
     int trackIndex, const std::filesystem::path& outputFile,
     const std::function<void(float)>& progressCallback,
-    const std::function<bool()>& cancellationRequested, std::string* error) {
+    const std::function<bool()>& cancellationRequested, std::string* error,
+    const std::function<bool()>& outputCommitStarted) {
   if (file.empty() || !std::filesystem::exists(file)) {
     if (error) *error = "Input file not found.";
     return false;
@@ -927,7 +931,7 @@ static bool audioAnalyzeFileToMelodyFile(
       file, trackIndex, analysisSampleRate, analysisChannels, 0,
       audio.kssOptions, audio.nsfOptions, audio.vgmOptions,
       audio.vgmDeviceOverrides, outputFile, progressCallback,
-      cancellationRequested, error);
+      cancellationRequested, error, outputCommitStarted);
 }
 
 static bool audioCanAnalyzeFileToMelodyFile(

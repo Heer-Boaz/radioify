@@ -8,6 +8,7 @@ namespace playback_video_transcript {
 
 using TextExportProgress = std::function<void(float, std::string)>;
 using TextExportCancellationRequested = std::function<bool()>;
+using TextExportCommitStarted = std::function<bool()>;
 
 std::filesystem::path uniqueTextExportPathForVideo(
     const std::filesystem::path& videoPath);
@@ -20,6 +21,7 @@ bool exportTranscriptText(
     const std::filesystem::path& outputPath,
     const TextExportProgress& reportProgress,
     const TextExportCancellationRequested& cancellationRequested,
-    std::string* error);
+    std::string* error,
+    const TextExportCommitStarted& outputCommitStarted = {});
 
 }  // namespace playback_video_transcript

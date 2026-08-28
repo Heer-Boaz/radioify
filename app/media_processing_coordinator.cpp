@@ -74,8 +74,10 @@ class WorkerTask {
  public:
   using ProgressReporter = Coordinator::ProgressReporter;
   using CancellationRequested = Coordinator::CancellationRequested;
+  using CommitStarted = std::function<bool(std::string)>;
   using Operation = std::function<TaskCompletion(
-      const ProgressReporter&, const CancellationRequested&)>;
+      const ProgressReporter&, const CancellationRequested&,
+      const CommitStarted&)>;
 
   explicit WorkerTask(WakeNotifier ownerWake = {})
       : ownerWake_(std::move(ownerWake)) {}
@@ -88,6 +90,7 @@ class WorkerTask {
       std::lock_guard<std::mutex> lock(mutex_);
       if (!operation || activity_ || completion_) return false;
       cancelRequested_.store(false, std::memory_order_relaxed);
+      commitStarted_ = false;
       if (activity.progress) {
         activity.progress = std::clamp(*activity.progress, 0.0f, 1.0f);
       }
@@ -173,7 +176,6 @@ class WorkerTask {
 
   void cancelAndJoin() {
     requestCancel();
-    cancelRequested_.store(true, std::memory_order_release);
     std::thread worker;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -203,6 +205,21 @@ class WorkerTask {
     notifyChanged();
   }
 
+  bool beginCommit(std::string phase) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!activity_ || activity_->cancelling ||
+          cancelRequested_.load(std::memory_order_acquire)) {
+        return false;
+      }
+      activity_->cancellable = false;
+      commitStarted_ = true;
+      if (!phase.empty()) activity_->phase = std::move(phase);
+    }
+    notifyChanged();
+    return true;
+  }
+
   void run(const Operation& operation) {
     TaskCompletion completion;
     try {
@@ -212,6 +229,9 @@ class WorkerTask {
           },
           [this]() {
             return cancelRequested_.load(std::memory_order_acquire);
+          },
+          [this](std::string phase) {
+            return beginCommit(std::move(phase));
           });
     } catch (const std::exception& exception) {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -232,6 +252,18 @@ class WorkerTask {
       }
       completion.outcome = TaskOutcome::Failed;
       completion.detail = "Media processing failed unexpectedly.";
+    }
+
+    bool commitWasStarted = false;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      commitWasStarted = commitStarted_;
+    }
+    if (completion.succeeded() && !commitWasStarted) {
+      completion.outcome = TaskOutcome::Failed;
+      completion.detail =
+          "The media backend completed without publishing its output "
+          "through the commit barrier.";
     }
 
     if (cancelRequested_.load(std::memory_order_acquire) &&
@@ -266,6 +298,7 @@ class WorkerTask {
   std::thread worker_;
   std::atomic<bool> changed_{false};
   std::atomic<bool> cancelRequested_{false};
+  bool commitStarted_ = false;
   WakeNotifier ownerWake_;
   std::optional<TaskActivity> activity_;
   std::optional<TaskCompletion> completion_;
@@ -276,6 +309,7 @@ class WorkerTask {
 std::optional<playback_media_processing::Completion> completionForPlayback(
     const TaskCompletion& completion) {
   playback_media_processing::Completion projected;
+  projected.taskId = completion.id;
   switch (completion.kind) {
     case TaskKind::MelodyAnalysis:
     case TaskKind::LoopSplit:
@@ -515,11 +549,17 @@ RequestResult Coordinator::tryStartMelodyAnalysis(
       [operation, sourceFile, trackIndex,
        outputFile](const WorkerTask::ProgressReporter& reportProgress,
                    const WorkerTask::CancellationRequested&
-                       cancellationRequested) {
+                       cancellationRequested,
+                   const WorkerTask::CommitStarted& beginCommit) {
         std::string error;
         const bool succeeded = operation(sourceFile, trackIndex, outputFile,
                                          reportProgress,
-                                         cancellationRequested, &error);
+                                         cancellationRequested,
+                                         [&]() {
+                                           return beginCommit(
+                                               "Publishing melody files");
+                                         },
+                                         &error);
         TaskCompletion completion;
         completion.kind = TaskKind::MelodyAnalysis;
         completion.outcome = succeeded ? TaskOutcome::Succeeded
@@ -578,12 +618,18 @@ RequestResult Coordinator::tryStartLoopSplit(
       [operation, sourceFile, stingerOutput, loopOutput,
        config](const WorkerTask::ProgressReporter& reportProgress,
                const WorkerTask::CancellationRequested&
-                   cancellationRequested) {
+                   cancellationRequested,
+               const WorkerTask::CommitStarted& beginCommit) {
         LoopSplitResult result;
         std::string error;
         const bool succeeded = operation(sourceFile, stingerOutput, loopOutput,
                                          config, &result, reportProgress,
-                                         cancellationRequested, &error);
+                                         cancellationRequested,
+                                         [&]() {
+                                           return beginCommit(
+                                               "Publishing loop files");
+                                         },
+                                         &error);
         TaskCompletion completion;
         completion.kind = TaskKind::LoopSplit;
         completion.outcome = succeeded ? TaskOutcome::Succeeded
@@ -636,11 +682,17 @@ RequestResult Coordinator::tryStartFileExport(
       [kind, operation, sourceFile, outputFile,
        fallbackError](const WorkerTask::ProgressReporter& reportProgress,
                       const WorkerTask::CancellationRequested&
-                          cancellationRequested) {
+                          cancellationRequested,
+                      const WorkerTask::CommitStarted& beginCommit) {
         std::string error;
         const bool succeeded = operation(sourceFile, outputFile,
                                          reportProgress,
-                                         cancellationRequested, &error);
+                                         cancellationRequested,
+                                         [&]() {
+                                           return beginCommit(
+                                               "Publishing output");
+                                         },
+                                         &error);
         TaskCompletion completion;
         completion.kind = kind;
         completion.outcome = succeeded ? TaskOutcome::Succeeded
@@ -674,6 +726,8 @@ playback_media_processing::SourceState Coordinator::sourceStateFor(
            .empty();
   if (currentActivity &&
       samePath(currentActivity->sourceFile, sourceFile)) {
+    state.activeTaskId = currentActivity->id;
+    state.activeTaskCancellable = currentActivity->cancellable;
     state.subtitleGenerationRunning =
         currentActivity->kind == TaskKind::SubtitleGeneration;
     state.audioSeparationRunning =

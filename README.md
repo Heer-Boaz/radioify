@@ -192,8 +192,15 @@ to the browser.
   `Generate subtitles...` to create its managed `video.transcript.srt`
   sidecar. The active player picks it up as soon as generation completes.
   `Regenerate subtitles...` atomically replaces that managed result instead of
-  accumulating competing subtitle tracks. F8 cancels the active generation
-  task from either the browser or player.
+  accumulating competing subtitle tracks. While generation is running, use
+  the task panel's `Cancel` button or choose `Cancel subtitle generation` from
+  the video's context menu; Radioify asks for confirmation before stopping the
+  task.
+- Long-running media jobs stay asynchronous and modeless: browsing and
+  playback remain available while the task panel shows progress. `Tab` can
+  focus its `Cancel` and `Hide` buttons; hiding the panel leaves a footer
+  indicator that can restore it. Task failures open a separate detailed dialog
+  with `Retry` when that operation supports retrying.
 - Enter: open folder / play file
 - Backspace: up
 - Arrows: move selection

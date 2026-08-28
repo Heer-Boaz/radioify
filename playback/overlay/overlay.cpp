@@ -66,7 +66,22 @@ std::wstring overlayUtf8ToWide(const std::string& text) {
             out.end());
   return out;
 }
+
 }  // namespace
+
+OverlayCellLayout layoutMediaTaskCancellationDialogCells(
+    const MediaTaskCancellationDialog& prompt, int width,
+    int height, int hoverControlToken) {
+  OverlayDialogLayoutInput input;
+  input.width = width;
+  input.height = height;
+  input.title = prompt.title;
+  input.text.push_back("Progress on " + prompt.sourceName +
+                       " will be lost.");
+  input.buttons = buildMediaTaskCancellationDialogButtons(
+      prompt, hoverControlToken);
+  return layoutOverlayDialogCells(input);
+}
 
 PlaybackOverlayState buildPlaybackOverlayState(
     const PlaybackOverlayInputs& inputs) {
@@ -105,7 +120,9 @@ PlaybackOverlayState buildPlaybackOverlayState(
   state.videoEdit = inputs.videoEdit;
   state.videoEditExport = inputs.videoEditExport;
   state.videoEditPrompt = inputs.videoEditPrompt;
+  state.mediaTaskCancellationPrompt = inputs.mediaTaskCancellationPrompt;
   state.chromeVisible = state.overlayVisible || !state.debugLines.empty() ||
+                        state.mediaTaskCancellationPrompt.has_value() ||
                         playback_video_edit::needsOverlayPresentation(
                             state.videoEdit, state.videoEditExport,
                             state.videoEditPrompt);
@@ -274,6 +291,11 @@ std::string buildSubtitleText(const SubtitleManager& subtitleManager,
 OverlayCellLayout layoutPlaybackOverlayCells(
     const PlaybackOverlayState& state, int width, int height,
     int hoverControlToken) {
+  if (state.mediaTaskCancellationPrompt) {
+    return layoutMediaTaskCancellationDialogCells(
+        *state.mediaTaskCancellationPrompt, width, height,
+        hoverControlToken);
+  }
   std::vector<OverlayControlSpec> specs =
       buildOverlayControlSpecs(state, hoverControlToken);
 
@@ -285,26 +307,40 @@ OverlayCellLayout layoutPlaybackOverlayCells(
                                  buildWindowOverlayTopLine(state));
   input.suffix = buildWindowOverlayProgressSuffix(state);
   input.reservedRowsAboveProgress =
-      playback_video_edit::needsOverlayPresentation(
+      (state.mediaTaskCancellationPrompt ||
+       playback_video_edit::needsOverlayPresentation(
           state.videoEdit, state.videoEditExport, state.videoEditPrompt)
-          ? 1
-          : 0;
+           ? 1
+           : 0);
   input.controls = buildOverlayCellControlInputs(specs, hoverControlToken);
   return layoutOverlayCells(input);
 }
 
 OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
                                            int height) {
+  if (ui.mediaTaskCancellationPrompt) {
+    int hoverControlToken = -1;
+    for (const WindowUiState::ControlButton& control : ui.controlButtons) {
+      if (control.hovered) {
+        hoverControlToken = overlayControlToken(control.id);
+        break;
+      }
+    }
+    return layoutMediaTaskCancellationDialogCells(
+        *ui.mediaTaskCancellationPrompt, width, height,
+        hoverControlToken);
+  }
   OverlayCellLayoutInput input;
   input.width = width;
   input.height = height;
   input.title = overlayTitleWithDebugLines(ui.debugLines, ui.title);
   input.suffix = ui.progressSuffix;
   input.reservedRowsAboveProgress =
-      playback_video_edit::needsOverlayPresentation(
+      (ui.mediaTaskCancellationPrompt ||
+       playback_video_edit::needsOverlayPresentation(
           ui.videoEdit, ui.videoEditExport, ui.videoEditPrompt)
-          ? 1
-          : 0;
+           ? 1
+           : 0);
   input.controls.reserve(ui.controlButtons.size());
   for (size_t i = 0; i < ui.controlButtons.size(); ++i) {
     OverlayCellControlInput control;
@@ -366,6 +402,7 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
   ui.videoEdit = state.videoEdit;
   ui.videoEditExport = state.videoEditExport;
   ui.videoEditPrompt = state.videoEditPrompt;
+  ui.mediaTaskCancellationPrompt = state.mediaTaskCancellationPrompt;
   return ui;
 }
 
@@ -523,9 +560,12 @@ void renderVideoEditTimelineToTarget(
     const OverlayRenderStyles& styles, double progress,
     const playback_video_edit::EditSnapshot& edit,
     const playback_video_edit::ExportProgress* editExport,
-    playback_video_edit::Prompt editPrompt) {
+    playback_video_edit::Prompt editPrompt,
+    const std::optional<MediaTaskCancellationDialog>&
+        mediaTaskCancellationPrompt) {
   if ((!edit.active && editPrompt == playback_video_edit::Prompt::None &&
-       !(editExport && editExport->visible())) ||
+       !(editExport && editExport->visible()) &&
+       !mediaTaskCancellationPrompt) ||
       layout.progressBarY < 0 || layout.progressBarWidth <= 0 ||
       !target.rowVisible(layout.progressBarY)) {
     return;
@@ -627,8 +667,14 @@ void renderVideoEditTimelineToTarget(
 
   const int statusY = layout.progressBarY - 1;
   if (!target.rowVisible(statusY)) return;
-  const std::string status =
-      utf8TakeDisplayWidth(model.status, target.width());
+  std::string status = model.status;
+  if (mediaTaskCancellationPrompt) {
+    status = mediaTaskCancellationPrompt->title;
+    if (!mediaTaskCancellationPrompt->sourceName.empty()) {
+      status += "  " + mediaTaskCancellationPrompt->sourceName;
+    }
+  }
+  status = utf8TakeDisplayWidth(status, target.width());
   target.writeText(0, statusY, status, styles.accentStyle);
 }
 
@@ -672,14 +718,56 @@ void renderContextMenuToTarget(Target& target,
 }
 
 template <typename Target>
+void renderDialogToTarget(Target& target,
+                          const OverlayCellDialogLayout& dialog,
+                          const OverlayRenderStyles& styles) {
+  if (!target.isDrawable() || !dialog.valid()) return;
+
+  const int left = dialog.x;
+  const int right = dialog.x + dialog.width - 1;
+  const int top = dialog.y;
+  const int bottom = dialog.y + dialog.height - 1;
+  for (int y = top; y <= bottom; ++y) {
+    for (int x = left; x <= right; ++x) {
+      target.writeChar(x, y, L' ', styles.baseStyle);
+    }
+  }
+  for (int x = left + 1; x < right; ++x) {
+    target.writeChar(x, top, L'-', styles.accentStyle);
+    target.writeChar(x, bottom, L'-', styles.accentStyle);
+  }
+  for (int y = top + 1; y < bottom; ++y) {
+    target.writeChar(left, y, L'|', styles.accentStyle);
+    target.writeChar(right, y, L'|', styles.accentStyle);
+  }
+  target.writeChar(left, top, L'+', styles.accentStyle);
+  target.writeChar(right, top, L'+', styles.accentStyle);
+  target.writeChar(left, bottom, L'+', styles.accentStyle);
+  target.writeChar(right, bottom, L'+', styles.accentStyle);
+
+  target.writeText(dialog.titleX, dialog.titleY, dialog.title,
+                   styles.accentStyle);
+  for (const OverlayCellTextLine& line : dialog.contentLines) {
+    target.writeText(line.x, line.y, line.text, styles.baseStyle);
+  }
+}
+
+template <typename Target>
 void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
                            const OverlayRenderStyles& styles,
                            double progress,
                            const playback_video_edit::EditSnapshot* videoEdit,
                            const playback_video_edit::ExportProgress*
                                videoEditExport,
-                           playback_video_edit::Prompt videoEditPrompt) {
+                           playback_video_edit::Prompt videoEditPrompt,
+                           const std::optional<MediaTaskCancellationDialog>&
+                               mediaTaskCancellationPrompt) {
   if (!target.isDrawable()) return;
+
+  const bool modalDialog = layout.dialog && layout.dialog->valid();
+  if (modalDialog) {
+    renderDialogToTarget(target, *layout.dialog, styles);
+  }
 
   for (const auto& item : layout.controls) {
     Style style = item.enabled
@@ -692,6 +780,8 @@ void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
     }
     target.writeControlText(item.text, item.y, item.x, item.width, style);
   }
+
+  if (modalDialog) return;
 
   for (const auto& titleLine : layout.titleLines) {
     target.writeText(titleLine.x, titleLine.y, titleLine.text,
@@ -719,7 +809,8 @@ void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
   if (videoEdit) {
     renderVideoEditTimelineToTarget(target, layout, styles, progress,
                                     *videoEdit, videoEditExport,
-                                    videoEditPrompt);
+                                    videoEditPrompt,
+                                    mediaTaskCancellationPrompt);
   }
 
   target.writeText(layout.suffixX, layout.suffixY, layout.suffixText,
@@ -779,11 +870,14 @@ void renderOverlayToScreen(ConsoleScreen& screen,
                            const playback_video_edit::ExportProgress*
                                videoEditExport,
                            playback_video_edit::Prompt videoEditPrompt,
+                           const std::optional<MediaTaskCancellationDialog>&
+                               mediaTaskCancellationPrompt,
                            int minY,
                            int maxY) {
   ScreenOverlayTarget target(screen, minY, maxY);
   renderOverlayToTarget(target, layout, styles, progress, videoEdit,
-                        videoEditExport, videoEditPrompt);
+                        videoEditExport, videoEditPrompt,
+                        mediaTaskCancellationPrompt);
 }
 
 void renderTransientMessageToScreen(ConsoleScreen& screen,
@@ -828,7 +922,8 @@ bool renderWindowUiToGpuTextGrid(const WindowUiState& ui,
   if (ui.chromeVisible) {
     renderOverlayToTarget(target, overlayLayout, styles, ui.progress,
                           &ui.videoEdit, &ui.videoEditExport,
-                          ui.videoEditPrompt);
+                          ui.videoEditPrompt,
+                          ui.mediaTaskCancellationPrompt);
     rendered = true;
   }
   if (ui.timelinePreview.hoverActive) {

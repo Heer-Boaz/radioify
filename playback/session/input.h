@@ -10,6 +10,7 @@
 #include "input_event.h"
 #include "playback/session/input_command.h"
 #include "playback/session/input_transport.h"
+#include "playback/session/overlay_control_pointer.h"
 #include "state.h"
 
 namespace playback_session_input {
@@ -44,6 +45,7 @@ struct PlaybackSeekGestureState {
   std::optional<VideoEditBoundaryDrag> videoEditBoundaryDrag;
   std::optional<PendingVideoEditBoundaryCommit>
       pendingVideoEditBoundaryCommit;
+  playback_session_pointer::State overlayControlPointer;
 };
 
 enum class VideoEditBoundaryCommitState : uint8_t {

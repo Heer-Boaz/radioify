@@ -4,7 +4,9 @@
 
 #include <utility>
 
-WindowInputController::WindowInputController() = default;
+WindowInputController::WindowInputController()
+    : fileDropAcceptance_(
+          std::make_shared<windows_file_drop::AcceptanceState>()) {}
 
 WindowInputController::~WindowInputController() {
   endWindowThread();
@@ -55,7 +57,7 @@ bool WindowInputController::enableFileDrop(HWND hwnd) {
         ev.type = InputEvent::Type::FileDrop;
         ev.fileDrop = std::move(drop);
         push(std::move(ev));
-      })) {
+      }, fileDropAcceptance_)) {
     return false;
   }
 
@@ -65,4 +67,15 @@ bool WindowInputController::enableFileDrop(HWND hwnd) {
 
 void WindowInputController::disableFileDrop() {
   fileDropTarget_.reset();
+}
+
+void WindowInputController::setFileDropAcceptanceEnabled(bool enabled) {
+  if (!fileDropAcceptance_ ||
+      !fileDropAcceptance_->setEnabled(enabled)) {
+    return;
+  }
+  InputEvent ev{};
+  ev.type = InputEvent::Type::FileDrop;
+  ev.fileDrop.phase = FileDropEventPhase::Cancel;
+  push(std::move(ev));
 }

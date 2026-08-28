@@ -103,16 +103,23 @@ class Coordinator final : public playback_media_processing::Service {
 
   using ProgressReporter = std::function<void(float, std::string)>;
   using CancellationRequested = std::function<bool()>;
+  // The backend must claim this barrier immediately before publishing staged
+  // output. It returns false when cancellation won the race; once it returns
+  // true, cancellation is no longer advertised or accepted.
+  using CommitStarted = std::function<bool()>;
   using MelodyOperation = std::function<bool(
       const std::filesystem::path&, int, const std::filesystem::path&,
-      const ProgressReporter&, const CancellationRequested&, std::string*)>;
+      const ProgressReporter&, const CancellationRequested&,
+      const CommitStarted&, std::string*)>;
   using LoopSplitOperation = std::function<bool(
       const std::filesystem::path&, const std::filesystem::path&,
       const std::filesystem::path&, const LoopSplitConfig&, LoopSplitResult*,
-      const ProgressReporter&, const CancellationRequested&, std::string*)>;
+      const ProgressReporter&, const CancellationRequested&,
+      const CommitStarted&, std::string*)>;
   using FileExportOperation = std::function<bool(
       const std::filesystem::path&, const std::filesystem::path&,
-      const ProgressReporter&, const CancellationRequested&, std::string*)>;
+      const ProgressReporter&, const CancellationRequested&,
+      const CommitStarted&, std::string*)>;
 
   struct Operations {
     MelodyOperation analyzeMelody;

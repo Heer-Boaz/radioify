@@ -34,6 +34,14 @@ InputEvent mouseEvent(MouseEventKind kind, int x, int y) {
   return event;
 }
 
+InputEvent resizeEvent(int width, int height) {
+  InputEvent event;
+  event.type = InputEvent::Type::Resize;
+  event.size = COORD{static_cast<SHORT>(width),
+                     static_cast<SHORT>(height)};
+  return event;
+}
+
 BrowserEntry mediaEntry(const char* name) {
   return BrowserEntry(name, std::filesystem::path(name),
                       browser_entry::OpenFile{});
@@ -59,10 +67,12 @@ int main() {
       shell_command_catalog::build({});
 
   shell_overlay_stack::Model overlays;
-  ok &= expect(!overlays.active() && overlays.activeLayer() == Layer::None,
+  ok &= expect(!overlays.active() && !overlays.inputModal() &&
+                   overlays.activeLayer() == Layer::None,
                "the overlay stack must start empty");
 
   ok &= expect(overlays.toggleCommandPalette() &&
+                   !overlays.inputModal() &&
                    overlays.activeLayer() == Layer::CommandPalette,
                "the command palette must become the sole active layer");
   ok &=
@@ -113,6 +123,8 @@ int main() {
       overlays.openDialog(std::move(failureDialog));
   ok &= expect(failureDialogId && overlays.activeLayer() == Layer::Dialog,
                "a dialog must replace every less important transient layer");
+  ok &= expect(overlays.inputModal(),
+               "only a dialog must identify itself as input-modal");
   interaction = overlays.handle(keyEvent(VK_F1), bounds, catalog);
   ok &= expect(
       interaction.consumed && overlays.activeLayer() == Layer::Dialog &&
@@ -134,12 +146,18 @@ int main() {
   safeDefaultDialog.initiallySelectedButton = 3;
   const tui_dialog::DialogId safeDefaultDialogId =
       overlays.openDialog(std::move(safeDefaultDialog));
+  interaction = overlays.handle(resizeEvent(32, 8), {32, 8, 1}, catalog);
+  ok &= expect(interaction.consumed && overlays.inputModal() &&
+                   overlays.activeLayer() == Layer::Dialog,
+               "a resize must be routed to an active dialog using the new "
+               "host bounds without dismissing a renderable decision");
   interaction = overlays.handle(keyEvent(VK_RETURN), bounds, catalog);
   ok &=
       expect(interaction.dialogActivation &&
                  interaction.dialogActivation->dialog == safeDefaultDialogId &&
                  interaction.dialogActivation->button == 3 &&
-                 overlays.activeLayer() == Layer::None,
+                 overlays.activeLayer() == Layer::None &&
+                 !overlays.inputModal(),
              "a dialog must honor an explicitly selected safe default");
 
   tui_dialog::Content keyboardDialog;
@@ -183,6 +201,27 @@ int main() {
                "a dialog button must activate on release over the armed "
                "button");
 
+  tui_dialog::Content resizePointerDialog;
+  resizePointerDialog.title = "Resize pointer capture";
+  resizePointerDialog.buttons = {{10, "Confirm"}, {11, "Cancel"}};
+  tui_dialog::Model resizePointerModel;
+  resizePointerModel.open(std::move(resizePointerDialog));
+  const tui_dialog::Layout resizePointerLayout =
+      resizePointerModel.layout(pointerBounds);
+  const tui_dialog::ButtonBounds& resizeConfirm =
+      resizePointerLayout.buttons.front();
+  pointerInteraction = resizePointerModel.handle(
+      mouseEvent(MouseEventKind::Press, resizeConfirm.x, resizeConfirm.y),
+      pointerBounds);
+  pointerInteraction = resizePointerModel.handle(
+      resizeEvent(pointerBounds.width, pointerBounds.height), pointerBounds);
+  pointerInteraction = resizePointerModel.handle(
+      mouseEvent(MouseEventKind::Release, resizeConfirm.x, resizeConfirm.y),
+      pointerBounds);
+  ok &= expect(!pointerInteraction.activation && resizePointerModel.active(),
+               "resizing between press and release must cancel dialog "
+               "activation");
+
   tui_dialog::Content responsiveDialog;
   responsiveDialog.title = "Cancel separation?";
   responsiveDialog.buttons = {{8, "Cancel task", "Stop"},
@@ -213,11 +252,19 @@ int main() {
                "actions");
   const tui_dialog::Interaction impossibleDialog =
       responsiveModel.handle(keyEvent('A'), {6, 3, 0});
-  ok &= expect(impossibleDialog.consumed && impossibleDialog.changed &&
-                   impossibleDialog.dismissedDialog &&
-                   !responsiveModel.active(),
-               "an unrenderable dialog must dismiss without allowing its "
-               "triggering event to click through");
+  ok &= expect(impossibleDialog.consumed && !impossibleDialog.changed &&
+                   !impossibleDialog.dismissedDialog &&
+                   responsiveModel.active(),
+               "an unrenderable dialog must preserve the pending decision "
+               "without allowing input to click through");
+  const tui_dialog::Interaction restoredDialog =
+      responsiveModel.handle(resizeEvent(32, 8), {32, 8, 0});
+  ok &= expect(restoredDialog.consumed && restoredDialog.changed &&
+                   responsiveModel.active() &&
+                   responsiveModel.layout({32, 8, 0}).valid,
+               "a preserved dialog must reappear after the surface recovers");
+  ok &= expect(responsiveModel.dismiss(),
+               "the restored test dialog must dismiss explicitly");
 
   tui_dialog::Content replacementDialog;
   replacementDialog.title = "Stable dialog identity";

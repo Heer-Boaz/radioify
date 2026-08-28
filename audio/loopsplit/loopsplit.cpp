@@ -4,11 +4,13 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "ffmpegaudio.h"
+#include "core/file_output.h"
 #include "gmeaudio.h"
 #include "gsfaudio.h"
 #include "kssaudio.h"
@@ -768,7 +770,9 @@ bool splitAudioIntoLoopFiles(const std::filesystem::path& inputFile,
                             LoopSplitResult* result,
                             const LoopSplitProgressReporter& reporter,
                             const LoopSplitCancellationRequested& cancellation,
-                            std::string* error) {
+                            std::string* error,
+                            const LoopSplitOutputCommitStarted&
+                                outputCommitStarted) {
   if (result) {
     *result = LoopSplitResult{};
   }
@@ -885,15 +889,36 @@ bool splitAudioIntoLoopFiles(const std::filesystem::path& inputFile,
     result->hasStinger = false;
   }
 
-  // Output publication is the commit phase. Once it begins, finish both files
-  // so a late cancellation cannot leave only half of the requested pair.
   if (stopIfCancelled(cancellation, error)) return false;
+  std::vector<file_output::TransactionDestination> destinations;
+  if (result->hasStinger && !stingerOutput.empty()) {
+    destinations.push_back(
+        {stingerOutput, file_output::PublishMode::ReplaceExisting});
+  }
+  destinations.push_back(
+      {loopOutput, file_output::PublishMode::ReplaceExisting});
+  std::optional<file_output::TransactionGroup> outputs =
+      file_output::TransactionGroup::begin(std::move(destinations), error);
+  if (!outputs) return false;
+  const std::filesystem::path* loopTemporary =
+      outputs->temporaryPathFor(loopOutput);
+  const std::filesystem::path* stingerTemporary =
+      result->hasStinger && !stingerOutput.empty()
+          ? outputs->temporaryPathFor(stingerOutput)
+          : nullptr;
+  if (!loopTemporary ||
+      (result->hasStinger && !stingerOutput.empty() && !stingerTemporary)) {
+    if (error) *error = "Could not resolve staged loop outputs.";
+    return false;
+  }
   if (result->hasStinger && !stingerOutput.empty()) {
     reportProgress(reporter, 0.88f, "Writing the stinger");
-    if (!writeSegment(stingerOutput, interleaved, config.channels, sampleRate,
-                      0, result->loopStartFrame, error)) {
+    if (!writeSegment(*stingerTemporary, interleaved, config.channels,
+                      sampleRate, 0,
+                      result->loopStartFrame, error)) {
       return false;
     }
+    if (stopIfCancelled(cancellation, error)) return false;
   }
 
   if (result->loopFrameCount == 0) {
@@ -902,10 +927,17 @@ bool splitAudioIntoLoopFiles(const std::filesystem::path& inputFile,
   }
   reportProgress(reporter, result->hasStinger ? 0.94f : 0.88f,
                  "Writing the main loop");
-  if (!writeSegment(loopOutput, interleaved, config.channels, sampleRate,
-                   result->loopStartFrame, result->loopFrameCount, error)) {
+  if (!writeSegment(*loopTemporary, interleaved, config.channels, sampleRate,
+                    result->loopStartFrame,
+                    result->loopFrameCount, error)) {
     return false;
   }
+  if (stopIfCancelled(cancellation, error)) return false;
+  if (outputCommitStarted && !outputCommitStarted()) {
+    if (error) *error = "Loop split cancelled before publication.";
+    return false;
+  }
+  if (!outputs->publish(error)) return false;
   reportProgress(reporter, 1.0f, "Loop files ready");
   return true;
 }

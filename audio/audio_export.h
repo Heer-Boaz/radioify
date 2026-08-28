@@ -8,6 +8,7 @@ namespace audio_export {
 
 using ProgressCallback = std::function<void(float, std::string)>;
 using CancellationRequested = std::function<bool()>;
+using OutputCommitStarted = std::function<bool()>;
 
 bool supportsSource(const std::filesystem::path& sourceFile);
 std::filesystem::path uniqueOutputPathFor(
@@ -20,6 +21,7 @@ bool exportToFlac(const std::filesystem::path& sourceFile,
                   const std::filesystem::path& outputFile,
                   const ProgressCallback& reportProgress,
                   const CancellationRequested& cancellationRequested,
-                  std::string* error);
+                  std::string* error,
+                  const OutputCommitStarted& outputCommitStarted = {});
 
 }  // namespace audio_export

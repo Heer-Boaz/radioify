@@ -9,6 +9,19 @@
 
 namespace playback_session {
 
+playback_overlay::MediaTaskCancellationDialog
+projectMediaTaskCancellationDialog(
+    const MediaTaskCancellationPrompt& prompt) {
+  playback_overlay::MediaTaskCancellationDialog dialog;
+  dialog.title = mediaTaskCancellationTitle(prompt.request.operation);
+  dialog.sourceName = mediaTaskCancellationSourceName(prompt);
+  dialog.selected =
+      prompt.selected == MediaTaskCancellationChoice::CancelTask
+          ? playback_overlay::MediaTaskCancellationSelection::CancelTask
+          : playback_overlay::MediaTaskCancellationSelection::KeepRunning;
+  return dialog;
+}
+
 playback_screen_renderer::PlaybackMediaPresentation capturePlaybackMedia(
     const Player& player, const AudioPlaybackSnapshot& audio,
     PlayerTimelineSnapshot timeline, std::string windowTitle, bool audioOk,
@@ -103,6 +116,10 @@ playback_overlay::PlaybackOverlayState projectPlaybackOverlay(
   }
   inputs.videoEditExport = std::move(projection.videoEditExport);
   inputs.videoEditPrompt = projection.videoEditPrompt;
+  if (projection.mediaTaskCancellationPrompt) {
+    inputs.mediaTaskCancellationPrompt = projectMediaTaskCancellationDialog(
+        *projection.mediaTaskCancellationPrompt);
+  }
   return playback_overlay::buildPlaybackOverlayState(inputs);
 }
 

@@ -21,6 +21,7 @@
 #include "playback/video/framebuffer/frame_snapshot.h"
 #include "playback/overlay/context_menu.h"
 #include "playback/overlay/interaction.h"
+#include "playback/overlay/media_task_cancellation_presentation.h"
 #include "playback/video/gpu/videoprocessor.h"
 #include "playback/video/framebuffer/video_output_color.h"
 #include "playback/video/subtitle/font_attachments.h"
@@ -116,6 +117,8 @@ struct WindowUiState {
     playback_video_edit::ExportProgress videoEditExport;
     playback_video_edit::Prompt videoEditPrompt =
         playback_video_edit::Prompt::None;
+    std::optional<playback_overlay::MediaTaskCancellationDialog>
+        mediaTaskCancellationPrompt;
 };
 
 struct IDXGISwapChain2;
@@ -230,6 +233,7 @@ public:
     NativeWaitHandle CloseRequestedWaitHandle() const;
     bool EnableFileDrop();
     void DisableFileDrop();
+    void SetFileDropAcceptanceEnabled(bool enabled);
     void Cleanup();
 
 private:

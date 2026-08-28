@@ -95,6 +95,7 @@ class PlaybackSession {
   PlaybackControlState controlState() const;
   PlaybackPresentationState presentationState() const;
   bool capturesBrowserInput() const;
+  void setExternalInputModal(bool modal);
   bool handleInputEvent(const InputEvent& event);
   bool handleControlCommand(PlaybackControlCommand command);
   bool seekToRatio(double ratio);

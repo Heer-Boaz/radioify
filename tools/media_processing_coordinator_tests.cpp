@@ -112,6 +112,7 @@ int main() {
           const std::filesystem::path& outputFile,
           const processing::Coordinator::ProgressReporter& progress,
           const processing::Coordinator::CancellationRequested& cancellation,
+          const processing::Coordinator::CommitStarted& beginCommit,
           std::string*) {
         observedMelodyTrackIndex = trackIndex;
         observedMelodyOutput = outputFile;
@@ -121,7 +122,7 @@ int main() {
                !cancellation()) {
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        return !cancellation();
+        return !cancellation() && beginCommit();
       };
   operations.splitLoop =
       [&](const std::filesystem::path&,
@@ -131,6 +132,7 @@ int main() {
           LoopSplitResult* result,
           const processing::Coordinator::ProgressReporter&,
           const processing::Coordinator::CancellationRequested& cancellation,
+          const processing::Coordinator::CommitStarted& beginCommit,
           std::string*) {
         observedLoopTrackIndex = config.trackIndex;
         observedStingerOutput = stingerOutput;
@@ -143,7 +145,7 @@ int main() {
         }
         if (cancellation()) return false;
         if (result) result->hasStinger = true;
-        return true;
+        return beginCommit();
       };
   operations.generateSubtitles =
       [&](const std::filesystem::path&, const std::filesystem::path&,
@@ -182,6 +184,7 @@ int main() {
           const std::filesystem::path& outputFile,
           const processing::Coordinator::ProgressReporter& progress,
           const processing::Coordinator::CancellationRequested& cancellation,
+          const processing::Coordinator::CommitStarted& beginCommit,
           std::string*) {
         observedAudioExportOutput = outputFile;
         progress(0.5f, "Extracting lossless audio");
@@ -190,13 +193,14 @@ int main() {
                !cancellation()) {
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        return !cancellation();
+        return !cancellation() && beginCommit();
       };
   operations.exportTranscriptText =
       [&](const std::filesystem::path&,
           const std::filesystem::path& outputFile,
           const processing::Coordinator::ProgressReporter& progress,
           const processing::Coordinator::CancellationRequested& cancellation,
+          const processing::Coordinator::CommitStarted&,
           std::string*) {
         observedTranscriptExportOutput = outputFile;
         progress(0.6f, "Writing plain-text transcript");
@@ -242,7 +246,9 @@ int main() {
           failureDialog->retryAction ==
               playback_media_actions::Action::SeparateAudio &&
           mediaTaskStatusModel(failedSeparation).text ==
-              "Audio separation failed. F1: Details",
+              "Audio separation failed. F1: Details" &&
+          mediaTaskStatusModel(failedSeparation).tone ==
+              MediaTaskStatusTone::Error,
       "failed work must retain actionable details in a reopenable dialog");
   ok &= expect(!unsupportedAction,
                "surface-specific actions must remain outside processing");
@@ -273,16 +279,18 @@ int main() {
       [](const std::filesystem::path&, int, const std::filesystem::path&,
          const processing::Coordinator::ProgressReporter&,
          const processing::Coordinator::CancellationRequested&,
-         std::string*) { return true; };
+         const processing::Coordinator::CommitStarted& beginCommit,
+         std::string*) { return beginCommit(); };
   completionQueueOperations.splitLoop =
       [](const std::filesystem::path&, const std::filesystem::path&,
          const std::filesystem::path&, const LoopSplitConfig&,
          LoopSplitResult* result,
          const processing::Coordinator::ProgressReporter&,
          const processing::Coordinator::CancellationRequested&,
+         const processing::Coordinator::CommitStarted& beginCommit,
          std::string*) {
         if (result) result->hasStinger = true;
-        return true;
+        return beginCommit();
       };
   processing::Coordinator completionQueueCoordinator(
       std::move(completionQueueOperations));
@@ -361,6 +369,7 @@ int main() {
                    melodyCompletion->id == melody->id &&
                    melodyStatus && melodyStatus->text ==
                        "Analyze: Saved clip.melody and clip.mid" &&
+                   melodyStatus->tone == MediaTaskStatusTone::Success &&
                    !processing::completionForPlayback(*melodyCompletion),
                "melody completion must use the shared result contract");
 
@@ -559,7 +568,9 @@ int main() {
                        *playbackSeparationCompletion) ==
                        "Audio separation cancelled." &&
                    mediaTaskStatusModel(*separationCompletion).text ==
-                       "Audio separation cancelled.",
+                       "Audio separation cancelled." &&
+                   mediaTaskStatusModel(*separationCompletion).tone ==
+                       MediaTaskStatusTone::Neutral,
                "cancelled separation must not leak backend error text");
 
   const auto exportStamp =
@@ -727,9 +738,41 @@ int main() {
     return separationStarted.load(std::memory_order_acquire);
   });
   const auto cancellableCard = taskController.snapshot().activeCard;
+  const auto cancellationRequest =
+      playback_media_processing::prepareCancellation(
+          playback_media_actions::Action::CancelAudioSeparation,
+          cancellableRequest.sourceFile,
+          coordinator.sourceStateFor(cancellableRequest.sourceFile));
+  auto wrongSourceCancellation = cancellationRequest;
+  if (wrongSourceCancellation) {
+    wrongSourceCancellation->sourceFile = "other.mp4";
+  }
+  auto wrongOperationCancellation = cancellationRequest;
+  if (wrongOperationCancellation) {
+    wrongOperationCancellation->operation =
+        playback_media_processing::Operation::AudioExport;
+  }
+  auto wrongTaskCancellation = cancellationRequest;
+  if (wrongTaskCancellation) {
+    wrongTaskCancellation->taskId =
+        processing::TaskId{wrongTaskCancellation->taskId.value + 1};
+  }
+  const auto matchedCancellation =
+      cancellationRequest
+          ? taskController.cancellationTarget(*cancellationRequest)
+          : std::nullopt;
+  const bool wrongSourceRejected =
+      wrongSourceCancellation &&
+      !taskController.cancellationTarget(*wrongSourceCancellation);
+  const bool wrongOperationRejected =
+      wrongOperationCancellation &&
+      !taskController.cancellationTarget(*wrongOperationCancellation);
+  const bool wrongTaskRejected =
+      wrongTaskCancellation &&
+      !taskController.cancellationTarget(*wrongTaskCancellation);
   const bool cancellationAccepted =
-      cancellableCard &&
-      taskController.cancelActive(cancellableCard->taskId);
+      cancellationRequest &&
+      taskController.confirmCancellation(*cancellationRequest);
   const bool cancellationReachedWorker = waitUntil([&]() {
     return separationCancellationObserved.load(std::memory_order_acquire);
   });
@@ -738,6 +781,9 @@ int main() {
   const auto controllerCancellation = waitForCompletion(taskController);
   ok &= expect(
       cancellableStart && cancellableStart->accepted && cancellableRunning &&
+          cancellableCard && matchedCancellation &&
+          matchedCancellation->taskId == cancellableCard->taskId &&
+          wrongSourceRejected && wrongOperationRejected && wrongTaskRejected &&
           cancellationAccepted && cancellationReachedWorker &&
           cancellingCard &&
           cancellingCard->title == "Cancelling audio separation" &&
@@ -750,12 +796,95 @@ int main() {
               "Audio separation cancelled.",
       "the TUI task controller must own cancellation and stable presentation");
 
+  std::atomic<bool> commitBarrierEntered{false};
+  std::atomic<bool> releaseCommitBarrier{false};
+  processing::Coordinator::Operations commitBarrierOperations;
+  commitBarrierOperations.exportAudio =
+      [&](const std::filesystem::path&, const std::filesystem::path&,
+          const processing::Coordinator::ProgressReporter&,
+          const processing::Coordinator::CancellationRequested& cancellation,
+          const processing::Coordinator::CommitStarted& beginCommit,
+          std::string*) {
+        if (cancellation() || !beginCommit()) return false;
+        commitBarrierEntered.store(true, std::memory_order_release);
+        while (!releaseCommitBarrier.load(std::memory_order_acquire)) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return true;
+      };
+  processing::Coordinator commitBarrierCoordinator(
+      std::move(commitBarrierOperations));
+  const auto commitBarrierStart =
+      commitBarrierCoordinator.requestAudioExport("commit-barrier.mp4");
+  const bool commitBarrierRunning = waitUntil([&]() {
+    return commitBarrierEntered.load(std::memory_order_acquire);
+  });
+  const auto committingActivity = commitBarrierCoordinator.activity();
+  const bool lateCancellationRejected =
+      committingActivity &&
+      !commitBarrierCoordinator.cancelActive(committingActivity->id);
+  releaseCommitBarrier.store(true, std::memory_order_release);
+  const auto commitBarrierCompletion =
+      waitForCompletion(commitBarrierCoordinator);
+  ok &= expect(
+      commitBarrierStart.wasAccepted() && commitBarrierRunning &&
+          committingActivity && !committingActivity->cancellable &&
+          !committingActivity->cancelling &&
+          committingActivity->phase == "Publishing output" &&
+          lateCancellationRejected && commitBarrierCompletion &&
+          commitBarrierCompletion->succeeded(),
+      "claiming the output commit barrier must remove Cancel before the "
+      "point of no return and reject stale cancellation");
+
+  std::atomic<bool> shutdownCommitEntered{false};
+  std::atomic<bool> releaseShutdownCommit{false};
+  std::atomic<bool> cancellationLeakedPastCommit{false};
+  processing::Coordinator::Operations shutdownCommitOperations;
+  shutdownCommitOperations.exportAudio =
+      [&](const std::filesystem::path&, const std::filesystem::path&,
+          const processing::Coordinator::ProgressReporter&,
+          const processing::Coordinator::CancellationRequested& cancellation,
+          const processing::Coordinator::CommitStarted& beginCommit,
+          std::string*) {
+        if (cancellation() || !beginCommit()) return false;
+        shutdownCommitEntered.store(true, std::memory_order_release);
+        while (!releaseShutdownCommit.load(std::memory_order_acquire)) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        const bool cancelledAfterCommit = cancellation();
+        cancellationLeakedPastCommit.store(cancelledAfterCommit,
+                                           std::memory_order_release);
+        return !cancelledAfterCommit;
+      };
+  processing::Coordinator shutdownCommitCoordinator(
+      std::move(shutdownCommitOperations));
+  const auto shutdownCommitStart =
+      shutdownCommitCoordinator.requestAudioExport("shutdown-commit.mp4");
+  const bool shutdownCommitRunning = waitUntil([&]() {
+    return shutdownCommitEntered.load(std::memory_order_acquire);
+  });
+  std::thread releaseShutdown([&]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    releaseShutdownCommit.store(true, std::memory_order_release);
+  });
+  shutdownCommitCoordinator.shutdown();
+  releaseShutdown.join();
+  const auto shutdownCommitCompletion =
+      waitForCompletion(shutdownCommitCoordinator);
+  ok &= expect(
+      shutdownCommitStart.wasAccepted() && shutdownCommitRunning &&
+          !cancellationLeakedPastCommit.load(std::memory_order_acquire) &&
+          shutdownCommitCompletion && shutdownCommitCompletion->succeeded(),
+      "shutdown must join an in-flight output commit without violating its "
+      "point-of-no-return contract");
+
   std::atomic<int> retryRuns{0};
   processing::Coordinator::Operations retryOperations;
   retryOperations.exportAudio =
       [&](const std::filesystem::path&, const std::filesystem::path&,
           const processing::Coordinator::ProgressReporter&,
           const processing::Coordinator::CancellationRequested& cancellation,
+          const processing::Coordinator::CommitStarted&,
           std::string* error) {
         const int run = retryRuns.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (run == 1) {

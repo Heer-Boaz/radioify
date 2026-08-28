@@ -2,6 +2,8 @@
 
 #include <utility>
 
+#include "core/path_identity.h"
+
 namespace tui_media_tasks {
 
 Controller::Controller(media_processing::Coordinator& coordinator,
@@ -31,6 +33,41 @@ std::optional<playback_media_processing::ActionResult> Controller::retry(
     return std::nullopt;
   }
   return execute(request);
+}
+
+std::optional<MediaTaskCardModel> Controller::cancellationTarget(
+    const playback_media_processing::CancellationRequest& request) {
+  if (!playback_media_processing::isCancellationAction(request.action)) {
+    return std::nullopt;
+  }
+
+  const std::optional<media_processing::TaskActivity> activity =
+      coordinator_.activity();
+  if (!request.taskId || !activity || activity->id != request.taskId ||
+      !activity->cancellable ||
+      !samePath(activity->sourceFile, request.sourceFile)) {
+    return std::nullopt;
+  }
+
+  if (request.operation != activity->kind ||
+      !playback_media_processing::cancellationTargetsOperation(
+          request.action, request.operation)) {
+    return std::nullopt;
+  }
+
+  refreshSnapshot();
+  return snapshot_.activeCard &&
+                 snapshot_.activeCard->taskId == activity->id
+             ? snapshot_.activeCard
+             : std::nullopt;
+}
+
+bool Controller::confirmCancellation(
+    const playback_media_processing::CancellationRequest& request) {
+  const std::optional<MediaTaskCardModel> target =
+      cancellationTarget(request);
+  return target && target->taskId == request.taskId &&
+         cancelActive(request.taskId);
 }
 
 playback_media_actions::Context Controller::contextForSource(

@@ -3,6 +3,8 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace file_output {
 
@@ -51,6 +53,54 @@ class Transaction {
   std::filesystem::path destinationPath_;
   std::filesystem::path temporaryPath_;
   PublishMode mode_ = PublishMode::CreateNew;
+  bool published_ = false;
+};
+
+struct TransactionDestination {
+  std::filesystem::path path;
+  PublishMode mode = PublishMode::CreateNew;
+};
+
+// Publishes a related set of sibling artifacts as one recoverable commit.
+// Every producer writes to same-directory staging files first. If any rename
+// fails, already-published members are removed and replaced destinations are
+// restored from private backups before control returns to the caller.
+class TransactionGroup {
+ public:
+  static std::optional<TransactionGroup> begin(
+      std::vector<TransactionDestination> destinations,
+      std::string* error);
+
+  TransactionGroup(TransactionGroup&& other) noexcept;
+  TransactionGroup& operator=(TransactionGroup&& other) noexcept;
+  ~TransactionGroup();
+
+  TransactionGroup(const TransactionGroup&) = delete;
+  TransactionGroup& operator=(const TransactionGroup&) = delete;
+
+  std::size_t size() const { return entries_.size(); }
+  const std::filesystem::path& temporaryPath(std::size_t index) const;
+  const std::filesystem::path& destinationPath(std::size_t index) const;
+  const std::filesystem::path* temporaryPathFor(
+      const std::filesystem::path& destination) const;
+
+  bool publish(std::string* error);
+
+ private:
+  struct Entry {
+    TransactionDestination destination;
+    std::filesystem::path temporary;
+    std::filesystem::path backup;
+    bool backupActive = false;
+    bool stagedPublished = false;
+  };
+
+  explicit TransactionGroup(std::vector<Entry> entries)
+      : entries_(std::move(entries)) {}
+  bool rollback(std::string* detail);
+  void discard();
+
+  std::vector<Entry> entries_;
   bool published_ = false;
 };
 

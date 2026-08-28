@@ -39,6 +39,8 @@ enum class OverlayControlId {
   EditCancelPrompt,
   EditDiscardAndExit,
   EditCancelExit,
+  MediaTaskCancel,
+  MediaTaskKeepRunning,
 };
 
 constexpr int overlayControlToken(OverlayControlId id) {
@@ -127,6 +129,7 @@ InteractionMap buildOverlayInteractionMap(
     const OverlayCellLayout& layout,
     const playback_video_edit::EditSnapshot* videoEdit = nullptr,
     playback_video_edit::Prompt videoEditPrompt =
-        playback_video_edit::Prompt::None);
+        playback_video_edit::Prompt::None,
+    bool mediaTaskCancellationPrompt = false);
 
 }  // namespace playback_overlay

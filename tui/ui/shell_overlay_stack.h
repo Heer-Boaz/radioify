@@ -49,6 +49,7 @@ class Model {
  public:
   Layer activeLayer() const;
   bool active() const { return activeLayer() != Layer::None; }
+  bool inputModal() const { return activeLayer() == Layer::Dialog; }
 
   bool openMediaMenu(BrowserEntry entry,
                      std::vector<playback_media_actions::Item> items,

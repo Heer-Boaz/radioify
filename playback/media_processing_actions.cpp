@@ -46,24 +46,6 @@ ActionText actionText(playback_media_actions::Action action) {
   return {};
 }
 
-const char* operationName(Operation operation) {
-  switch (operation) {
-    case Operation::MelodyAnalysis:
-      return "melody analysis";
-    case Operation::LoopSplit:
-      return "loop splitting";
-    case Operation::SubtitleGeneration:
-      return "subtitle generation";
-    case Operation::AudioSeparation:
-      return "audio separation";
-    case Operation::AudioExport:
-      return "audio export";
-    case Operation::TranscriptTextExport:
-      return "transcript export";
-  }
-  return "media processing";
-}
-
 std::string displayName(const std::filesystem::path& sourceFile) {
   const std::filesystem::path filename = sourceFile.filename();
   return toUtf8String(filename.empty() ? sourceFile : filename);
@@ -71,7 +53,7 @@ std::string displayName(const std::filesystem::path& sourceFile) {
 
 std::string rejectionReason(const RequestError& error) {
   if (error.failure == RequestFailure::Busy && error.blockingOperation) {
-    std::string reason = operationName(*error.blockingOperation);
+    std::string reason = operationDisplayName(*error.blockingOperation);
     reason += " is already running";
     const std::string blockingSource = displayName(error.blockingSourceFile);
     if (!blockingSource.empty()) {
@@ -174,12 +156,20 @@ std::optional<ActionResult> Actions::execute(
   return std::nullopt;
 }
 
+std::optional<CancellationRequest> Actions::prepareCancellation(
+    playback_media_actions::Action action,
+    const std::filesystem::path& sourceFile) const {
+  return playback_media_processing::prepareCancellation(
+      action, sourceFile, service_.sourceStateFor(sourceFile));
+}
+
 playback_media_actions::Context Actions::contextForSource(
     const std::filesystem::path& sourceFile) const {
   playback_media_actions::Context context;
   context.mediaKind = playback_media_actions::mediaKindForSource(sourceFile);
   const SourceState state = service_.sourceStateFor(sourceFile);
   context.backgroundTaskRunning = state.backgroundTaskRunning;
+  context.activeTaskCancellable = state.activeTaskCancellable;
   context.canGenerateSubtitles = state.subtitleGenerationAvailable;
   context.subtitleGenerationRunningForSource =
       state.subtitleGenerationRunning;

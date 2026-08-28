@@ -4,6 +4,7 @@
 
 #include "app/media_processing_coordinator.h"
 #include "core/runtime_helpers.h"
+#include "playback/media_processing_actions.h"
 #include "tui/shell_shortcuts.h"
 
 namespace {
@@ -44,22 +45,7 @@ std::string activityTitle(const media_processing::TaskActivity& activity) {
 }
 
 std::string activityOperationName(media_processing::TaskKind kind) {
-  using Kind = media_processing::TaskKind;
-  switch (kind) {
-    case Kind::MelodyAnalysis:
-      return "melody analysis";
-    case Kind::LoopSplit:
-      return "loop split";
-    case Kind::SubtitleGeneration:
-      return "subtitle generation";
-    case Kind::AudioSeparation:
-      return "audio separation";
-    case Kind::AudioExport:
-      return "audio export";
-    case Kind::TranscriptTextExport:
-      return "transcript export";
-  }
-  return "media processing";
+  return playback_media_processing::operationDisplayName(kind);
 }
 
 std::string completionText(
@@ -225,7 +211,17 @@ MediaTaskStatusModel mediaTaskStatusModel(
     const media_processing::TaskCompletion& completion) {
   MediaTaskStatusModel model;
   model.text = completionText(completion);
-  model.succeeded = completion.succeeded();
+  switch (completion.outcome) {
+    case media_processing::TaskOutcome::Succeeded:
+      model.tone = MediaTaskStatusTone::Success;
+      break;
+    case media_processing::TaskOutcome::Cancelled:
+      model.tone = MediaTaskStatusTone::Neutral;
+      break;
+    case media_processing::TaskOutcome::Failed:
+      model.tone = MediaTaskStatusTone::Error;
+      break;
+  }
   return model;
 }
 

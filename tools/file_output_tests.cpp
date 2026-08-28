@@ -86,6 +86,54 @@ int main() {
                    !std::filesystem::exists(directory / "abandoned.txt"),
                "an unpublished transaction must clean up partial output");
 
+  const std::filesystem::path groupedFirst = directory / "first.txt";
+  const std::filesystem::path groupedSecond = directory / "second.txt";
+  writeFile(groupedFirst, "old-first");
+  writeFile(groupedSecond, "old-second");
+  {
+    auto cancelledGroup = output::TransactionGroup::begin(
+        {{groupedFirst, output::PublishMode::ReplaceExisting},
+         {groupedSecond, output::PublishMode::ReplaceExisting}},
+        &error);
+    if (cancelledGroup) {
+      writeFile(cancelledGroup->temporaryPath(0), "cancelled-first");
+      writeFile(cancelledGroup->temporaryPath(1), "cancelled-second");
+    }
+  }
+  ok &= expect(readFile(groupedFirst) == "old-first" &&
+                   readFile(groupedSecond) == "old-second",
+               "cancellation before group publication must preserve every "
+               "previous artifact");
+
+  auto failedGroup = output::TransactionGroup::begin(
+      {{groupedFirst, output::PublishMode::ReplaceExisting},
+       {groupedSecond, output::PublishMode::ReplaceExisting}},
+      &error);
+  if (failedGroup) {
+    writeFile(failedGroup->temporaryPath(0), "new-first");
+    writeFile(failedGroup->temporaryPath(1), "new-second");
+    std::error_code injectedFailure;
+    std::filesystem::remove(failedGroup->temporaryPath(1), injectedFailure);
+  }
+  ok &= expect(failedGroup && !failedGroup->publish(&error) &&
+                   readFile(groupedFirst) == "old-first" &&
+                   readFile(groupedSecond) == "old-second",
+               "a failure publishing the second artifact must roll the "
+               "entire group back");
+
+  auto successfulGroup = output::TransactionGroup::begin(
+      {{groupedFirst, output::PublishMode::ReplaceExisting},
+       {groupedSecond, output::PublishMode::ReplaceExisting}},
+      &error);
+  if (successfulGroup) {
+    writeFile(successfulGroup->temporaryPath(0), "new-first");
+    writeFile(successfulGroup->temporaryPath(1), "new-second");
+  }
+  ok &= expect(successfulGroup && successfulGroup->publish(&error) &&
+                   readFile(groupedFirst) == "new-first" &&
+                   readFile(groupedSecond) == "new-second",
+               "a complete artifact group must replace every destination");
+
   std::error_code cleanupError;
   std::filesystem::remove_all(directory, cleanupError);
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;

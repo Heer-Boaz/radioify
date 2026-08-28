@@ -9,6 +9,7 @@
 #include "audio/media_formats.h"
 #include "core/path_identity.h"
 #include "playback/target.h"
+#include "tui/deferred_media_handoff.h"
 #include "tui/media_activation_plan.h"
 
 namespace {
@@ -131,6 +132,7 @@ struct TuiMediaCoordinator::Impl {
     }
     if (videoSession_) {
       drainVideoSessionEvents();
+      resumeDeferredVideoHandoff();
       if (std::optional<PlaybackSessionCompletion> completion =
               videoSession_->pump()) {
         drainVideoSessionEvents();
@@ -139,6 +141,7 @@ struct TuiMediaCoordinator::Impl {
         playbackChanged = true;
       } else {
         drainVideoSessionEvents();
+        resumeDeferredVideoHandoff();
       }
     }
     std::vector<Event> events;
@@ -197,10 +200,19 @@ struct TuiMediaCoordinator::Impl {
     return videoSession_ && videoSession_->capturesBrowserInput();
   }
 
+  bool canAcceptExternalMediaChange() const {
+    return !driving_ && !pendingCommand_ && externalHandoff_.empty();
+  }
+
+  void setExternalInputModal(bool modal) {
+    if (videoSession_) videoSession_->setExternalInputModal(modal);
+  }
+
   bool handleVideoInputEvent(const InputEvent& event) {
     if (!videoSession_) return false;
     const bool handled = videoSession_->handleInputEvent(event);
     drainVideoSessionEvents();
+    resumeDeferredVideoHandoff();
     return handled;
   }
 
@@ -297,6 +309,7 @@ struct TuiMediaCoordinator::Impl {
     if (std::optional<playback_media_processing::Completion> projected =
             media_processing::completionForPlayback(completion)) {
       videoSession_->mediaTaskFinished(*projected);
+      resumeDeferredVideoHandoff();
     }
   }
 
@@ -321,6 +334,12 @@ struct TuiMediaCoordinator::Impl {
                                tui_media_activation::ShowImages,
                                tui_media_activation::OpenDirectory, Quit>;
   using CommandBuildResult = std::variant<Command, MediaCommandFailure>;
+
+  enum class DeferredHandoffStart : std::uint8_t {
+    WaitingForModal,
+    Started,
+    Failed,
+  };
 
   class DriveScope {
    public:
@@ -427,12 +446,12 @@ struct TuiMediaCoordinator::Impl {
     }
     if (!std::holds_alternative<playback_session_exit::ExternalHandoff>(
             request.intent) ||
-        !handoffCommand_ || handoffRequestId_ != request.id) {
+        !externalHandoff_.matches(request.id)) {
       return false;
     }
-    pendingCommand_.emplace(std::move(*handoffCommand_));
-    handoffCommand_.reset();
-    handoffRequestId_.reset();
+    std::optional<Command> command = externalHandoff_.accept(request.id);
+    if (!command) return false;
+    pendingCommand_.emplace(std::move(*command));
     return true;
   }
 
@@ -450,30 +469,75 @@ struct TuiMediaCoordinator::Impl {
       if (const auto* cancellation =
               std::get_if<playback_session_exit::HandoffCancellation>(
                   &event)) {
-        if (handoffRequestId_ == cancellation->id) {
-          handoffCommand_.reset();
-          handoffRequestId_.reset();
-        }
+        (void)externalHandoff_.cancel(cancellation->id);
+        continue;
+      }
+      if (const auto* taskCancellation =
+              std::get_if<
+                  playback_session::MediaTaskCancellationRequested>(&event)) {
+        publishEvent(*taskCancellation);
         continue;
       }
       publishEvent(ActivateBrowserSurface{});
     }
   }
 
-  MediaCommandResult requestVideoHandoff(Command command) {
-    if (!videoSession_ || pendingCommand_ || handoffCommand_ ||
-        handoffRequestId_) {
-      return reject(MediaCommandFailureKind::Busy, {});
+  DeferredHandoffStart tryStartDeferredVideoHandoff() {
+    if (!videoSession_ || !externalHandoff_.awaitingRequest()) {
+      return DeferredHandoffStart::Failed;
     }
-    handoffCommand_.emplace(std::move(command));
+    if (videoSession_->capturesBrowserInput()) {
+      return DeferredHandoffStart::WaitingForModal;
+    }
+
     const std::optional<playback_session_exit::RequestId> requestId =
         videoSession_->requestHandoff();
-    if (!requestId) {
-      handoffCommand_.reset();
+    if (!requestId) return DeferredHandoffStart::Failed;
+
+    if (!externalHandoff_.markRequestStarted(*requestId)) {
+      (void)videoSession_->resolveHandoff(*requestId, false);
+      drainVideoSessionEvents();
+      return DeferredHandoffStart::Failed;
+    }
+    drainVideoSessionEvents();
+    return DeferredHandoffStart::Started;
+  }
+
+  void resumeDeferredVideoHandoff() {
+    if (!videoSession_ || !externalHandoff_.awaitingRequest()) return;
+    const DeferredHandoffStart start = tryStartDeferredVideoHandoff();
+    if (start == DeferredHandoffStart::WaitingForModal) return;
+    if (start == DeferredHandoffStart::Started) {
+      clearCommandError();
+      return;
+    }
+
+    externalHandoff_.clear();
+    (void)reject(
+        MediaCommandFailureKind::Busy,
+        "Could not complete the requested media change because the current "
+        "playback session could not hand off control.");
+  }
+
+  MediaCommandResult requestVideoHandoff(Command command) {
+    if (!videoSession_) {
       return reject(MediaCommandFailureKind::Busy, {});
     }
-    handoffRequestId_ = requestId;
-    drainVideoSessionEvents();
+    if (pendingCommand_ || !externalHandoff_.empty()) {
+      return reject(MediaCommandFailureKind::Busy,
+                    "Another media change is already pending.");
+    }
+    if (!externalHandoff_.enqueue(std::move(command))) {
+      return reject(MediaCommandFailureKind::Busy, {});
+    }
+    const DeferredHandoffStart start = tryStartDeferredVideoHandoff();
+    if (start == DeferredHandoffStart::Failed) {
+      externalHandoff_.clear();
+      return reject(
+          MediaCommandFailureKind::Busy,
+          "Could not complete the requested media change because the current "
+          "playback session could not hand off control.");
+    }
     clearCommandError();
     return MediaCommandResult::deferred();
   }
@@ -646,8 +710,13 @@ struct TuiMediaCoordinator::Impl {
     endControlSession();
     videoSession_.reset();
     videoTarget_.reset();
-    handoffCommand_.reset();
-    handoffRequestId_.reset();
+    if (completion.intent != PlaybackSessionExitIntent::QuitApplication &&
+        !pendingCommand_) {
+      if (std::optional<Command> command = externalHandoff_.release()) {
+        pendingCommand_.emplace(std::move(*command));
+      }
+    }
+    externalHandoff_.clear();
     if (completion.intent == PlaybackSessionExitIntent::QuitApplication) {
       enqueueQuit();
     }
@@ -735,8 +804,7 @@ struct TuiMediaCoordinator::Impl {
   std::optional<PlaybackSession> videoSession_;
   std::optional<PlaybackTarget> videoTarget_;
   std::optional<Command> pendingCommand_;
-  std::optional<Command> handoffCommand_;
-  std::optional<playback_session_exit::RequestId> handoffRequestId_;
+  tui_media_handoff::DeferredCommand<Command> externalHandoff_;
   std::uint64_t lastControlSessionValue_ = 0;
   PlaybackControlSessionId controlSessionId_;
   std::string commandError_;
@@ -808,6 +876,14 @@ wake_schedule::Deadline TuiMediaCoordinator::nextWakeDeadline() const {
 
 bool TuiMediaCoordinator::capturesBrowserInput() const {
   return impl_->capturesBrowserInput();
+}
+
+bool TuiMediaCoordinator::canAcceptExternalMediaChange() const {
+  return impl_->canAcceptExternalMediaChange();
+}
+
+void TuiMediaCoordinator::setExternalInputModal(bool modal) {
+  impl_->setExternalInputModal(modal);
 }
 
 bool TuiMediaCoordinator::handleVideoInputEvent(const InputEvent& event) {

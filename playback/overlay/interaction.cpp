@@ -21,9 +21,11 @@ InteractionRect transformRect(const InteractionRect& rect, double offsetX,
 InteractionMap buildOverlayInteractionMap(
     const OverlayCellLayout& layout,
     const playback_video_edit::EditSnapshot* videoEdit,
-    playback_video_edit::Prompt videoEditPrompt) {
+    playback_video_edit::Prompt videoEditPrompt,
+    bool mediaTaskCancellationPrompt) {
   InteractionMap map;
-  map.modal = videoEditPrompt != playback_video_edit::Prompt::None;
+  map.modal = mediaTaskCancellationPrompt ||
+              videoEditPrompt != playback_video_edit::Prompt::None;
   for (const OverlayCellControlLayoutItem& item : layout.controls) {
     if (!item.enabled || item.width <= 0 || item.y < 0) continue;
     map.controls.push_back(
@@ -35,6 +37,7 @@ InteractionMap buildOverlayInteractionMap(
 
   if (layout.progressBarX < 0 || layout.progressBarY < 0 ||
       layout.progressBarWidth <= 0 ||
+      mediaTaskCancellationPrompt ||
       videoEditPrompt != playback_video_edit::Prompt::None) {
     return map;
   }

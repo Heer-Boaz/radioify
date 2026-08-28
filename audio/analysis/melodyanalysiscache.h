@@ -26,6 +26,8 @@ struct MelodyOfflineAnalysisState {
   std::string error;
 };
 
+using MelodyOutputCommitStarted = std::function<bool()>;
+
 // Session-scoped cache for the analysis that follows active playback. Each
 // audio runtime owns one instance, including its worker lifetime and results.
 class MelodyOfflineCache {
@@ -65,4 +67,5 @@ bool melodyOfflineAnalyzeToFile(
     const std::unordered_map<uint32_t, VgmDeviceOptions>& vgmDeviceOverrides,
     const std::filesystem::path& outputFile,
     const std::function<void(float)>& progressCallback,
-    const std::function<bool()>& cancellationRequested, std::string* error);
+    const std::function<bool()>& cancellationRequested, std::string* error,
+    const MelodyOutputCommitStarted& outputCommitStarted = {});

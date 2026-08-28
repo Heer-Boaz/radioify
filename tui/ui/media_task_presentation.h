@@ -24,9 +24,15 @@ struct MediaTaskCardModel {
   bool cancellable = false;
 };
 
+enum class MediaTaskStatusTone {
+  Neutral,
+  Success,
+  Error,
+};
+
 struct MediaTaskStatusModel {
   std::string text;
-  bool succeeded = false;
+  MediaTaskStatusTone tone = MediaTaskStatusTone::Neutral;
 };
 
 inline constexpr tui_dialog::ButtonId kMediaTaskDialogClose = 0;

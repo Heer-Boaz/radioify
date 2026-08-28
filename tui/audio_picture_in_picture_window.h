@@ -62,6 +62,7 @@ class AudioPictureInPictureWindow {
   bool toggle();
   NativeWaitHandle inputWaitHandle() const;
   NativeWaitHandle closeRequestedWaitHandle() const;
+  void setFileDropAcceptanceEnabled(bool enabled);
   PollResult pollEvents();
   bool render(const Styles& styles, const Context& context);
   WindowPlacementState capturePlacement() const;

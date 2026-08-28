@@ -38,5 +38,7 @@ MouseButtons mouseButtonsFromWParam(WPARAM wParam);
 InputEvent mouseEvent(int x, int y, MouseEventKind kind, MouseButtons buttons,
                       MouseButton button, int wheelDelta = 0);
 InputEvent pointerLeaveEvent();
+std::optional<InputEvent> textGridResizeEvent(int pixelWidth, int pixelHeight,
+                                              int cellWidth, int cellHeight);
 
 }  // namespace window_input_events

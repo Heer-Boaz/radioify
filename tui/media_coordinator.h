@@ -60,7 +60,8 @@ class TuiMediaCoordinator {
   using Event = std::variant<ApplyAudioPictureInPicture, CommandErrorChanged,
                              AudioPlaybackFailed, ShowImages, QuitRequested,
                              PresentationFinished, ActivateBrowserSurface,
-                             OpenBrowserDirectory>;
+                             OpenBrowserDirectory,
+                             playback_session::MediaTaskCancellationRequested>;
 
   struct PollResult {
     bool playbackChanged = false;
@@ -101,6 +102,8 @@ class TuiMediaCoordinator {
   std::vector<NativeWaitHandle> waitHandles() const;
   wake_schedule::Deadline nextWakeDeadline() const;
   bool capturesBrowserInput() const;
+  bool canAcceptExternalMediaChange() const;
+  void setExternalInputModal(bool modal);
 
   bool handleVideoInputEvent(const InputEvent& event);
   bool handleControlCommand(PlaybackControlCommand command);

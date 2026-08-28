@@ -80,7 +80,9 @@ std::vector<std::filesystem::path> filesFromDataObject(IDataObject* dataObject) 
 
 class DropTarget final : public IDropTarget {
  public:
-  explicit DropTarget(DropEventSink sink) : sink_(std::move(sink)) {}
+  DropTarget(DropEventSink sink,
+             std::shared_ptr<AcceptanceState> acceptance)
+      : sink_(std::move(sink)), acceptance_(std::move(acceptance)) {}
 
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid,
                                            void** object) override {
@@ -117,10 +119,16 @@ class DropTarget final : public IDropTarget {
       return E_POINTER;
     }
     hoveredFiles_ = filesFromDataObject(dataObject);
-    acceptsData_ = !hoveredFiles_.empty();
-    currentEffect_ = acceptedEffect(*effect, acceptsData_);
+    const DWORD proposedEffect =
+        acceptedEffect(*effect, !hoveredFiles_.empty());
+    const AcceptanceState::Transition transition =
+        acceptance_->update(proposedEffect != DROPEFFECT_NONE);
+    currentEffect_ = transition.accept ? proposedEffect : DROPEFFECT_NONE;
     *effect = currentEffect_;
-    if (acceptsData_) {
+    if (transition.cancelHover) {
+      emitFileDropEvent(FileDropEventPhase::Cancel, {});
+    }
+    if (transition.beginHover) {
       emitFileDropEvent(FileDropEventPhase::Hover, hoveredFiles_);
     }
     return S_OK;
@@ -131,17 +139,26 @@ class DropTarget final : public IDropTarget {
     if (!effect) {
       return E_POINTER;
     }
-    currentEffect_ = acceptedEffect(*effect, acceptsData_);
+    const DWORD proposedEffect =
+        acceptedEffect(*effect, !hoveredFiles_.empty());
+    const AcceptanceState::Transition transition =
+        acceptance_->update(proposedEffect != DROPEFFECT_NONE);
+    currentEffect_ = transition.accept ? proposedEffect : DROPEFFECT_NONE;
     *effect = currentEffect_;
+    if (transition.cancelHover) {
+      emitFileDropEvent(FileDropEventPhase::Cancel, {});
+    }
+    if (transition.beginHover) {
+      emitFileDropEvent(FileDropEventPhase::Hover, hoveredFiles_);
+    }
     return S_OK;
   }
 
   HRESULT STDMETHODCALLTYPE DragLeave() override {
-    if (acceptsData_) {
+    if (acceptance_->leave()) {
       emitFileDropEvent(FileDropEventPhase::Cancel, {});
     }
     hoveredFiles_.clear();
-    acceptsData_ = false;
     currentEffect_ = DROPEFFECT_NONE;
     return S_OK;
   }
@@ -153,23 +170,19 @@ class DropTarget final : public IDropTarget {
     }
 
     std::vector<std::filesystem::path> files = filesFromDataObject(dataObject);
-    if (files.empty()) {
-      *effect = DROPEFFECT_NONE;
-      hoveredFiles_.clear();
-      acceptsData_ = false;
-      currentEffect_ = DROPEFFECT_NONE;
-      return S_OK;
+    const DWORD proposedEffect = acceptedEffect(*effect, !files.empty());
+    const AcceptanceState::Transition transition =
+        acceptance_->complete(proposedEffect != DROPEFFECT_NONE);
+    if (transition.cancelHover) {
+      emitFileDropEvent(FileDropEventPhase::Cancel, {});
     }
-
-    const DWORD finalEffect = acceptedEffect(*effect, true);
-    if (sink_) {
+    if (transition.accept && sink_) {
       emitFileDropEvent(FileDropEventPhase::Drop, std::move(files));
-      *effect = finalEffect != DROPEFFECT_NONE ? finalEffect : DROPEFFECT_COPY;
+      *effect = proposedEffect;
     } else {
       *effect = DROPEFFECT_NONE;
     }
     hoveredFiles_.clear();
-    acceptsData_ = false;
     currentEffect_ = DROPEFFECT_NONE;
     return S_OK;
   }
@@ -190,8 +203,8 @@ class DropTarget final : public IDropTarget {
 
   LONG refCount_ = 1;
   DropEventSink sink_;
+  std::shared_ptr<AcceptanceState> acceptance_;
   std::vector<std::filesystem::path> hoveredFiles_;
-  bool acceptsData_ = false;
   DWORD currentEffect_ = DROPEFFECT_NONE;
 };
 
@@ -199,12 +212,14 @@ DropTargetRegistration::~DropTargetRegistration() {
   revoke();
 }
 
-bool DropTargetRegistration::registerWindow(HWND hwnd, DropEventSink sink) {
-  if (hwnd_ || target_ || !hwnd || !sink) {
+bool DropTargetRegistration::registerWindow(
+    HWND hwnd, DropEventSink sink,
+    std::shared_ptr<AcceptanceState> acceptance) {
+  if (hwnd_ || target_ || !hwnd || !sink || !acceptance) {
     return false;
   }
 
-  target_ = new DropTarget(std::move(sink));
+  target_ = new DropTarget(std::move(sink), std::move(acceptance));
   const HRESULT registerResult = RegisterDragDrop(hwnd, target_);
   if (FAILED(registerResult)) {
     target_->Release();

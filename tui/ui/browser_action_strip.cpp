@@ -46,6 +46,8 @@ std::optional<ActionStripItem> actionForControl(
     case playback_overlay::OverlayControlId::EditCancelPrompt:
     case playback_overlay::OverlayControlId::EditDiscardAndExit:
     case playback_overlay::OverlayControlId::EditCancelExit:
+    case playback_overlay::OverlayControlId::MediaTaskCancel:
+    case playback_overlay::OverlayControlId::MediaTaskKeepRunning:
       return std::nullopt;
   }
   return std::nullopt;

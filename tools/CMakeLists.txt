@@ -62,6 +62,10 @@ radioify_add_module_object_library(radioify_tool_playback_exit_coordinator_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_exit_coordinator_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_deferred_media_handoff_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/deferred_media_handoff_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_video_output_color_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/video_output_color_tests.cpp
 )
@@ -116,6 +120,11 @@ radioify_add_module_object_library(radioify_tool_window_input_queue_tests
 
 radioify_add_module_object_library(radioify_tool_open_file_requests_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/open_file_requests_tests.cpp
+)
+
+radioify_add_module_object_library(
+  radioify_tool_windows_file_drop_acceptance_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/windows_file_drop_acceptance_tests.cpp
 )
 
 radioify_add_module_object_library(radioify_tool_shell_open_protocol_tests
@@ -231,6 +240,16 @@ radioify_add_module_object_library(radioify_tool_ui_viewport_tests
 
 radioify_add_module_object_library(radioify_tool_media_task_panel_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/media_task_panel_tests.cpp
+)
+
+radioify_add_module_object_library(
+  radioify_tool_media_task_cancellation_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/media_task_cancellation_tests.cpp
+)
+
+radioify_add_module_object_library(
+  radioify_tool_overlay_control_pointer_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/overlay_control_pointer_tests.cpp
 )
 
 radioify_add_module_object_library(radioify_tool_media_action_catalog_tests

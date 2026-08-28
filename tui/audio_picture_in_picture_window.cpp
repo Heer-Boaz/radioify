@@ -49,6 +49,10 @@ NativeWaitHandle AudioPictureInPictureWindow::closeRequestedWaitHandle() const {
   return window_.CloseRequestedWaitHandle();
 }
 
+void AudioPictureInPictureWindow::setFileDropAcceptanceEnabled(bool enabled) {
+  window_.SetFileDropAcceptanceEnabled(enabled);
+}
+
 bool AudioPictureInPictureWindow::open() {
   lastError_.clear();
   if (window_.IsOpen()) return true;

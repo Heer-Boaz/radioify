@@ -345,6 +345,7 @@ endfunction()
 add_subdirectory(app)
 add_subdirectory(audio)
 add_subdirectory(core)
+add_subdirectory(ui)
 add_subdirectory(playback)
 add_subdirectory(tools)
 add_subdirectory(tui)
@@ -419,6 +420,7 @@ target_sources(radioify PRIVATE
   $<TARGET_OBJECTS:radioify_audio_export>
   $<TARGET_OBJECTS:radioify_audio_separation>
   $<TARGET_OBJECTS:radioify_analysis>
+  $<TARGET_OBJECTS:radioify_text_grid_ui>
   $<TARGET_OBJECTS:radioify_ui>
   $<TARGET_OBJECTS:radioify_core_runtime>
   $<TARGET_OBJECTS:radioify_core>
@@ -625,6 +627,23 @@ radioify_link_repo_target(playback_exit_coordinator_tests)
 add_test(NAME playback_exit_coordinator_tests
          COMMAND $<TARGET_FILE:playback_exit_coordinator_tests>)
 
+add_executable(deferred_media_handoff_tests)
+target_sources(deferred_media_handoff_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_deferred_media_handoff_tests>
+)
+radioify_link_repo_target(deferred_media_handoff_tests)
+add_test(NAME deferred_media_handoff_tests
+         COMMAND $<TARGET_FILE:deferred_media_handoff_tests>)
+
+add_executable(overlay_control_pointer_tests)
+target_sources(overlay_control_pointer_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_overlay_control_pointer_tests>
+  ${CMAKE_SOURCE_DIR}/playback/session/overlay_control_pointer.cpp
+)
+radioify_link_repo_target(overlay_control_pointer_tests)
+add_test(NAME overlay_control_pointer_tests
+         COMMAND $<TARGET_FILE:overlay_control_pointer_tests>)
+
 add_executable(video_output_color_tests)
 target_sources(video_output_color_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_video_output_color_tests>
@@ -645,6 +664,7 @@ target_sources(video_frame_step_smoke PRIVATE
   $<TARGET_OBJECTS:radioify_analysis>
   $<TARGET_OBJECTS:radioify_audiofilter>
   $<TARGET_OBJECTS:radioify_config>
+  ${CMAKE_SOURCE_DIR}/core/file_output.cpp
 )
 radioify_configure_repo_target(video_frame_step_smoke)
 
@@ -691,6 +711,7 @@ target_sources(video_edit_timeline_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/edit/scene_suggestions.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/timeline.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/overlay_model.cpp
+  $<TARGET_OBJECTS:radioify_text_grid_ui>
   ${CMAKE_SOURCE_DIR}/core/unicode_display_width.cpp
 )
 radioify_link_repo_target(video_edit_timeline_tests)
@@ -792,6 +813,14 @@ target_sources(open_file_requests_tests PRIVATE
 radioify_link_repo_target(open_file_requests_tests)
 add_test(NAME open_file_requests_tests
          COMMAND $<TARGET_FILE:open_file_requests_tests>)
+
+add_executable(windows_file_drop_acceptance_tests)
+target_sources(windows_file_drop_acceptance_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_windows_file_drop_acceptance_tests>
+)
+radioify_link_repo_target(windows_file_drop_acceptance_tests)
+add_test(NAME windows_file_drop_acceptance_tests
+         COMMAND $<TARGET_FILE:windows_file_drop_acceptance_tests>)
 
 add_executable(shell_open_protocol_tests)
 target_sources(shell_open_protocol_tests PRIVATE
@@ -936,6 +965,7 @@ target_sources(shell_overlay_stack_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/tui/ui/shell_overlay_stack.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/dialog.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/button_row.cpp
+  $<TARGET_OBJECTS:radioify_text_grid_ui>
   ${CMAKE_SOURCE_DIR}/tui/ui/browser_media_menu.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/popup_menu.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/shell_command_catalog.cpp
@@ -1108,11 +1138,25 @@ target_sources(media_task_panel_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_media_task_panel_tests>
   ${CMAKE_SOURCE_DIR}/tui/ui/media_task_panel.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/button_row.cpp
+  $<TARGET_OBJECTS:radioify_text_grid_ui>
   ${CMAKE_SOURCE_DIR}/core/unicode_display_width.cpp
 )
 radioify_link_repo_target(media_task_panel_tests)
 add_test(NAME media_task_panel_tests
          COMMAND $<TARGET_FILE:media_task_panel_tests>)
+
+add_executable(media_task_cancellation_tests)
+target_sources(media_task_cancellation_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_media_task_cancellation_tests>
+  ${CMAKE_SOURCE_DIR}/playback/media_processing_cancellation.cpp
+  ${CMAKE_SOURCE_DIR}/playback/session/media_task_cancellation.cpp
+  ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+)
+radioify_link_repo_target(media_task_cancellation_tests)
+add_test(NAME media_task_cancellation_tests
+         COMMAND $<TARGET_FILE:media_task_cancellation_tests>)
 
 add_executable(media_action_catalog_tests)
 target_sources(media_action_catalog_tests PRIVATE
@@ -1120,6 +1164,7 @@ target_sources(media_action_catalog_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/media_action_catalog.cpp
   ${CMAKE_SOURCE_DIR}/playback/media_action_context.cpp
   ${CMAKE_SOURCE_DIR}/playback/media_processing_actions.cpp
+  ${CMAKE_SOURCE_DIR}/playback/media_processing_cancellation.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
@@ -1154,6 +1199,7 @@ target_sources(media_processing_coordinator_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/audio/loopsplit/output_paths.cpp
   ${CMAKE_SOURCE_DIR}/playback/media_action_context.cpp
   ${CMAKE_SOURCE_DIR}/playback/media_processing_actions.cpp
+  ${CMAKE_SOURCE_DIR}/playback/media_processing_cancellation.cpp
   ${CMAKE_SOURCE_DIR}/playback/session/media_task_feedback.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/media_task_controller.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/media_task_presentation.cpp

@@ -82,6 +82,25 @@ std::vector<OverlayCellControlInput> buildOverlayCellControlInputs(
   return controls;
 }
 
+std::vector<OverlayDialogButtonInput>
+buildMediaTaskCancellationDialogButtons(
+    const MediaTaskCancellationDialog& prompt,
+    int hoverControlToken) {
+  using Selection = MediaTaskCancellationSelection;
+  return {
+      {OverlayControlId::MediaTaskCancel, "Cancel task", "Stop",
+       prompt.selected == Selection::CancelTask,
+       hoverControlToken ==
+           overlayControlToken(OverlayControlId::MediaTaskCancel),
+       true},
+      {OverlayControlId::MediaTaskKeepRunning, "Keep running", "Keep",
+       prompt.selected == Selection::KeepRunning,
+       hoverControlToken ==
+           overlayControlToken(OverlayControlId::MediaTaskKeepRunning),
+       true},
+  };
+}
+
 OverlayControlIntent intentForOverlayControl(OverlayControlId id) {
   switch (id) {
     case OverlayControlId::Previous:
@@ -140,6 +159,10 @@ OverlayControlIntent intentForOverlayControl(OverlayControlId id) {
       return OverlayAction::ConfirmPendingExit;
     case OverlayControlId::EditCancelExit:
       return OverlayAction::CancelPendingExit;
+    case OverlayControlId::MediaTaskCancel:
+      return OverlayAction::ConfirmMediaTaskCancellation;
+    case OverlayControlId::MediaTaskKeepRunning:
+      return OverlayAction::DismissMediaTaskCancellation;
   }
   throw std::invalid_argument("Unknown playback overlay control.");
 }
@@ -155,6 +178,16 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
   const auto finish = [&]() {
     finishControlSpecs(&out, hoverControlToken);
   };
+
+  if (state.mediaTaskCancellationPrompt) {
+    for (const OverlayDialogButtonInput& button :
+         buildMediaTaskCancellationDialogButtons(
+             *state.mediaTaskCancellationPrompt, hoverControlToken)) {
+      add(button.id, button.label, button.selected, button.enabled);
+    }
+    finish();
+    return out;
+  }
 
   if (state.videoEditPrompt == playback_video_edit::Prompt::LeaveEditMode) {
     add(OverlayControlId::EditConfirmPrompt, "Leave", true);

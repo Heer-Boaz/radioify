@@ -4,8 +4,10 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "ui/text_grid/dialog_layout.h"
 #include "unicode_display_width.h"
 
 namespace playback_overlay {
@@ -138,7 +140,7 @@ std::string buildWindowOverlayProgressSuffix(
   // Edit mode owns the row above the timeline, including frame-accurate
   // timecode.  A modal prompt owns it exclusively.  Do not add a second,
   // rounded playback clock to either state.
-  if (state.videoEdit.active ||
+  if (state.mediaTaskCancellationPrompt || state.videoEdit.active ||
       state.videoEditPrompt != playback_video_edit::Prompt::None) {
     return {};
   }
@@ -293,6 +295,83 @@ OverlayCellLayout layoutOverlayControlCells(
     layout.controls.push_back(placeControl(item, item.line));
   }
   return layout;
+}
+
+OverlayCellLayout layoutOverlayDialogCells(
+    const OverlayDialogLayoutInput& input) {
+  OverlayCellLayout result;
+  result.width = std::max(1, input.width);
+  result.height = std::max(0, input.height);
+
+  text_grid_dialog_layout::Content content;
+  content.title = input.title;
+  content.text.reserve(input.text.size());
+  for (const std::string& line : input.text) {
+    content.text.push_back(
+        {line, text_grid_dialog_layout::TextTone::Normal});
+  }
+
+  std::size_t selectedIndex = 0;
+  content.buttons.reserve(input.buttons.size());
+  for (std::size_t index = 0; index < input.buttons.size(); ++index) {
+    const OverlayDialogButtonInput& button = input.buttons[index];
+    content.buttons.push_back(
+        {static_cast<text_grid_dialog_layout::ButtonId>(index + 1),
+         button.label, button.compactLabel});
+    if (button.selected) selectedIndex = index;
+  }
+
+  const text_grid_dialog_layout::Layout dialog =
+      text_grid_dialog_layout::layoutContent(
+          content, selectedIndex, 0,
+          text_grid_dialog_layout::Bounds{result.width, result.height, 0});
+  if (!dialog.valid) return result;
+
+  OverlayCellDialogLayout presentation;
+  presentation.x = dialog.x;
+  presentation.y = dialog.y;
+  presentation.width = dialog.width;
+  presentation.height = dialog.height;
+  presentation.titleX = dialog.x + 2;
+  presentation.titleY = dialog.titleY;
+  presentation.title = fitLayoutText(content.title, dialog.innerWidth);
+
+  const int endLine = std::min(
+      static_cast<int>(dialog.contentLines.size()),
+      dialog.firstContentLine + dialog.visibleContentRows);
+  for (int line = dialog.firstContentLine; line < endLine; ++line) {
+    presentation.contentLines.push_back(OverlayCellTextLine{
+        dialog.x + 2, dialog.contentY + line - dialog.firstContentLine,
+        fitLayoutText(dialog.contentLines[static_cast<std::size_t>(line)].text,
+                      dialog.innerWidth)});
+  }
+
+  result.controls.reserve(dialog.buttons.size());
+  for (const text_grid_dialog_layout::ButtonBounds& placement :
+       dialog.buttons) {
+    if (placement.index >= input.buttons.size() ||
+        placement.index >= content.buttons.size()) {
+      continue;
+    }
+    const OverlayDialogButtonInput& button = input.buttons[placement.index];
+    const std::string& label =
+        text_grid_button_layout::labelFor(content.buttons[placement.index],
+                                          placement);
+    result.controls.push_back(OverlayCellControlLayoutItem{
+        button.id,
+        fitControlText("[ " + label + " ]", placement.width),
+        placement.x,
+        placement.y >= 0 ? placement.y : dialog.buttonY,
+        placement.width,
+        button.selected,
+        button.hovered,
+        button.enabled});
+  }
+
+  if (result.controls.empty()) return result;
+  result.topY = dialog.y;
+  result.dialog = std::move(presentation);
+  return result;
 }
 
 }  // namespace playback_overlay

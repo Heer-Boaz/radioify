@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 
 #include <windows.h>
 
@@ -77,6 +78,25 @@ int main() {
   ok &= expect(!unknown.handled && !unknown.event,
                "unowned application commands must remain available to the "
                "default window procedure");
+
+  const std::optional<InputEvent> resize =
+      window_input_events::textGridResizeEvent(801, 601, 10, 20);
+  ok &= expect(resize && resize->type == InputEvent::Type::Resize &&
+                   resize->size.X == 81 && resize->size.Y == 31,
+               "native client resize must publish the new rounded-up text "
+               "grid dimensions");
+  ok &= expect(!window_input_events::textGridResizeEvent(0, 600, 10, 20),
+               "an empty native client area must not publish a resize");
+  const std::optional<InputEvent> hugeResize =
+      window_input_events::textGridResizeEvent(
+          (std::numeric_limits<int>::max)(),
+          (std::numeric_limits<int>::max)(), 1, 1);
+  ok &= expect(hugeResize &&
+                   hugeResize->size.X ==
+                       (std::numeric_limits<SHORT>::max)() &&
+                   hugeResize->size.Y ==
+                       (std::numeric_limits<SHORT>::max)(),
+               "native resize dimensions must stay representable in COORD");
 
   return ok ? 0 : 1;
 }

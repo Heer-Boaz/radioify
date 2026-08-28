@@ -196,6 +196,7 @@ int main() {
                "existing generated subtitles must be reflected in the shared "
                "action");
   video.backgroundTaskRunning = true;
+  video.activeTaskCancellable = true;
   ok &= expect(!hasAction(actions::build(video),
                           actions::Action::GenerateSubtitles) &&
                    !hasAction(actions::build(video),
@@ -214,6 +215,12 @@ int main() {
                    !hasAction(generatingSubtitleVideo,
                               actions::Action::GenerateSubtitles),
                "the source being processed must expose cancellation");
+  video.activeTaskCancellable = false;
+  ok &= expect(!hasAction(actions::build(video),
+                          actions::Action::CancelSubtitleGeneration),
+               "a task publishing output must remove its cancellation "
+               "affordance");
+  video.activeTaskCancellable = true;
   video.subtitleGenerationRunningForSource = false;
   video.transcriptTextExportRunningForSource = true;
   const std::vector<actions::Item> exportingTranscriptVideo =
@@ -233,6 +240,7 @@ int main() {
                               actions::Action::SeparateAudio),
                "a video being separated must expose cancellation");
   video.audioSeparationRunningForSource = false;
+  video.activeTaskCancellable = false;
   video.backgroundTaskRunning = false;
   video.hasSeparatedAudio = true;
   const std::vector<actions::Item> separatedVideo = actions::build(video);
@@ -267,6 +275,7 @@ int main() {
                    busyAudio.front().action == actions::Action::BrowseTracks,
                "playback and background-task state must project independently");
   audio.audioSeparationRunningForSource = true;
+  audio.activeTaskCancellable = true;
   const std::vector<actions::Item> separatingAudio = actions::build(audio);
   ok &= expect(separatingAudio.size() == 2 &&
                    hasAction(separatingAudio,
@@ -277,6 +286,7 @@ int main() {
 
   FakeMediaProcessingService processingService;
   processingService.state.backgroundTaskRunning = true;
+  processingService.state.activeTaskCancellable = true;
   processingService.state.subtitleGenerationAvailable = true;
   processingService.state.subtitleGenerationRunning = true;
   processingService.state.hasGeneratedSubtitles = true;
@@ -291,6 +301,7 @@ int main() {
       processingActions.contextForSource("source.mp4");
   ok &= expect(projected.mediaKind == actions::MediaKind::Video &&
                    projected.backgroundTaskRunning &&
+                   projected.activeTaskCancellable &&
                    projected.canGenerateSubtitles &&
                    projected.subtitleGenerationRunningForSource &&
                    projected.hasGeneratedSubtitles &&

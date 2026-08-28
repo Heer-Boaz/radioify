@@ -37,6 +37,7 @@ struct LoopSplitResult {
 using LoopSplitProgressReporter =
     std::function<void(float, std::string)>;
 using LoopSplitCancellationRequested = std::function<bool()>;
+using LoopSplitOutputCommitStarted = std::function<bool()>;
 
 bool splitAudioIntoLoopFiles(const std::filesystem::path& inputFile,
                             const std::filesystem::path& stingerOutput,
@@ -46,6 +47,8 @@ bool splitAudioIntoLoopFiles(const std::filesystem::path& inputFile,
                             const LoopSplitProgressReporter& reportProgress,
                             const LoopSplitCancellationRequested&
                                 cancellationRequested,
-                            std::string* error);
+                            std::string* error,
+                            const LoopSplitOutputCommitStarted&
+                                outputCommitStarted = {});
 
 #endif  // LOOPSPLIT_H

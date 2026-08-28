@@ -5,6 +5,7 @@
 
 #include "audio/playback_snapshot.h"
 #include "playback/ascii/screen_renderer.h"
+#include "playback/session/media_task_cancellation.h"
 
 class Player;
 
@@ -36,9 +37,14 @@ struct OverlayProjection {
   playback_video_edit::ExportProgress videoEditExport;
   playback_video_edit::Prompt videoEditPrompt =
       playback_video_edit::Prompt::None;
+  std::optional<MediaTaskCancellationPrompt> mediaTaskCancellationPrompt;
 };
 
 playback_overlay::PlaybackOverlayState projectPlaybackOverlay(
     OverlayProjection projection);
+
+playback_overlay::MediaTaskCancellationDialog
+projectMediaTaskCancellationDialog(
+    const MediaTaskCancellationPrompt& prompt);
 
 }  // namespace playback_session

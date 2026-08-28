@@ -222,6 +222,10 @@ bool PlaybackSession::capturesBrowserInput() const {
   return impl_->canControl() && impl_->loop->capturesBrowserInput();
 }
 
+void PlaybackSession::setExternalInputModal(bool modal) {
+  if (impl_->canControl()) impl_->loop->setExternalInputModal(modal);
+}
+
 bool PlaybackSession::handleInputEvent(const InputEvent& event) {
   return impl_->canControl() && impl_->loop->handleInputEvent(event);
 }

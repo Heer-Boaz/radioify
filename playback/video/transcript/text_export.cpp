@@ -41,7 +41,8 @@ bool exportTranscriptText(
     const std::filesystem::path& outputPath,
     const TextExportProgress& reportProgress,
     const TextExportCancellationRequested& cancellationRequested,
-    std::string* error) {
+    std::string* error,
+    const TextExportCommitStarted& outputCommitStarted) {
   if (error) error->clear();
   if (videoPath.empty() || outputPath.empty()) {
     setError(error, "The transcript export request is invalid.");
@@ -92,6 +93,7 @@ bool exportTranscriptText(
   output.close();
   if (cancelled(cancellationRequested)) return false;
   report(reportProgress, 0.98f, "Publishing transcript export");
+  if (outputCommitStarted && !outputCommitStarted()) return false;
   if (!transaction->publish(error)) return false;
   report(reportProgress, 1.0f, "Transcript export ready");
   return true;

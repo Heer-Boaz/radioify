@@ -117,7 +117,8 @@ class AudioPlaybackRuntime {
       const std::filesystem::path& outputFile,
       const std::function<void(float)>& progressCallback,
       const std::function<bool()>& cancellationRequested,
-      std::string* error) const;
+      std::string* error,
+      const std::function<bool()>& outputCommitStarted = {}) const;
   bool canAnalyzeFile(const std::filesystem::path& file) const;
   KssPlaybackOptions kssOptions() const;
   bool kssInstrumentAuditionState(KssInstrumentDevice* device,

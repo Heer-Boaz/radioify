@@ -90,7 +90,7 @@ inline constexpr DWORD kPlaybackShortcutFrameStepForbiddenMask =
 
 // One shared shortcut table. Context masks let modes layer additional keys on
 // top of the shared map without owning separate per-mode tables.
-inline constexpr std::array<PlaybackShortcutBinding, 55>
+inline constexpr std::array<PlaybackShortcutBinding, 63>
     kPlaybackShortcutBindings = {{
         {PlaybackAction::Quit, 'Q', 'q', 'Q', kPlaybackShortcutCtrlMask,
          kPlaybackShortcutChordForbiddenMask, kPlaybackShortcutContextGlobal,
@@ -111,6 +111,34 @@ inline constexpr std::array<PlaybackShortcutBinding, 55>
          kPlaybackShortcutContextVideoEditExitConfirmation |
              kPlaybackShortcutContextVideoEditLeaveConfirmation |
              kPlaybackShortcutContextVideoEditDiscardConfirmation},
+        {PlaybackAction::DismissMediaTaskCancellation, VK_ESCAPE, 0, 0, 0,
+         kPlaybackShortcutTextForbiddenMask,
+         kPlaybackShortcutContextMediaTaskCancellationConfirmation},
+        {PlaybackAction::DismissMediaTaskCancellation, VK_BACK, 0, 0, 0,
+         kPlaybackShortcutTextForbiddenMask,
+         kPlaybackShortcutContextMediaTaskCancellationConfirmation},
+        {PlaybackAction::SelectPreviousMediaTaskCancellationAction, VK_LEFT,
+         0, 0, 0,
+         kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
+         kPlaybackShortcutContextMediaTaskCancellationConfirmation},
+        {PlaybackAction::SelectNextMediaTaskCancellationAction, VK_RIGHT,
+         0, 0, 0,
+         kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
+         kPlaybackShortcutContextMediaTaskCancellationConfirmation},
+        {PlaybackAction::SelectNextMediaTaskCancellationAction, VK_TAB,
+         0, 0, 0,
+         kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
+         kPlaybackShortcutContextMediaTaskCancellationConfirmation},
+        {PlaybackAction::SelectPreviousMediaTaskCancellationAction, VK_TAB,
+         0, 0, kPlaybackShortcutShiftMask,
+         kPlaybackShortcutTextForbiddenMask,
+         kPlaybackShortcutContextMediaTaskCancellationConfirmation},
+        {PlaybackAction::ActivateMediaTaskCancellationAction, VK_RETURN,
+         0, 0, 0, kPlaybackShortcutTextForbiddenMask,
+         kPlaybackShortcutContextMediaTaskCancellationConfirmation},
+        {PlaybackAction::ActivateMediaTaskCancellationAction, VK_SPACE,
+         ' ', ' ', 0, kPlaybackShortcutTextForbiddenMask,
+         kPlaybackShortcutContextMediaTaskCancellationConfirmation},
         {PlaybackAction::ConfirmVideoEditPrompt, VK_RETURN, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoEditLeaveConfirmation},
@@ -307,6 +335,10 @@ inline std::optional<PlaybackAction> resolvePlaybackAction(
   switch (action) {
     case InputAction::Back:
       if ((shortcutContexts &
+           kPlaybackShortcutContextMediaTaskCancellationConfirmation) != 0) {
+        return PlaybackAction::DismissMediaTaskCancellation;
+      }
+      if ((shortcutContexts &
            kPlaybackShortcutContextVideoEditLeaveConfirmation) != 0 ||
           (shortcutContexts &
            kPlaybackShortcutContextVideoEditDiscardConfirmation) != 0) {
@@ -408,6 +440,10 @@ resolveLiveBrowserVideoShortcut(const InputEvent& event) {
     case PlaybackAction::ExportVideoEdits:
     case PlaybackAction::DiscardVideoEditsAndExit:
     case PlaybackAction::CancelVideoEditPrompt:
+    case PlaybackAction::SelectPreviousMediaTaskCancellationAction:
+    case PlaybackAction::SelectNextMediaTaskCancellationAction:
+    case PlaybackAction::ActivateMediaTaskCancellationAction:
+    case PlaybackAction::DismissMediaTaskCancellation:
     case PlaybackAction::DismissPictureInPicture:
     case PlaybackAction::CloseViewer:
       return std::nullopt;

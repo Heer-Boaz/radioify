@@ -37,6 +37,10 @@ class Controller {
   std::optional<playback_media_processing::ActionResult> retry(
       media_processing::TaskId expectedFailure,
       const media_processing::ActionRequest& request);
+  std::optional<MediaTaskCardModel> cancellationTarget(
+      const playback_media_processing::CancellationRequest& request);
+  bool confirmCancellation(
+      const playback_media_processing::CancellationRequest& request);
   playback_media_actions::Context contextForSource(
       const std::filesystem::path& sourceFile) const;
 

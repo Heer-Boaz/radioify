@@ -43,6 +43,13 @@ InputEvent pointerLeaveEvent() {
   return event;
 }
 
+InputEvent resizeEvent(SHORT width, SHORT height) {
+  InputEvent event{};
+  event.type = InputEvent::Type::Resize;
+  event.size = COORD{width, height};
+  return event;
+}
+
 }  // namespace
 
 int main() {
@@ -97,6 +104,15 @@ int main() {
   ok &= expect(queue.poll(event) &&
                    event.type == InputEvent::Type::PointerLeave,
                "pointer leave must be an explicit non-sentinel event");
+
+  queue.push(resizeEvent(80, 25));
+  queue.push(resizeEvent(120, 40));
+  ok &= expect(queue.poll(event) && event.type == InputEvent::Type::Resize &&
+                   event.size.X == 120 && event.size.Y == 40,
+               "adjacent native resize events must coalesce to the latest "
+               "geometry");
+  ok &= expect(!queue.poll(event),
+               "coalesced native resize events must occupy one queue entry");
 
   return ok ? 0 : 1;
 }

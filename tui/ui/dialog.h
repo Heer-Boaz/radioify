@@ -3,15 +3,23 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <string>
-#include <vector>
 
 #include "input_event.h"
 #include "tui/ui/button_row.h"
+#include "ui/text_grid/dialog_layout.h"
 
 namespace tui_dialog {
 
-using ButtonId = tui_button_row::ButtonId;
+using ButtonId = text_grid_dialog_layout::ButtonId;
+using Button = text_grid_dialog_layout::Button;
+using TextTone = text_grid_dialog_layout::TextTone;
+using TextBlock = text_grid_dialog_layout::TextBlock;
+using Content = text_grid_dialog_layout::Content;
+using Bounds = text_grid_dialog_layout::Bounds;
+using RenderLine = text_grid_dialog_layout::RenderLine;
+using ButtonBounds = text_grid_dialog_layout::ButtonBounds;
+using Layout = text_grid_dialog_layout::Layout;
+using text_grid_dialog_layout::layoutContent;
 
 struct DialogId {
   std::uint64_t value = 0;
@@ -28,56 +36,6 @@ struct DialogId {
 struct ButtonActivation {
   DialogId dialog;
   ButtonId button = 0;
-};
-
-enum class TextTone : std::uint8_t {
-  Normal,
-  Emphasis,
-  Secondary,
-  Error,
-};
-
-struct TextBlock {
-  std::string text;
-  TextTone tone = TextTone::Normal;
-};
-
-using Button = tui_button_row::Button;
-
-struct Content {
-  std::string title;
-  std::vector<TextBlock> text;
-  std::vector<Button> buttons;
-  std::optional<ButtonId> initiallySelectedButton;
-};
-
-struct Bounds {
-  int width = 0;
-  int height = 0;
-  int topInset = 0;
-};
-
-struct RenderLine {
-  std::string text;
-  TextTone tone = TextTone::Normal;
-};
-
-using ButtonBounds = tui_button_row::Placement;
-
-struct Layout {
-  int x = 0;
-  int y = 0;
-  int width = 0;
-  int height = 0;
-  int innerWidth = 0;
-  int titleY = 0;
-  int contentY = 0;
-  int buttonY = 0;
-  int visibleContentRows = 0;
-  int firstContentLine = 0;
-  std::vector<RenderLine> contentLines;
-  std::vector<ButtonBounds> buttons;
-  bool valid = false;
 };
 
 struct Interaction {

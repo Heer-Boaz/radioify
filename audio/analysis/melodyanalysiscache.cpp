@@ -9,6 +9,7 @@
 #include "media_formats.h"
 #include "psfaudio.h"
 #include "midiaudio.h"
+#include "core/file_output.h"
 #include "vgmaudio.h"
 
 #include <algorithm>
@@ -1222,7 +1223,8 @@ bool melodyOfflineAnalyzeToFile(
     const std::unordered_map<uint32_t, VgmDeviceOptions>& vgmDeviceOverrides,
     const std::filesystem::path& outputFile,
     const std::function<void(float)>& progressCallback,
-    const std::function<bool()>& cancellationRequested, std::string* error) {
+    const std::function<bool()>& cancellationRequested, std::string* error,
+    const MelodyOutputCommitStarted& outputCommitStarted) {
   if (file.empty() || !std::filesystem::exists(file)) {
     if (error) *error = "Input file not found.";
     return false;
@@ -1281,15 +1283,45 @@ bool melodyOfflineAnalyzeToFile(
   std::filesystem::path midiPath = melodyPath;
   midiPath.replace_extension(".mid");
 
+  std::optional<file_output::TransactionGroup> outputs =
+      file_output::TransactionGroup::begin(
+          {{melodyPath, file_output::PublishMode::ReplaceExisting},
+           {midiPath, file_output::PublishMode::ReplaceExisting}},
+          error);
+  if (!outputs) return false;
+  const std::filesystem::path* melodyTemporary =
+      outputs->temporaryPathFor(melodyPath);
+  const std::filesystem::path* midiTemporary =
+      outputs->temporaryPathFor(midiPath);
+  if (!melodyTemporary || !midiTemporary) {
+    if (error) *error = "Could not resolve staged melody outputs.";
+    return false;
+  }
+
   if (cancellationRequested && cancellationRequested()) {
     if (error) *error = "Melody analysis cancelled.";
     return false;
   }
   const bool melodyOk =
-      writeMelodyFramesToFile(melodyPath, resultSampleRate, frames, error);
+      writeMelodyFramesToFile(*melodyTemporary, resultSampleRate, frames,
+                              error);
   bool midiOk = false;
   if (melodyOk) {
-    midiOk = writeMidiFramesToFile(midiPath, resultSampleRate, frames, error);
+    if (cancellationRequested && cancellationRequested()) {
+      if (error) *error = "Melody analysis cancelled.";
+      return false;
+    }
+    midiOk = writeMidiFramesToFile(*midiTemporary, resultSampleRate, frames,
+                                   error);
   }
-  return melodyOk && midiOk;
+  if (!melodyOk || !midiOk) return false;
+  if (cancellationRequested && cancellationRequested()) {
+    if (error) *error = "Melody analysis cancelled.";
+    return false;
+  }
+  if (outputCommitStarted && !outputCommitStarted()) {
+    if (error) *error = "Melody analysis cancelled before publication.";
+    return false;
+  }
+  return outputs->publish(error);
 }

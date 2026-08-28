@@ -15,6 +15,42 @@ struct ActionResult {
   std::optional<RequestError> error;
 };
 
+inline constexpr const char* operationDisplayName(Operation operation) {
+  switch (operation) {
+    case Operation::MelodyAnalysis:
+      return "melody analysis";
+    case Operation::LoopSplit:
+      return "loop split";
+    case Operation::SubtitleGeneration:
+      return "subtitle generation";
+    case Operation::AudioSeparation:
+      return "audio separation";
+    case Operation::AudioExport:
+      return "audio export";
+    case Operation::TranscriptTextExport:
+      return "transcript export";
+  }
+  return "media processing";
+}
+
+// Stable intent shared by browser and playback surfaces. Presentation layers
+// may ask for confirmation, but only the application task owner decides
+// whether this exact task identity, operation and source are still active.
+struct CancellationRequest {
+  TaskId taskId;
+  playback_media_actions::Action action =
+      playback_media_actions::Action::CancelMediaExport;
+  Operation operation = Operation::AudioExport;
+  std::filesystem::path sourceFile;
+};
+
+bool isCancellationAction(playback_media_actions::Action action);
+bool cancellationTargetsOperation(playback_media_actions::Action action,
+                                  Operation operation);
+std::optional<CancellationRequest> prepareCancellation(
+    playback_media_actions::Action action,
+    const std::filesystem::path& sourceFile, const SourceState& state);
+
 // Converts a typed application request result into consistent user feedback.
 // Both playback-owned and application-owned media actions use this boundary.
 ActionResult makeActionResult(playback_media_actions::Action action,
@@ -28,6 +64,9 @@ class Actions {
   explicit Actions(Service& service) : service_(service) {}
 
   std::optional<ActionResult> execute(
+      playback_media_actions::Action action,
+      const std::filesystem::path& sourceFile) const;
+  std::optional<CancellationRequest> prepareCancellation(
       playback_media_actions::Action action,
       const std::filesystem::path& sourceFile) const;
   playback_media_actions::Context contextForSource(

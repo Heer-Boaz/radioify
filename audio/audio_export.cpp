@@ -48,7 +48,8 @@ bool exportToFlac(const std::filesystem::path& sourceFile,
                   const std::filesystem::path& outputFile,
                   const ProgressCallback& reportProgress,
                   const CancellationRequested& cancellationRequested,
-                  std::string* error) {
+                  std::string* error,
+                  const OutputCommitStarted& outputCommitStarted) {
   if (error) error->clear();
   if (!supportsSource(sourceFile) || outputFile.empty()) {
     setError(error, "The audio export request is invalid.");
@@ -151,6 +152,7 @@ bool exportToFlac(const std::filesystem::path& sourceFile,
   report(reportProgress, 0.97f, "Finalizing FLAC audio");
   if (!writer.finish(error)) return false;
   if (cancelled(cancellationRequested)) return false;
+  if (outputCommitStarted && !outputCommitStarted()) return false;
   if (!transaction->publish(error)) return false;
   report(reportProgress, 1.0f, "Audio export ready");
   return true;

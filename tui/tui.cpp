@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -135,7 +136,7 @@ inline bool hasDirtyFlag(UiDirtyFlags value, UiDirtyFlags flag) {
 }
 
 static DWORD waitForBrowserWake(ConsoleInput& input,
-                                const OpenFileRequests& openFileRequests,
+                                NativeWaitHandle openFileRequestWakeHandle,
                                 NativeWaitHandle thumbnailWakeHandle,
                                 NativeWaitHandle browserContentWakeHandle,
                                 NativeWaitHandle browserMetadataWakeHandle,
@@ -152,7 +153,7 @@ static DWORD waitForBrowserWake(ConsoleInput& input,
     if (handle) handles.push_back(handle);
   };
   append(input.waitHandle());
-  append(openFileRequests.nativeWaitHandle());
+  append(openFileRequestWakeHandle);
   append(thumbnailWakeHandle);
   append(browserContentWakeHandle);
   append(browserMetadataWakeHandle);
@@ -174,6 +175,11 @@ static DWORD waitForBrowserWake(ConsoleInput& input,
 struct WindowClientSize {
   int width = 1;
   int height = 1;
+};
+
+enum class BrowserInputSurface : std::uint8_t {
+  Terminal,
+  NativeWindow,
 };
 
 static int gridPixelExtent(int cells, double pixelsPerCell,
@@ -556,6 +562,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   };
 
   std::string mediaCommandError;
+  std::vector<playback_media_processing::CancellationRequest>
+      confirmedPlaybackTaskCancellations;
 
   PlaybackSession::Dependencies mediaSessionDependencies{
       audioPlayback, gpu, input, screen, theme.playbackSessionAppearance()};
@@ -624,6 +632,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
               mediaCommandError.clear();
             }
             markDirty(UiDirtyFlags::Async);
+          } else if constexpr (
+              std::is_same_v<
+                  Event,
+                  playback_session::MediaTaskCancellationRequested>) {
+            confirmedPlaybackTaskCancellations.push_back(
+                std::move(value.request));
           }
         },
         event);
@@ -696,6 +710,20 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   const shell_overlay_stack::Styles shellOverlayStyles{
       theme.popupMenuStyles(), theme.commandPaletteStyles(),
       theme.dialogStyles()};
+  const auto openFileRequestWakeHandle = [&]() {
+    return shellOverlays.inputModal() ||
+                   !mediaCoordinator.canAcceptExternalMediaChange()
+               ? NativeWaitHandle{}
+               : openFileRequests.nativeWaitHandle();
+  };
+  const auto synchronizeNativeInputModality = [&]() {
+    const bool shellModal = shellOverlays.inputModal();
+    mediaCoordinator.setExternalInputModal(shellModal);
+    const bool acceptsFileDrop =
+        !shellModal && !mediaCoordinator.capturesBrowserInput();
+    tuiWindow.SetFileDropAcceptanceEnabled(acceptsFileDrop);
+    audioPictureInPicture.setFileDropAcceptanceEnabled(acceptsFileDrop);
+  };
 
   auto selectedOptionsSubject = [&]()
       -> std::optional<OptionsBrowserSubject> {
@@ -964,6 +992,10 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       case PlaybackAction::ExportVideoEdits:
       case PlaybackAction::DiscardVideoEditsAndExit:
       case PlaybackAction::CancelVideoEditPrompt:
+      case PlaybackAction::SelectPreviousMediaTaskCancellationAction:
+      case PlaybackAction::SelectNextMediaTaskCancellationAction:
+      case PlaybackAction::ActivateMediaTaskCancellationAction:
+      case PlaybackAction::DismissMediaTaskCancellation:
       case PlaybackAction::ExitPlaybackSession:
       case PlaybackAction::CloseViewer:
         break;
@@ -1003,6 +1035,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     audioPictureInPicture.render(audioPictureInPictureStyles,
                                  buildAudioPictureInPictureContext());
   };
+  std::deque<AudioPictureInPictureWindow::OpenFiles>
+      pendingAudioPictureInPictureOpens;
   auto handleAudioPictureInPictureEvent =
       [&](AudioPictureInPictureWindow::Event event) {
         std::visit(
@@ -1015,14 +1049,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
               } else if constexpr (
                   std::is_same_v<Event,
                                  AudioPictureInPictureWindow::OpenFiles>) {
-                PlaybackPresentationState videoPresentation =
-                    videoConfig.enableAscii
-                        ? PlaybackPresentationState::terminalAscii()
-                        : PlaybackPresentationState::nativeWindowed();
-                videoPresentation =
-                    videoPresentation.togglePictureInPicture();
-                mediaCoordinator.startDroppedFiles(
-                    value.files, &value.sourcePlacement, videoPresentation);
+                // The OLE target normally refuses drops while modal. Retain a
+                // drop that won the cross-thread race just before modality so
+                // Windows never reports success for input we subsequently
+                // discard.
+                pendingAudioPictureInPictureOpens.push_back(
+                    std::move(value));
               } else if constexpr (
                   std::is_same_v<Event,
                                  AudioPictureInPictureWindow::Closed>) {
@@ -1154,6 +1186,16 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     return true;
   };
 
+  auto requestMediaTaskCancellationFor =
+      [&](const playback_media_processing::CancellationRequest& request) {
+        const std::optional<MediaTaskCardModel> task =
+            mediaTasks.cancellationTarget(request);
+        if (!task) return false;
+        openMediaTaskDialog(
+            tui_media_task_panel::cancellationDialogRequest(*task));
+        return true;
+      };
+
   auto dispatchPaletteIntent = [&](const shell_command_catalog::Intent&
                                        intent) {
     std::visit(
@@ -1208,6 +1250,19 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     const auto* track = entry.actionAs<browser_entry::PlayTrack>();
     const std::optional<int> trackIndex =
         track ? std::optional<int>(track->trackIndex) : std::nullopt;
+    if (playback_media_processing::isCancellationAction(action)) {
+      const auto request = mediaProcessingActions.prepareCancellation(
+          action, entry.path);
+      if (!request || !requestMediaTaskCancellationFor(*request)) {
+        mediaCommandError =
+            "The matching background task is no longer running. Source: \"" +
+            toUtf8String(entry.path.filename()) + "\".";
+      } else {
+        mediaCommandError.clear();
+      }
+      markLayoutDirty();
+      return;
+    }
     const media_processing::ActionRequest processingRequest =
         media_processing::captureActionRequest(
             action, entry.path, trackIndex, o.output, audioPlayback);
@@ -1260,11 +1315,19 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   PlaybackShellTerminalRole previousTerminalRole =
       mediaCoordinator.terminalRole();
   while (running) {
+    synchronizeNativeInputModality();
     TuiMediaCoordinator::PollResult mediaUpdate = mediaCoordinator.poll();
     for (TuiMediaCoordinator::Event& event : mediaUpdate.events) {
       handleMediaCoordinatorEvent(std::move(event));
     }
     tui_media_tasks::Update taskUpdate = mediaTasks.poll();
+    for (const playback_media_processing::CancellationRequest& request :
+         confirmedPlaybackTaskCancellations) {
+      if (mediaTasks.confirmCancellation(request)) {
+        markDirty(UiDirtyFlags::Async);
+      }
+    }
+    confirmedPlaybackTaskCancellations.clear();
     const tui_media_tasks::Snapshot& taskSnapshot = mediaTasks.snapshot();
     mediaTaskPanel.synchronize(taskSnapshot.activeCard);
     if (const std::optional<tui_dialog::DialogId> obsoleteDialog =
@@ -1341,6 +1404,9 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     if (layoutDirty) {
       rebuildLayout();
     }
+    // poll() may have opened or closed a playback-owned prompt. Publish the
+    // resulting application modality before any native surface pumps OLE.
+    synchronizeNativeInputModality();
     if (windowTuiEnabled && tuiWindow.IsOpen()) {
       tuiWindow.PollEvents();
     }
@@ -1359,8 +1425,29 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       markDirty(UiDirtyFlags::Async);
     }
 
+    bool admittedExternalMediaChange = false;
+    if (!shellOverlays.inputModal() &&
+        mediaCoordinator.canAcceptExternalMediaChange() &&
+        !pendingAudioPictureInPictureOpens.empty()) {
+      AudioPictureInPictureWindow::OpenFiles request =
+          std::move(pendingAudioPictureInPictureOpens.front());
+      pendingAudioPictureInPictureOpens.pop_front();
+      PlaybackPresentationState videoPresentation =
+          videoConfig.enableAscii
+              ? PlaybackPresentationState::terminalAscii()
+              : PlaybackPresentationState::nativeWindowed();
+      videoPresentation = videoPresentation.togglePictureInPicture();
+      if (mediaCoordinator.startDroppedFiles(
+              request.files, &request.sourcePlacement, videoPresentation)) {
+        markDirty(UiDirtyFlags::Async);
+      }
+      admittedExternalMediaChange = true;
+    }
+
     OpenFilesRequest openRequest;
-    while (openFileRequests.poll(openRequest)) {
+    if (!admittedExternalMediaChange && !shellOverlays.inputModal() &&
+        mediaCoordinator.canAcceptExternalMediaChange() &&
+        openFileRequests.poll(openRequest)) {
       if (playOpenFilesRequest(openRequest)) {
         markDirty(UiDirtyFlags::Async);
       }
@@ -1382,7 +1469,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       const std::vector<NativeWaitHandle> activityHandles =
           mediaWaitHandles();
       waitForBrowserWake(
-          input, openFileRequests, browserThumbnails.waitHandle(),
+          input, openFileRequestWakeHandle(),
+          browserThumbnails.waitHandle(),
           browserContentService.nativeWaitHandle(),
           browserSelectionMetadata.nativeWaitHandle(),
           notificationAreaControls.nativeWaitHandle(), tuiWindow,
@@ -1391,25 +1479,43 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       continue;
     }
 
-    auto processInputEvent = [&](InputEvent ev) {
+    auto processInputEvent = [&](InputEvent ev,
+                                 BrowserInputSurface inputSurface) {
+      if (ev.type == InputEvent::Type::Resize) {
+        if (inputSurface == BrowserInputSurface::Terminal) {
+          handleResize();
+          rebuildLayout();
+        } else {
+          // The native browser window presents the console-owned grid scaled
+          // to its client area. Its WM_SIZE invalidates presentation, not the
+          // console grid dimensions that own browser layout.
+          markDirty();
+        }
+      }
       if (ev.type == InputEvent::Type::Mouse) {
         browserDoubleClickTracker.classifyUsingSystemSettings(
             ev.mouse, screen.cellPixelWidth(), screen.cellPixelHeight());
       } else {
         browserDoubleClickTracker.reset();
       }
+      if (ev.type == InputEvent::Type::FileDrop &&
+          isCommittedFileDropEvent(ev.fileDrop)) {
+        // Native drops and same-instance shell opens share one durable ingress
+        // queue. The queue remains pending while either modal owner holds
+        // activation, then follows the same handoff path after resolution.
+        OpenFilesRequest request;
+        request.files = std::move(ev.fileDrop.files);
+        openFileRequests.post(std::move(request));
+        return;
+      }
       if (mediaCoordinator.capturesBrowserInput()) {
         if (ev.type == InputEvent::Type::Key ||
-            ev.type == InputEvent::Type::Action) {
+            ev.type == InputEvent::Type::Action ||
+            (ev.type == InputEvent::Type::Resize &&
+             inputSurface == BrowserInputSurface::Terminal)) {
           mediaCoordinator.handleVideoInputEvent(ev);
           markDirty(UiDirtyFlags::Async);
         }
-        return;
-      }
-      if (ev.type == InputEvent::Type::FileDrop &&
-          isCommittedFileDropEvent(ev.fileDrop) &&
-          playOpenFilesRequest({ev.fileDrop.files})) {
-        markDirty(UiDirtyFlags::Async);
         return;
       }
       if (ev.type == InputEvent::Type::Mouse &&
@@ -1500,6 +1606,9 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         if (interaction.consumed) {
           return;
         }
+      }
+      if (ev.type == InputEvent::Type::Resize) {
+        return;
       }
       // Application-global accelerators belong to the shell, above focused
       // non-modal widgets but below input-modal overlays. Child controls may
@@ -1603,17 +1712,11 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       }
     };
 
-    auto flushLayoutIfNeeded = [&]() {
-      consumeBrowserNavigationEvents();
-      if (layoutDirty && hasDirtyFlag(dirtyFlags, UiDirtyFlags::Layout)) {
-        rebuildLayout();
-      }
-    };
-
-    auto dispatchInputEvent = [&](const InputEvent& event) -> bool {
+    auto dispatchInputEvent = [&](const InputEvent& event,
+                                  BrowserInputSurface inputSurface) -> bool {
       processShellPlaybackCommands();
       if (!running) return true;
-      processInputEvent(event);
+      processInputEvent(event, inputSurface);
       if (didRender) {
         finalizeRenderedExit();
         return false;
@@ -1631,9 +1734,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
              mediaCoordinator.terminalRole() ==
                  PlaybackShellTerminalRole::Browser &&
              tuiWindow.PollInput(ev)) {
-        if (!dispatchInputEvent(ev)) return 0;
-        if (ev.type == InputEvent::Type::Resize) {
-          flushLayoutIfNeeded();
+        if (!dispatchInputEvent(ev, BrowserInputSurface::NativeWindow)) {
+          return 0;
         }
         if (!running) break;
       }
@@ -1643,10 +1745,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         mediaCoordinator.terminalRole() ==
             PlaybackShellTerminalRole::Browser &&
         consoleInputPump.pollNext(input, ev)) {
-      if (!dispatchInputEvent(ev)) return 0;
-      if (ev.type == InputEvent::Type::Resize) {
-        flushLayoutIfNeeded();
-      }
+      if (!dispatchInputEvent(ev, BrowserInputSurface::Terminal)) return 0;
     }
     if (didRender) {
       finalizeRenderedExit();
@@ -1700,7 +1799,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       const std::vector<NativeWaitHandle> activityHandles =
           mediaWaitHandles();
       DWORD waitResult = waitForBrowserWake(
-          input, openFileRequests, browserThumbnails.waitHandle(),
+          input, openFileRequestWakeHandle(),
+          browserThumbnails.waitHandle(),
           browserContentService.nativeWaitHandle(),
           browserSelectionMetadata.nativeWaitHandle(),
           notificationAreaControls.nativeWaitHandle(), tuiWindow,
@@ -1924,9 +2024,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           const std::optional<MediaTaskStatusModel>& status =
               mediaTasks.snapshot().latestStatus;
           if (status && !status->text.empty()) {
+            const Style& statusStyle =
+                status->tone == MediaTaskStatusTone::Error ? theme.alert
+                                                          : theme.dim;
             screen.writeText(0, line++,
                              fitLine(" " + status->text, width),
-                             status->succeeded ? theme.dim : theme.alert);
+                             statusStyle);
           }
         }
       } else {

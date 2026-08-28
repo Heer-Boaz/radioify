@@ -5,6 +5,8 @@
 #include <string>
 #include <utility>
 
+#include "playback/media_processing_task_id.h"
+
 namespace playback_media_processing {
 
 enum class Operation {
@@ -74,6 +76,7 @@ enum class Outcome {
 };
 
 struct Completion {
+  TaskId taskId;
   Operation operation = Operation::SubtitleGeneration;
   Outcome outcome = Outcome::Failed;
   std::filesystem::path sourceFile;
@@ -86,6 +89,11 @@ struct Completion {
 
 struct SourceState {
   bool backgroundTaskRunning = false;
+  // Present only when this source owns the active application task. UI
+  // confirmations must freeze this identity instead of resolving a later task
+  // from operation and path alone.
+  std::optional<TaskId> activeTaskId;
+  bool activeTaskCancellable = false;
   bool subtitleGenerationAvailable = false;
   bool subtitleGenerationRunning = false;
   bool hasGeneratedSubtitles = false;

@@ -357,6 +357,8 @@ int main() {
       kPlaybackShortcutContextVideoEditLeaveConfirmation;
   const uint32_t videoEditDiscardContexts =
       kPlaybackShortcutContextVideoEditDiscardConfirmation;
+  const uint32_t mediaTaskCancellationContexts =
+      kPlaybackShortcutContextMediaTaskCancellationConfirmation;
   ok &= expect(resolvePlaybackAction(makeKey('E'),
                                               videoPlaybackContexts)
                    .value() == PlaybackAction::OpenVideoEditor,
@@ -502,6 +504,27 @@ int main() {
                        .value() ==
                    PlaybackAction::CancelVideoEditPrompt,
                "Enter must choose the safe default in the playback-exit prompt");
+  ok &= expect(
+      resolvePlaybackAction(makeKey(VK_RETURN),
+                            mediaTaskCancellationContexts) ==
+              PlaybackAction::ActivateMediaTaskCancellationAction &&
+          resolvePlaybackAction(makeKey(VK_SPACE, ' '),
+                                mediaTaskCancellationContexts) ==
+              PlaybackAction::ActivateMediaTaskCancellationAction &&
+          resolvePlaybackAction(makeKey(VK_RIGHT),
+                                mediaTaskCancellationContexts) ==
+              PlaybackAction::SelectNextMediaTaskCancellationAction &&
+          resolvePlaybackAction(makeKey(VK_TAB),
+                                mediaTaskCancellationContexts) ==
+              PlaybackAction::SelectNextMediaTaskCancellationAction &&
+          resolvePlaybackAction(makeKey(VK_TAB, 0, SHIFT_PRESSED),
+                                mediaTaskCancellationContexts) ==
+              PlaybackAction::SelectPreviousMediaTaskCancellationAction &&
+          resolvePlaybackAction(InputAction::Back,
+                                mediaTaskCancellationContexts) ==
+              PlaybackAction::DismissMediaTaskCancellation,
+      "media-task confirmation must use standard dialog navigation and "
+      "activation keys");
   ok &= expect(resolvePlaybackAction(
                    makeKey('E', 0, kPlaybackShortcutCtrlMask),
                    videoEditExitContexts)

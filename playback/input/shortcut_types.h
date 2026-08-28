@@ -13,6 +13,7 @@ enum class PlaybackShortcutContext : uint32_t {
   VideoEditExitConfirmation = 1u << 7,
   VideoEditLeaveConfirmation = 1u << 8,
   VideoEditDiscardConfirmation = 1u << 9,
+  MediaTaskCancellationConfirmation = 1u << 10,
 };
 
 inline constexpr uint32_t kPlaybackShortcutContextGlobal =
@@ -39,6 +40,10 @@ inline constexpr uint32_t
     kPlaybackShortcutContextVideoEditDiscardConfirmation =
         static_cast<uint32_t>(
             PlaybackShortcutContext::VideoEditDiscardConfirmation);
+inline constexpr uint32_t
+    kPlaybackShortcutContextMediaTaskCancellationConfirmation =
+        static_cast<uint32_t>(
+            PlaybackShortcutContext::MediaTaskCancellationConfirmation);
 inline constexpr uint32_t kPlaybackShortcutContextAll =
     kPlaybackShortcutContextGlobal | kPlaybackShortcutContextShared |
     kPlaybackShortcutContextPlaybackSession |
@@ -48,7 +53,8 @@ inline constexpr uint32_t kPlaybackShortcutContextAll =
      kPlaybackShortcutContextVideoEditing |
      kPlaybackShortcutContextVideoEditExitConfirmation |
      kPlaybackShortcutContextVideoEditLeaveConfirmation |
-     kPlaybackShortcutContextVideoEditDiscardConfirmation;
+     kPlaybackShortcutContextVideoEditDiscardConfirmation |
+     kPlaybackShortcutContextMediaTaskCancellationConfirmation;
 
 enum class PlaybackAction : uint8_t {
   Quit,
@@ -88,6 +94,10 @@ enum class PlaybackAction : uint8_t {
   ExportVideoEdits,
   DiscardVideoEditsAndExit,
   CancelVideoEditPrompt,
+  SelectPreviousMediaTaskCancellationAction,
+  SelectNextMediaTaskCancellationAction,
+  ActivateMediaTaskCancellationAction,
+  DismissMediaTaskCancellation,
   VolumeUp,
   VolumeDown,
   TogglePictureInPicture,
