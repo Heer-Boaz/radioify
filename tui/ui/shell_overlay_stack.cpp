@@ -17,17 +17,16 @@ Layer Model::activeLayer() const {
   return Layer::None;
 }
 
-bool Model::openMediaMenu(
-    BrowserEntry entry,
-    std::vector<playback_media_actions::Item> items,
-    tui_popup_menu::Anchor anchor) {
+bool Model::openMediaMenu(BrowserEntry entry,
+                          std::vector<playback_media_actions::Item> items,
+                          tui_popup_menu::Anchor anchor) {
   if (dialog_.active()) {
     return false;
   }
   const bool paletteDismissed = commandPalette_.dismiss();
   const bool menuWasActive = mediaMenu_.active();
-  const bool menuOpened = mediaMenu_.open(
-      std::move(entry), std::move(items), anchor);
+  const bool menuOpened =
+      mediaMenu_.open(std::move(entry), std::move(items), anchor);
   return paletteDismissed || menuWasActive || menuOpened;
 }
 
@@ -43,10 +42,14 @@ bool Model::toggleCommandPalette() {
   return true;
 }
 
-bool Model::openDialog(tui_dialog::Content content) {
+tui_dialog::DialogId Model::openDialog(tui_dialog::Content content) {
   mediaMenu_.dismiss();
   commandPalette_.dismiss();
   return dialog_.open(std::move(content));
+}
+
+bool Model::dismissDialog(tui_dialog::DialogId expectedDialog) {
+  return dialog_.dismiss(expectedDialog);
 }
 
 bool Model::dismiss() {
@@ -56,9 +59,8 @@ bool Model::dismiss() {
   return mediaMenuDismissed || paletteDismissed || dialogDismissed;
 }
 
-Interaction Model::handle(
-    const InputEvent& event, const Bounds& bounds,
-    const shell_command_catalog::Catalog& catalog) {
+Interaction Model::handle(const InputEvent& event, const Bounds& bounds,
+                          const shell_command_catalog::Catalog& catalog) {
   Interaction result;
   switch (activeLayer()) {
     case Layer::MediaMenu: {
@@ -99,7 +101,8 @@ Interaction Model::handle(
           dialog_.handle(event, dialogBounds);
       result.consumed = interaction.consumed;
       result.changed = interaction.changed;
-      result.dialogButton = interaction.activatedButton;
+      result.dismissedDialog = interaction.dismissedDialog;
+      result.dialogActivation = interaction.activation;
       break;
     }
     case Layer::None:

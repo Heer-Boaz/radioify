@@ -692,6 +692,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
 
   shell_overlay_stack::Model shellOverlays;
   tui_media_task_panel::State mediaTaskPanel;
+  tui_media_task_panel::DialogSession mediaTaskDialogs;
   const shell_overlay_stack::Styles shellOverlayStyles{
       theme.popupMenuStyles(), theme.commandPaletteStyles(),
       theme.dialogStyles()};
@@ -1138,18 +1139,24 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     return shell_command_catalog::build(context);
   };
 
+  auto openMediaTaskDialog = [&](tui_media_task_panel::DialogRequest request) {
+    const tui_dialog::DialogId dialog =
+        shellOverlays.openDialog(std::move(request.content));
+    mediaTaskDialogs.opened(dialog, std::move(request.context));
+  };
+
   auto requestMediaTaskCancellation = [&]() {
     const std::optional<MediaTaskCardModel>& task =
         mediaTasks.snapshot().activeCard;
     if (!task || !task->cancellable) {
       return false;
     }
-    return shellOverlays.openDialog(
-        tui_media_task_panel::cancellationDialog(*task));
+    openMediaTaskDialog(tui_media_task_panel::cancellationDialogRequest(*task));
+    return true;
   };
 
-  auto dispatchPaletteIntent =
-      [&](const shell_command_catalog::Intent& intent) {
+  auto dispatchPaletteIntent = [&](const shell_command_catalog::Intent&
+                                       intent) {
     std::visit(
         [&](const auto& value) {
           using Intent = std::decay_t<decltype(value)>;
@@ -1185,7 +1192,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
                              shell_command_catalog::ShowMediaTaskFailure>) {
             const auto& failure = mediaTasks.snapshot().latestFailure;
             if (failure) {
-              shellOverlays.openDialog(failure->content);
+              openMediaTaskDialog(
+                  tui_media_task_panel::failureDialogRequest(*failure));
               markDirty();
             }
           }
@@ -1258,6 +1266,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
     tui_media_tasks::Update taskUpdate = mediaTasks.poll();
     mediaTaskPanel.synchronize(mediaTasks.snapshot().activeCard);
+    if (const std::optional<tui_dialog::DialogId> obsoleteDialog =
+            mediaTaskDialogs.synchronize(mediaTasks.snapshot().activeCard)) {
+      if (shellOverlays.dismissDialog(*obsoleteDialog)) {
+        markDirty();
+      }
+    }
     for (const media_processing::TaskCompletion& completion :
          taskUpdate.completions) {
       mediaCoordinator.handleMediaTaskCompletion(completion);
@@ -1283,7 +1297,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
     if (terminalRole == PlaybackShellTerminalRole::Browser &&
         pendingMediaTaskFailure) {
-      shellOverlays.openDialog(pendingMediaTaskFailure->content);
+      openMediaTaskDialog(tui_media_task_panel::failureDialogRequest(
+          *pendingMediaTaskFailure));
       pendingMediaTaskFailure.reset();
       markDirty();
     }
@@ -1438,27 +1453,39 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         if (interaction.paletteIntent) {
           dispatchPaletteIntent(*interaction.paletteIntent);
         }
-        if (interaction.dialogButton == kMediaTaskDialogRetry) {
-          const auto& failure = mediaTasks.snapshot().latestFailure;
-          if (failure && failure->retryAction) {
-            const media_processing::ActionRequest request =
-                media_processing::captureActionRequest(
-                    *failure->retryAction, failure->sourceFile,
-                    std::nullopt, o.output, audioPlayback);
-            const auto retry = mediaTasks.execute(request);
-            if (retry) {
-              mediaCommandError =
-                  retry->accepted ? std::string() : retry->feedback;
-              markLayoutDirty();
-            }
-          }
+        std::optional<tui_media_task_panel::DialogIntent> taskDialogIntent;
+        if (interaction.dialogActivation) {
+          taskDialogIntent =
+              mediaTaskDialogs.handle(*interaction.dialogActivation);
         }
-        if (interaction.dialogButton ==
-            tui_media_task_panel::kCancelTaskButton) {
-          const auto& activeTask = mediaTasks.snapshot().activeCard;
-          if (activeTask && mediaTasks.cancelActive(activeTask->taskId)) {
-            markDirty(UiDirtyFlags::Async);
-          }
+        if (interaction.dismissedDialog) {
+          mediaTaskDialogs.dismissed(*interaction.dismissedDialog);
+        }
+        if (taskDialogIntent) {
+          std::visit(
+              [&](const auto& value) {
+                using Intent = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<Intent,
+                                             tui_media_task_panel::RetryTask>) {
+                  const media_processing::ActionRequest request =
+                      media_processing::captureActionRequest(
+                          value.action, value.sourceFile, std::nullopt,
+                          o.output, audioPlayback);
+                  const auto retry = mediaTasks.execute(request);
+                  if (retry) {
+                    mediaCommandError =
+                        retry->accepted ? std::string() : retry->feedback;
+                    markLayoutDirty();
+                  }
+                } else if constexpr (std::is_same_v<
+                                         Intent,
+                                         tui_media_task_panel::CancelTask>) {
+                  if (mediaTasks.cancelActive(value.taskId)) {
+                    markDirty(UiDirtyFlags::Async);
+                  }
+                }
+              },
+              *taskDialogIntent);
         }
         if (interaction.changed) {
           dirty = true;

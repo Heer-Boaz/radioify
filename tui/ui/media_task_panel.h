@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "tui/input_event.h"
@@ -61,6 +62,52 @@ struct Interaction {
   std::optional<Action> activatedAction;
 };
 
+struct CancelTask {
+  media_processing::TaskId taskId;
+};
+
+struct RetryTask {
+  media_processing::TaskId taskId;
+  std::filesystem::path sourceFile;
+  playback_media_actions::Action action;
+};
+
+using DialogIntent = std::variant<CancelTask, RetryTask>;
+
+enum class DialogKind {
+  Cancellation,
+  Failure,
+};
+
+struct DialogContext {
+  DialogKind kind = DialogKind::Cancellation;
+  media_processing::TaskId taskId;
+  std::filesystem::path sourceFile;
+  std::optional<playback_media_actions::Action> retryAction;
+};
+
+struct DialogRequest {
+  tui_dialog::Content content;
+  DialogContext context;
+};
+
+// Correlates generic dialog sessions with media-task intent. Button IDs never
+// escape into the shell composition root, and a cancellation prompt is
+// invalidated as soon as its exact task is no longer cancellable.
+class DialogSession {
+ public:
+  void opened(tui_dialog::DialogId dialog, DialogContext context);
+  std::optional<tui_dialog::DialogId> synchronize(
+      const std::optional<MediaTaskCardModel>& activeTask);
+  std::optional<DialogIntent> handle(
+      const tui_dialog::ButtonActivation& activation);
+  void dismissed(tui_dialog::DialogId dialog);
+
+ private:
+  std::optional<tui_dialog::DialogId> dialog_;
+  std::optional<DialogContext> context_;
+};
+
 class State {
  public:
   void synchronize(const std::optional<MediaTaskCardModel>& task);
@@ -103,6 +150,7 @@ Layout layout(const Bounds& bounds, const MediaTaskCardModel& task);
 std::string indicatorText(const MediaTaskCardModel& task);
 IndicatorLayout indicatorLayout(int availableWidth, int y,
                                 const MediaTaskCardModel& task);
-tui_dialog::Content cancellationDialog(const MediaTaskCardModel& task);
+DialogRequest cancellationDialogRequest(const MediaTaskCardModel& task);
+DialogRequest failureDialogRequest(const MediaTaskFailureDialogModel& failure);
 
 }  // namespace tui_media_task_panel

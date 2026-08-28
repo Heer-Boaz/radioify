@@ -1,8 +1,8 @@
-#include "tui/ui/shell_overlay_stack.h"
-
 #include <cstdlib>
 #include <iostream>
 #include <vector>
+
+#include "tui/ui/shell_overlay_stack.h"
 
 namespace {
 
@@ -28,9 +28,8 @@ InputEvent mouseEvent(MouseEventKind kind, int x, int y) {
   event.mouse.pos.X = static_cast<SHORT>(x);
   event.mouse.pos.Y = static_cast<SHORT>(y);
   event.mouse.button = MouseButton::Left;
-  event.mouse.buttons = kind == MouseEventKind::Press
-                            ? MouseButtons::Left
-                            : MouseButtons::None;
+  event.mouse.buttons =
+      kind == MouseEventKind::Press ? MouseButtons::Left : MouseButtons::None;
   return event;
 }
 
@@ -65,16 +64,16 @@ int main() {
   ok &= expect(overlays.toggleCommandPalette() &&
                    overlays.activeLayer() == Layer::CommandPalette,
                "the command palette must become the sole active layer");
-  ok &= expect(overlays.openMediaMenu(mediaEntry("video.mp4"),
-                                      mediaActions()) &&
-                   overlays.activeLayer() == Layer::MediaMenu,
-               "opening a media menu must replace the command palette");
+  ok &=
+      expect(overlays.openMediaMenu(mediaEntry("video.mp4"), mediaActions()) &&
+                 overlays.activeLayer() == Layer::MediaMenu,
+             "opening a media menu must replace the command palette");
 
   shell_overlay_stack::Interaction interaction =
       overlays.handle(keyEvent(VK_DOWN), bounds, catalog);
-  ok &= expect(interaction.consumed && interaction.changed &&
-                   !interaction.mediaCommand,
-               "input must be routed to the topmost media menu");
+  ok &= expect(
+      interaction.consumed && interaction.changed && !interaction.mediaCommand,
+      "input must be routed to the topmost media menu");
   interaction = overlays.handle(keyEvent(VK_RETURN), bounds, catalog);
   ok &= expect(
       interaction.mediaCommand &&
@@ -97,8 +96,8 @@ int main() {
                "palette activation must publish its typed catalog intent");
 
   overlays.toggleCommandPalette();
-  interaction = overlays.handle(inputActionEvent(InputAction::Back), bounds,
-                                catalog);
+  interaction =
+      overlays.handle(inputActionEvent(InputAction::Back), bounds, catalog);
   ok &= expect(interaction.consumed && interaction.changed &&
                    overlays.activeLayer() == Layer::None,
                "Back must dismiss exactly the active overlay layer");
@@ -109,19 +108,21 @@ int main() {
       {"Reason: DirectML device was removed", tui_dialog::TextTone::Error});
   failureDialog.buttons = {{0, "Close"}, {1, "Retry"}};
   overlays.toggleCommandPalette();
-  ok &= expect(overlays.openDialog(std::move(failureDialog)) &&
-                   overlays.activeLayer() == Layer::Dialog,
+  const tui_dialog::DialogId failureDialogId =
+      overlays.openDialog(std::move(failureDialog));
+  ok &= expect(failureDialogId && overlays.activeLayer() == Layer::Dialog,
                "a dialog must replace every less important transient layer");
   interaction = overlays.handle(keyEvent(VK_F1), bounds, catalog);
-  ok &= expect(interaction.consumed &&
-                   overlays.activeLayer() == Layer::Dialog &&
-                   !overlays.toggleCommandPalette() &&
-                   !overlays.openMediaMenu(mediaEntry("blocked.mp4"),
-                                           mediaActions()),
-               "an input-modal dialog must consume unrelated shortcuts");
+  ok &= expect(
+      interaction.consumed && overlays.activeLayer() == Layer::Dialog &&
+          !overlays.toggleCommandPalette() &&
+          !overlays.openMediaMenu(mediaEntry("blocked.mp4"), mediaActions()),
+      "an input-modal dialog must consume unrelated shortcuts");
   interaction = overlays.handle(keyEvent(VK_TAB), bounds, catalog);
   interaction = overlays.handle(keyEvent(VK_RETURN), bounds, catalog);
-  ok &= expect(interaction.dialogButton == 1 &&
+  ok &= expect(interaction.dialogActivation &&
+                   interaction.dialogActivation->dialog == failureDialogId &&
+                   interaction.dialogActivation->button == 1 &&
                    overlays.activeLayer() == Layer::None,
                "dialog buttons must publish a typed result without nesting "
                "an event loop");
@@ -130,17 +131,22 @@ int main() {
   safeDefaultDialog.title = "Cancel task?";
   safeDefaultDialog.buttons = {{2, "Cancel task"}, {3, "Keep running"}};
   safeDefaultDialog.initiallySelectedButton = 3;
-  overlays.openDialog(std::move(safeDefaultDialog));
+  const tui_dialog::DialogId safeDefaultDialogId =
+      overlays.openDialog(std::move(safeDefaultDialog));
   interaction = overlays.handle(keyEvent(VK_RETURN), bounds, catalog);
-  ok &= expect(interaction.dialogButton == 3 &&
-                   overlays.activeLayer() == Layer::None,
-               "a dialog must honor an explicitly selected safe default");
+  ok &=
+      expect(interaction.dialogActivation &&
+                 interaction.dialogActivation->dialog == safeDefaultDialogId &&
+                 interaction.dialogActivation->button == 3 &&
+                 overlays.activeLayer() == Layer::None,
+             "a dialog must honor an explicitly selected safe default");
 
   tui_dialog::Content pointerDialog;
   pointerDialog.title = "Pointer activation";
   pointerDialog.buttons = {{4, "Confirm"}, {5, "Cancel"}};
   tui_dialog::Model pointerModel;
-  pointerModel.open(std::move(pointerDialog));
+  const tui_dialog::DialogId pointerDialogId =
+      pointerModel.open(std::move(pointerDialog));
   const tui_dialog::Bounds pointerBounds{bounds.width, bounds.height,
                                          bounds.topInset};
   const tui_dialog::Layout pointerLayout = pointerModel.layout(pointerBounds);
@@ -148,17 +154,28 @@ int main() {
   tui_dialog::Interaction pointerInteraction = pointerModel.handle(
       mouseEvent(MouseEventKind::Press, confirm.x, pointerLayout.buttonY),
       pointerBounds);
-  ok &= expect(pointerInteraction.consumed &&
-                   !pointerInteraction.activatedButton &&
+  ok &= expect(pointerInteraction.consumed && !pointerInteraction.activation &&
                    pointerModel.active(),
                "a dialog button press must not activate before release");
   pointerInteraction = pointerModel.handle(
       mouseEvent(MouseEventKind::Release, confirm.x, pointerLayout.buttonY),
       pointerBounds);
-  ok &= expect(pointerInteraction.activatedButton == 4 &&
+  ok &= expect(pointerInteraction.activation &&
+                   pointerInteraction.activation->dialog == pointerDialogId &&
+                   pointerInteraction.activation->button == 4 &&
                    !pointerModel.active(),
                "a dialog button must activate on release over the armed "
                "button");
+
+  tui_dialog::Content replacementDialog;
+  replacementDialog.title = "Stable dialog identity";
+  const tui_dialog::DialogId replacementId =
+      overlays.openDialog(std::move(replacementDialog));
+  ok &= expect(!overlays.dismissDialog(failureDialogId) &&
+                   overlays.activeLayer() == Layer::Dialog &&
+                   overlays.dismissDialog(replacementId) &&
+                   overlays.activeLayer() == Layer::None,
+               "conditional dismissal must never close a replacement dialog");
 
   overlays.toggleCommandPalette();
   ok &= expect(overlays.openMediaMenu(mediaEntry("empty.mp4"), {}) &&

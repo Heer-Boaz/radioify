@@ -26,8 +26,7 @@ std::vector<std::string> wrapText(const std::string& text, int width) {
     char32_t codepoint = 0;
     std::size_t startByte = 0;
     std::size_t endByte = 0;
-    if (!utf8DecodeCodepoint(text, &offset, &codepoint, &startByte,
-                            &endByte)) {
+    if (!utf8DecodeCodepoint(text, &offset, &codepoint, &startByte, &endByte)) {
       break;
     }
     if (codepoint == U'\r') {
@@ -41,8 +40,7 @@ std::vector<std::string> wrapText(const std::string& text, int width) {
       continue;
     }
     const int glyphWidth = unicodeDisplayWidth(codepoint);
-    if (glyphWidth > 0 && lineWidth > 0 &&
-        lineWidth + glyphWidth > width) {
+    if (glyphWidth > 0 && lineWidth > 0 && lineWidth + glyphWidth > width) {
       lines.emplace_back(text.substr(lineStart, lineEnd - lineStart));
       lineStart = startByte;
       lineEnd = startByte;
@@ -70,18 +68,18 @@ std::vector<RenderLine> buildLines(const Content& content, int width) {
 
 }  // namespace
 
-bool Model::open(Content content) {
+DialogId Model::open(Content content) {
   if (content.buttons.empty()) {
     content.buttons.push_back({0, "Close"});
   }
   content_ = std::move(content);
   selectedButton_ = 0;
   if (content_.initiallySelectedButton) {
-    const auto selected = std::find_if(
-        content_.buttons.begin(), content_.buttons.end(),
-        [&](const Button& button) {
-          return button.id == *content_.initiallySelectedButton;
-        });
+    const auto selected =
+        std::find_if(content_.buttons.begin(), content_.buttons.end(),
+                     [&](const Button& button) {
+                       return button.id == *content_.initiallySelectedButton;
+                     });
     if (selected != content_.buttons.end()) {
       selectedButton_ = static_cast<std::size_t>(
           std::distance(content_.buttons.begin(), selected));
@@ -89,8 +87,12 @@ bool Model::open(Content content) {
   }
   firstVisibleLine_ = 0;
   buttonPointer_.reset();
+  activeDialog_ = DialogId{nextDialogId_++};
+  if (nextDialogId_ == 0) {
+    nextDialogId_ = 1;
+  }
   active_ = true;
-  return true;
+  return activeDialog_;
 }
 
 bool Model::dismiss() {
@@ -103,7 +105,12 @@ bool Model::dismiss() {
   firstVisibleLine_ = 0;
   buttonPointer_.reset();
   active_ = false;
+  activeDialog_ = {};
   return true;
+}
+
+bool Model::dismiss(DialogId expectedDialog) {
+  return active_ && activeDialog_ == expectedDialog && dismiss();
 }
 
 Layout Model::layout(const Bounds& bounds) {
@@ -132,8 +139,7 @@ Layout Model::layout(const Bounds& bounds) {
   result.titleY = result.y + 1;
   result.contentY = result.y + 2;
   result.buttonY = result.y + result.height - 2;
-  result.visibleContentRows =
-      std::max(0, result.buttonY - result.contentY);
+  result.visibleContentRows = std::max(0, result.buttonY - result.contentY);
 
   const int maximumFirstLine =
       std::max(0, static_cast<int>(result.contentLines.size()) -
@@ -141,10 +147,9 @@ Layout Model::layout(const Bounds& bounds) {
   firstVisibleLine_ = std::clamp(firstVisibleLine_, 0, maximumFirstLine);
   result.firstContentLine = firstVisibleLine_;
 
-  result.buttons =
-      tui_button_row::layout(content_.buttons, result.x, result.width,
-                             result.buttonY)
-          .buttons;
+  result.buttons = tui_button_row::layout(content_.buttons, result.x,
+                                          result.width, result.buttonY)
+                       .buttons;
   result.valid = true;
   return result;
 }
@@ -158,8 +163,8 @@ Interaction Model::handle(const InputEvent& event, const Bounds& bounds) {
   result.consumed = true;
   if (event.type == InputEvent::Type::Action &&
       event.action == InputAction::Back) {
+    result.dismissedDialog = activeDialog_;
     result.changed = dismiss();
-    result.dismissed = true;
     return result;
   }
 
@@ -167,8 +172,8 @@ Interaction Model::handle(const InputEvent& event, const Bounds& bounds) {
   if (event.type == InputEvent::Type::Key) {
     switch (event.key.vk) {
       case VK_ESCAPE:
+        result.dismissedDialog = activeDialog_;
         result.changed = dismiss();
-        result.dismissed = true;
         break;
       case VK_LEFT:
         selectAdjacentButton(-1);
@@ -188,13 +193,11 @@ Interaction Model::handle(const InputEvent& event, const Bounds& bounds) {
         result.changed = true;
         break;
       case VK_PRIOR:
-        scrollBy(-std::max(1, currentLayout.visibleContentRows),
-                 currentLayout);
+        scrollBy(-std::max(1, currentLayout.visibleContentRows), currentLayout);
         result.changed = true;
         break;
       case VK_NEXT:
-        scrollBy(std::max(1, currentLayout.visibleContentRows),
-                 currentLayout);
+        scrollBy(std::max(1, currentLayout.visibleContentRows), currentLayout);
         result.changed = true;
         break;
       case VK_RETURN:
@@ -247,8 +250,7 @@ void Model::scrollBy(int rows, const Layout& layout) {
   const int maximumFirstLine =
       std::max(0, static_cast<int>(layout.contentLines.size()) -
                       layout.visibleContentRows);
-  firstVisibleLine_ =
-      std::clamp(firstVisibleLine_ + rows, 0, maximumFirstLine);
+  firstVisibleLine_ = std::clamp(firstVisibleLine_ + rows, 0, maximumFirstLine);
 }
 
 Interaction Model::activateSelected() {
@@ -257,11 +259,11 @@ Interaction Model::activateSelected() {
   if (content_.buttons.empty()) {
     return result;
   }
-  selectedButton_ =
-      std::min(selectedButton_, content_.buttons.size() - 1);
-  result.activatedButton = content_.buttons[selectedButton_].id;
+  selectedButton_ = std::min(selectedButton_, content_.buttons.size() - 1);
+  result.activation =
+      ButtonActivation{activeDialog_, content_.buttons[selectedButton_].id};
+  result.dismissedDialog = activeDialog_;
   result.changed = dismiss();
-  result.dismissed = true;
   return result;
 }
 

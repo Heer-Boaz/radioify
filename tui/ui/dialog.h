@@ -13,6 +13,23 @@ namespace tui_dialog {
 
 using ButtonId = tui_button_row::ButtonId;
 
+struct DialogId {
+  std::uint64_t value = 0;
+
+  constexpr explicit operator bool() const { return value != 0; }
+  friend constexpr bool operator==(DialogId left, DialogId right) {
+    return left.value == right.value;
+  }
+  friend constexpr bool operator!=(DialogId left, DialogId right) {
+    return !(left == right);
+  }
+};
+
+struct ButtonActivation {
+  DialogId dialog;
+  ButtonId button = 0;
+};
+
 enum class TextTone : std::uint8_t {
   Normal,
   Emphasis,
@@ -66,8 +83,8 @@ struct Layout {
 struct Interaction {
   bool consumed = false;
   bool changed = false;
-  bool dismissed = false;
-  std::optional<ButtonId> activatedButton;
+  std::optional<DialogId> dismissedDialog;
+  std::optional<ButtonActivation> activation;
 };
 
 // Input-modal dialog model for the browser shell. It never owns a nested
@@ -75,10 +92,14 @@ struct Interaction {
 // this model exclusively consumes browser input.
 class Model {
  public:
-  bool open(Content content);
+  DialogId open(Content content);
   bool dismiss();
+  bool dismiss(DialogId expectedDialog);
 
   bool active() const { return active_; }
+  std::optional<DialogId> activeId() const {
+    return active_ ? std::optional<DialogId>(activeDialog_) : std::nullopt;
+  }
   const Content& content() const { return content_; }
   std::size_t selectedButton() const { return selectedButton_; }
 
@@ -95,6 +116,8 @@ class Model {
   int firstVisibleLine_ = 0;
   bool active_ = false;
   tui_button_row::PointerState buttonPointer_;
+  DialogId activeDialog_;
+  std::uint64_t nextDialogId_ = 1;
 };
 
 }  // namespace tui_dialog

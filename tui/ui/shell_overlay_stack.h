@@ -32,14 +32,15 @@ struct Interaction {
   bool changed = false;
   std::optional<tui_browser_media_menu::Command> mediaCommand;
   std::optional<shell_command_catalog::Intent> paletteIntent;
-  std::optional<tui_dialog::ButtonId> dialogButton;
+  std::optional<tui_dialog::DialogId> dismissedDialog;
+  std::optional<tui_dialog::ButtonActivation> dialogActivation;
 };
 
 struct Styles;
 class Model;
 void draw(ConsoleScreen& screen, Model& model,
-          const shell_command_catalog::Catalog& catalog,
-          const Bounds& bounds, const Styles& styles);
+          const shell_command_catalog::Catalog& catalog, const Bounds& bounds,
+          const Styles& styles);
 
 // Owns the browser shell's transient overlays as one exclusive stack. Opening
 // one layer always closes the previous layer, and input is routed only to the
@@ -49,12 +50,12 @@ class Model {
   Layer activeLayer() const;
   bool active() const { return activeLayer() != Layer::None; }
 
-  bool openMediaMenu(
-      BrowserEntry entry,
-      std::vector<playback_media_actions::Item> items,
-      tui_popup_menu::Anchor anchor = {});
+  bool openMediaMenu(BrowserEntry entry,
+                     std::vector<playback_media_actions::Item> items,
+                     tui_popup_menu::Anchor anchor = {});
   bool toggleCommandPalette();
-  bool openDialog(tui_dialog::Content content);
+  tui_dialog::DialogId openDialog(tui_dialog::Content content);
+  bool dismissDialog(tui_dialog::DialogId expectedDialog);
   bool dismiss();
 
   Interaction handle(const InputEvent& event, const Bounds& bounds,

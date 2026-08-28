@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "core/unicode_display_width.h"
 
@@ -17,7 +18,58 @@ std::optional<Action> actionAt(
   return static_cast<Action>(actions[*index].id);
 }
 
+void clearDialogSession(std::optional<tui_dialog::DialogId>& dialog,
+                        std::optional<DialogContext>& context) {
+  dialog.reset();
+  context.reset();
+}
+
 }  // namespace
+
+void DialogSession::opened(tui_dialog::DialogId dialog, DialogContext context) {
+  dialog_ = dialog;
+  context_ = std::move(context);
+}
+
+std::optional<tui_dialog::DialogId> DialogSession::synchronize(
+    const std::optional<MediaTaskCardModel>& activeTask) {
+  if (!dialog_ || !context_ || context_->kind != DialogKind::Cancellation) {
+    return std::nullopt;
+  }
+  if (activeTask && activeTask->taskId == context_->taskId &&
+      activeTask->cancellable) {
+    return std::nullopt;
+  }
+  const tui_dialog::DialogId obsolete = *dialog_;
+  clearDialogSession(dialog_, context_);
+  return obsolete;
+}
+
+std::optional<DialogIntent> DialogSession::handle(
+    const tui_dialog::ButtonActivation& activation) {
+  if (!dialog_ || !context_ || activation.dialog != *dialog_) {
+    return std::nullopt;
+  }
+
+  const DialogContext context = *context_;
+  clearDialogSession(dialog_, context_);
+  if (context.kind == DialogKind::Cancellation &&
+      activation.button == kCancelTaskButton) {
+    return DialogIntent{CancelTask{context.taskId}};
+  }
+  if (context.kind == DialogKind::Failure &&
+      activation.button == kMediaTaskDialogRetry && context.retryAction) {
+    return DialogIntent{
+        RetryTask{context.taskId, context.sourceFile, *context.retryAction}};
+  }
+  return std::nullopt;
+}
+
+void DialogSession::dismissed(tui_dialog::DialogId dialog) {
+  if (dialog_ && *dialog_ == dialog) {
+    clearDialogSession(dialog_, context_);
+  }
+}
 
 bool Layout::contains(int pointerX, int pointerY) const {
   return valid && pointerX >= x && pointerX < x + width && pointerY >= y &&
@@ -224,8 +276,8 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
       activate(*action, ActivationSource::Pointer, result);
     }
   }
-  result.consumed = result.consumed || pointer.captured ||
-                    result.activatedAction.has_value();
+  result.consumed =
+      result.consumed || pointer.captured || result.activatedAction.has_value();
   return result;
 }
 
@@ -297,15 +349,28 @@ IndicatorLayout indicatorLayout(int availableWidth, int y,
   return result;
 }
 
-tui_dialog::Content cancellationDialog(const MediaTaskCardModel& task) {
-  tui_dialog::Content content;
-  content.title = "Cancel " + task.operationName + "?";
-  content.text.push_back({"Progress on " + task.sourceName + " will be lost.",
-                          tui_dialog::TextTone::Normal});
-  content.buttons.push_back({kCancelTaskButton, "Cancel task"});
-  content.buttons.push_back({kKeepRunningButton, "Keep running"});
-  content.initiallySelectedButton = kKeepRunningButton;
-  return content;
+DialogRequest cancellationDialogRequest(const MediaTaskCardModel& task) {
+  DialogRequest request;
+  request.context.kind = DialogKind::Cancellation;
+  request.context.taskId = task.taskId;
+  request.content.title = "Cancel " + task.operationName + "?";
+  request.content.text.push_back(
+      {"Progress on " + task.sourceName + " will be lost.",
+       tui_dialog::TextTone::Normal});
+  request.content.buttons.push_back({kCancelTaskButton, "Cancel task"});
+  request.content.buttons.push_back({kKeepRunningButton, "Keep running"});
+  request.content.initiallySelectedButton = kKeepRunningButton;
+  return request;
+}
+
+DialogRequest failureDialogRequest(const MediaTaskFailureDialogModel& failure) {
+  DialogRequest request;
+  request.content = failure.content;
+  request.context.kind = DialogKind::Failure;
+  request.context.taskId = failure.taskId;
+  request.context.sourceFile = failure.sourceFile;
+  request.context.retryAction = failure.retryAction;
+  return request;
 }
 
 }  // namespace tui_media_task_panel

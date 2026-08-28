@@ -80,9 +80,8 @@ int main() {
   interaction = state.handle(
       pointerEvent(MouseEventKind::Press, cancel.x, card.buttons.y, true),
       bounds, noIndicator, task);
-  ok &= expect(
-      interaction.consumed && !interaction.activatedAction,
-      "pressing Cancel must arm the button without activating it");
+  ok &= expect(interaction.consumed && !interaction.activatedAction,
+               "pressing Cancel must arm the button without activating it");
   interaction = state.handle(
       pointerEvent(MouseEventKind::Release, cancel.x, card.buttons.y), bounds,
       noIndicator, task);
@@ -101,10 +100,9 @@ int main() {
 
   interaction = state.handle(pointerEvent(MouseEventKind::Move, 0, 0), bounds,
                              noIndicator, task);
-  ok &= expect(
-      !interaction.consumed && !state.hoveredButton(),
-      "leaving the panel must clear hover without blocking browser "
-      "input");
+  ok &= expect(!interaction.consumed && !state.hoveredButton(),
+               "leaving the panel must clear hover without blocking browser "
+               "input");
 
   interaction = state.handle(keyEvent(VK_TAB), bounds, noIndicator, task);
   ok &= expect(interaction.consumed && interaction.focusChanged &&
@@ -159,10 +157,10 @@ int main() {
   interaction = state.handle(
       pointerEvent(MouseEventKind::Press, indicator.x, indicator.y, true),
       bounds, indicator, task);
-  ok &= expect(interaction.consumed && !interaction.activatedAction &&
-                   state.hidden(),
-               "pressing the footer indicator must arm it without restoring "
-               "the panel early");
+  ok &= expect(
+      interaction.consumed && !interaction.activatedAction && state.hidden(),
+      "pressing the footer indicator must arm it without restoring "
+      "the panel early");
   interaction = state.handle(
       pointerEvent(MouseEventKind::Release, indicator.x, indicator.y), bounds,
       indicator, task);
@@ -181,12 +179,54 @@ int main() {
       "clicking outside a focused panel must return focus and let "
       "the browser receive the click");
 
-  const tui_dialog::Content confirmation = cancellationDialog(task);
-  ok &= expect(confirmation.title == "Cancel audio separation?" &&
-                   confirmation.buttons.size() == 2 &&
-                   confirmation.buttons[0].id == kCancelTaskButton &&
-                   confirmation.initiallySelectedButton == kKeepRunningButton,
-               "cancellation must require a safe-default confirmation");
+  const DialogRequest confirmation = cancellationDialogRequest(task);
+  ok &= expect(
+      confirmation.content.title == "Cancel audio separation?" &&
+          confirmation.content.buttons.size() == 2 &&
+          confirmation.content.buttons[0].id == kCancelTaskButton &&
+          confirmation.content.initiallySelectedButton == kKeepRunningButton &&
+          confirmation.context.taskId == task.taskId,
+      "cancellation must require a safe-default confirmation");
+
+  DialogSession dialogSession;
+  const tui_dialog::DialogId cancellationDialogId{7};
+  dialogSession.opened(cancellationDialogId, confirmation.context);
+  ok &= expect(!dialogSession.synchronize(task),
+               "a cancellation dialog must remain open for its exact active "
+               "task");
+  const std::optional<DialogIntent> cancellationIntent =
+      dialogSession.handle({cancellationDialogId, kCancelTaskButton});
+  const CancelTask* cancelTask =
+      cancellationIntent ? std::get_if<CancelTask>(&*cancellationIntent)
+                         : nullptr;
+  ok &= expect(cancelTask && cancelTask->taskId == task.taskId,
+               "a cancellation button must publish its bound task identity");
+
+  dialogSession.opened(cancellationDialogId, confirmation.context);
+  MediaTaskCardModel differentTask = task;
+  differentTask.taskId = media_processing::TaskId{99};
+  ok &= expect(dialogSession.synchronize(differentTask) == cancellationDialogId,
+               "a stale cancellation dialog must request only its own "
+               "conditional dismissal");
+
+  MediaTaskFailureDialogModel failure;
+  failure.taskId = media_processing::TaskId{100};
+  failure.sourceFile = "NTE.mp4";
+  failure.retryAction = playback_media_actions::Action::SeparateAudio;
+  failure.content.buttons = {{kMediaTaskDialogClose, "Close"},
+                             {kMediaTaskDialogRetry, "Retry"}};
+  const DialogRequest retryRequest = failureDialogRequest(failure);
+  const tui_dialog::DialogId failureDialogId{8};
+  dialogSession.opened(failureDialogId, retryRequest.context);
+  const std::optional<DialogIntent> retryIntent =
+      dialogSession.handle({failureDialogId, kMediaTaskDialogRetry});
+  const RetryTask* retryTask =
+      retryIntent ? std::get_if<RetryTask>(&*retryIntent) : nullptr;
+  ok &= expect(retryTask && retryTask->taskId == failure.taskId &&
+                   retryTask->sourceFile == failure.sourceFile &&
+                   retryTask->action == *failure.retryAction,
+               "a failure dialog must publish a typed retry for the failure "
+               "it displays");
 
   task.cancellable = false;
   const std::vector<tui_button_row::Button> nonCancellableActions =
