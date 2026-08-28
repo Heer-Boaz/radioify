@@ -98,6 +98,7 @@ class WorkerTask {
         });
       } catch (const std::exception& exception) {
         TaskCompletion completion;
+        completion.id = activity_->id;
         completion.kind = activity_->kind;
         completion.outcome = TaskOutcome::Failed;
         completion.sourceFile = activity_->sourceFile;
@@ -108,6 +109,7 @@ class WorkerTask {
         activity_.reset();
       } catch (...) {
         TaskCompletion completion;
+        completion.id = activity_->id;
         completion.kind = activity_->kind;
         completion.outcome = TaskOutcome::Failed;
         completion.sourceFile = activity_->sourceFile;
@@ -214,6 +216,7 @@ class WorkerTask {
     } catch (const std::exception& exception) {
       std::lock_guard<std::mutex> lock(mutex_);
       if (activity_) {
+        completion.id = activity_->id;
         completion.kind = activity_->kind;
         completion.sourceFile = activity_->sourceFile;
       }
@@ -223,6 +226,7 @@ class WorkerTask {
     } catch (...) {
       std::lock_guard<std::mutex> lock(mutex_);
       if (activity_) {
+        completion.id = activity_->id;
         completion.kind = activity_->kind;
         completion.sourceFile = activity_->sourceFile;
       }
@@ -238,6 +242,9 @@ class WorkerTask {
 
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      if (activity_) {
+        completion.id = activity_->id;
+      }
       completion_ = std::move(completion);
       activity_.reset();
     }
@@ -314,14 +321,17 @@ struct Coordinator::Impl {
   std::unique_ptr<playback_video_transcript::GenerationJob> subtitles;
   std::unique_ptr<audio_separation::Job> audioSeparation;
   std::shared_ptr<InteractivePlaybackState> interactivePlayback;
-  bool subtitleCompletionPending = false;
-  bool audioSeparationCompletionPending = false;
+  std::optional<TaskId> subtitleTask;
+  std::optional<TaskId> audioSeparationTask;
   std::vector<TaskCompletion> queuedCompletions;
   std::optional<TaskCompletion> latestCompletion;
+  std::uint64_t nextTaskId = 1;
+
+  TaskId allocateTaskId() { return TaskId{nextTaskId++}; }
 
   bool completionPending() const {
-    return workerTask.hasPendingCompletion() || subtitleCompletionPending ||
-           audioSeparationCompletionPending;
+    return workerTask.hasPendingCompletion() || subtitleTask.has_value() ||
+           audioSeparationTask.has_value();
   }
 };
 
@@ -361,6 +371,7 @@ std::optional<TaskActivity> Coordinator::activity() const {
     const auto snapshot = impl_->subtitles->snapshot();
     if (snapshot.running()) {
       TaskActivity activity;
+      activity.id = impl_->subtitleTask.value_or(TaskId{});
       activity.kind = TaskKind::SubtitleGeneration;
       activity.sourceFile = snapshot.sourceFile;
       activity.progress = std::clamp(snapshot.progress, 0.0f, 1.0f);
@@ -374,6 +385,7 @@ std::optional<TaskActivity> Coordinator::activity() const {
     const auto snapshot = impl_->audioSeparation->snapshot();
     if (snapshot.running()) {
       TaskActivity activity;
+      activity.id = impl_->audioSeparationTask.value_or(TaskId{});
       activity.kind = TaskKind::AudioSeparation;
       activity.sourceFile = snapshot.sourceFile;
       activity.progress = std::clamp(snapshot.progress, 0.0f, 1.0f);
@@ -416,12 +428,13 @@ bool Coordinator::collectReadyCompletions() {
   if (impl_->subtitles) {
     if (auto completion = impl_->subtitles->takeCompletion()) {
       TaskCompletion taskCompletion;
+      taskCompletion.id = impl_->subtitleTask.value_or(TaskId{});
       taskCompletion.kind = TaskKind::SubtitleGeneration;
       taskCompletion.outcome = outcomeFor(*completion);
       taskCompletion.sourceFile = completion->sourceFile;
       taskCompletion.outputFile = completion->outputFile;
       taskCompletion.detail = completion->error;
-      impl_->subtitleCompletionPending = false;
+      impl_->subtitleTask.reset();
       impl_->latestCompletion = taskCompletion;
       impl_->queuedCompletions.push_back(std::move(taskCompletion));
       collected = true;
@@ -431,13 +444,15 @@ bool Coordinator::collectReadyCompletions() {
   if (impl_->audioSeparation) {
     if (auto completion = impl_->audioSeparation->takeCompletion()) {
       TaskCompletion taskCompletion;
+      taskCompletion.id =
+          impl_->audioSeparationTask.value_or(TaskId{});
       taskCompletion.kind = TaskKind::AudioSeparation;
       taskCompletion.outcome = outcomeFor(*completion);
       taskCompletion.sourceFile = completion->sourceFile;
       taskCompletion.outputFile = completion->outputFiles.front();
       taskCompletion.diagnosticLog = completion->diagnosticLog;
       taskCompletion.detail = completion->error;
-      impl_->audioSeparationCompletionPending = false;
+      impl_->audioSeparationTask.reset();
       impl_->latestCompletion = taskCompletion;
       impl_->queuedCompletions.push_back(std::move(taskCompletion));
       collected = true;
@@ -489,6 +504,7 @@ RequestResult Coordinator::tryStartMelodyAnalysis(
 
   const MelodyOperation operation = impl_->analyzeMelody;
   TaskActivity activity;
+  activity.id = impl_->allocateTaskId();
   activity.kind = TaskKind::MelodyAnalysis;
   activity.sourceFile = sourceFile;
   activity.progress = 0.0f;
@@ -552,6 +568,7 @@ RequestResult Coordinator::tryStartLoopSplit(
 
   const LoopSplitOperation operation = impl_->splitLoop;
   TaskActivity activity;
+  activity.id = impl_->allocateTaskId();
   activity.kind = TaskKind::LoopSplit;
   activity.sourceFile = sourceFile;
   activity.phase = "Preparing loop split";
@@ -608,6 +625,7 @@ RequestResult Coordinator::tryStartFileExport(
   }
   if (const auto conflict = startConflict()) return rejected(*conflict);
   TaskActivity activity;
+  activity.id = impl_->allocateTaskId();
   activity.kind = kind;
   activity.sourceFile = sourceFile;
   activity.progress = 0.0f;
@@ -686,11 +704,13 @@ RequestResult Coordinator::requestSubtitles(
     return rejected(RequestFailure::UnsupportedSource);
   }
   if (const auto conflict = startConflict()) return rejected(*conflict);
+  const TaskId task = impl_->allocateTaskId();
+  impl_->subtitleTask = task;
   if (!impl_->subtitles->tryStart(sourceFile)) {
+    impl_->subtitleTask.reset();
     return rejected(RequestFailure::InternalError,
                     "the subtitle-generation worker rejected the request");
   }
-  impl_->subtitleCompletionPending = true;
   impl_->latestCompletion.reset();
   return RequestResult::accepted();
 }
@@ -717,13 +737,15 @@ RequestResult Coordinator::requestAudioSeparation(
     std::lock_guard<std::mutex> lock(impl_->interactivePlayback->mutex);
     initiallyPaused = impl_->interactivePlayback->leaseCount > 0;
   }
+  const TaskId task = impl_->allocateTaskId();
+  impl_->audioSeparationTask = task;
   if (!impl_->audioSeparation->tryStart(
           sourceFile,
           audio_separation::JobStartOptions{initiallyPaused})) {
+    impl_->audioSeparationTask.reset();
     return rejected(RequestFailure::InternalError,
                     "the audio-separation worker rejected the request");
   }
-  impl_->audioSeparationCompletionPending = true;
   impl_->latestCompletion.reset();
   return RequestResult::accepted();
 }
@@ -862,17 +884,22 @@ RequestResult Coordinator::requestMediaExportCancellation() {
                         "the export worker rejected cancellation");
 }
 
-bool Coordinator::cancelActive() {
+bool Coordinator::cancelActive(TaskId expectedTask) {
   if (!impl_) return false;
-  if (impl_->workerTask.running()) {
-    return impl_->workerTask.requestCancel();
+  const std::optional<TaskActivity> current = activity();
+  if (!current || current->id != expectedTask) {
+    return false;
   }
-  if (impl_->subtitles && impl_->subtitles->snapshot().running()) {
-    return requestSubtitleCancellation().wasAccepted();
-  }
-  if (impl_->audioSeparation &&
-      impl_->audioSeparation->snapshot().running()) {
-    return requestAudioSeparationCancellation().wasAccepted();
+  switch (current->kind) {
+    case TaskKind::MelodyAnalysis:
+    case TaskKind::LoopSplit:
+    case TaskKind::AudioExport:
+    case TaskKind::TranscriptTextExport:
+      return impl_->workerTask.requestCancel();
+    case TaskKind::SubtitleGeneration:
+      return requestSubtitleCancellation().wasAccepted();
+    case TaskKind::AudioSeparation:
+      return requestAudioSeparationCancellation().wasAccepted();
   }
   return false;
 }

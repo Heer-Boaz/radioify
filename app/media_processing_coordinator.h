@@ -10,6 +10,7 @@
 
 #include "audio/loopsplit/loopsplit.h"
 #include "audio/separation/job.h"
+#include "app/media_processing_task_id.h"
 #include "core/native_wait_handle.h"
 #include "playback/media_processing_service.h"
 #include "playback/video/transcript/generation_job.h"
@@ -33,6 +34,7 @@ enum class TaskSchedulingState {
 };
 
 struct TaskActivity {
+  TaskId id;
   TaskKind kind = TaskKind::MelodyAnalysis;
   std::filesystem::path sourceFile;
   // Empty means that the backend cannot measure completion yet. UI surfaces
@@ -45,6 +47,7 @@ struct TaskActivity {
 };
 
 struct TaskCompletion {
+  TaskId id;
   TaskKind kind = TaskKind::MelodyAnalysis;
   TaskOutcome outcome = TaskOutcome::Failed;
   std::filesystem::path sourceFile;
@@ -173,7 +176,10 @@ class Coordinator final : public playback_media_processing::Service {
   bool transcriptTextExportAvailableFor(
       const std::filesystem::path& sourceFile) const;
 
-  bool cancelActive();
+  // Cancels only when the active task still has the identity observed by the
+  // caller. This prevents a stale confirmation surface from cancelling a
+  // newer task.
+  bool cancelActive(TaskId expectedTask);
 
   // A lease makes foreground resource ownership follow the playback
   // lifecycle. ready() becomes true only after resource-intensive background

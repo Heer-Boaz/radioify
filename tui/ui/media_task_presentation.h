@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 
+#include "app/media_processing_task_id.h"
 #include "dialog.h"
 #include "playback/media_action_catalog.h"
 
@@ -14,6 +15,7 @@ struct TaskCompletion;
 }
 
 struct MediaTaskCardModel {
+  media_processing::TaskId taskId;
   std::string title;
   std::string operationName;
   std::string sourceName;
@@ -31,6 +33,7 @@ inline constexpr tui_dialog::ButtonId kMediaTaskDialogClose = 0;
 inline constexpr tui_dialog::ButtonId kMediaTaskDialogRetry = 1;
 
 struct MediaTaskFailureDialogModel {
+  media_processing::TaskId taskId;
   tui_dialog::Content content;
   std::filesystem::path sourceFile;
   std::optional<playback_media_actions::Action> retryAction;

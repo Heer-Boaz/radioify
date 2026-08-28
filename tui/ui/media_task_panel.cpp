@@ -29,14 +29,32 @@ bool IndicatorLayout::contains(int pointerX, int pointerY) const {
 }
 
 void State::synchronize(const std::optional<MediaTaskCardModel>& task) {
-  if (!task) {
+  const std::optional<media_processing::TaskId> nextTask =
+      task ? std::optional<media_processing::TaskId>(task->taskId)
+           : std::nullopt;
+  if (taskId_ != nextTask) {
     hidden_ = false;
     focused_ = false;
     selectedButton_ = 0;
     buttonPointer_.reset();
+    actionIds_.clear();
+    taskId_ = nextTask;
+  }
+  if (!task) {
     return;
   }
-  const std::size_t actionCount = actionsFor(*task).size();
+
+  const std::vector<tui_button_row::Button> actions = actionsFor(*task);
+  std::vector<tui_button_row::ButtonId> nextActionIds;
+  nextActionIds.reserve(actions.size());
+  for (const tui_button_row::Button& action : actions) {
+    nextActionIds.push_back(action.id);
+  }
+  if (actionIds_ != nextActionIds) {
+    buttonPointer_.reset();
+    actionIds_ = std::move(nextActionIds);
+  }
+  const std::size_t actionCount = actions.size();
   selectedButton_ =
       actionCount == 0 ? 0 : std::min(selectedButton_, actionCount - 1);
 }

@@ -41,6 +41,7 @@ int main() {
   bool ok = true;
 
   MediaTaskCardModel task;
+  task.taskId = media_processing::TaskId{42};
   task.title = "Separating audio";
   task.operationName = "audio separation";
   task.sourceName = "NTE.mp4";
@@ -56,6 +57,7 @@ int main() {
              "an active task must expose direct Cancel and Hide buttons");
 
   State state;
+  state.synchronize(task);
   const tui_button_row::Placement& cancel = card.buttons.buttons.front();
   Interaction interaction =
       state.handle(pointerEvent(MouseEventKind::Move, cancel.x, card.buttons.y),
@@ -202,6 +204,18 @@ int main() {
   ok &= expect(!state.hidden() && !state.focused(),
                "task completion must reset presentation state for the next "
                "background task");
+
+  MediaTaskCardModel replacement = task;
+  replacement.taskId = media_processing::TaskId{43};
+  state.synchronize(replacement);
+  state.handle(keyEvent(VK_TAB), bounds, noIndicator, replacement);
+  state.handle(keyEvent(VK_RETURN), bounds, noIndicator, replacement);
+  ok &= expect(state.hidden(), "the replacement task must remain actionable");
+  replacement.taskId = media_processing::TaskId{44};
+  state.synchronize(replacement);
+  ok &= expect(!state.hidden() && !state.focused(),
+               "a new task identity must not inherit hidden or focused state "
+               "from its predecessor");
 
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

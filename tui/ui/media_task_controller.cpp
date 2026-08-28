@@ -40,8 +40,8 @@ Update Controller::poll() {
   return update;
 }
 
-bool Controller::cancelActive() {
-  if (!coordinator_.cancelActive()) {
+bool Controller::cancelActive(media_processing::TaskId expectedTask) {
+  if (!coordinator_.cancelActive(expectedTask)) {
     return false;
   }
   refreshSnapshot();

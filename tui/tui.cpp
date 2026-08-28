@@ -1455,7 +1455,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         }
         if (interaction.dialogButton ==
             tui_media_task_panel::kCancelTaskButton) {
-          if (mediaTasks.cancelActive()) {
+          const auto& activeTask = mediaTasks.snapshot().activeCard;
+          if (activeTask && mediaTasks.cancelActive(activeTask->taskId)) {
             markDirty(UiDirtyFlags::Async);
           }
         }

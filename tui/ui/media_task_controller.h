@@ -38,7 +38,7 @@ class Controller {
       const std::filesystem::path& sourceFile) const;
 
   Update poll();
-  bool cancelActive();
+  bool cancelActive(media_processing::TaskId expectedTask);
   NativeWaitHandle waitHandle() const;
 
   const Snapshot& snapshot() const { return snapshot_; }

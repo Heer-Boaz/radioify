@@ -94,6 +94,8 @@ class State {
   bool focused_ = false;
   std::size_t selectedButton_ = 0;
   tui_button_row::PointerState buttonPointer_;
+  std::optional<media_processing::TaskId> taskId_;
+  std::vector<tui_button_row::ButtonId> actionIds_;
 };
 
 std::vector<tui_button_row::Button> actionsFor(const MediaTaskCardModel& task);

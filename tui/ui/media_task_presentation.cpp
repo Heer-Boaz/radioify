@@ -207,6 +207,7 @@ std::optional<playback_media_actions::Action> retryAction(
 MediaTaskCardModel mediaTaskCardModel(
     const media_processing::TaskActivity& activity) {
   MediaTaskCardModel model;
+  model.taskId = activity.id;
   model.title = activityTitle(activity);
   model.operationName = activityOperationName(activity.kind);
   model.sourceName = activity.sourceFile.empty()
@@ -235,6 +236,7 @@ std::optional<MediaTaskFailureDialogModel> mediaTaskFailureDialogModel(
   }
 
   MediaTaskFailureDialogModel model;
+  model.taskId = completion.id;
   model.sourceFile = completion.sourceFile;
   model.retryAction = retryAction(completion.kind);
   model.content.title = failureTitle(completion.kind);

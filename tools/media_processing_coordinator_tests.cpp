@@ -338,7 +338,8 @@ int main() {
                    melody->progress && *melody->progress == 0.4f &&
                    melody->cancellable &&
                    melodyCard && melodyCard->title == "Analyzing melody" &&
-                   melodyCard->actionHint == "F1: Task actions" &&
+                   melodyCard->taskId == melody->id &&
+                   melodyCard->cancellable &&
                    !busyLoop.wasAccepted() && busyLoop.error() &&
                    busyLoop.error()->failure ==
                        playback_media_processing::RequestFailure::Busy &&
@@ -357,6 +358,7 @@ int main() {
   const std::optional<MediaTaskStatusModel> melodyStatus =
       presenter.latestStatus();
   ok &= expect(melodyCompletion && melodyCompletion->succeeded() &&
+                   melodyCompletion->id == melody->id &&
                    melodyStatus && melodyStatus->text ==
                        "Analyze: Saved clip.melody and clip.mid" &&
                    !processing::completionForPlayback(*melodyCompletion),
@@ -371,20 +373,27 @@ int main() {
                    }),
                "starting new work must retire the previous footer result");
   const std::optional<MediaTaskCardModel> loopCard = presenter.activeCard();
-  ok &= expect(loopCard && !loopCard->progress &&
-                   loopCard->actionHint == "F1: Task actions" &&
+  const std::optional<processing::TaskActivity> loopActivity =
+      coordinator.activity();
+  ok &= expect(loopCard && loopActivity && !loopCard->progress &&
+                   loopCard->taskId == loopActivity->id &&
+                   loopCard->cancellable &&
                    loopCard->title == "Splitting loop",
                "tasks without measurable progress must stay indeterminate");
-  ok &= expect(coordinator.cancelActive() && !coordinator.cancelActive(),
+  ok &= expect(
+      !coordinator.cancelActive(melody->id) &&
+          coordinator.cancelActive(loopActivity->id) &&
+          !coordinator.cancelActive(loopActivity->id),
                "generic background work must accept cancellation once");
   const std::optional<MediaTaskCardModel> cancellingLoopCard =
       presenter.activeCard();
   ok &= expect(cancellingLoopCard &&
-                   !cancellingLoopCard->actionHint &&
+                   !cancellingLoopCard->cancellable &&
                    cancellingLoopCard->title == "Cancelling loop split",
                "generic cancellation must reach the shared task card");
   const auto cancelledLoopCompletion = waitForCompletion(coordinator);
   ok &= expect(cancelledLoopCompletion &&
+                   cancelledLoopCompletion->id == loopActivity->id &&
                    cancelledLoopCompletion->outcome ==
                        processing::TaskOutcome::Cancelled,
                "a cancelled generic worker must publish a cancelled result");
@@ -428,8 +437,8 @@ int main() {
                        "Generating subtitles" &&
                    mediaTaskCardModel(*subtitles).detail ==
                        "Transcribing audio" &&
-                   mediaTaskCardModel(*subtitles).actionHint ==
-                       "F1: Task actions",
+                   mediaTaskCardModel(*subtitles).taskId == subtitles->id &&
+                   mediaTaskCardModel(*subtitles).cancellable,
                "backend phases must reach the generic task card");
   releaseSubtitles.store(true, std::memory_order_release);
   const auto subtitleCompletion = waitForCompletion(coordinator);
@@ -438,6 +447,7 @@ int main() {
           ? processing::completionForPlayback(*subtitleCompletion)
           : std::nullopt;
   ok &= expect(subtitleCompletion && subtitleCompletion->succeeded() &&
+                   subtitleCompletion->id == subtitles->id &&
                    subtitleCompletion->outputFile ==
                        std::filesystem::path("movie.transcript.srt") &&
                    playbackSubtitleCompletion &&
@@ -508,8 +518,9 @@ int main() {
   ok &= expect(runningSeparationSuspended && runningSeparationResumed,
                "a foreground lease must become ready only after active "
                "background work suspends and must resume it on release");
-  ok &= expect(coordinator.cancelActive() &&
-                   !coordinator.cancelActive() &&
+  ok &= expect(pausedSeparation &&
+                   coordinator.cancelActive(pausedSeparation->id) &&
+                   !coordinator.cancelActive(pausedSeparation->id) &&
                    waitUntil([&]() {
                      return separationCancellationObserved.load(
                          std::memory_order_acquire);
@@ -527,7 +538,7 @@ int main() {
                    separationSourceState.audioSeparationRunning &&
                    mediaTaskCardModel(*cancelling).title ==
                        "Cancelling audio separation" &&
-                   !mediaTaskCardModel(*cancelling).actionHint,
+                   !mediaTaskCardModel(*cancelling).cancellable,
                "cancellation must remain an explicit generic activity state");
   releaseSeparation.store(true, std::memory_order_release);
   const auto separationCompletion = waitForCompletion(coordinator);
@@ -536,6 +547,7 @@ int main() {
           ? processing::completionForPlayback(*separationCompletion)
           : std::nullopt;
   ok &= expect(separationCompletion &&
+                   separationCompletion->id == pausedSeparation->id &&
                    separationCompletion->outcome ==
                        processing::TaskOutcome::Cancelled &&
                    playbackSeparationCompletion &&
@@ -714,8 +726,10 @@ int main() {
   const bool cancellableRunning = waitUntil([&]() {
     return separationStarted.load(std::memory_order_acquire);
   });
+  const auto cancellableCard = taskController.snapshot().activeCard;
   const bool cancellationAccepted =
-      taskController.cancelActive();
+      cancellableCard &&
+      taskController.cancelActive(cancellableCard->taskId);
   const bool cancellationReachedWorker = waitUntil([&]() {
     return separationCancellationObserved.load(std::memory_order_acquire);
   });
@@ -727,7 +741,8 @@ int main() {
           cancellationAccepted && cancellationReachedWorker &&
           cancellingCard &&
           cancellingCard->title == "Cancelling audio separation" &&
-          !cancellingCard->actionHint && controllerCancellation &&
+          !cancellingCard->cancellable && controllerCancellation &&
+          controllerCancellation->id == cancellableCard->taskId &&
           controllerCancellation->outcome ==
               processing::TaskOutcome::Cancelled &&
           taskController.snapshot().latestStatus &&
