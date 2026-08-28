@@ -249,6 +249,10 @@ bool BanditMaskModel::initialize(const std::filesystem::path& modelPath,
     options.AddFreeDimensionOverrideByName("batch", kInputShape[0]);
     options.AddFreeDimensionOverrideByName("time", kInputShape[3]);
     Ort::KeyValuePairs providerOptions;
+    // Fixed dimensions and stable reusable tensor addresses satisfy the DML
+    // capture contract and avoid rebuilding this recurrent command graph for
+    // every eight-second inference window.
+    providerOptions.Add("enable_graph_capture", "true");
     options.AppendExecutionProvider_V2(implementation->environment,
                                        directMlDevices, providerOptions);
     implementation->session = std::make_unique<Ort::Session>(
