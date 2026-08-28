@@ -7,6 +7,7 @@
 
 #include "browser_media_menu.h"
 #include "command_palette.h"
+#include "dialog.h"
 #include "shell_command_catalog.h"
 
 class ConsoleScreen;
@@ -17,6 +18,7 @@ enum class Layer : std::uint8_t {
   None,
   MediaMenu,
   CommandPalette,
+  Dialog,
 };
 
 struct Bounds {
@@ -30,6 +32,7 @@ struct Interaction {
   bool changed = false;
   std::optional<tui_browser_media_menu::Command> mediaCommand;
   std::optional<shell_command_catalog::Intent> paletteIntent;
+  std::optional<tui_dialog::ButtonId> dialogButton;
 };
 
 struct Styles;
@@ -51,6 +54,7 @@ class Model {
       std::vector<playback_media_actions::Item> items,
       tui_popup_menu::Anchor anchor = {});
   bool toggleCommandPalette();
+  bool openDialog(tui_dialog::Content content);
   bool dismiss();
 
   Interaction handle(const InputEvent& event, const Bounds& bounds,
@@ -63,6 +67,7 @@ class Model {
 
   tui_browser_media_menu::Model mediaMenu_;
   tui_command_palette::Model commandPalette_;
+  tui_dialog::Model dialog_;
 };
 
 }  // namespace shell_overlay_stack

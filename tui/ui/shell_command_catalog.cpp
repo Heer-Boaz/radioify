@@ -20,6 +20,12 @@ std::string browserShortcutLabel(browser_input::KeyAction action) {
 
 Catalog build(const Context& context) {
   Catalog catalog;
+  if (context.activeMediaTaskCancellable) {
+    catalog.add("Cancel Background Task", "", CancelMediaTask{});
+  }
+  if (context.mediaTaskFailureAvailable) {
+    catalog.add("Show Last Task Error", "", ShowMediaTaskFailure{});
+  }
   catalog.add("Play/Pause",
               playbackShortcutLabel(PlaybackAction::TogglePause),
               PlaybackAction::TogglePause);

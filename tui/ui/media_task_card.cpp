@@ -14,13 +14,10 @@ void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth,
                        const MediaTaskCardStyles& styles) {
   if (screenWidth < 4 || screenHeight - top < 3) return;
 
-  const std::string cancelHint =
-      model.cancelAction
-          ? model.cancelAction->shortcut + ": " + model.cancelAction->label
-          : std::string{};
+  const std::string actionHint = model.actionHint.value_or(std::string{});
   int contentWidth = std::max(
       {utf8DisplayWidth(model.title), utf8DisplayWidth(model.sourceName),
-       utf8DisplayWidth(model.detail), utf8DisplayWidth(cancelHint)});
+       utf8DisplayWidth(model.detail), utf8DisplayWidth(actionHint)});
   const int desiredWidth = std::max(46, contentWidth + 4);
   const int popupWidth = std::clamp(desiredWidth, 4, screenWidth);
   const int innerWidth = std::max(1, popupWidth - 2);
@@ -54,8 +51,8 @@ void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth,
     progressLine = "Working...";
   }
   lines.push_back({std::move(progressLine), styles.progress});
-  if (model.cancelAction) {
-    lines.push_back({cancelHint, styles.secondary});
+  if (model.actionHint) {
+    lines.push_back({actionHint, styles.secondary});
   }
 
   const int availableHeight = screenHeight - top;

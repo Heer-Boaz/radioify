@@ -91,6 +91,22 @@ int main() {
   ok &= expect(media.intentAt(media.commands().size()) == nullptr,
                "out-of-range palette selections must be rejected");
 
+  Context tasks;
+  tasks.activeMediaTaskCancellable = true;
+  tasks.mediaTaskFailureAvailable = true;
+  const Catalog taskCommands = shell_command_catalog::build(tasks);
+  const auto* cancelTask =
+      findIntent(taskCommands, "Cancel Background Task");
+  const auto* showFailure =
+      findIntent(taskCommands, "Show Last Task Error");
+  ok &= expect(
+      cancelTask &&
+          std::get_if<shell_command_catalog::CancelMediaTask>(cancelTask) &&
+          showFailure &&
+          std::get_if<shell_command_catalog::ShowMediaTaskFailure>(
+              showFailure),
+      "background-task commands must use typed palette intents");
+
   active.pitchMonitorActive = true;
   const Catalog pitch = shell_command_catalog::build(active);
   ok &= expect(hasCommand(pitch, "Hide Pitch Monitor") &&

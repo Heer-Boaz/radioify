@@ -12,12 +12,10 @@ namespace tui_shell_shortcuts {
 
 enum class Action : std::uint8_t {
   ToggleCommandPalette,
-  CancelMediaTask,
 };
 
 enum class Context : std::uint8_t {
   Browser = 1u << 0,
-  Global = 1u << 1,
 };
 
 inline constexpr std::uint8_t context(Context value) {
@@ -33,13 +31,10 @@ struct Binding {
   std::string_view label;
 };
 
-inline constexpr std::array<Binding, 2> kBindings = {{
+inline constexpr std::array<Binding, 1> kBindings = {{
     {Action::ToggleCommandPalette, VK_F1, 0,
      kShortcutCtrlMask | kShortcutAltMask | kShortcutShiftMask,
      context(Context::Browser), "F1"},
-    {Action::CancelMediaTask, VK_F8, 0,
-     kShortcutCtrlMask | kShortcutAltMask | kShortcutShiftMask,
-     context(Context::Global), "F8"},
 }};
 
 inline std::optional<Action> resolve(const InputEvent& event,

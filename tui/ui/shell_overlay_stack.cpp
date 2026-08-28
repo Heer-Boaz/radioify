@@ -5,6 +5,9 @@
 namespace shell_overlay_stack {
 
 Layer Model::activeLayer() const {
+  if (dialog_.active()) {
+    return Layer::Dialog;
+  }
   if (mediaMenu_.active()) {
     return Layer::MediaMenu;
   }
@@ -18,6 +21,9 @@ bool Model::openMediaMenu(
     BrowserEntry entry,
     std::vector<playback_media_actions::Item> items,
     tui_popup_menu::Anchor anchor) {
+  if (dialog_.active()) {
+    return false;
+  }
   const bool paletteDismissed = commandPalette_.dismiss();
   const bool menuWasActive = mediaMenu_.active();
   const bool menuOpened = mediaMenu_.open(
@@ -26,6 +32,9 @@ bool Model::openMediaMenu(
 }
 
 bool Model::toggleCommandPalette() {
+  if (dialog_.active()) {
+    return false;
+  }
   if (commandPalette_.active()) {
     return commandPalette_.dismiss();
   }
@@ -34,10 +43,17 @@ bool Model::toggleCommandPalette() {
   return true;
 }
 
+bool Model::openDialog(tui_dialog::Content content) {
+  mediaMenu_.dismiss();
+  commandPalette_.dismiss();
+  return dialog_.open(std::move(content));
+}
+
 bool Model::dismiss() {
   const bool mediaMenuDismissed = mediaMenu_.dismiss();
   const bool paletteDismissed = commandPalette_.dismiss();
-  return mediaMenuDismissed || paletteDismissed;
+  const bool dialogDismissed = dialog_.dismiss();
+  return mediaMenuDismissed || paletteDismissed || dialogDismissed;
 }
 
 Interaction Model::handle(
@@ -72,6 +88,18 @@ Interaction Model::handle(
           result.paletteIntent = *intent;
         }
       }
+      break;
+    }
+    case Layer::Dialog: {
+      tui_dialog::Bounds dialogBounds;
+      dialogBounds.width = bounds.width;
+      dialogBounds.height = bounds.height;
+      dialogBounds.topInset = bounds.topInset;
+      const tui_dialog::Interaction interaction =
+          dialog_.handle(event, dialogBounds);
+      result.consumed = interaction.consumed;
+      result.changed = interaction.changed;
+      result.dialogButton = interaction.activatedButton;
       break;
     }
     case Layer::None:

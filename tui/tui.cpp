@@ -627,17 +627,6 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
     return handles;
   };
-  auto handleGlobalShellShortcut = [&](const InputEvent& event) {
-    const auto action = tui_shell_shortcuts::resolve(
-        event, tui_shell_shortcuts::context(
-                   tui_shell_shortcuts::Context::Global));
-    if (action != tui_shell_shortcuts::Action::CancelMediaTask ||
-        !mediaTasks.cancelActive()) {
-      return false;
-    }
-    markDirty(UiDirtyFlags::Async);
-    return true;
-  };
   auto buildPlaybackLabel =
       [&](const std::optional<PlaybackTarget>& target) {
     const std::filesystem::path nowPlaying =
@@ -694,7 +683,9 @@ int runTui(Options o, ApplicationRuntime& runtime) {
 
   shell_overlay_stack::Model shellOverlays;
   const shell_overlay_stack::Styles shellOverlayStyles{
-      theme.popupMenuStyles(), theme.commandPaletteStyles()};
+      theme.popupMenuStyles(), theme.commandPaletteStyles(),
+      theme.dialogStyles()};
+  std::optional<MediaTaskFailureDialogModel> pendingMediaTaskFailure;
 
   auto selectedOptionsSubject = [&]()
       -> std::optional<OptionsBrowserSubject> {
@@ -1122,6 +1113,11 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         selectedOptionsSubject().has_value();
     context.currentTargetAvailable =
         presentation.currentTarget.has_value();
+    context.activeMediaTaskCancellable =
+        mediaTasks.snapshot().activeCard &&
+        mediaTasks.snapshot().activeCard->cancellable;
+    context.mediaTaskFailureAvailable =
+        mediaTasks.snapshot().latestFailure.has_value();
     return shell_command_catalog::build(context);
   };
 
@@ -1144,6 +1140,20 @@ int runTui(Options o, ApplicationRuntime& runtime) {
                 playbackPresenter.model();
             if (current.currentTarget) {
               browserPlaybackRevealer.reveal(*current.currentTarget);
+            }
+          } else if constexpr (
+              std::is_same_v<Intent,
+                             shell_command_catalog::CancelMediaTask>) {
+            if (mediaTasks.cancelActive()) {
+              markDirty(UiDirtyFlags::Async);
+            }
+          } else if constexpr (
+              std::is_same_v<Intent,
+                             shell_command_catalog::ShowMediaTaskFailure>) {
+            const auto& failure = mediaTasks.snapshot().latestFailure;
+            if (failure) {
+              shellOverlays.openDialog(failure->content);
+              markDirty();
             }
           }
         },
@@ -1217,6 +1227,10 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     for (const media_processing::TaskCompletion& completion :
          taskUpdate.completions) {
       mediaCoordinator.handleMediaTaskCompletion(completion);
+      if (std::optional<MediaTaskFailureDialogModel> failure =
+              mediaTaskFailureDialogModel(completion)) {
+        pendingMediaTaskFailure = std::move(*failure);
+      }
     }
     if (taskUpdate.layoutChanged) {
       markLayoutDirty();
@@ -1232,6 +1246,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       browserDoubleClickTracker.reset();
       markLayoutDirty();
       forceFullRedraw = true;
+    }
+    if (terminalRole == PlaybackShellTerminalRole::Browser &&
+        pendingMediaTaskFailure) {
+      shellOverlays.openDialog(pendingMediaTaskFailure->content);
+      pendingMediaTaskFailure.reset();
+      markDirty();
     }
     while (std::optional<BrowserContentService::Completion>
                browserContentCompletion = browserContentService.poll()) {
@@ -1297,9 +1317,6 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         if (playbackEvent.type == InputEvent::Type::Resize) {
           screen.updateSize();
         }
-        if (handleGlobalShellShortcut(playbackEvent)) {
-          continue;
-        }
         mediaCoordinator.handleVideoInputEvent(playbackEvent);
         continue;
       }
@@ -1324,9 +1341,6 @@ int runTui(Options o, ApplicationRuntime& runtime) {
             ev.mouse, screen.cellPixelWidth(), screen.cellPixelHeight());
       } else {
         browserDoubleClickTracker.reset();
-      }
-      if (handleGlobalShellShortcut(ev)) {
-        return;
       }
       if (mediaCoordinator.capturesBrowserInput()) {
         if (ev.type == InputEvent::Type::Key ||
@@ -1370,7 +1384,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           ev, tui_shell_shortcuts::context(
                   tui_shell_shortcuts::Context::Browser));
       if (browserShellAction ==
-          tui_shell_shortcuts::Action::ToggleCommandPalette) {
+              tui_shell_shortcuts::Action::ToggleCommandPalette &&
+          shellOverlays.activeLayer() != shell_overlay_stack::Layer::Dialog) {
         shellOverlays.toggleCommandPalette();
         dirty =
             setBrowserSearchFocus(browser, BrowserSearchFocus::None) || dirty;
@@ -1388,6 +1403,21 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         }
         if (interaction.paletteIntent) {
           dispatchPaletteIntent(*interaction.paletteIntent);
+        }
+        if (interaction.dialogButton == kMediaTaskDialogRetry) {
+          const auto& failure = mediaTasks.snapshot().latestFailure;
+          if (failure && failure->retryAction) {
+            const media_processing::ActionRequest request =
+                media_processing::captureActionRequest(
+                    *failure->retryAction, failure->sourceFile,
+                    std::nullopt, o.output, audioPlayback);
+            const auto retry = mediaTasks.execute(request);
+            if (retry) {
+              mediaCommandError =
+                  retry->accepted ? std::string() : retry->feedback;
+              markLayoutDirty();
+            }
+          }
         }
         if (interaction.changed) {
           dirty = true;
@@ -1863,18 +1893,18 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       progressBarY = footerResult.progressBarY;
       progressBarWidth = footerResult.progressBarWidth;
 
+      if (const std::optional<MediaTaskCardModel>& taskCard =
+              mediaTasks.snapshot().activeCard) {
+        drawMediaTaskCard(screen, width, height, listTop, *taskCard,
+                          theme.mediaTaskCardStyles());
+      }
+
       if (shellOverlays.active()) {
         const shell_command_catalog::Catalog catalog = buildCommands();
         shell_overlay_stack::draw(
             screen, shellOverlays, catalog,
             shell_overlay_stack::Bounds{width, height, listTop},
             shellOverlayStyles);
-      }
-
-      if (const std::optional<MediaTaskCardModel>& taskCard =
-              mediaTasks.snapshot().activeCard) {
-        drawMediaTaskCard(screen, width, height, listTop, *taskCard,
-                          theme.mediaTaskCardStyles());
       }
 
       screen.draw();

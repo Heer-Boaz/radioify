@@ -17,8 +17,12 @@ struct SetBrowserView {
 };
 
 struct RevealPlayingFile {};
+struct CancelMediaTask {};
+struct ShowMediaTaskFailure {};
 
-using Intent = std::variant<PlaybackAction, SetBrowserView, RevealPlayingFile>;
+using Intent =
+    std::variant<PlaybackAction, SetBrowserView, RevealPlayingFile,
+                 CancelMediaTask, ShowMediaTaskFailure>;
 
 struct Context {
   bool videoActive = false;
@@ -28,6 +32,8 @@ struct Context {
   bool pitchMonitorActive = false;
   bool optionsAvailable = false;
   bool currentTargetAvailable = false;
+  bool activeMediaTaskCancellable = false;
+  bool mediaTaskFailureAvailable = false;
 };
 
 class Catalog {

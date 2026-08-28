@@ -55,21 +55,31 @@ std::string completionText(
   }
 
   if (completion.outcome == Outcome::Failed) {
-    if (!completion.detail.empty()) return completion.detail;
+    std::string text;
     switch (completion.kind) {
       case Kind::MelodyAnalysis:
-        return "Melody analysis failed.";
+        text = "Melody analysis failed.";
+        break;
       case Kind::LoopSplit:
-        return "Loop split failed.";
+        text = "Loop split failed.";
+        break;
       case Kind::SubtitleGeneration:
-        return "Subtitle generation failed.";
+        text = "Subtitle generation failed.";
+        break;
       case Kind::AudioSeparation:
-        return "Audio separation failed.";
+        text = "Audio separation failed.";
+        break;
       case Kind::AudioExport:
-        return "Audio export failed.";
+        text = "Audio export failed.";
+        break;
       case Kind::TranscriptTextExport:
-        return "Transcript export failed.";
+        text = "Transcript export failed.";
+        break;
     }
+    const std::string shortcut(tui_shell_shortcuts::label(
+        tui_shell_shortcuts::Action::ToggleCommandPalette));
+    return shortcut.empty() ? text + " Open Commands for details."
+                            : text + " " + shortcut + ": Details";
   }
 
   switch (completion.kind) {
@@ -105,6 +115,64 @@ std::string completionText(
   return {};
 }
 
+std::string failureTitle(media_processing::TaskKind kind) {
+  using Kind = media_processing::TaskKind;
+  switch (kind) {
+    case Kind::MelodyAnalysis:
+      return "Melody analysis failed";
+    case Kind::LoopSplit:
+      return "Loop split failed";
+    case Kind::SubtitleGeneration:
+      return "Subtitle generation failed";
+    case Kind::AudioSeparation:
+      return "Audio separation failed";
+    case Kind::AudioExport:
+      return "Audio export failed";
+    case Kind::TranscriptTextExport:
+      return "Transcript export failed";
+  }
+  return "Media processing failed";
+}
+
+std::string failureSummary(media_processing::TaskKind kind) {
+  using Kind = media_processing::TaskKind;
+  switch (kind) {
+    case Kind::MelodyAnalysis:
+      return "Radioify could not analyze the selected audio.";
+    case Kind::LoopSplit:
+      return "Radioify could not split the selected loop.";
+    case Kind::SubtitleGeneration:
+      return "Radioify could not generate subtitles for this file.";
+    case Kind::AudioSeparation:
+      return "Radioify could not separate this file into audio stems.";
+    case Kind::AudioExport:
+      return "Radioify could not export audio from this file.";
+    case Kind::TranscriptTextExport:
+      return "Radioify could not export this transcript.";
+  }
+  return "Radioify could not finish the media-processing task.";
+}
+
+std::optional<playback_media_actions::Action> retryAction(
+    media_processing::TaskKind kind) {
+  using Kind = media_processing::TaskKind;
+  using Action = playback_media_actions::Action;
+  switch (kind) {
+    case Kind::SubtitleGeneration:
+      return Action::GenerateSubtitles;
+    case Kind::AudioSeparation:
+      return Action::SeparateAudio;
+    case Kind::AudioExport:
+      return Action::ExportAudio;
+    case Kind::TranscriptTextExport:
+      return Action::ExportTranscriptText;
+    case Kind::MelodyAnalysis:
+    case Kind::LoopSplit:
+      return std::nullopt;
+  }
+  return std::nullopt;
+}
+
 }  // namespace
 
 MediaTaskCardModel mediaTaskCardModel(
@@ -118,11 +186,13 @@ MediaTaskCardModel mediaTaskCardModel(
   if (activity.progress) {
     model.progress = std::clamp(*activity.progress, 0.0f, 1.0f);
   }
+  model.cancellable = activity.cancellable;
   if (activity.cancellable) {
-    model.cancelAction = MediaTaskActionHint{
-        std::string(tui_shell_shortcuts::label(
-            tui_shell_shortcuts::Action::CancelMediaTask)),
-        "Cancel"};
+    const std::string shortcut(tui_shell_shortcuts::label(
+        tui_shell_shortcuts::Action::ToggleCommandPalette));
+    model.actionHint = shortcut.empty()
+                           ? "Open Commands to cancel"
+                           : shortcut + ": Task actions";
   }
   return model;
 }
@@ -132,6 +202,40 @@ MediaTaskStatusModel mediaTaskStatusModel(
   MediaTaskStatusModel model;
   model.text = completionText(completion);
   model.succeeded = completion.succeeded();
+  return model;
+}
+
+std::optional<MediaTaskFailureDialogModel> mediaTaskFailureDialogModel(
+    const media_processing::TaskCompletion& completion) {
+  if (completion.outcome != media_processing::TaskOutcome::Failed) {
+    return std::nullopt;
+  }
+
+  MediaTaskFailureDialogModel model;
+  model.sourceFile = completion.sourceFile;
+  model.retryAction = retryAction(completion.kind);
+  model.content.title = failureTitle(completion.kind);
+  model.content.text.push_back(
+      {failureSummary(completion.kind), tui_dialog::TextTone::Error});
+  model.content.text.push_back(
+      {completion.detail.empty()
+           ? "The processing backend did not provide an error description."
+           : "Reason: " + completion.detail,
+       tui_dialog::TextTone::Normal});
+  if (!completion.sourceFile.empty()) {
+    model.content.text.push_back(
+        {"Source: " + toUtf8String(completion.sourceFile),
+         tui_dialog::TextTone::Secondary});
+  }
+  if (!completion.diagnosticLog.empty()) {
+    model.content.text.push_back(
+        {"Diagnostics: " + toUtf8String(completion.diagnosticLog),
+         tui_dialog::TextTone::Secondary});
+  }
+  model.content.buttons.push_back({kMediaTaskDialogClose, "Close"});
+  if (model.retryAction) {
+    model.content.buttons.push_back({kMediaTaskDialogRetry, "Retry"});
+  }
   return model;
 }
 
@@ -148,5 +252,13 @@ std::optional<MediaTaskStatusModel> MediaTaskPresenter::latestStatus() const {
       coordinator_.latestCompletion();
   return completion ? std::optional<MediaTaskStatusModel>(
                           mediaTaskStatusModel(*completion))
+                    : std::nullopt;
+}
+
+std::optional<MediaTaskFailureDialogModel>
+MediaTaskPresenter::latestFailure() const {
+  const std::optional<media_processing::TaskCompletion> completion =
+      coordinator_.latestCompletion();
+  return completion ? mediaTaskFailureDialogModel(*completion)
                     : std::nullopt;
 }

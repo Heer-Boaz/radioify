@@ -14,6 +14,7 @@ namespace tui_media_tasks {
 struct Snapshot {
   std::optional<MediaTaskCardModel> activeCard;
   std::optional<MediaTaskStatusModel> latestStatus;
+  std::optional<MediaTaskFailureDialogModel> latestFailure;
 };
 
 struct Update {

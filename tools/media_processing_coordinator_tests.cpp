@@ -218,8 +218,29 @@ int main() {
 
   ok &= expect(static_cast<bool>(coordinator.waitHandle()),
                "all worker families must fan in through one owner wake event");
-  ok &= expect(!presenter.activeCard() && !presenter.latestStatus(),
+  ok &= expect(!presenter.activeCard() && !presenter.latestStatus() &&
+                   !presenter.latestFailure(),
                "the presenter must not invent inactive task state");
+  processing::TaskCompletion failedSeparation;
+  failedSeparation.kind = processing::TaskKind::AudioSeparation;
+  failedSeparation.outcome = processing::TaskOutcome::Failed;
+  failedSeparation.sourceFile = "C:/Media/movie.mp4";
+  failedSeparation.diagnosticLog = "C:/Logs/separation.log";
+  failedSeparation.detail = "DirectML device was removed";
+  const auto failureDialog =
+      mediaTaskFailureDialogModel(failedSeparation);
+  ok &= expect(
+      failureDialog &&
+          failureDialog->content.title == "Audio separation failed" &&
+          failureDialog->content.text.size() == 4 &&
+          failureDialog->content.text[1].text ==
+              "Reason: DirectML device was removed" &&
+          failureDialog->content.buttons.size() == 2 &&
+          failureDialog->retryAction ==
+              playback_media_actions::Action::SeparateAudio &&
+          mediaTaskStatusModel(failedSeparation).text ==
+              "Audio separation failed. F1: Details",
+      "failed work must retain actionable details in a reopenable dialog");
   ok &= expect(!unsupportedAction,
                "surface-specific actions must remain outside processing");
 
@@ -314,9 +335,7 @@ int main() {
                    melody->progress && *melody->progress == 0.4f &&
                    melody->cancellable &&
                    melodyCard && melodyCard->title == "Analyzing melody" &&
-                   melodyCard->cancelAction &&
-                   melodyCard->cancelAction->shortcut == "F8" &&
-                   melodyCard->cancelAction->label == "Cancel" &&
+                   melodyCard->actionHint == "F1: Task actions" &&
                    !busyLoop.wasAccepted() && busyLoop.error() &&
                    busyLoop.error()->failure ==
                        playback_media_processing::RequestFailure::Busy &&
@@ -350,8 +369,7 @@ int main() {
                "starting new work must retire the previous footer result");
   const std::optional<MediaTaskCardModel> loopCard = presenter.activeCard();
   ok &= expect(loopCard && !loopCard->progress &&
-                   loopCard->cancelAction &&
-                   loopCard->cancelAction->shortcut == "F8" &&
+                   loopCard->actionHint == "F1: Task actions" &&
                    loopCard->title == "Splitting loop",
                "tasks without measurable progress must stay indeterminate");
   ok &= expect(coordinator.cancelActive() && !coordinator.cancelActive(),
@@ -359,7 +377,7 @@ int main() {
   const std::optional<MediaTaskCardModel> cancellingLoopCard =
       presenter.activeCard();
   ok &= expect(cancellingLoopCard &&
-                   !cancellingLoopCard->cancelAction &&
+                   !cancellingLoopCard->actionHint &&
                    cancellingLoopCard->title == "Cancelling loop split",
                "generic cancellation must reach the shared task card");
   const auto cancelledLoopCompletion = waitForCompletion(coordinator);
@@ -407,9 +425,8 @@ int main() {
                        "Generating subtitles" &&
                    mediaTaskCardModel(*subtitles).detail ==
                        "Transcribing audio" &&
-                   mediaTaskCardModel(*subtitles).cancelAction &&
-                   mediaTaskCardModel(*subtitles).cancelAction->shortcut ==
-                       "F8",
+                   mediaTaskCardModel(*subtitles).actionHint ==
+                       "F1: Task actions",
                "backend phases must reach the generic task card");
   releaseSubtitles.store(true, std::memory_order_release);
   const auto subtitleCompletion = waitForCompletion(coordinator);
@@ -450,7 +467,7 @@ int main() {
                      return separationCancellationObserved.load(
                          std::memory_order_acquire);
                    }),
-               "F8 cancellation must dispatch through the active task owner");
+               "cancellation must dispatch through the active task owner");
   const std::optional<processing::TaskActivity> cancelling =
       coordinator.activity();
   const playback_media_processing::SourceState separationSourceState =
@@ -462,7 +479,7 @@ int main() {
                    separationSourceState.audioSeparationRunning &&
                    mediaTaskCardModel(*cancelling).title ==
                        "Cancelling audio separation" &&
-                   !mediaTaskCardModel(*cancelling).cancelAction,
+                   !mediaTaskCardModel(*cancelling).actionHint,
                "cancellation must remain an explicit generic activity state");
   releaseSeparation.store(true, std::memory_order_release);
   const auto separationCompletion = waitForCompletion(coordinator);
@@ -662,7 +679,7 @@ int main() {
           cancellationAccepted && cancellationReachedWorker &&
           cancellingCard &&
           cancellingCard->title == "Cancelling audio separation" &&
-          !cancellingCard->cancelAction && controllerCancellation &&
+          !cancellingCard->actionHint && controllerCancellation &&
           controllerCancellation->outcome ==
               processing::TaskOutcome::Cancelled &&
           taskController.snapshot().latestStatus &&

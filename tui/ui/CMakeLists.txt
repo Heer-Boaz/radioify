@@ -18,6 +18,8 @@ radioify_add_module_object_library(radioify_ui
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_model.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/command_palette.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/command_palette_renderer.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/dialog.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/dialog_renderer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_task_card.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_task_controller.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_task_presentation.cpp

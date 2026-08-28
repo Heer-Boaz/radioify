@@ -71,6 +71,20 @@ tui_command_palette::Styles TuiTheme::commandPaletteStyles() const {
   return result;
 }
 
+tui_dialog::Styles TuiTheme::dialogStyles() const {
+  tui_dialog::Styles result;
+  result.background = normal;
+  result.border = dim;
+  result.title = accent;
+  result.normal = normal;
+  result.emphasis = accent;
+  result.secondary = dim;
+  result.error = alert;
+  result.button = normal;
+  result.selectedButton = highlight;
+  return result;
+}
+
 browser_action_strip::Styles TuiTheme::browserActionStripStyles() const {
   browser_action_strip::Styles result;
   result.normal = normal;

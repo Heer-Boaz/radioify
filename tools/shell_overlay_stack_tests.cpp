@@ -90,6 +90,29 @@ int main() {
                    overlays.activeLayer() == Layer::None,
                "Back must dismiss exactly the active overlay layer");
 
+  tui_dialog::Content failureDialog;
+  failureDialog.title = "Audio separation failed";
+  failureDialog.text.push_back(
+      {"Reason: DirectML device was removed", tui_dialog::TextTone::Error});
+  failureDialog.buttons = {{0, "Close"}, {1, "Retry"}};
+  overlays.toggleCommandPalette();
+  ok &= expect(overlays.openDialog(std::move(failureDialog)) &&
+                   overlays.activeLayer() == Layer::Dialog,
+               "a dialog must replace every less important transient layer");
+  interaction = overlays.handle(keyEvent(VK_F1), bounds, catalog);
+  ok &= expect(interaction.consumed &&
+                   overlays.activeLayer() == Layer::Dialog &&
+                   !overlays.toggleCommandPalette() &&
+                   !overlays.openMediaMenu(mediaEntry("blocked.mp4"),
+                                           mediaActions()),
+               "an input-modal dialog must consume unrelated shortcuts");
+  interaction = overlays.handle(keyEvent(VK_TAB), bounds, catalog);
+  interaction = overlays.handle(keyEvent(VK_RETURN), bounds, catalog);
+  ok &= expect(interaction.dialogButton == 1 &&
+                   overlays.activeLayer() == Layer::None,
+               "dialog buttons must publish a typed result without nesting "
+               "an event loop");
+
   overlays.toggleCommandPalette();
   ok &= expect(overlays.openMediaMenu(mediaEntry("empty.mp4"), {}) &&
                    overlays.activeLayer() == Layer::None,

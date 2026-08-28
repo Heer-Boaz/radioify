@@ -25,6 +25,14 @@ void draw(ConsoleScreen& screen, Model& model,
                                 styles.commandPalette);
       break;
     }
+    case Layer::Dialog: {
+      tui_dialog::Bounds dialogBounds;
+      dialogBounds.width = bounds.width;
+      dialogBounds.height = bounds.height;
+      dialogBounds.topInset = bounds.topInset;
+      tui_dialog::draw(screen, model.dialog_, dialogBounds, styles.dialog);
+      break;
+    }
     case Layer::None:
       break;
   }

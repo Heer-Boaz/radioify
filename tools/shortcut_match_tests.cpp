@@ -153,13 +153,12 @@ int main() {
               makeKeyEvent(VK_F1, 0, LEFT_CTRL_PRESSED),
               tui_shell_shortcuts::context(
                   tui_shell_shortcuts::Context::Browser)) &&
-          tui_shell_shortcuts::resolve(
+          !tui_shell_shortcuts::resolve(
               makeKeyEvent(VK_F8),
               tui_shell_shortcuts::context(
-                  tui_shell_shortcuts::Context::Global)) ==
-              tui_shell_shortcuts::Action::CancelMediaTask &&
+                  tui_shell_shortcuts::Context::Browser)) &&
           tui_shell_shortcuts::label(
-              tui_shell_shortcuts::Action::CancelMediaTask) == "F8",
+              tui_shell_shortcuts::Action::ToggleCommandPalette) == "F1",
       "shell shortcut matching and displayed labels must share one catalog");
   ok &= expect(
       playback_session_bootstrap_input::resolve(

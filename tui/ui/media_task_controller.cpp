@@ -55,6 +55,7 @@ NativeWaitHandle Controller::waitHandle() const {
 void Controller::refreshSnapshot() {
   snapshot_.activeCard = presenter_.activeCard();
   snapshot_.latestStatus = presenter_.latestStatus();
+  snapshot_.latestFailure = presenter_.latestFailure();
 }
 
 bool Controller::statusVisible(const Snapshot& snapshot) {

@@ -934,6 +934,7 @@ add_executable(shell_overlay_stack_tests)
 target_sources(shell_overlay_stack_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_shell_overlay_stack_tests>
   ${CMAKE_SOURCE_DIR}/tui/ui/shell_overlay_stack.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/dialog.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/browser_media_menu.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/popup_menu.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/shell_command_catalog.cpp
