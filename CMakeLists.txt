@@ -935,6 +935,7 @@ target_sources(shell_overlay_stack_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_shell_overlay_stack_tests>
   ${CMAKE_SOURCE_DIR}/tui/ui/shell_overlay_stack.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/dialog.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/button_row.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/browser_media_menu.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/popup_menu.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/shell_command_catalog.cpp
@@ -1092,6 +1093,17 @@ target_sources(ui_footer_layout_tests PRIVATE
 radioify_link_repo_target(ui_footer_layout_tests)
 add_test(NAME ui_footer_layout_tests
          COMMAND $<TARGET_FILE:ui_footer_layout_tests>)
+
+add_executable(media_task_panel_tests)
+target_sources(media_task_panel_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_media_task_panel_tests>
+  ${CMAKE_SOURCE_DIR}/tui/ui/media_task_panel.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/button_row.cpp
+  ${CMAKE_SOURCE_DIR}/core/unicode_display_width.cpp
+)
+radioify_link_repo_target(media_task_panel_tests)
+add_test(NAME media_task_panel_tests
+         COMMAND $<TARGET_FILE:media_task_panel_tests>)
 
 add_executable(media_action_catalog_tests)
 target_sources(media_action_catalog_tests PRIVATE

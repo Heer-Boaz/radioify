@@ -7,10 +7,11 @@
 #include <vector>
 
 #include "input_event.h"
+#include "tui/ui/button_row.h"
 
 namespace tui_dialog {
 
-using ButtonId = std::uint32_t;
+using ButtonId = tui_button_row::ButtonId;
 
 enum class TextTone : std::uint8_t {
   Normal,
@@ -24,15 +25,13 @@ struct TextBlock {
   TextTone tone = TextTone::Normal;
 };
 
-struct Button {
-  ButtonId id = 0;
-  std::string label;
-};
+using Button = tui_button_row::Button;
 
 struct Content {
   std::string title;
   std::vector<TextBlock> text;
   std::vector<Button> buttons;
+  std::optional<ButtonId> initiallySelectedButton;
 };
 
 struct Bounds {
@@ -46,11 +45,7 @@ struct RenderLine {
   TextTone tone = TextTone::Normal;
 };
 
-struct ButtonBounds {
-  std::size_t index = 0;
-  int x = 0;
-  int width = 0;
-};
+using ButtonBounds = tui_button_row::Placement;
 
 struct Layout {
   int x = 0;

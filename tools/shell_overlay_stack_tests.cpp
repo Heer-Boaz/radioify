@@ -113,6 +113,16 @@ int main() {
                "dialog buttons must publish a typed result without nesting "
                "an event loop");
 
+  tui_dialog::Content safeDefaultDialog;
+  safeDefaultDialog.title = "Cancel task?";
+  safeDefaultDialog.buttons = {{2, "Cancel task"}, {3, "Keep running"}};
+  safeDefaultDialog.initiallySelectedButton = 3;
+  overlays.openDialog(std::move(safeDefaultDialog));
+  interaction = overlays.handle(keyEvent(VK_RETURN), bounds, catalog);
+  ok &= expect(interaction.dialogButton == 3 &&
+                   overlays.activeLayer() == Layer::None,
+               "a dialog must honor an explicitly selected safe default");
+
   overlays.toggleCommandPalette();
   ok &= expect(overlays.openMediaMenu(mediaEntry("empty.mp4"), {}) &&
                    overlays.activeLayer() == Layer::None,

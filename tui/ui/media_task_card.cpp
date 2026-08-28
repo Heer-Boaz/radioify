@@ -11,16 +11,11 @@
 void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth,
                        int screenHeight, int top,
                        const MediaTaskCardModel& model,
+                       const tui_media_task_panel::State& state,
                        const MediaTaskCardStyles& styles) {
-  if (screenWidth < 4 || screenHeight - top < 3) return;
-
-  const std::string actionHint = model.actionHint.value_or(std::string{});
-  int contentWidth = std::max(
-      {utf8DisplayWidth(model.title), utf8DisplayWidth(model.sourceName),
-       utf8DisplayWidth(model.detail), utf8DisplayWidth(actionHint)});
-  const int desiredWidth = std::max(46, contentWidth + 4);
-  const int popupWidth = std::clamp(desiredWidth, 4, screenWidth);
-  const int innerWidth = std::max(1, popupWidth - 2);
+  const tui_media_task_panel::Layout layout =
+      tui_media_task_panel::layout({screenWidth, screenHeight, top}, model);
+  if (!layout.valid) return;
 
   std::vector<std::pair<std::string, Style>> lines;
   lines.push_back({model.title, styles.title});
@@ -36,7 +31,7 @@ void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth,
         static_cast<int>(std::round(progress * 100.0f));
     const std::string percentText = std::to_string(percent) + "%";
     const int barCells =
-        std::max(0, innerWidth - utf8DisplayWidth(percentText) - 4);
+        std::max(0, layout.innerWidth - utf8DisplayWidth(percentText) - 4);
     if (barCells >= 4) {
       const int filled = std::clamp(
           static_cast<int>(std::round(barCells * progress)), 0, barCells);
@@ -51,38 +46,49 @@ void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth,
     progressLine = "Working...";
   }
   lines.push_back({std::move(progressLine), styles.progress});
-  if (model.actionHint) {
-    lines.push_back({actionHint, styles.secondary});
+  for (int y = 0; y < layout.height; ++y) {
+    screen.writeRun(layout.x, layout.y + y, layout.width, L' ',
+                    styles.background);
   }
-
-  const int availableHeight = screenHeight - top;
-  const int popupHeight = std::min(
-      static_cast<int>(lines.size()) + 2, availableHeight);
-  const int x0 = std::max(0, screenWidth - popupWidth - 1);
-  const int y0 = top;
-
-  for (int y = 0; y < popupHeight; ++y) {
-    screen.writeRun(x0, y0 + y, popupWidth, L' ', styles.background);
-  }
-  screen.writeChar(x0, y0, L'+', styles.secondary);
-  screen.writeRun(x0 + 1, y0, popupWidth - 2, L'-', styles.secondary);
-  screen.writeChar(x0 + popupWidth - 1, y0, L'+', styles.secondary);
-  screen.writeChar(x0, y0 + popupHeight - 1, L'+', styles.secondary);
-  screen.writeRun(x0 + 1, y0 + popupHeight - 1, popupWidth - 2, L'-',
+  screen.writeChar(layout.x, layout.y, L'+', styles.secondary);
+  screen.writeRun(layout.x + 1, layout.y, layout.width - 2, L'-',
                   styles.secondary);
-  screen.writeChar(x0 + popupWidth - 1, y0 + popupHeight - 1, L'+',
+  screen.writeChar(layout.x + layout.width - 1, layout.y, L'+',
                    styles.secondary);
-  for (int y = 1; y < popupHeight - 1; ++y) {
-    screen.writeChar(x0, y0 + y, L'|', styles.secondary);
-    screen.writeChar(x0 + popupWidth - 1, y0 + y, L'|', styles.secondary);
+  screen.writeChar(layout.x, layout.y + layout.height - 1, L'+',
+                   styles.secondary);
+  screen.writeRun(layout.x + 1, layout.y + layout.height - 1,
+                  layout.width - 2, L'-',
+                  styles.secondary);
+  screen.writeChar(layout.x + layout.width - 1,
+                   layout.y + layout.height - 1, L'+',
+                   styles.secondary);
+  for (int y = 1; y < layout.height - 1; ++y) {
+    screen.writeChar(layout.x, layout.y + y, L'|', styles.secondary);
+    screen.writeChar(layout.x + layout.width - 1, layout.y + y, L'|',
+                     styles.secondary);
   }
 
   const int visibleLines =
-      std::min(static_cast<int>(lines.size()), popupHeight - 2);
+      std::min(static_cast<int>(lines.size()), layout.height - 2);
   for (int line = 0; line < visibleLines; ++line) {
     screen.writeText(
-        x0 + 1, y0 + 1 + line,
-        fitLine(lines[static_cast<size_t>(line)].first, innerWidth),
+        layout.x + 1, layout.y + 1 + line,
+        fitLine(lines[static_cast<size_t>(line)].first, layout.innerWidth),
         lines[static_cast<size_t>(line)].second);
+  }
+
+  const std::vector<tui_button_row::Button> actions =
+      tui_media_task_panel::actionsFor(model);
+  for (const tui_button_row::Placement& buttonBounds :
+       layout.buttons.buttons) {
+    if (buttonBounds.index >= actions.size()) continue;
+    const bool selected = state.hoveredButton() == buttonBounds.index;
+    const Style style = selected ? styles.selectedButton : styles.button;
+    const std::string label = "[ " + actions[buttonBounds.index].label + " ]";
+    screen.writeRun(buttonBounds.x, layout.buttons.y, buttonBounds.width, L' ',
+                    style);
+    screen.writeText(buttonBounds.x, layout.buttons.y,
+                     fitLine(label, buttonBounds.width), style);
   }
 }

@@ -11,6 +11,7 @@ radioify_add_module_object_library(radioify_ui
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_directory_listing.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_input_state.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_search.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/button_row.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_media_menu.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_media_menu_renderer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_navigation.cpp
@@ -22,6 +23,7 @@ radioify_add_module_object_library(radioify_ui
   ${CMAKE_CURRENT_SOURCE_DIR}/dialog_renderer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_task_card.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_task_controller.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/media_task_panel.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_task_presentation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/melody_visualization.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/melody_visualization_renderer.cpp

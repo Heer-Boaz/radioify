@@ -76,6 +76,17 @@ bool Model::open(Content content) {
   }
   content_ = std::move(content);
   selectedButton_ = 0;
+  if (content_.initiallySelectedButton) {
+    const auto selected = std::find_if(
+        content_.buttons.begin(), content_.buttons.end(),
+        [&](const Button& button) {
+          return button.id == *content_.initiallySelectedButton;
+        });
+    if (selected != content_.buttons.end()) {
+      selectedButton_ = static_cast<std::size_t>(
+          std::distance(content_.buttons.begin(), selected));
+    }
+  }
   firstVisibleLine_ = 0;
   active_ = true;
   return true;
@@ -128,29 +139,10 @@ Layout Model::layout(const Bounds& bounds) {
   firstVisibleLine_ = std::clamp(firstVisibleLine_, 0, maximumFirstLine);
   result.firstContentLine = firstVisibleLine_;
 
-  const int buttonGapCount =
-      std::max(0, static_cast<int>(content_.buttons.size()) - 1);
-  const int availableButtonWidth =
-      std::max(1, result.width - 2 - buttonGapCount);
-  const int maximumButtonWidth = std::max(
-      1, availableButtonWidth /
-             std::max(1, static_cast<int>(content_.buttons.size())));
-  int totalButtonWidth = 0;
-  for (const Button& button : content_.buttons) {
-    totalButtonWidth += std::min(
-        maximumButtonWidth,
-        std::max(4, utf8DisplayWidth(button.label) + 4));
-  }
-  totalButtonWidth += buttonGapCount;
-  int buttonX =
-      result.x + std::max(1, (result.width - totalButtonWidth) / 2);
-  for (std::size_t index = 0; index < content_.buttons.size(); ++index) {
-    const int buttonWidth = std::min(
-        maximumButtonWidth,
-        std::max(4, utf8DisplayWidth(content_.buttons[index].label) + 4));
-    result.buttons.push_back({index, buttonX, buttonWidth});
-    buttonX += buttonWidth + 1;
-  }
+  result.buttons =
+      tui_button_row::layout(content_.buttons, result.x, result.width,
+                             result.buttonY)
+          .buttons;
   result.valid = true;
   return result;
 }
@@ -224,16 +216,12 @@ Interaction Model::handle(const InputEvent& event, const Bounds& bounds) {
     return result;
   }
 
-  std::optional<std::size_t> hoveredButton;
-  if (currentLayout.valid && mouse.pos.Y == currentLayout.buttonY) {
-    for (const ButtonBounds& button : currentLayout.buttons) {
-      if (mouse.pos.X >= button.x &&
-          mouse.pos.X < button.x + button.width) {
-        hoveredButton = button.index;
-        break;
-      }
-    }
-  }
+  const std::optional<std::size_t> hoveredButton =
+      currentLayout.valid
+          ? tui_button_row::hitTest(
+                {currentLayout.buttonY, currentLayout.buttons}, mouse.pos.X,
+                mouse.pos.Y)
+          : std::nullopt;
   if (mouse.kind == MouseEventKind::Move) {
     if (hoveredButton && selectedButton_ != *hoveredButton) {
       selectedButton_ = *hoveredButton;
@@ -250,17 +238,8 @@ Interaction Model::handle(const InputEvent& event, const Bounds& bounds) {
 }
 
 void Model::selectAdjacentButton(int direction) {
-  if (content_.buttons.empty()) {
-    selectedButton_ = 0;
-    return;
-  }
-  const int buttonCount = static_cast<int>(content_.buttons.size());
-  int selected = static_cast<int>(selectedButton_);
-  selected = (selected + direction) % buttonCount;
-  if (selected < 0) {
-    selected += buttonCount;
-  }
-  selectedButton_ = static_cast<std::size_t>(selected);
+  selectedButton_ = tui_button_row::selectAdjacent(
+      selectedButton_, content_.buttons.size(), direction);
 }
 
 void Model::scrollBy(int rows, const Layout& layout) {

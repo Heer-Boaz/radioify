@@ -43,6 +43,25 @@ std::string activityTitle(const media_processing::TaskActivity& activity) {
   return "Processing media";
 }
 
+std::string activityOperationName(media_processing::TaskKind kind) {
+  using Kind = media_processing::TaskKind;
+  switch (kind) {
+    case Kind::MelodyAnalysis:
+      return "melody analysis";
+    case Kind::LoopSplit:
+      return "loop split";
+    case Kind::SubtitleGeneration:
+      return "subtitle generation";
+    case Kind::AudioSeparation:
+      return "audio separation";
+    case Kind::AudioExport:
+      return "audio export";
+    case Kind::TranscriptTextExport:
+      return "transcript export";
+  }
+  return "media processing";
+}
+
 std::string completionText(
     const media_processing::TaskCompletion& completion) {
   using Kind = media_processing::TaskKind;
@@ -189,6 +208,7 @@ MediaTaskCardModel mediaTaskCardModel(
     const media_processing::TaskActivity& activity) {
   MediaTaskCardModel model;
   model.title = activityTitle(activity);
+  model.operationName = activityOperationName(activity.kind);
   model.sourceName = activity.sourceFile.empty()
                          ? std::string("(unknown)")
                          : toUtf8String(activity.sourceFile.filename());
@@ -197,13 +217,6 @@ MediaTaskCardModel mediaTaskCardModel(
     model.progress = std::clamp(*activity.progress, 0.0f, 1.0f);
   }
   model.cancellable = activity.cancellable;
-  if (activity.cancellable) {
-    const std::string shortcut(tui_shell_shortcuts::label(
-        tui_shell_shortcuts::Action::ToggleCommandPalette));
-    model.actionHint = shortcut.empty()
-                           ? "Open Commands to cancel"
-                           : shortcut + ": Task actions";
-  }
   return model;
 }
 

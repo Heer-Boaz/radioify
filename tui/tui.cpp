@@ -690,6 +690,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   }
 
   shell_overlay_stack::Model shellOverlays;
+  tui_media_task_panel::State mediaTaskPanel;
   const shell_overlay_stack::Styles shellOverlayStyles{
       theme.popupMenuStyles(), theme.commandPaletteStyles(),
       theme.dialogStyles()};
@@ -1131,6 +1132,16 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     return shell_command_catalog::build(context);
   };
 
+  auto requestMediaTaskCancellation = [&]() {
+    const std::optional<MediaTaskCardModel>& task =
+        mediaTasks.snapshot().activeCard;
+    if (!task || !task->cancellable) {
+      return false;
+    }
+    return shellOverlays.openDialog(
+        tui_media_task_panel::cancellationDialog(*task));
+  };
+
   auto dispatchPaletteIntent =
       [&](const shell_command_catalog::Intent& intent) {
     std::visit(
@@ -1154,8 +1165,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           } else if constexpr (
               std::is_same_v<Intent,
                              shell_command_catalog::CancelMediaTask>) {
-            if (mediaTasks.cancelActive()) {
-              markDirty(UiDirtyFlags::Async);
+            if (requestMediaTaskCancellation()) {
+              markDirty();
             }
           } else if constexpr (
               std::is_same_v<Intent,
@@ -1234,6 +1245,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       handleMediaCoordinatorEvent(std::move(event));
     }
     tui_media_tasks::Update taskUpdate = mediaTasks.poll();
+    mediaTaskPanel.synchronize(
+        mediaTasks.snapshot().activeCard.has_value());
     for (const media_processing::TaskCompletion& completion :
          taskUpdate.completions) {
       mediaCoordinator.handleMediaTaskCompletion(completion);
@@ -1429,8 +1442,34 @@ int runTui(Options o, ApplicationRuntime& runtime) {
             }
           }
         }
+        if (interaction.dialogButton ==
+            tui_media_task_panel::kCancelTaskButton) {
+          if (mediaTasks.cancelActive()) {
+            markDirty(UiDirtyFlags::Async);
+          }
+        }
         if (interaction.changed) {
           dirty = true;
+        }
+        if (interaction.consumed) {
+          return;
+        }
+      }
+      if (const std::optional<MediaTaskCardModel>& task =
+              mediaTasks.snapshot().activeCard) {
+        const tui_media_task_panel::Interaction interaction =
+            mediaTaskPanel.handle(
+                ev, tui_media_task_panel::Bounds{width, height, listTop},
+                *task);
+        if (interaction.activatedAction ==
+            tui_media_task_panel::Action::Cancel) {
+          if (requestMediaTaskCancellation()) {
+            markDirty();
+          }
+          return;
+        }
+        if (interaction.changed) {
+          markDirty();
         }
         if (interaction.consumed) {
           return;
@@ -1906,6 +1945,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       if (const std::optional<MediaTaskCardModel>& taskCard =
               mediaTasks.snapshot().activeCard) {
         drawMediaTaskCard(screen, width, height, listTop, *taskCard,
+                          mediaTaskPanel,
                           theme.mediaTaskCardStyles());
       }
 

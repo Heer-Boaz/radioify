@@ -15,9 +15,9 @@ struct TaskCompletion;
 
 struct MediaTaskCardModel {
   std::string title;
+  std::string operationName;
   std::string sourceName;
   std::string detail;
-  std::optional<std::string> actionHint;
   std::optional<float> progress;
   bool cancellable = false;
 };
