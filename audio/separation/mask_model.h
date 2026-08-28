@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "audio/separation/diagnostics.h"
+
 namespace audio_separation {
 
 class BanditMaskModel {
@@ -17,6 +19,7 @@ class BanditMaskModel {
   BanditMaskModel& operator=(const BanditMaskModel&) = delete;
 
   bool initialize(const std::filesystem::path& modelPath,
+                  DiagnosticReporter diagnostics,
                   std::string* error);
   bool run(const std::vector<float>& spectrogramRealImag,
            std::vector<float>* masksRealImag,

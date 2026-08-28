@@ -206,7 +206,9 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
   separation::Job job(
       [](const std::filesystem::path&, const separation::ArtifactPaths&,
          const separation::Job::ProgressReporter& progress,
+         const separation::Job::DiagnosticReporter& diagnostics,
          const std::atomic<bool>*, std::string*) {
+        diagnostics(DiagnosticLevel::Info, "test", "operation invoked");
         progress(0.4f, "Separating test audio");
         return true;
       });
@@ -225,8 +227,19 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
   ok &= expect(completion && completion->succeeded() &&
                    completion->outputFiles[0] == "clip.dialogue.flac" &&
                    completion->outputFiles[1] == "clip.music.flac" &&
-                   completion->outputFiles[2] == "clip.effects.flac",
+                   completion->outputFiles[2] == "clip.effects.flac" &&
+                   !completion->diagnosticLog.empty(),
                "job completion must own and expose the managed stem set");
+  if (completion && !completion->diagnosticLog.empty()) {
+    const std::string diagnostics = readText(completion->diagnosticLog);
+    ok &= expect(diagnostics.find("[test] operation invoked") !=
+                         std::string::npos &&
+                     diagnostics.find("completed successfully") !=
+                         std::string::npos,
+                 "a job log must retain backend diagnostics and outcome");
+    std::error_code ignored;
+    std::filesystem::remove(completion->diagnosticLog, ignored);
+  }
   ok &= expect(!job.takeCompletion(),
                "a separation completion must be delivered exactly once");
 
@@ -240,7 +253,9 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
       explicitModelOperation &&
           !explicitModelOperation(
               "clip.mp4", separation::artifactPathsFor("clip.mp4"),
-              [](float, std::string) {}, &notCancelled,
+              [](float, std::string) {},
+              [](DiagnosticLevel, std::string_view, std::string_view) {},
+              &notCancelled,
               &explicitModelError) &&
           explicitModelError.find("missing-explicit-model.onnx") !=
               std::string::npos,
@@ -250,6 +265,7 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
   separation::Job cancellable(
       [&](const std::filesystem::path&, const separation::ArtifactPaths&,
           const separation::Job::ProgressReporter& progress,
+          const separation::Job::DiagnosticReporter&,
           const std::atomic<bool>* cancelRequested, std::string* error) {
         progress(0.2f, "Separating test audio");
         operationStarted.store(true, std::memory_order_release);
@@ -278,8 +294,13 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
     }
   }
   ok &= expect(cancelled && cancelled->state == separation::JobState::Cancelled &&
-                   cancelled->error.empty(),
+                   cancelled->error.empty() &&
+                   !cancelled->diagnosticLog.empty(),
                "cancelled work must publish typed state without backend noise");
+  if (cancelled && !cancelled->diagnosticLog.empty()) {
+    std::error_code ignored;
+    std::filesystem::remove(cancelled->diagnosticLog, ignored);
+  }
   return ok;
 }
 

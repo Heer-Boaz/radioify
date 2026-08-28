@@ -421,12 +421,15 @@ bool separateMediaAudioUsingModel(
     const std::filesystem::path& modelPath,
     const ArtifactPaths& outputPaths,
     const ProgressCallback& onProgress,
+    const DiagnosticReporter& diagnostics,
     const std::atomic<bool>* cancelRequested,
     std::string* error) {
   report(onProgress, 0.01f, "Loading DirectML separation model");
   BanditMaskModel model;
   std::string modelError;
-  if (!model.initialize(modelPath, &modelError)) {
+  reportDiagnostic(diagnostics, DiagnosticLevel::Info, "model",
+                   "Loading model: " + toUtf8String(modelPath));
+  if (!model.initialize(modelPath, diagnostics, &modelError)) {
     setError(error, modelError + " Model: " + toUtf8String(modelPath));
     return false;
   }
@@ -544,6 +547,7 @@ bool separateMediaAudioWithModel(
     const std::filesystem::path& modelPath,
     const ArtifactPaths& outputPaths,
     const ProgressCallback& onProgress,
+    const DiagnosticReporter& diagnostics,
     const std::atomic<bool>* cancelRequested,
     std::string* error) {
   if (error) error->clear();
@@ -552,12 +556,14 @@ bool separateMediaAudioWithModel(
     return false;
   }
   return separateMediaAudioUsingModel(mediaPath, modelPath, outputPaths,
-                                      onProgress, cancelRequested, error);
+                                      onProgress, diagnostics,
+                                      cancelRequested, error);
 }
 
 bool separateMediaAudio(const std::filesystem::path& mediaPath,
                         const ArtifactPaths& outputPaths,
                         const ProgressCallback& onProgress,
+                        const DiagnosticReporter& diagnostics,
                         const std::atomic<bool>* cancelRequested,
                         std::string* error) {
   if (error) error->clear();
@@ -566,7 +572,8 @@ bool separateMediaAudio(const std::filesystem::path& mediaPath,
   std::filesystem::path modelPath;
   if (!resolveBundledModelPath(&modelPath, error)) return false;
   return separateMediaAudioUsingModel(mediaPath, modelPath, outputPaths,
-                                      onProgress, cancelRequested, error);
+                                      onProgress, diagnostics,
+                                      cancelRequested, error);
 }
 
 }  // namespace audio_separation

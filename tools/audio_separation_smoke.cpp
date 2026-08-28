@@ -40,6 +40,16 @@ int main(int argc, char** argv) {
         std::cout << std::setw(3) << percent << "%  " << phase
                   << '\n';
       },
+      [](DiagnosticLevel level, std::string_view component,
+         std::string_view message) {
+        const char* levelName = level == DiagnosticLevel::Error
+                                    ? "error"
+                                    : level == DiagnosticLevel::Warning
+                                          ? "warning"
+                                          : "info";
+        std::cerr << '[' << levelName << ":" << component << "] "
+                  << message << '\n';
+      },
       &cancelRequested, &error);
   const double elapsedSeconds = std::chrono::duration<double>(
                                     std::chrono::steady_clock::now() - started)

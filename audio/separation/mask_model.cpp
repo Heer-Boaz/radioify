@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <sstream>
 #include <utility>
 
 #include "audio/separation/artifact.h"
@@ -27,6 +28,42 @@ bool cancelled(const std::atomic<bool>* cancelRequested) {
 
 bool isDimension(std::int64_t actual, std::int64_t expected) {
   return actual <= 0 || actual == expected;
+}
+
+DiagnosticLevel diagnosticLevel(OrtLoggingLevel level) {
+  switch (level) {
+    case ORT_LOGGING_LEVEL_WARNING:
+      return DiagnosticLevel::Warning;
+    case ORT_LOGGING_LEVEL_ERROR:
+    case ORT_LOGGING_LEVEL_FATAL:
+      return DiagnosticLevel::Error;
+    case ORT_LOGGING_LEVEL_VERBOSE:
+    case ORT_LOGGING_LEVEL_INFO:
+      return DiagnosticLevel::Info;
+  }
+  return DiagnosticLevel::Info;
+}
+
+void ORT_API_CALL onnxRuntimeLog(void* parameter, OrtLoggingLevel severity,
+                                 const char* category, const char*,
+                                 const char* codeLocation,
+                                 const char* message) {
+  const auto* reporter =
+      static_cast<const DiagnosticReporter*>(parameter);
+  if (!reporter || !*reporter) return;
+  try {
+    std::string detail = message ? message : "(empty ONNX Runtime message)";
+    if (codeLocation && codeLocation[0] != '\0') {
+      detail += " [";
+      detail += codeLocation;
+      detail += "]";
+    }
+    (*reporter)(diagnosticLevel(severity),
+                category && category[0] != '\0' ? category : "onnxruntime",
+                detail);
+  } catch (...) {
+    // A diagnostics sink must never cross the C callback boundary.
+  }
 }
 
 std::string elementTypeName(ONNXTensorElementDataType type) {
@@ -91,8 +128,12 @@ bool matchesModelContract(Ort::Session& session, std::string* error) {
 }  // namespace
 
 struct BanditMaskModel::Impl {
-  Impl() : environment(ORT_LOGGING_LEVEL_WARNING, "radioify-separation") {}
+  explicit Impl(DiagnosticReporter reporter)
+      : diagnostics(std::move(reporter)),
+        environment(ORT_LOGGING_LEVEL_WARNING, "radioify-separation",
+                    onnxRuntimeLog, &diagnostics) {}
 
+  DiagnosticReporter diagnostics;
   Ort::Env environment;
   std::unique_ptr<Ort::Session> session;
   Ort::MemoryInfo cpuMemory =
@@ -103,6 +144,7 @@ BanditMaskModel::BanditMaskModel() = default;
 BanditMaskModel::~BanditMaskModel() = default;
 
 bool BanditMaskModel::initialize(const std::filesystem::path& modelPath,
+                                 DiagnosticReporter diagnostics,
                                  std::string* error) {
   if (error) error->clear();
   if (modelPath.empty()) {
@@ -110,7 +152,10 @@ bool BanditMaskModel::initialize(const std::filesystem::path& modelPath,
     return false;
   }
   try {
-    auto implementation = std::make_unique<Impl>();
+    auto implementation =
+        std::make_unique<Impl>(std::move(diagnostics));
+    reportDiagnostic(implementation->diagnostics, DiagnosticLevel::Info,
+                     "onnxruntime", "Version: " + Ort::GetVersionString());
     std::vector<Ort::ConstEpDevice> directMlDevices;
     for (const Ort::ConstEpDevice& device :
          implementation->environment.GetEpDevices()) {
@@ -125,6 +170,15 @@ bool BanditMaskModel::initialize(const std::filesystem::path& modelPath,
       return false;
     }
 
+    const Ort::ConstHardwareDevice hardware = directMlDevices.front().Device();
+    std::ostringstream deviceDescription;
+    deviceDescription << "Selected DirectML GPU; vendor="
+                      << (hardware.Vendor() ? hardware.Vendor() : "unknown")
+                      << ", vendor_id=0x" << std::hex << hardware.VendorId()
+                      << ", device_id=0x" << hardware.DeviceId();
+    reportDiagnostic(implementation->diagnostics, DiagnosticLevel::Info,
+                     "directml", deviceDescription.str());
+
     Ort::SessionOptions options;
     options.DisableMemPattern();
     options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
@@ -135,6 +189,8 @@ bool BanditMaskModel::initialize(const std::filesystem::path& modelPath,
     implementation->session = std::make_unique<Ort::Session>(
         implementation->environment, modelPath.c_str(), options);
     if (!matchesModelContract(*implementation->session, error)) return false;
+    reportDiagnostic(implementation->diagnostics, DiagnosticLevel::Info,
+                     "directml", "Model session initialized successfully.");
     impl_ = std::move(implementation);
     return true;
   } catch (const Ort::Exception& exception) {

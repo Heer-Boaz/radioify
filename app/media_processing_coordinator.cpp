@@ -276,6 +276,7 @@ std::optional<playback_media_processing::Completion> completionForPlayback(
   projected.outcome = playbackOutcomeFor(completion.outcome);
   projected.sourceFile = completion.sourceFile;
   projected.outputFile = completion.outputFile;
+  projected.diagnosticLog = completion.diagnosticLog;
   projected.detail = completion.detail;
   return projected;
 }
@@ -411,6 +412,7 @@ bool Coordinator::collectReadyCompletions() {
       taskCompletion.outcome = outcomeFor(*completion);
       taskCompletion.sourceFile = completion->sourceFile;
       taskCompletion.outputFile = completion->outputFiles.front();
+      taskCompletion.diagnosticLog = completion->diagnosticLog;
       taskCompletion.detail = completion->error;
       impl_->audioSeparationCompletionPending = false;
       impl_->latestCompletion = taskCompletion;

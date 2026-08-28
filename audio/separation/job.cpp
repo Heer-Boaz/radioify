@@ -6,6 +6,7 @@
 #include <thread>
 #include <utility>
 
+#include "core/runtime_helpers.h"
 #include "core/waitable_signal.h"
 
 namespace audio_separation {
@@ -40,7 +41,21 @@ struct Job::Impl {
     notifyChanged();
   }
 
-  void finish(bool succeeded, std::string error) {
+  void finish(bool succeeded, std::string error,
+              const std::shared_ptr<DiagnosticLog>& diagnosticLog) {
+    if (diagnosticLog) {
+      if (succeeded) {
+        diagnosticLog->append(DiagnosticLevel::Info, "job",
+                              "Audio separation completed successfully.");
+      } else if (cancelRequested.load(std::memory_order_relaxed)) {
+        diagnosticLog->append(DiagnosticLevel::Info, "job",
+                              "Audio separation was cancelled.");
+      } else {
+        diagnosticLog->append(
+            DiagnosticLevel::Error, "job",
+            error.empty() ? "Audio separation failed unexpectedly." : error);
+      }
+    }
     {
       std::lock_guard<std::mutex> lock(mutex);
       if (succeeded) {
@@ -62,14 +77,45 @@ struct Job::Impl {
     notifyChanged();
   }
 
-  void run(std::filesystem::path mediaPath, ArtifactPaths outputPaths) {
+  void run(std::filesystem::path mediaPath, ArtifactPaths outputPaths,
+           std::shared_ptr<DiagnosticLog> diagnosticLog) {
     std::string error;
     bool succeeded = false;
+    if (diagnosticLog) {
+      diagnosticLog->append(DiagnosticLevel::Info, "job",
+                            "Source: " + toUtf8String(mediaPath));
+      for (const std::filesystem::path& output : outputPaths) {
+        diagnosticLog->append(DiagnosticLevel::Info, "job",
+                              "Output: " + toUtf8String(output));
+      }
+    }
     try {
+      int lastLoggedPercent = -5;
+      std::string lastLoggedPhase;
       succeeded = operation(
           mediaPath, outputPaths,
-          [this](float fraction, std::string phase) {
+          [this, diagnosticLog, lastLoggedPercent,
+           lastLoggedPhase = std::move(lastLoggedPhase)](
+              float fraction, std::string phase) mutable {
+            if (diagnosticLog) {
+              const int percent = static_cast<int>(
+                  std::clamp(fraction, 0.0f, 1.0f) * 100.0f);
+              if (phase != lastLoggedPhase ||
+                  percent >= lastLoggedPercent + 5) {
+                diagnosticLog->append(
+                    DiagnosticLevel::Info, "progress",
+                    std::to_string(percent) + "% " + phase);
+                lastLoggedPercent = percent;
+                lastLoggedPhase = phase;
+              }
+            }
             updateProgress(fraction, std::move(phase));
+          },
+          [diagnosticLog](DiagnosticLevel level, std::string_view component,
+                          std::string_view message) {
+            if (diagnosticLog) {
+              diagnosticLog->append(level, component, message);
+            }
           },
           &cancelRequested, &error);
     } catch (const std::exception& exception) {
@@ -77,7 +123,7 @@ struct Job::Impl {
     } catch (...) {
       error = "Audio separation failed unexpectedly.";
     }
-    finish(succeeded, std::move(error));
+    finish(succeeded, std::move(error), diagnosticLog);
   }
 
   void joinFinishedWorker() {
@@ -112,18 +158,26 @@ bool Job::tryStart(const std::filesystem::path& mediaPath) {
     if (!impl_->operation || impl_->state.running() || impl_->completion) {
       return false;
     }
+    std::string diagnosticError;
+    std::shared_ptr<DiagnosticLog> diagnosticLog =
+        createDiagnosticLog("audio-separation", &diagnosticError);
     impl_->cancelRequested.store(false, std::memory_order_relaxed);
     impl_->state = JobSnapshot{};
     impl_->state.state = JobState::Running;
     impl_->state.phase = "Starting audio separation";
     impl_->state.sourceFile = mediaPath;
     impl_->state.outputFiles = outputPaths;
+    if (diagnosticLog) {
+      impl_->state.diagnosticLog = diagnosticLog->path();
+    }
 
     try {
       impl_->worker = std::thread(
-          [implementation = impl_.get(), mediaPath, outputPaths]() mutable {
+          [implementation = impl_.get(), mediaPath, outputPaths,
+           diagnosticLog = std::move(diagnosticLog)]() mutable {
             implementation->run(std::move(mediaPath),
-                                std::move(outputPaths));
+                                std::move(outputPaths),
+                                std::move(diagnosticLog));
           });
     } catch (const std::exception& exception) {
       impl_->state.state = JobState::Failed;
@@ -131,11 +185,17 @@ bool Job::tryStart(const std::filesystem::path& mediaPath) {
       impl_->state.error =
           std::string("Could not start audio separation: ") +
           exception.what();
+      if (!diagnosticError.empty()) {
+        impl_->state.error += " Diagnostics: " + diagnosticError;
+      }
       impl_->completion = impl_->state;
     } catch (...) {
       impl_->state.state = JobState::Failed;
       impl_->state.phase.clear();
       impl_->state.error = "Could not start audio separation.";
+      if (!diagnosticError.empty()) {
+        impl_->state.error += " Diagnostics: " + diagnosticError;
+      }
       impl_->completion = impl_->state;
     }
   }

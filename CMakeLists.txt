@@ -1121,6 +1121,7 @@ target_sources(media_processing_coordinator_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/audio/separation/artifact.cpp
   ${CMAKE_SOURCE_DIR}/audio/separation/job.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+  ${CMAKE_SOURCE_DIR}/core/diagnostic_log.cpp
   ${CMAKE_SOURCE_DIR}/core/file_output.cpp
   ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
@@ -1262,6 +1263,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
     ${CMAKE_SOURCE_DIR}/audio/ffmpegaudio.cpp
     ${CMAKE_SOURCE_DIR}/audio/flac_writer.cpp
     ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+    ${CMAKE_SOURCE_DIR}/core/diagnostic_log.cpp
     ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
     ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
   )
@@ -1283,6 +1285,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
     ${CMAKE_SOURCE_DIR}/audio/ffmpegaudio.cpp
     ${CMAKE_SOURCE_DIR}/audio/flac_writer.cpp
     ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+    ${CMAKE_SOURCE_DIR}/core/diagnostic_log.cpp
     ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
     ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
   )

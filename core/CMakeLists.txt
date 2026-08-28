@@ -1,4 +1,5 @@
 radioify_add_module_object_library(radioify_core_runtime
+  ${CMAKE_CURRENT_SOURCE_DIR}/diagnostic_log.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/queues.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime_helpers.cpp
 )

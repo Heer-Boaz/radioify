@@ -78,6 +78,7 @@ struct Completion {
   Outcome outcome = Outcome::Failed;
   std::filesystem::path sourceFile;
   std::filesystem::path outputFile;
+  std::filesystem::path diagnosticLog;
   std::string detail;
 
   bool succeeded() const { return outcome == Outcome::Succeeded; }

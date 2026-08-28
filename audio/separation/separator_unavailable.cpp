@@ -6,6 +6,7 @@ namespace audio_separation {
 
 bool separateMediaAudio(const std::filesystem::path&,
                         const ArtifactPaths&, const ProgressCallback&,
+                        const DiagnosticReporter&,
                         const std::atomic<bool>*, std::string* error) {
   if (error) {
     *error =
@@ -17,6 +18,7 @@ bool separateMediaAudio(const std::filesystem::path&,
 bool separateMediaAudioWithModel(
     const std::filesystem::path&, const std::filesystem::path&,
     const ArtifactPaths&, const ProgressCallback&,
+    const DiagnosticReporter&,
     const std::atomic<bool>*, std::string* error) {
   if (error) {
     *error =

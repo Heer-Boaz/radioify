@@ -160,6 +160,7 @@ int main() {
       [&](const std::filesystem::path&,
           const audio_separation::ArtifactPaths&,
           const audio_separation::Job::ProgressReporter& progress,
+          const audio_separation::Job::DiagnosticReporter&,
           const std::atomic<bool>* cancelRequested, std::string* error) {
         progress(0.2f, "Separating dialogue, music and effects on GPU");
         separationStarted.store(true, std::memory_order_release);

@@ -9,6 +9,7 @@
 #include <string>
 
 #include "audio/separation/artifact.h"
+#include "audio/separation/diagnostics.h"
 #include "core/native_wait_handle.h"
 #include "core/wake_event.h"
 
@@ -29,6 +30,7 @@ struct JobSnapshot {
   std::string phase;
   std::string error;
   std::filesystem::path sourceFile;
+  std::filesystem::path diagnosticLog;
   ArtifactPaths outputFiles{};
 
   bool running() const {
@@ -48,9 +50,11 @@ struct JobSnapshot {
 class Job {
  public:
   using ProgressReporter = std::function<void(float, std::string)>;
+  using DiagnosticReporter = audio_separation::DiagnosticReporter;
   using Operation = std::function<bool(
       const std::filesystem::path&, const ArtifactPaths&,
-      const ProgressReporter&, const std::atomic<bool>*, std::string*)>;
+      const ProgressReporter&, const DiagnosticReporter&,
+      const std::atomic<bool>*, std::string*)>;
 
   explicit Job(Operation operation);
   Job(Operation operation, WakeNotifier ownerWake);

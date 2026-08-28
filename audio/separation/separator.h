@@ -6,6 +6,7 @@
 #include <string>
 
 #include "audio/separation/artifact.h"
+#include "audio/separation/diagnostics.h"
 
 namespace audio_separation {
 
@@ -19,6 +20,7 @@ using ProgressCallback = std::function<void(const Progress&)>;
 bool separateMediaAudio(const std::filesystem::path& mediaPath,
                         const ArtifactPaths& outputPaths,
                         const ProgressCallback& onProgress,
+                        const DiagnosticReporter& diagnostics,
                         const std::atomic<bool>* cancelRequested,
                         std::string* error);
 
@@ -29,6 +31,7 @@ bool separateMediaAudioWithModel(
     const std::filesystem::path& modelPath,
     const ArtifactPaths& outputPaths,
     const ProgressCallback& onProgress,
+    const DiagnosticReporter& diagnostics,
     const std::atomic<bool>* cancelRequested,
     std::string* error);
 

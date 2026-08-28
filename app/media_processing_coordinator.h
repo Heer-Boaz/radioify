@@ -42,6 +42,7 @@ struct TaskCompletion {
   TaskOutcome outcome = TaskOutcome::Failed;
   std::filesystem::path sourceFile;
   std::filesystem::path outputFile;
+  std::filesystem::path diagnosticLog;
   std::string detail;
 
   bool succeeded() const { return outcome == TaskOutcome::Succeeded; }
