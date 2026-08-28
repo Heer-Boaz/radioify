@@ -111,7 +111,10 @@ ArtifactPaths temporaryArtifactPathsFor(
   ArtifactPaths paths = artifactPathsFor(mediaPath);
   const std::string unique = uniquePart();
   for (std::filesystem::path& path : paths) {
-    path += ".radioify-" + unique + ".tmp.flac";
+    // The FLAC writer selects its muxer explicitly, so staging files do not
+    // need a media extension. Keep the terminal extension non-media: browser
+    // refreshes must never surface a partial stem as playable content.
+    path += ".radioify-" + unique + ".tmp";
   }
   return paths;
 }

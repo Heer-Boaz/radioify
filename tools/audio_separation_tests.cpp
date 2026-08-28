@@ -63,6 +63,13 @@ bool testArtifactContract(const std::filesystem::path& directory) {
 
   const separation::ArtifactPaths temporaryPaths =
       separation::temporaryArtifactPathsFor(media);
+  ok &= expect(
+      std::all_of(temporaryPaths.begin(), temporaryPaths.end(),
+                  [](const std::filesystem::path& path) {
+                    return path.extension() == L".tmp" &&
+                           !separation::isManagedArtifactPath(path);
+                  }),
+      "staging stems must not have a playable media extension");
   for (std::size_t index = 0; index < separation::kStemCount; ++index) {
     ok &= expect(writeText(finalPaths[index], "old") &&
                      writeText(temporaryPaths[index], "new"),
@@ -154,14 +161,15 @@ bool testFlacWriter(const std::filesystem::path& directory) {
 
   bool ok = true;
   std::string error;
-  const std::filesystem::path path = directory / "writer.flac";
+  const std::filesystem::path path = directory / "writer.tmp";
   audio_file::FlacWriter writer;
   ok &= expect(writer.open(path, kSampleRate, kChannels, &error) &&
                    writer.writeFrames(samples.data(), 123, &error) &&
                    writer.writeFrames(samples.data() + 123 * kChannels,
                                       kFrames - 123, &error) &&
                    writer.finish(&error),
-               "FLAC writer must finalize arbitrary frame blocks");
+               "FLAC writer must finalize arbitrary frame blocks without "
+               "depending on a playable filename extension");
   if (!ok) {
     std::cerr << error << '\n';
     return false;
