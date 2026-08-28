@@ -39,20 +39,27 @@ struct Layout {
 struct Interaction {
   bool consumed = false;
   bool changed = false;
+  bool focusChanged = false;
   std::optional<Action> activatedAction;
 };
 
 class State {
  public:
-  void synchronize(bool taskActive);
+  void synchronize(const std::optional<MediaTaskCardModel>& task);
   Interaction handle(const InputEvent& event, const Bounds& bounds,
                      const MediaTaskCardModel& task);
 
+  bool focused() const { return focused_; }
+  std::optional<std::size_t> highlightedButton() const;
   std::optional<std::size_t> hoveredButton() const {
     return hoveredButton_;
   }
 
  private:
+  void setFocused(bool focused, Interaction& interaction);
+
+  bool focused_ = false;
+  std::size_t selectedButton_ = 0;
   std::optional<std::size_t> hoveredButton_;
 };
 

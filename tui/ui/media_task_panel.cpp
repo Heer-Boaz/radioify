@@ -23,10 +23,26 @@ bool Layout::contains(int pointerX, int pointerY) const {
          pointerY < y + height;
 }
 
-void State::synchronize(bool taskActive) {
-  if (!taskActive) {
+void State::synchronize(const std::optional<MediaTaskCardModel>& task) {
+  if (!task || actionsFor(*task).empty()) {
+    focused_ = false;
+    selectedButton_ = 0;
     hoveredButton_.reset();
   }
+}
+
+std::optional<std::size_t> State::highlightedButton() const {
+  return focused_ ? std::optional<std::size_t>(selectedButton_)
+                  : hoveredButton_;
+}
+
+void State::setFocused(bool focused, Interaction& interaction) {
+  if (focused_ == focused) {
+    return;
+  }
+  focused_ = focused;
+  interaction.changed = true;
+  interaction.focusChanged = true;
 }
 
 Interaction State::handle(const InputEvent& event, const Bounds& bounds,
@@ -39,13 +55,56 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
     }
     return result;
   }
+
+  const std::vector<tui_button_row::Button> actions = actionsFor(task);
+  if (event.type == InputEvent::Type::Action) {
+    if (focused_) {
+      result.consumed = true;
+      if (event.action == InputAction::Back) {
+        setFocused(false, result);
+      }
+    }
+    return result;
+  }
+  if (event.type == InputEvent::Type::Key) {
+    if (!focused_) {
+      if (event.key.vk == VK_TAB && !actions.empty()) {
+        setFocused(true, result);
+        result.consumed = true;
+      }
+      return result;
+    }
+
+    result.consumed = true;
+    switch (event.key.vk) {
+      case VK_TAB:
+      case VK_ESCAPE:
+        setFocused(false, result);
+        break;
+      case VK_LEFT:
+        selectedButton_ = tui_button_row::selectAdjacent(
+            selectedButton_, actions.size(), -1);
+        result.changed = true;
+        break;
+      case VK_RIGHT:
+        selectedButton_ = tui_button_row::selectAdjacent(
+            selectedButton_, actions.size(), 1);
+        result.changed = true;
+        break;
+      case VK_RETURN:
+        result.activatedAction = actionAt(actions, selectedButton_);
+        break;
+      default:
+        break;
+    }
+    return result;
+  }
   if (event.type != InputEvent::Type::Mouse) {
     return result;
   }
 
   const Layout currentLayout = layout(bounds, task);
   const MouseEvent& mouse = event.mouse;
-  const std::vector<tui_button_row::Button> actions = actionsFor(task);
   const std::optional<std::size_t> hovered =
       tui_button_row::hitTest(currentLayout.buttons, mouse.pos.X,
                               mouse.pos.Y);
@@ -54,8 +113,19 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
     result.changed = true;
   }
   result.consumed = currentLayout.contains(mouse.pos.X, mouse.pos.Y);
+  if (!result.consumed && focused_ &&
+      mouse.kind == MouseEventKind::Press) {
+    setFocused(false, result);
+  }
+  if (focused_ && hovered && selectedButton_ != *hovered) {
+    selectedButton_ = *hovered;
+    result.changed = true;
+  }
   if (mouse.kind == MouseEventKind::Press &&
       isMouseButtonDown(mouse, MouseButton::Left)) {
+    if (hovered) {
+      selectedButton_ = *hovered;
+    }
     result.activatedAction = actionAt(actions, hovered);
     result.consumed = result.consumed || result.activatedAction.has_value();
   }

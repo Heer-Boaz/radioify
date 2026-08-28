@@ -25,6 +25,13 @@ InputEvent pointerEvent(MouseEventKind kind, int x, int y,
   return event;
 }
 
+InputEvent keyEvent(WORD key) {
+  InputEvent event;
+  event.type = InputEvent::Type::Key;
+  event.key.vk = key;
+  return event;
+}
+
 }  // namespace
 
 int main() {
@@ -68,6 +75,29 @@ int main() {
                    !state.hoveredButton(),
                "leaving the panel must clear hover without blocking browser "
                "input");
+
+  interaction = state.handle(keyEvent(VK_TAB), bounds, task);
+  ok &= expect(interaction.consumed && interaction.focusChanged &&
+                   state.focused() && state.highlightedButton() == 0,
+               "Tab must move focus from the browser into an actionable "
+               "task panel");
+  interaction = state.handle(keyEvent(VK_RETURN), bounds, task);
+  ok &= expect(interaction.consumed &&
+                   interaction.activatedAction == Action::Cancel,
+               "Enter must activate the selected task-panel button");
+  interaction = state.handle(keyEvent(VK_ESCAPE), bounds, task);
+  ok &= expect(interaction.consumed && interaction.focusChanged &&
+                   !state.focused(),
+               "Escape must return task-panel focus to the browser");
+
+  state.handle(keyEvent(VK_TAB), bounds, task);
+  interaction = state.handle(
+      pointerEvent(MouseEventKind::Press, 0, bounds.top + 10, true), bounds,
+      task);
+  ok &= expect(!interaction.consumed && interaction.focusChanged &&
+                   !state.focused(),
+               "clicking outside a focused panel must return focus and let "
+               "the browser receive the click");
 
   const tui_dialog::Content confirmation = cancellationDialog(task);
   ok &= expect(confirmation.title == "Cancel audio separation?" &&

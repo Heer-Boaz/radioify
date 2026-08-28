@@ -8,6 +8,7 @@ struct MediaTaskCardStyles {
   Style title;
   Style secondary;
   Style progress;
+  Style focusedBorder;
   Style button;
   Style selectedButton;
 };

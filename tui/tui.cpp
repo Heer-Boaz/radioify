@@ -1245,8 +1245,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       handleMediaCoordinatorEvent(std::move(event));
     }
     tui_media_tasks::Update taskUpdate = mediaTasks.poll();
-    mediaTaskPanel.synchronize(
-        mediaTasks.snapshot().activeCard.has_value());
+    mediaTaskPanel.synchronize(mediaTasks.snapshot().activeCard);
     for (const media_processing::TaskCompletion& completion :
          taskUpdate.completions) {
       mediaCoordinator.handleMediaTaskCompletion(completion);
@@ -1461,6 +1460,9 @@ int runTui(Options o, ApplicationRuntime& runtime) {
             mediaTaskPanel.handle(
                 ev, tui_media_task_panel::Bounds{width, height, listTop},
                 *task);
+        if (interaction.focusChanged && mediaTaskPanel.focused()) {
+          setBrowserSearchFocus(browser, BrowserSearchFocus::None);
+        }
         if (interaction.activatedAction ==
             tui_media_task_panel::Action::Cancel) {
           if (requestMediaTaskCancellation()) {

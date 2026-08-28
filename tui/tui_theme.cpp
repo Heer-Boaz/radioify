@@ -110,6 +110,7 @@ MediaTaskCardStyles TuiTheme::mediaTaskCardStyles() const {
   result.title = accent;
   result.secondary = dim;
   result.progress = normal;
+  result.focusedBorder = accent;
   result.button = dim;
   result.selectedButton = highlight;
   return result;

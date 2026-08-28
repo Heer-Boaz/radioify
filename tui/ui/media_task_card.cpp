@@ -50,23 +50,25 @@ void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth,
     screen.writeRun(layout.x, layout.y + y, layout.width, L' ',
                     styles.background);
   }
-  screen.writeChar(layout.x, layout.y, L'+', styles.secondary);
+  const Style border = state.focused() ? styles.focusedBorder
+                                       : styles.secondary;
+  screen.writeChar(layout.x, layout.y, L'+', border);
   screen.writeRun(layout.x + 1, layout.y, layout.width - 2, L'-',
-                  styles.secondary);
+                  border);
   screen.writeChar(layout.x + layout.width - 1, layout.y, L'+',
-                   styles.secondary);
+                   border);
   screen.writeChar(layout.x, layout.y + layout.height - 1, L'+',
-                   styles.secondary);
+                   border);
   screen.writeRun(layout.x + 1, layout.y + layout.height - 1,
                   layout.width - 2, L'-',
-                  styles.secondary);
+                  border);
   screen.writeChar(layout.x + layout.width - 1,
                    layout.y + layout.height - 1, L'+',
-                   styles.secondary);
+                   border);
   for (int y = 1; y < layout.height - 1; ++y) {
-    screen.writeChar(layout.x, layout.y + y, L'|', styles.secondary);
+    screen.writeChar(layout.x, layout.y + y, L'|', border);
     screen.writeChar(layout.x + layout.width - 1, layout.y + y, L'|',
-                     styles.secondary);
+                     border);
   }
 
   const int visibleLines =
@@ -83,7 +85,8 @@ void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth,
   for (const tui_button_row::Placement& buttonBounds :
        layout.buttons.buttons) {
     if (buttonBounds.index >= actions.size()) continue;
-    const bool selected = state.hoveredButton() == buttonBounds.index;
+    const bool selected =
+        state.highlightedButton() == buttonBounds.index;
     const Style style = selected ? styles.selectedButton : styles.button;
     const std::string label = "[ " + actions[buttonBounds.index].label + " ]";
     screen.writeRun(buttonBounds.x, layout.buttons.y, buttonBounds.width, L' ',
