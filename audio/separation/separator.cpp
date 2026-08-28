@@ -408,15 +408,15 @@ class ScheduledMaskModel {
                      "Released DirectML resources for foreground playback.");
   }
 
-  bool run(std::span<const float> spectrogramRealImag,
-           std::span<const float>* masksRealImag,
-           const std::atomic<bool>* cancelRequested, std::string* error) {
+  MaskInferenceResult run(std::span<const float> spectrogramRealImag,
+                          std::span<const float>* masksRealImag,
+                          const ExecutionControl& control,
+                          std::string* error) {
     if (!model_) {
       setError(error, "The scheduled DirectML model is not acquired.");
-      return false;
+      return MaskInferenceResult::Failed;
     }
-    return model_->run(spectrogramRealImag, masksRealImag, cancelRequested,
-                       error);
+    return model_->run(spectrogramRealImag, masksRealImag, control, error);
   }
 
   void releaseResources() { model_.reset(); }
@@ -578,9 +578,16 @@ bool separateMediaAudioUsingModel(
             interleavedChunk[frame * kChannels + channel];
       }
       if (!spectral.forward(monoChunk.data(), monoChunk.size(), &spectrogram,
-                            error) ||
-          !model.run(spectrogram, &masks, control.cancellationFlag(), error)) {
+                            error)) {
         return false;
+      }
+      for (;;) {
+        const MaskInferenceResult inference =
+            model.run(spectrogram, &masks, control, error);
+        if (inference == MaskInferenceResult::Succeeded) break;
+        if (inference == MaskInferenceResult::Failed) return false;
+        if (!checkpoint(control, yieldGpuResources, error)) return false;
+        if (!model.acquire(onProgress, inferenceProgress, error)) return false;
       }
       for (std::size_t stem = 0; stem < kStemCount; ++stem) {
         const float* mask =

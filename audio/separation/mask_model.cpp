@@ -41,11 +41,6 @@ void setError(std::string* error, std::string message) {
   if (error) *error = std::move(message);
 }
 
-bool cancelled(const std::atomic<bool>* cancelRequested) {
-  return cancelRequested &&
-         cancelRequested->load(std::memory_order_relaxed);
-}
-
 template <std::size_t Size>
 bool matchesShape(const std::vector<std::int64_t>& actual,
                   const std::array<std::int64_t, Size>& expected) {
@@ -279,54 +274,69 @@ bool BanditMaskModel::initialize(const std::filesystem::path& modelPath,
   }
 }
 
-bool BanditMaskModel::run(std::span<const float> spectrogramRealImag,
-                          std::span<const float>* masksRealImag,
-                          const std::atomic<bool>* cancelRequested,
-                          std::string* error) {
+MaskInferenceResult BanditMaskModel::run(
+    std::span<const float> spectrogramRealImag,
+    std::span<const float>* masksRealImag,
+    const ExecutionControl& control, std::string* error) {
   if (error) error->clear();
   if (!impl_ || !impl_->session) {
     setError(error, "The DirectML separation session is not ready.");
-    return false;
+    return MaskInferenceResult::Failed;
   }
   if (!masksRealImag) {
     setError(error, "No destination was provided for separation masks.");
-    return false;
+    return MaskInferenceResult::Failed;
   }
   if (spectrogramRealImag.size() != kInputValues) {
     setError(error, "The DirectML separation session expected " +
                         std::to_string(kInputValues) +
                         " input values but received " +
                         std::to_string(spectrogramRealImag.size()) + ".");
-    return false;
+    return MaskInferenceResult::Failed;
   }
-  if (cancelled(cancelRequested)) {
-    setError(error, "Audio separation cancelled.");
-    return false;
+  if (control.cancellationRequested()) {
+    return MaskInferenceResult::Interrupted;
   }
+  std::atomic<bool> interrupted{false};
+  Ort::RunOptions runOptions;
+  auto interruption = control.registerInterruption([&]() {
+    interrupted.store(true, std::memory_order_relaxed);
+    try {
+      runOptions.SetTerminate();
+    } catch (...) {
+      // The local flag still prevents interrupted output from being consumed.
+    }
+  });
   try {
     std::copy(spectrogramRealImag.begin(), spectrogramRealImag.end(),
               impl_->inputBuffer.begin());
     const char* inputNames[] = {kInputName};
     const char* outputNames[] = {kOutputName};
-    impl_->session->Run(Ort::RunOptions{nullptr}, inputNames,
+    impl_->session->Run(runOptions, inputNames,
                         &impl_->inputValue, 1, outputNames,
                         &impl_->outputValue, 1);
-    if (cancelled(cancelRequested)) {
-      setError(error, "Audio separation cancelled.");
-      return false;
+    if (interrupted.load(std::memory_order_relaxed) ||
+        control.cancellationRequested()) {
+      return MaskInferenceResult::Interrupted;
     }
     // The session contract and the bound output tensor were validated once at
     // initialization. Keep the repeated inference path allocation-free.
     *masksRealImag = std::span<const float>(impl_->outputBuffer);
-    return true;
+    return MaskInferenceResult::Succeeded;
   } catch (const Ort::Exception& exception) {
+    if (interrupted.load(std::memory_order_relaxed)) {
+      return MaskInferenceResult::Interrupted;
+    }
     setError(error, std::string("DirectML audio separation failed: ") +
                         exception.what());
-    return false;
+    return MaskInferenceResult::Failed;
   } catch (const std::exception& exception) {
+    if (interrupted.load(std::memory_order_relaxed)) {
+      return MaskInferenceResult::Interrupted;
+    }
     setError(error, std::string("Audio separation failed: ") +
                         exception.what());
-    return false;
+    return MaskInferenceResult::Failed;
   }
 }
 

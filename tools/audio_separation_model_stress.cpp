@@ -73,10 +73,12 @@ int wmain(int argc, wchar_t** argv) {
         0.01 * std::sin(static_cast<double>(index % 4096) * 0.013));
   }
   std::atomic<bool> cancelRequested{false};
+  const audio_separation::ExecutionControl control(&cancelRequested);
   std::span<const float> output;
   const auto started = std::chrono::steady_clock::now();
   for (int iteration = 0; iteration < iterations; ++iteration) {
-    if (!model.run(input, &output, &cancelRequested, &error)) {
+    if (model.run(input, &output, control, &error) !=
+        audio_separation::MaskInferenceResult::Succeeded) {
       std::cerr << "Inference " << (iteration + 1)
                 << " failed: " << error << '\n';
       return EXIT_FAILURE;

@@ -474,7 +474,8 @@ int main() {
     return separationStarted.load(std::memory_order_acquire);
   });
   ok &= expect(playbackPriorityStored && pausedSeparation &&
-                   pausedSeparation->paused &&
+                   pausedSeparation->scheduling ==
+                       processing::TaskSchedulingState::Suspended &&
                    pausedSeparation->phase ==
                        "Video playback has priority" &&
                    pausedSeparationCard &&

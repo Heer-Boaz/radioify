@@ -330,7 +330,8 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
   }
-  ok &= expect(initiallyPausedSnapshot.paused &&
+  ok &= expect(initiallyPausedSnapshot.scheduling ==
+                       separation::JobSchedulingState::Suspended &&
                    backendBlockedBeforeResume &&
                    initiallyPausedResumeAccepted && initiallyPausedCompletion &&
                    initiallyPausedCompletion->succeeded() &&
@@ -349,6 +350,7 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
   }
 
   std::atomic<bool> pauseOperationStarted{false};
+  std::atomic<bool> pauseInterruptObserved{false};
   std::atomic<bool> enterPauseCheckpoint{false};
   std::atomic<bool> pauseResourcesYielded{false};
   std::atomic<bool> passedPauseCheckpoint{false};
@@ -356,8 +358,15 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
       [&](const std::filesystem::path&, const separation::ArtifactPaths&,
           const separation::Job::ProgressReporter&,
           const separation::Job::DiagnosticReporter&,
-          const separation::ExecutionControl& control, std::string*) {
+        const separation::ExecutionControl& control, std::string*) {
         pauseOperationStarted.store(true, std::memory_order_release);
+        auto interruption = control.registerInterruption([&]() {
+          pauseInterruptObserved.store(true, std::memory_order_release);
+        });
+        while (!pauseInterruptObserved.load(std::memory_order_acquire)) {
+          std::this_thread::yield();
+        }
+        interruption.reset();
         while (!enterPauseCheckpoint.load(std::memory_order_acquire)) {
           std::this_thread::yield();
         }
@@ -378,6 +387,13 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
   const bool pauseAccepted = pausable.setPaused(true);
+  for (int attempt = 0;
+       attempt < 100 &&
+       !pauseInterruptObserved.load(std::memory_order_acquire);
+       ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  const separation::JobSnapshot suspendingSnapshot = pausable.snapshot();
   enterPauseCheckpoint.store(true, std::memory_order_release);
   for (int attempt = 0;
        attempt < 100 &&
@@ -396,7 +412,13 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
   }
-  ok &= expect(pauseAccepted && pausedSnapshot.paused && stayedPaused &&
+  ok &= expect(pauseAccepted &&
+                   pauseInterruptObserved.load(std::memory_order_acquire) &&
+                   suspendingSnapshot.scheduling ==
+                       separation::JobSchedulingState::Suspending &&
+                   pausedSnapshot.scheduling ==
+                       separation::JobSchedulingState::Suspended &&
+                   stayedPaused &&
                    pauseResourcesYielded.load(std::memory_order_acquire) &&
                    resumeAccepted && resumedCompletion &&
                    resumedCompletion->succeeded() &&
@@ -406,7 +428,7 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
   if (resumedCompletion && !resumedCompletion->diagnosticLog.empty()) {
     const std::string pauseDiagnostics =
         readText(resumedCompletion->diagnosticLog);
-    ok &= expect(pauseDiagnostics.find("Paused while foreground video") !=
+    ok &= expect(pauseDiagnostics.find("Suspending for foreground video") !=
                          std::string::npos &&
                      pauseDiagnostics.find(
                          "Resumed after foreground video") !=

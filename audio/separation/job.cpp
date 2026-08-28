@@ -21,12 +21,16 @@ struct Job::Impl {
   std::condition_variable runCondition;
   std::thread worker;
   std::atomic<bool> cancelRequested{false};
+  std::atomic<bool> suspensionRequested{false};
   WaitableSignal changed;
   Operation operation;
   WakeNotifier ownerWake;
   JobSnapshot state;
   std::optional<JobSnapshot> completion;
   std::shared_ptr<DiagnosticLog> activeDiagnosticLog;
+  std::mutex interruptionMutex;
+  ExecutionControl::Interrupt activeInterrupt;
+  std::uint64_t activeInterruptToken = 0;
 
   void notifyChanged() {
     changed.signal();
@@ -47,18 +51,44 @@ struct Job::Impl {
   bool waitUntilRunnable(
       const ExecutionControl::YieldResources& yieldResources) {
     std::unique_lock<std::mutex> lock(mutex);
-    if (state.paused &&
+    if (state.scheduling != JobSchedulingState::Running &&
         !cancelRequested.load(std::memory_order_relaxed) &&
         yieldResources) {
       lock.unlock();
       yieldResources();
       lock.lock();
     }
+    if (state.scheduling != JobSchedulingState::Running &&
+        !cancelRequested.load(std::memory_order_relaxed)) {
+      state.scheduling = JobSchedulingState::Suspended;
+      notifyChanged();
+    }
     runCondition.wait(lock, [this]() {
-      return !state.paused ||
+      return state.scheduling == JobSchedulingState::Running ||
              cancelRequested.load(std::memory_order_relaxed);
     });
     return !cancelRequested.load(std::memory_order_relaxed);
+  }
+
+  std::function<void()> registerInterrupt(
+      ExecutionControl::Interrupt interrupt) {
+    std::lock_guard<std::mutex> lock(interruptionMutex);
+    const std::uint64_t token = ++activeInterruptToken;
+    activeInterrupt = std::move(interrupt);
+    if (activeInterrupt &&
+        (cancelRequested.load(std::memory_order_relaxed) ||
+         suspensionRequested.load(std::memory_order_relaxed))) {
+      activeInterrupt();
+    }
+    return [this, token]() {
+      std::lock_guard<std::mutex> lock(interruptionMutex);
+      if (activeInterruptToken == token) activeInterrupt = {};
+    };
+  }
+
+  void interruptActiveOperation() {
+    std::lock_guard<std::mutex> lock(interruptionMutex);
+    if (activeInterrupt) activeInterrupt();
   }
 
   void finish(bool succeeded, std::string error,
@@ -92,7 +122,8 @@ struct Job::Impl {
                           : std::move(error);
       }
       state.phase.clear();
-      state.paused = false;
+      state.scheduling = JobSchedulingState::Running;
+      suspensionRequested.store(false, std::memory_order_relaxed);
       completion = state;
       activeDiagnosticLog.reset();
     }
@@ -118,6 +149,9 @@ struct Job::Impl {
           &cancelRequested,
           [this](const ExecutionControl::YieldResources& yieldResources) {
             return waitUntilRunnable(yieldResources);
+          },
+          [this](ExecutionControl::Interrupt interrupt) {
+            return registerInterrupt(std::move(interrupt));
           });
       if (control.checkpoint()) {
         succeeded = operation(
@@ -192,12 +226,16 @@ bool Job::tryStart(const std::filesystem::path& mediaPath,
     std::shared_ptr<DiagnosticLog> diagnosticLog =
         createDiagnosticLog("audio-separation", &diagnosticError);
     impl_->cancelRequested.store(false, std::memory_order_relaxed);
+    impl_->suspensionRequested.store(options.initiallyPaused,
+                                     std::memory_order_relaxed);
     impl_->state = JobSnapshot{};
     impl_->state.state = JobState::Running;
     impl_->state.phase = "Starting audio separation";
     impl_->state.sourceFile = mediaPath;
     impl_->state.outputFiles = outputPaths;
-    impl_->state.paused = options.initiallyPaused;
+    impl_->state.scheduling =
+        options.initiallyPaused ? JobSchedulingState::Suspended
+                                : JobSchedulingState::Running;
     if (diagnosticLog) {
       impl_->state.diagnosticLog = diagnosticLog->path();
       if (options.initiallyPaused) {
@@ -250,8 +288,10 @@ bool Job::requestCancel() {
     impl_->cancelRequested.store(true, std::memory_order_relaxed);
     impl_->state.state = JobState::Cancelling;
     impl_->state.phase = "Cancelling audio separation";
-    impl_->state.paused = false;
+    impl_->state.scheduling = JobSchedulingState::Running;
+    impl_->suspensionRequested.store(false, std::memory_order_relaxed);
   }
+  impl_->interruptActiveOperation();
   impl_->runCondition.notify_all();
   impl_->notifyChanged();
   return true;
@@ -262,20 +302,33 @@ bool Job::setPaused(bool paused) {
   std::shared_ptr<DiagnosticLog> diagnosticLog;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (impl_->state.state != JobState::Running ||
-        impl_->state.paused == paused) {
+    if (impl_->state.state != JobState::Running) {
       return false;
     }
-    impl_->state.paused = paused;
+    if (paused) {
+      if (impl_->state.scheduling != JobSchedulingState::Running) {
+        return false;
+      }
+      impl_->state.scheduling = JobSchedulingState::Suspending;
+      impl_->suspensionRequested.store(true, std::memory_order_relaxed);
+    } else {
+      if (impl_->state.scheduling == JobSchedulingState::Running) {
+        return false;
+      }
+      impl_->state.scheduling = JobSchedulingState::Running;
+      impl_->suspensionRequested.store(false, std::memory_order_relaxed);
+    }
     diagnosticLog = impl_->activeDiagnosticLog;
   }
   if (diagnosticLog) {
     diagnosticLog->append(
         DiagnosticLevel::Info, "scheduler",
-        paused ? "Paused while foreground video is playing."
+        paused ? "Suspending for foreground video playback."
                : "Resumed after foreground video playback yielded.");
   }
-  if (!paused) {
+  if (paused) {
+    impl_->interruptActiveOperation();
+  } else {
     impl_->runCondition.notify_all();
   }
   impl_->notifyChanged();

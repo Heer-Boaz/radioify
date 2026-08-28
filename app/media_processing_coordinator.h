@@ -26,6 +26,12 @@ enum class TaskOutcome {
   Cancelled,
 };
 
+enum class TaskSchedulingState {
+  Running,
+  Suspending,
+  Suspended,
+};
+
 struct TaskActivity {
   TaskKind kind = TaskKind::MelodyAnalysis;
   std::filesystem::path sourceFile;
@@ -35,7 +41,7 @@ struct TaskActivity {
   std::string phase;
   bool cancelling = false;
   bool cancellable = false;
-  bool paused = false;
+  TaskSchedulingState scheduling = TaskSchedulingState::Running;
 };
 
 struct TaskCompletion {

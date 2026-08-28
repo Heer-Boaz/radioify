@@ -25,6 +25,12 @@ enum class JobState : std::uint8_t {
   Cancelled,
 };
 
+enum class JobSchedulingState : std::uint8_t {
+  Running,
+  Suspending,
+  Suspended,
+};
+
 struct JobSnapshot {
   JobState state = JobState::Idle;
   float progress = 0.0f;
@@ -33,7 +39,7 @@ struct JobSnapshot {
   std::filesystem::path sourceFile;
   std::filesystem::path diagnosticLog;
   ArtifactPaths outputFiles{};
-  bool paused = false;
+  JobSchedulingState scheduling = JobSchedulingState::Running;
 
   bool running() const {
     return state == JobState::Running || state == JobState::Cancelling;

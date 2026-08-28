@@ -370,9 +370,17 @@ std::optional<TaskActivity> Coordinator::activity() const {
       activity.phase = snapshot.phase;
       activity.cancelling = snapshot.cancelling();
       activity.cancellable = !activity.cancelling;
-      activity.paused = snapshot.paused;
-      if (activity.paused) {
-        activity.phase = "Video playback has priority";
+      switch (snapshot.scheduling) {
+        case audio_separation::JobSchedulingState::Running:
+          break;
+        case audio_separation::JobSchedulingState::Suspending:
+          activity.scheduling = TaskSchedulingState::Suspending;
+          activity.phase = "Yielding the GPU to video playback";
+          break;
+        case audio_separation::JobSchedulingState::Suspended:
+          activity.scheduling = TaskSchedulingState::Suspended;
+          activity.phase = "Video playback has priority";
+          break;
       }
       return activity;
     }

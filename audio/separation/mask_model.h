@@ -1,6 +1,5 @@
 #pragma once
 
-#include <atomic>
 #include <filesystem>
 #include <memory>
 #include <span>
@@ -8,8 +7,15 @@
 #include <vector>
 
 #include "audio/separation/diagnostics.h"
+#include "audio/separation/execution_control.h"
 
 namespace audio_separation {
+
+enum class MaskInferenceResult {
+  Succeeded,
+  Interrupted,
+  Failed,
+};
 
 class BanditMaskModel {
  public:
@@ -26,10 +32,10 @@ class BanditMaskModel {
   bool initialize(const std::filesystem::path& modelPath,
                   DiagnosticReporter diagnostics,
                   std::string* error);
-  bool run(std::span<const float> spectrogramRealImag,
-           std::span<const float>* masksRealImag,
-           const std::atomic<bool>* cancelRequested,
-           std::string* error);
+  MaskInferenceResult run(std::span<const float> spectrogramRealImag,
+                          std::span<const float>* masksRealImag,
+                          const ExecutionControl& control,
+                          std::string* error);
 
  private:
   struct Impl;
