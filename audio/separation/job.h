@@ -46,6 +46,12 @@ struct JobSnapshot {
   bool succeeded() const { return state == JobState::Succeeded; }
 };
 
+struct JobStartOptions {
+  // The worker is allowed to exist, but its backend is not entered until the
+  // foreground resource owner releases it.
+  bool initiallyPaused = false;
+};
+
 // Owns one background separation operation and exposes immutable snapshots.
 // Completions are delivered once, while the wait handle lets the TUI sleep
 // without reaching into worker-thread state.
@@ -65,7 +71,8 @@ class Job {
   Job(const Job&) = delete;
   Job& operator=(const Job&) = delete;
 
-  bool tryStart(const std::filesystem::path& mediaPath);
+  bool tryStart(const std::filesystem::path& mediaPath,
+                JobStartOptions options = {});
   bool setPaused(bool paused);
   bool requestCancel();
   void cancelAndJoin();

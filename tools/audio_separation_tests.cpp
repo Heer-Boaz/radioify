@@ -303,8 +303,54 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
     std::filesystem::remove(cancelled->diagnosticLog, ignored);
   }
 
+  std::atomic<bool> initiallyPausedOperationEntered{false};
+  separation::Job initiallyPaused(
+      [&](const std::filesystem::path&, const separation::ArtifactPaths&,
+          const separation::Job::ProgressReporter&,
+          const separation::Job::DiagnosticReporter&,
+          const separation::ExecutionControl&, std::string*) {
+        initiallyPausedOperationEntered.store(true, std::memory_order_release);
+        return true;
+      });
+  ok &= expect(initiallyPaused.tryStart(
+                   "initially-paused.mp4",
+                   separation::JobStartOptions{true}),
+               "foreground priority must be part of the atomic job start");
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  const separation::JobSnapshot initiallyPausedSnapshot =
+      initiallyPaused.snapshot();
+  const bool backendBlockedBeforeResume =
+      !initiallyPausedOperationEntered.load(std::memory_order_acquire);
+  const bool initiallyPausedResumeAccepted = initiallyPaused.setPaused(false);
+  std::optional<separation::JobSnapshot> initiallyPausedCompletion;
+  for (int attempt = 0; attempt < 100 && !initiallyPausedCompletion;
+       ++attempt) {
+    initiallyPausedCompletion = initiallyPaused.takeCompletion();
+    if (!initiallyPausedCompletion) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  ok &= expect(initiallyPausedSnapshot.paused &&
+                   backendBlockedBeforeResume &&
+                   initiallyPausedResumeAccepted && initiallyPausedCompletion &&
+                   initiallyPausedCompletion->succeeded() &&
+                   initiallyPausedOperationEntered.load(
+                       std::memory_order_acquire),
+               "an initially paused job must not enter or allocate its backend");
+  if (initiallyPausedCompletion &&
+      !initiallyPausedCompletion->diagnosticLog.empty()) {
+    const std::string diagnostics =
+        readText(initiallyPausedCompletion->diagnosticLog);
+    ok &= expect(diagnostics.find("Started paused while foreground video") !=
+                     std::string::npos,
+                 "the task log must record atomic foreground scheduling");
+    std::error_code ignored;
+    std::filesystem::remove(initiallyPausedCompletion->diagnosticLog, ignored);
+  }
+
   std::atomic<bool> pauseOperationStarted{false};
   std::atomic<bool> enterPauseCheckpoint{false};
+  std::atomic<bool> pauseResourcesYielded{false};
   std::atomic<bool> passedPauseCheckpoint{false};
   separation::Job pausable(
       [&](const std::filesystem::path&, const separation::ArtifactPaths&,
@@ -315,7 +361,11 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
         while (!enterPauseCheckpoint.load(std::memory_order_acquire)) {
           std::this_thread::yield();
         }
-        if (!control.checkpoint()) return false;
+        if (!control.checkpoint([&]() {
+              pauseResourcesYielded.store(true, std::memory_order_release);
+            })) {
+          return false;
+        }
         passedPauseCheckpoint.store(true, std::memory_order_release);
         return true;
       });
@@ -329,7 +379,12 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
   }
   const bool pauseAccepted = pausable.setPaused(true);
   enterPauseCheckpoint.store(true, std::memory_order_release);
-  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  for (int attempt = 0;
+       attempt < 100 &&
+       !pauseResourcesYielded.load(std::memory_order_acquire);
+       ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
   const separation::JobSnapshot pausedSnapshot = pausable.snapshot();
   const bool stayedPaused =
       !passedPauseCheckpoint.load(std::memory_order_acquire);
@@ -342,11 +397,12 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
     }
   }
   ok &= expect(pauseAccepted && pausedSnapshot.paused && stayedPaused &&
+                   pauseResourcesYielded.load(std::memory_order_acquire) &&
                    resumeAccepted && resumedCompletion &&
                    resumedCompletion->succeeded() &&
                    passedPauseCheckpoint.load(std::memory_order_acquire),
-               "pause must block at a checkpoint and resume without losing "
-               "the job");
+               "pause must yield recreatable resources, block at a checkpoint, "
+               "and resume without losing the job");
   if (resumedCompletion && !resumedCompletion->diagnosticLog.empty()) {
     const std::string pauseDiagnostics =
         readText(resumedCompletion->diagnosticLog);

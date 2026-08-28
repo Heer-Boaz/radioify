@@ -6,12 +6,15 @@
 
 namespace audio_separation {
 
-// Cooperative control passed through the complete separation pipeline.
-// checkpoint() may wait while foreground playback has resource priority and
-// returns false as soon as cancellation is requested.
+// Cooperative scheduling control passed through the complete separation
+// pipeline. A checkpoint may wait while foreground playback owns the GPU.
+// Re-creatable accelerator resources can be yielded before that wait so a
+// suspended background task does not keep VRAM reserved.
 class ExecutionControl {
  public:
-  using Checkpoint = std::function<bool()>;
+  using YieldResources = std::function<void()>;
+  using Checkpoint =
+      std::function<bool(const YieldResources& yieldResources)>;
 
   explicit ExecutionControl(const std::atomic<bool>* cancellationFlag,
                             Checkpoint checkpoint = {})
@@ -23,11 +26,12 @@ class ExecutionControl {
            cancellationFlag_->load(std::memory_order_relaxed);
   }
 
-  bool checkpoint() const {
+  bool checkpoint(const YieldResources& yieldResources = {}) const {
     if (cancellationRequested()) {
       return false;
     }
-    return checkpoint_ ? checkpoint_() : !cancellationRequested();
+    return checkpoint_ ? checkpoint_(yieldResources)
+                       : !cancellationRequested();
   }
 
   const std::atomic<bool>* cancellationFlag() const {

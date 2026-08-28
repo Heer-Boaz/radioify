@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <numbers>
 #include <span>
 #include <utility>
@@ -37,6 +38,16 @@ void setError(std::string* error, std::string message) {
 
 bool checkpoint(const ExecutionControl& control, std::string* error) {
   if (control.checkpoint()) {
+    return true;
+  }
+  setError(error, "Audio separation cancelled.");
+  return false;
+}
+
+bool checkpoint(const ExecutionControl& control,
+                const ExecutionControl::YieldResources& yieldResources,
+                std::string* error) {
+  if (control.checkpoint(yieldResources)) {
     return true;
   }
   setError(error, "Audio separation cancelled.");
@@ -125,10 +136,11 @@ bool validateModelPath(const std::filesystem::path& modelPath,
 }
 
 bool decodeToRawFile(const std::filesystem::path& mediaPath,
-                     const std::filesystem::path& rawPath,
-                     const ProgressCallback& onProgress,
-                     const ExecutionControl& control,
-                     std::uint64_t* outputFrames, std::string* error) {
+                      const std::filesystem::path& rawPath,
+                      const ProgressCallback& onProgress,
+                      const ExecutionControl& control,
+                      const ExecutionControl::YieldResources& yieldResources,
+                      std::uint64_t* outputFrames, std::string* error) {
   if (!outputFrames) return false;
   *outputFrames = 0;
   FfmpegAudioDecoder decoder;
@@ -155,7 +167,7 @@ bool decodeToRawFile(const std::filesystem::path& mediaPath,
   std::uint64_t skippedFrames = 0;
   std::uint64_t writtenFrames = 0;
   for (;;) {
-    if (!checkpoint(control, error)) {
+    if (!checkpoint(control, yieldResources, error)) {
       return false;
     }
     std::uint64_t framesRead = 0;
@@ -356,6 +368,66 @@ class RawAudioReader {
   std::vector<float> scratch_;
 };
 
+// Owns only the re-creatable DirectML state. CPU preparation and already
+// published progress remain with the operation while this lease is yielded to
+// foreground playback.
+class ScheduledMaskModel {
+ public:
+  ScheduledMaskModel(const std::filesystem::path& modelPath,
+                     const DiagnosticReporter& diagnostics)
+      : modelPath_(modelPath), diagnostics_(diagnostics) {}
+
+  bool acquire(const ProgressCallback& onProgress, float progress,
+               std::string* error) {
+    if (model_) return true;
+
+    report(onProgress, progress,
+           initializedOnce_ ? "Restoring DirectML separation model"
+                            : "Loading DirectML separation model");
+    if (initializedOnce_) {
+      reportDiagnostic(diagnostics_, DiagnosticLevel::Info, "scheduler",
+                       "Reacquiring DirectML resources after foreground "
+                       "playback yielded.");
+    }
+
+    auto model = std::make_unique<BanditMaskModel>();
+    std::string modelError;
+    if (!model->initialize(modelPath_, diagnostics_, &modelError)) {
+      setError(error, modelError + " Model: " + toUtf8String(modelPath_));
+      return false;
+    }
+    model_ = std::move(model);
+    initializedOnce_ = true;
+    return true;
+  }
+
+  void yieldForForegroundPlayback() {
+    if (!model_) return;
+    model_.reset();
+    reportDiagnostic(diagnostics_, DiagnosticLevel::Info, "scheduler",
+                     "Released DirectML resources for foreground playback.");
+  }
+
+  bool run(std::span<const float> spectrogramRealImag,
+           std::span<const float>* masksRealImag,
+           const std::atomic<bool>* cancelRequested, std::string* error) {
+    if (!model_) {
+      setError(error, "The scheduled DirectML model is not acquired.");
+      return false;
+    }
+    return model_->run(spectrogramRealImag, masksRealImag, cancelRequested,
+                       error);
+  }
+
+  void releaseResources() { model_.reset(); }
+
+ private:
+  std::filesystem::path modelPath_;
+  DiagnosticReporter diagnostics_;
+  std::unique_ptr<BanditMaskModel> model_;
+  bool initializedOnce_ = false;
+};
+
 std::vector<float> chunkWindow() {
   std::vector<float> window(static_cast<std::size_t>(kChunkFrames));
   constexpr double kScaler =
@@ -424,27 +496,32 @@ bool separateMediaAudioUsingModel(
     const ExecutionControl& control,
     std::string* error) {
   if (!checkpoint(control, error)) return false;
-  report(onProgress, 0.01f, "Loading DirectML separation model");
-  BanditMaskModel model;
-  std::string modelError;
+  report(onProgress, 0.01f, "Preparing audio separation");
   reportDiagnostic(diagnostics, DiagnosticLevel::Info, "model",
                    "Loading model: " + toUtf8String(modelPath));
-  if (!model.initialize(modelPath, diagnostics, &modelError)) {
-    setError(error, modelError + " Model: " + toUtf8String(modelPath));
-    return false;
-  }
-  BanditSpectralTransform spectral;
-  if (!spectral.initialize(error)) return false;
-  if (!checkpoint(control, error)) return false;
+
+  ScheduledMaskModel model(modelPath, diagnostics);
+  const auto yieldGpuResources = [&model]() {
+    model.yieldForForegroundPlayback();
+  };
+  if (!checkpoint(control, yieldGpuResources, error)) return false;
+  if (!model.acquire(onProgress, 0.02f, error)) return false;
+  if (!checkpoint(control, yieldGpuResources, error)) return false;
   report(onProgress, 0.03f, "DirectML GPU ready");
 
   const std::filesystem::path rawPath = temporaryRawAudioPathFor(mediaPath);
   ScopedTemporaryFile rawTemporary(rawPath);
   std::uint64_t sourceFrames = 0;
   if (!decodeToRawFile(mediaPath, rawPath, onProgress, control,
-                       &sourceFrames, error)) {
+                       yieldGpuResources, &sourceFrames, error)) {
     return false;
   }
+
+  BanditSpectralTransform spectral;
+  if (!spectral.initialize(error)) return false;
+  if (!checkpoint(control, yieldGpuResources, error)) return false;
+  if (!model.acquire(onProgress, 0.07f, error)) return false;
+  report(onProgress, 0.07f, "DirectML GPU ready");
 
   RawAudioReader reader;
   if (!reader.open(rawPath, error)) return false;
@@ -480,7 +557,7 @@ bool separateMediaAudioUsingModel(
 
   for (std::uint64_t chunkIndex = 0; chunkIndex < plan.chunkCount;
        ++chunkIndex) {
-    if (!checkpoint(control, error)) {
+    if (!checkpoint(control, yieldGpuResources, error)) {
       return false;
     }
     const std::uint64_t chunkStart = chunkIndex * kChunkHopFrames;
@@ -488,7 +565,14 @@ bool separateMediaAudioUsingModel(
       return false;
     }
     for (std::uint32_t channel = 0; channel < kChannels; ++channel) {
-      if (!checkpoint(control, error)) return false;
+      if (!checkpoint(control, yieldGpuResources, error)) return false;
+      const double started =
+          (static_cast<double>(chunkIndex) +
+           static_cast<double>(channel) / kChannels) /
+          static_cast<double>(std::max<std::uint64_t>(plan.chunkCount, 1));
+      const float inferenceProgress =
+          static_cast<float>(0.07 + 0.89 * started);
+      if (!model.acquire(onProgress, inferenceProgress, error)) return false;
       for (std::size_t frame = 0; frame < monoChunk.size(); ++frame) {
         monoChunk[frame] =
             interleavedChunk[frame * kChannels + channel];
@@ -527,6 +611,7 @@ bool separateMediaAudioUsingModel(
     setError(error, "Audio separation produced an incomplete timeline.");
     return false;
   }
+  model.releaseResources();
   if (!checkpoint(control, error)) return false;
   report(onProgress, 0.97f, "Finalizing lossless audio stems");
   for (audio_file::FlacWriter& writer : writers) {

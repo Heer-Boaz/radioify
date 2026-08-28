@@ -44,8 +44,16 @@ struct Job::Impl {
     notifyChanged();
   }
 
-  bool waitUntilRunnable() {
+  bool waitUntilRunnable(
+      const ExecutionControl::YieldResources& yieldResources) {
     std::unique_lock<std::mutex> lock(mutex);
+    if (state.paused &&
+        !cancelRequested.load(std::memory_order_relaxed) &&
+        yieldResources) {
+      lock.unlock();
+      yieldResources();
+      lock.lock();
+    }
     runCondition.wait(lock, [this]() {
       return !state.paused ||
              cancelRequested.load(std::memory_order_relaxed);
@@ -107,33 +115,38 @@ struct Job::Impl {
       int lastLoggedPercent = -5;
       std::string lastLoggedPhase;
       const ExecutionControl control(
-          &cancelRequested, [this]() { return waitUntilRunnable(); });
-      succeeded = operation(
-          mediaPath, outputPaths,
-          [this, diagnosticLog, lastLoggedPercent,
-           lastLoggedPhase = std::move(lastLoggedPhase)](
-              float fraction, std::string phase) mutable {
-            if (diagnosticLog) {
-              const int percent = static_cast<int>(
-                  std::clamp(fraction, 0.0f, 1.0f) * 100.0f);
-              if (phase != lastLoggedPhase ||
-                  percent >= lastLoggedPercent + 5) {
-                diagnosticLog->append(
-                    DiagnosticLevel::Info, "progress",
-                    std::to_string(percent) + "% " + phase);
-                lastLoggedPercent = percent;
-                lastLoggedPhase = phase;
+          &cancelRequested,
+          [this](const ExecutionControl::YieldResources& yieldResources) {
+            return waitUntilRunnable(yieldResources);
+          });
+      if (control.checkpoint()) {
+        succeeded = operation(
+            mediaPath, outputPaths,
+            [this, diagnosticLog, lastLoggedPercent,
+             lastLoggedPhase = std::move(lastLoggedPhase)](
+                float fraction, std::string phase) mutable {
+              if (diagnosticLog) {
+                const int percent = static_cast<int>(
+                    std::clamp(fraction, 0.0f, 1.0f) * 100.0f);
+                if (phase != lastLoggedPhase ||
+                    percent >= lastLoggedPercent + 5) {
+                  diagnosticLog->append(
+                      DiagnosticLevel::Info, "progress",
+                      std::to_string(percent) + "% " + phase);
+                  lastLoggedPercent = percent;
+                  lastLoggedPhase = phase;
+                }
               }
-            }
-            updateProgress(fraction, std::move(phase));
-          },
-          [diagnosticLog](DiagnosticLevel level, std::string_view component,
-                          std::string_view message) {
-            if (diagnosticLog) {
-              diagnosticLog->append(level, component, message);
-            }
-          },
-          control, &error);
+              updateProgress(fraction, std::move(phase));
+            },
+            [diagnosticLog](DiagnosticLevel level, std::string_view component,
+                            std::string_view message) {
+              if (diagnosticLog) {
+                diagnosticLog->append(level, component, message);
+              }
+            },
+            control, &error);
+      }
     } catch (const std::exception& exception) {
       error = std::string("Audio separation failed: ") + exception.what();
     } catch (...) {
@@ -163,7 +176,8 @@ Job::Job(Operation operation, WakeNotifier ownerWake)
 
 Job::~Job() { cancelAndJoin(); }
 
-bool Job::tryStart(const std::filesystem::path& mediaPath) {
+bool Job::tryStart(const std::filesystem::path& mediaPath,
+                   JobStartOptions options) {
   if (!impl_) return false;
   const ArtifactPaths outputPaths = artifactPathsFor(mediaPath);
   if (mediaPath.empty() || outputPaths.front().empty()) return false;
@@ -183,8 +197,14 @@ bool Job::tryStart(const std::filesystem::path& mediaPath) {
     impl_->state.phase = "Starting audio separation";
     impl_->state.sourceFile = mediaPath;
     impl_->state.outputFiles = outputPaths;
+    impl_->state.paused = options.initiallyPaused;
     if (diagnosticLog) {
       impl_->state.diagnosticLog = diagnosticLog->path();
+      if (options.initiallyPaused) {
+        diagnosticLog->append(
+            DiagnosticLevel::Info, "scheduler",
+            "Started paused while foreground video is playing.");
+      }
     }
     impl_->activeDiagnosticLog = diagnosticLog;
 

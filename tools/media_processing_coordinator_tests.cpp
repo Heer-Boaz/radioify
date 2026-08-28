@@ -460,18 +460,19 @@ int main() {
                    separationStart->feedback ==
                        "Separating audio" &&
                    wakeIsSignaled(coordinator) &&
-                   waitUntil([&]() {
-                     return separationStarted.load(std::memory_order_acquire);
-                   }) &&
+                   !separationStarted.load(std::memory_order_acquire) &&
                    coordinator.audioSeparationRunningFor("movie.mp4"),
-               "foreground playback policy must still allow a resumable "
-               "separation task to start");
+               "foreground playback policy must register a resumable task "
+               "without entering its GPU backend");
   const std::optional<processing::TaskActivity> pausedSeparation =
       coordinator.activity();
   const std::optional<MediaTaskCardModel> pausedSeparationCard =
       presenter.activeCard();
   const bool playbackPriorityReleased =
       coordinator.setInteractivePlaybackActive(false);
+  const bool separationStartedAfterRelease = waitUntil([&]() {
+    return separationStarted.load(std::memory_order_acquire);
+  });
   ok &= expect(playbackPriorityStored && pausedSeparation &&
                    pausedSeparation->paused &&
                    pausedSeparation->phase ==
@@ -479,9 +480,9 @@ int main() {
                    pausedSeparationCard &&
                    pausedSeparationCard->title ==
                        "Audio separation paused" &&
-                   playbackPriorityReleased,
+                   playbackPriorityReleased && separationStartedAfterRelease,
                "resource priority must surface as a typed paused state and "
-               "remain resumable");
+               "enter the backend only after playback yields");
   ok &= expect(coordinator.cancelActive() &&
                    !coordinator.cancelActive() &&
                    waitUntil([&]() {

@@ -694,11 +694,13 @@ RequestResult Coordinator::requestAudioSeparation(
     return rejected(RequestFailure::ManagedArtifact);
   }
   if (const auto conflict = startConflict()) return rejected(*conflict);
-  if (!impl_->audioSeparation->tryStart(sourceFile)) {
+  if (!impl_->audioSeparation->tryStart(
+          sourceFile,
+          audio_separation::JobStartOptions{
+              impl_->interactivePlaybackActive})) {
     return rejected(RequestFailure::InternalError,
                     "the audio-separation worker rejected the request");
   }
-  impl_->audioSeparation->setPaused(impl_->interactivePlaybackActive);
   impl_->audioSeparationCompletionPending = true;
   impl_->latestCompletion.reset();
   return RequestResult::accepted();
