@@ -39,7 +39,6 @@ class Controller {
 
   Update poll();
   bool cancelActive();
-  bool setInteractivePlaybackActive(bool active);
   NativeWaitHandle waitHandle() const;
 
   const Snapshot& snapshot() const { return snapshot_; }

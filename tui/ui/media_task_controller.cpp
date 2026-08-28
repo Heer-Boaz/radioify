@@ -48,14 +48,6 @@ bool Controller::cancelActive() {
   return true;
 }
 
-bool Controller::setInteractivePlaybackActive(bool active) {
-  if (!coordinator_.setInteractivePlaybackActive(active)) {
-    return false;
-  }
-  refreshSnapshot();
-  return true;
-}
-
 NativeWaitHandle Controller::waitHandle() const {
   return coordinator_.waitHandle();
 }

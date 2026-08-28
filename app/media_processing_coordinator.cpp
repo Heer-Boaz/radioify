@@ -15,6 +15,13 @@
 #include "playback/video/transcript/artifact.h"
 
 namespace media_processing {
+
+struct InteractivePlaybackState {
+  std::mutex mutex;
+  std::size_t leaseCount = 0;
+  audio_separation::Job* audioSeparation = nullptr;
+};
+
 namespace {
 
 using playback_media_processing::RequestFailure;
@@ -293,7 +300,10 @@ struct Coordinator::Impl {
             std::make_unique<playback_video_transcript::GenerationJob>(
                 std::move(backends.generateSubtitles), wakeEvent.notifier())),
         audioSeparation(std::make_unique<audio_separation::Job>(
-            std::move(backends.separateAudio), wakeEvent.notifier())) {}
+            std::move(backends.separateAudio), wakeEvent.notifier())),
+        interactivePlayback(std::make_shared<InteractivePlaybackState>()) {
+    interactivePlayback->audioSeparation = audioSeparation.get();
+  }
 
   WakeEvent wakeEvent;
   WorkerTask workerTask;
@@ -303,9 +313,9 @@ struct Coordinator::Impl {
   FileExportOperation exportTranscriptText;
   std::unique_ptr<playback_video_transcript::GenerationJob> subtitles;
   std::unique_ptr<audio_separation::Job> audioSeparation;
+  std::shared_ptr<InteractivePlaybackState> interactivePlayback;
   bool subtitleCompletionPending = false;
   bool audioSeparationCompletionPending = false;
-  bool interactivePlaybackActive = false;
   std::vector<TaskCompletion> queuedCompletions;
   std::optional<TaskCompletion> latestCompletion;
 
@@ -702,10 +712,14 @@ RequestResult Coordinator::requestAudioSeparation(
     return rejected(RequestFailure::ManagedArtifact);
   }
   if (const auto conflict = startConflict()) return rejected(*conflict);
+  bool initiallyPaused = false;
+  {
+    std::lock_guard<std::mutex> lock(impl_->interactivePlayback->mutex);
+    initiallyPaused = impl_->interactivePlayback->leaseCount > 0;
+  }
   if (!impl_->audioSeparation->tryStart(
           sourceFile,
-          audio_separation::JobStartOptions{
-              impl_->interactivePlaybackActive})) {
+          audio_separation::JobStartOptions{initiallyPaused})) {
     return rejected(RequestFailure::InternalError,
                     "the audio-separation worker rejected the request");
   }
@@ -863,13 +877,19 @@ bool Coordinator::cancelActive() {
   return false;
 }
 
-bool Coordinator::setInteractivePlaybackActive(bool active) {
-  if (!impl_) return false;
-  const bool policyChanged = impl_->interactivePlaybackActive != active;
-  impl_->interactivePlaybackActive = active;
-  const bool taskChanged =
-      impl_->audioSeparation && impl_->audioSeparation->setPaused(active);
-  return policyChanged || taskChanged;
+Coordinator::InteractivePlaybackLease
+Coordinator::acquireInteractivePlayback() {
+  if (!impl_) return {};
+  const std::shared_ptr<InteractivePlaybackState> state =
+      impl_->interactivePlayback;
+  {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    ++state->leaseCount;
+    if (state->leaseCount == 1 && state->audioSeparation) {
+      state->audioSeparation->setPaused(true);
+    }
+  }
+  return InteractivePlaybackLease(state);
 }
 
 PollResult Coordinator::poll() {
@@ -900,9 +920,52 @@ NativeWaitHandle Coordinator::waitHandle() const {
 
 void Coordinator::shutdown() {
   if (!impl_) return;
+  {
+    std::lock_guard<std::mutex> lock(impl_->interactivePlayback->mutex);
+    impl_->interactivePlayback->audioSeparation = nullptr;
+  }
   impl_->workerTask.cancelAndJoin();
   if (impl_->subtitles) impl_->subtitles->cancelAndJoin();
   if (impl_->audioSeparation) impl_->audioSeparation->cancelAndJoin();
+}
+
+Coordinator::InteractivePlaybackLease::~InteractivePlaybackLease() {
+  reset();
+}
+
+Coordinator::InteractivePlaybackLease::InteractivePlaybackLease(
+    InteractivePlaybackLease&& other) noexcept
+    : state_(std::move(other.state_)) {}
+
+Coordinator::InteractivePlaybackLease&
+Coordinator::InteractivePlaybackLease::operator=(
+    InteractivePlaybackLease&& other) noexcept {
+  if (this == &other) return *this;
+  reset();
+  state_ = std::move(other.state_);
+  return *this;
+}
+
+bool Coordinator::InteractivePlaybackLease::ready() const {
+  if (!state_) return true;
+  std::lock_guard<std::mutex> lock(state_->mutex);
+  if (!state_->audioSeparation) return true;
+  const audio_separation::JobSnapshot snapshot =
+      state_->audioSeparation->snapshot();
+  return !snapshot.running() ||
+         snapshot.scheduling ==
+             audio_separation::JobSchedulingState::Suspended;
+}
+
+void Coordinator::InteractivePlaybackLease::reset() {
+  std::shared_ptr<InteractivePlaybackState> state = std::move(state_);
+  if (!state) return;
+  std::lock_guard<std::mutex> lock(state->mutex);
+  if (state->leaseCount == 0) return;
+  --state->leaseCount;
+  if (state->leaseCount == 0 && state->audioSeparation) {
+    state->audioSeparation->setPaused(false);
+  }
 }
 
 }  // namespace media_processing

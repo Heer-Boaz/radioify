@@ -66,11 +66,38 @@ struct PollResult {
 std::optional<playback_media_processing::Completion> completionForPlayback(
     const TaskCompletion& completion);
 
+struct InteractivePlaybackState;
+
 // Application-level owner of Radioify's mutually-exclusive, offline media
 // processing. UI surfaces observe one common activity/completion contract
 // instead of understanding every worker's lifecycle and synchronization.
 class Coordinator final : public playback_media_processing::Service {
  public:
+  class InteractivePlaybackLease {
+   public:
+    InteractivePlaybackLease() = default;
+    ~InteractivePlaybackLease();
+
+    InteractivePlaybackLease(InteractivePlaybackLease&& other) noexcept;
+    InteractivePlaybackLease& operator=(
+        InteractivePlaybackLease&& other) noexcept;
+
+    InteractivePlaybackLease(const InteractivePlaybackLease&) = delete;
+    InteractivePlaybackLease& operator=(const InteractivePlaybackLease&) =
+        delete;
+
+    bool ready() const;
+    void reset();
+
+   private:
+    friend class Coordinator;
+    explicit InteractivePlaybackLease(
+        std::shared_ptr<InteractivePlaybackState> state)
+        : state_(std::move(state)) {}
+
+    std::shared_ptr<InteractivePlaybackState> state_;
+  };
+
   using ProgressReporter = std::function<void(float, std::string)>;
   using CancellationRequested = std::function<bool()>;
   using MelodyOperation = std::function<bool(
@@ -148,10 +175,10 @@ class Coordinator final : public playback_media_processing::Service {
 
   bool cancelActive();
 
-  // Foreground playback owns latency-sensitive GPU and media I/O. The
-  // coordinator applies that policy only to resource-intensive work that can
-  // be safely checkpointed, while retaining task progress and ownership.
-  bool setInteractivePlaybackActive(bool active);
+  // A lease makes foreground resource ownership follow the playback
+  // lifecycle. ready() becomes true only after resource-intensive background
+  // work has reached a verified suspension point.
+  InteractivePlaybackLease acquireInteractivePlayback();
 
   PollResult poll();
   // One owner event fans in every worker family; UI loops never depend on the

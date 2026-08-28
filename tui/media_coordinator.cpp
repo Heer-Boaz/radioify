@@ -48,6 +48,7 @@ class MediaCommandResult {
   }
 
   bool accepted() const { return status_ != Status::Rejected; }
+  bool isDeferred() const { return status_ == Status::Deferred; }
   const MediaCommandFailure* failure() const {
     return failure_ ? &*failure_ : nullptr;
   }
@@ -124,6 +125,10 @@ struct TuiMediaCoordinator::Impl {
 
   PollResult poll() {
     bool playbackChanged = false;
+    if (!videoSession_ && pendingCommand_) {
+      drainPendingCommands();
+      playbackChanged = videoSession_.has_value();
+    }
     if (videoSession_) {
       drainVideoSessionEvents();
       if (std::optional<PlaybackSessionCompletion> completion =
@@ -299,6 +304,8 @@ struct TuiMediaCoordinator::Impl {
     if (videoSession_) {
       videoSession_->requestQuit();
     } else {
+      pendingCommand_.reset();
+      releaseForegroundPlayback();
       publishEvent(QuitRequested{});
     }
   }
@@ -473,6 +480,9 @@ struct TuiMediaCoordinator::Impl {
 
   MediaCommandResult submit(Command command) {
     if (videoSession_) return requestVideoHandoff(std::move(command));
+    if (pendingCommand_) {
+      return reject(MediaCommandFailureKind::Busy, {});
+    }
     if (driving_) {
       if (pendingCommand_) return reject(MediaCommandFailureKind::Busy, {});
       pendingCommand_.emplace(std::move(command));
@@ -495,6 +505,7 @@ struct TuiMediaCoordinator::Impl {
         publishFailure(result);
         return result;
       }
+      if (result.isDeferred()) break;
       if (videoSession_) break;
       command = std::exchange(pendingCommand_, std::nullopt);
     }
@@ -526,16 +537,33 @@ struct TuiMediaCoordinator::Impl {
                : playback_queue::Direction::Next;
   }
 
+  bool foregroundPlaybackReady() {
+    if (!interactivePlayback_) {
+      interactivePlayback_.emplace(
+          services_.mediaProcessing.acquireInteractivePlayback());
+    }
+    return interactivePlayback_->ready();
+  }
+
+  void releaseForegroundPlayback() { interactivePlayback_.reset(); }
+
   MediaCommandResult presentPlayback(
       playback_queue::Queue::PreparedActivation activation) {
     const playback_route::Route& route = activation.route();
+    const PlaybackTarget target = route.target;
+    const std::filesystem::path& targetFile = playbackTargetFile(target);
+    const bool videoTarget = isSupportedVideoExt(targetFile);
+    if (videoTarget && !foregroundPlaybackReady()) {
+      pendingCommand_.emplace(PreparedPlayback{std::move(activation)});
+      return MediaCommandResult::deferred();
+    }
+    if (!videoTarget) releaseForegroundPlayback();
+
     if (route.videoContinuation) {
       continuationState_ = *route.videoContinuation;
     }
     publishEvent(ApplyAudioPictureInPicture{route.audioPictureInPicture});
 
-    const PlaybackTarget target = route.target;
-    const std::filesystem::path& targetFile = playbackTargetFile(target);
     if (const std::optional<int> trackIndex =
             playbackTargetTrackIndex(target)) {
       endControlSession();
@@ -589,6 +617,7 @@ struct TuiMediaCoordinator::Impl {
     }
     if (openOutcome == PlaybackSessionOpenOutcome::AudioFallbackRequested) {
       videoSession_.reset();
+      releaseForegroundPlayback();
       if (!audioPlayback().startFile(targetFile, 0)) {
         publishEvent(AudioPlaybackFailed{targetFile});
         return MediaCommandResult::rejected(
@@ -601,11 +630,13 @@ struct TuiMediaCoordinator::Impl {
     if (openOutcome ==
         PlaybackSessionOpenOutcome::QuitApplicationRequested) {
       videoSession_.reset();
+      releaseForegroundPlayback();
       enqueueQuit();
       presentationFinished();
       return MediaCommandResult::handledWithoutPlayback();
     }
     videoSession_.reset();
+    releaseForegroundPlayback();
     presentationFinished();
     return MediaCommandResult::handledWithoutPlayback();
   }
@@ -620,6 +651,7 @@ struct TuiMediaCoordinator::Impl {
     if (completion.intent == PlaybackSessionExitIntent::QuitApplication) {
       enqueueQuit();
     }
+    if (!pendingCommand_) releaseForegroundPlayback();
     presentationFinished();
   }
 
@@ -628,6 +660,7 @@ struct TuiMediaCoordinator::Impl {
   }
 
   MediaCommandResult dispatch(tui_media_activation::ShowImages image) {
+    releaseForegroundPlayback();
     publishEvent(ShowImages{image.route.audioPictureInPicture,
                             std::move(image.sequence)});
     return MediaCommandResult::applied();
@@ -635,11 +668,13 @@ struct TuiMediaCoordinator::Impl {
 
   MediaCommandResult dispatch(
       tui_media_activation::OpenDirectory directory) {
+    releaseForegroundPlayback();
     publishEvent(OpenBrowserDirectory{std::move(directory.path)});
     return MediaCommandResult::applied();
   }
 
   MediaCommandResult dispatch(Quit) {
+    releaseForegroundPlayback();
     publishEvent(QuitRequested{});
     return MediaCommandResult::applied();
   }
@@ -695,6 +730,8 @@ struct TuiMediaCoordinator::Impl {
 
   Services services_;
   PlaybackSessionContinuationState continuationState_;
+  std::optional<media_processing::Coordinator::InteractivePlaybackLease>
+      interactivePlayback_;
   std::optional<PlaybackSession> videoSession_;
   std::optional<PlaybackTarget> videoTarget_;
   std::optional<Command> pendingCommand_;

@@ -21,6 +21,7 @@
 
 struct InputEvent;
 namespace media_processing {
+class Coordinator;
 struct TaskCompletion;
 }
 
@@ -68,6 +69,7 @@ class TuiMediaCoordinator {
 
   struct Services {
     playback_queue::Queue& queue;
+    media_processing::Coordinator& mediaProcessing;
     playback_media_processing::Actions mediaProcessingActions;
     PlaybackSession::Dependencies sessionDependencies;
     VideoPlaybackConfig videoConfig;

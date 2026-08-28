@@ -90,6 +90,7 @@ int main() {
   std::atomic<bool> subtitlesStarted{false};
   std::atomic<bool> releaseSubtitles{false};
   std::atomic<bool> separationStarted{false};
+  std::atomic<int> separationCheckpoints{0};
   std::atomic<bool> separationCancellationObserved{false};
   std::atomic<bool> releaseSeparation{false};
   std::atomic<bool> audioExportStarted{false};
@@ -166,6 +167,7 @@ int main() {
         progress(0.2f, "Separating dialogue, music and effects on GPU");
         separationStarted.store(true, std::memory_order_release);
         while (control.checkpoint()) {
+          separationCheckpoints.fetch_add(1, std::memory_order_release);
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         separationCancellationObserved.store(true, std::memory_order_release);
@@ -450,8 +452,10 @@ int main() {
                        "Subtitles ready: movie.transcript.srt",
                "subtitle completion must retain its canonical sidecar");
 
-  const bool playbackPriorityStored =
-      coordinator.setInteractivePlaybackActive(true);
+  auto playbackPriority = coordinator.acquireInteractivePlayback();
+  auto secondPlaybackPriority = coordinator.acquireInteractivePlayback();
+  const bool playbackPriorityReadyBeforeWork =
+      playbackPriority.ready() && secondPlaybackPriority.ready();
   const std::optional<playback_media_processing::ActionResult>
       separationStart =
       playbackActions.execute(playback_media_actions::Action::SeparateAudio,
@@ -468,12 +472,17 @@ int main() {
       coordinator.activity();
   const std::optional<MediaTaskCardModel> pausedSeparationCard =
       presenter.activeCard();
-  const bool playbackPriorityReleased =
-      coordinator.setInteractivePlaybackActive(false);
+  playbackPriority.reset();
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  const bool retainedBySecondLease =
+      !separationStarted.load(std::memory_order_acquire);
+  secondPlaybackPriority.reset();
   const bool separationStartedAfterRelease = waitUntil([&]() {
-    return separationStarted.load(std::memory_order_acquire);
+    return separationStarted.load(std::memory_order_acquire) &&
+           separationCheckpoints.load(std::memory_order_acquire) > 0;
   });
-  ok &= expect(playbackPriorityStored && pausedSeparation &&
+  ok &= expect(playbackPriorityReadyBeforeWork && retainedBySecondLease &&
+                   pausedSeparation &&
                    pausedSeparation->scheduling ==
                        processing::TaskSchedulingState::Suspended &&
                    pausedSeparation->phase ==
@@ -481,9 +490,24 @@ int main() {
                    pausedSeparationCard &&
                    pausedSeparationCard->title ==
                        "Audio separation paused" &&
-                   playbackPriorityReleased && separationStartedAfterRelease,
+                   separationStartedAfterRelease,
                "resource priority must surface as a typed paused state and "
                "enter the backend only after playback yields");
+
+  auto runningPlaybackPriority = coordinator.acquireInteractivePlayback();
+  const bool runningSeparationSuspended = waitUntil([&]() {
+    return runningPlaybackPriority.ready();
+  });
+  const int checkpointsBeforeResume =
+      separationCheckpoints.load(std::memory_order_acquire);
+  runningPlaybackPriority.reset();
+  const bool runningSeparationResumed = waitUntil([&]() {
+    return separationCheckpoints.load(std::memory_order_acquire) >
+           checkpointsBeforeResume;
+  });
+  ok &= expect(runningSeparationSuspended && runningSeparationResumed,
+               "a foreground lease must become ready only after active "
+               "background work suspends and must resume it on release");
   ok &= expect(coordinator.cancelActive() &&
                    !coordinator.cancelActive() &&
                    waitUntil([&]() {
