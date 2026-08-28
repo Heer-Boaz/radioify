@@ -17,12 +17,14 @@ struct SetBrowserView {
 };
 
 struct RevealPlayingFile {};
+struct ShowMediaTaskPanel {};
 struct CancelMediaTask {};
 struct ShowMediaTaskFailure {};
 
 using Intent =
     std::variant<PlaybackAction, SetBrowserView, RevealPlayingFile,
-                 CancelMediaTask, ShowMediaTaskFailure>;
+                 ShowMediaTaskPanel, CancelMediaTask,
+                 ShowMediaTaskFailure>;
 
 struct Context {
   bool videoActive = false;
@@ -33,6 +35,7 @@ struct Context {
   bool optionsAvailable = false;
   bool currentTargetAvailable = false;
   bool activeMediaTaskCancellable = false;
+  bool mediaTaskPanelHidden = false;
   bool mediaTaskFailureAvailable = false;
 };
 

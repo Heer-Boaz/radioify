@@ -8,9 +8,8 @@
 
 #include "tui/ui/ui_helpers.h"
 
-void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth,
-                       int screenHeight, int top,
-                       const MediaTaskCardModel& model,
+void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth, int screenHeight,
+                       int top, const MediaTaskCardModel& model,
                        const tui_media_task_panel::State& state,
                        const MediaTaskCardStyles& styles) {
   const tui_media_task_panel::Layout layout =
@@ -27,8 +26,7 @@ void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth,
   std::string progressLine;
   if (model.progress) {
     const float progress = std::clamp(*model.progress, 0.0f, 1.0f);
-    const int percent =
-        static_cast<int>(std::round(progress * 100.0f));
+    const int percent = static_cast<int>(std::round(progress * 100.0f));
     const std::string percentText = std::to_string(percent) + "%";
     const int barCells =
         std::max(0, layout.innerWidth - utf8DisplayWidth(percentText) - 4);
@@ -50,25 +48,19 @@ void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth,
     screen.writeRun(layout.x, layout.y + y, layout.width, L' ',
                     styles.background);
   }
-  const Style border = state.focused() ? styles.focusedBorder
-                                       : styles.secondary;
+  const Style border =
+      state.focused() ? styles.focusedBorder : styles.secondary;
   screen.writeChar(layout.x, layout.y, L'+', border);
-  screen.writeRun(layout.x + 1, layout.y, layout.width - 2, L'-',
-                  border);
-  screen.writeChar(layout.x + layout.width - 1, layout.y, L'+',
-                   border);
-  screen.writeChar(layout.x, layout.y + layout.height - 1, L'+',
-                   border);
-  screen.writeRun(layout.x + 1, layout.y + layout.height - 1,
-                  layout.width - 2, L'-',
-                  border);
-  screen.writeChar(layout.x + layout.width - 1,
-                   layout.y + layout.height - 1, L'+',
-                   border);
+  screen.writeRun(layout.x + 1, layout.y, layout.width - 2, L'-', border);
+  screen.writeChar(layout.x + layout.width - 1, layout.y, L'+', border);
+  screen.writeChar(layout.x, layout.y + layout.height - 1, L'+', border);
+  screen.writeRun(layout.x + 1, layout.y + layout.height - 1, layout.width - 2,
+                  L'-', border);
+  screen.writeChar(layout.x + layout.width - 1, layout.y + layout.height - 1,
+                   L'+', border);
   for (int y = 1; y < layout.height - 1; ++y) {
     screen.writeChar(layout.x, layout.y + y, L'|', border);
-    screen.writeChar(layout.x + layout.width - 1, layout.y + y, L'|',
-                     border);
+    screen.writeChar(layout.x + layout.width - 1, layout.y + y, L'|', border);
   }
 
   const int visibleLines =
@@ -82,11 +74,9 @@ void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth,
 
   const std::vector<tui_button_row::Button> actions =
       tui_media_task_panel::actionsFor(model);
-  for (const tui_button_row::Placement& buttonBounds :
-       layout.buttons.buttons) {
+  for (const tui_button_row::Placement& buttonBounds : layout.buttons.buttons) {
     if (buttonBounds.index >= actions.size()) continue;
-    const bool selected =
-        state.highlightedButton() == buttonBounds.index;
+    const bool selected = state.highlightedButton() == buttonBounds.index;
     const Style style = selected ? styles.selectedButton : styles.button;
     const std::string label = "[ " + actions[buttonBounds.index].label + " ]";
     screen.writeRun(buttonBounds.x, layout.buttons.y, buttonBounds.width, L' ',
@@ -94,4 +84,22 @@ void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth,
     screen.writeText(buttonBounds.x, layout.buttons.y,
                      fitLine(label, buttonBounds.width), style);
   }
+}
+
+tui_media_task_panel::IndicatorLayout drawMediaTaskIndicator(
+    ConsoleScreen& screen, int screenWidth, int y,
+    const MediaTaskCardModel& model, const tui_media_task_panel::State& state,
+    const MediaTaskCardStyles& styles) {
+  const tui_media_task_panel::IndicatorLayout layout =
+      tui_media_task_panel::indicatorLayout(screenWidth, y, model);
+  if (!layout.valid) return layout;
+
+  const Style style =
+      state.indicatorHighlighted() ? styles.selectedButton : styles.progress;
+  screen.writeText(
+      layout.x, layout.y,
+      fitLine("[ " + tui_media_task_panel::indicatorText(model) + " ]",
+              layout.width),
+      style);
+  return layout;
 }

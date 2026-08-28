@@ -1,6 +1,7 @@
 #include "tui/ui/media_task_panel.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "core/unicode_display_width.h"
 
@@ -23,12 +24,31 @@ bool Layout::contains(int pointerX, int pointerY) const {
          pointerY < y + height;
 }
 
+bool IndicatorLayout::contains(int pointerX, int pointerY) const {
+  return valid && pointerY == y && pointerX >= x && pointerX < x + width;
+}
+
 void State::synchronize(const std::optional<MediaTaskCardModel>& task) {
-  if (!task || actionsFor(*task).empty()) {
+  if (!task) {
+    hidden_ = false;
     focused_ = false;
     selectedButton_ = 0;
     hoveredButton_.reset();
+    indicatorHovered_ = false;
+    return;
   }
+  const std::size_t actionCount = actionsFor(*task).size();
+  selectedButton_ =
+      actionCount == 0 ? 0 : std::min(selectedButton_, actionCount - 1);
+}
+
+bool State::show() {
+  if (!hidden_) return false;
+  hidden_ = false;
+  focused_ = false;
+  indicatorHovered_ = false;
+  selectedButton_ = 0;
+  return true;
 }
 
 std::optional<std::size_t> State::highlightedButton() const {
@@ -45,12 +65,41 @@ void State::setFocused(bool focused, Interaction& interaction) {
   interaction.focusChanged = true;
 }
 
+void State::activate(Action action, ActivationSource source,
+                     Interaction& interaction) {
+  interaction.activatedAction = action;
+  switch (action) {
+    case Action::Cancel:
+      break;
+    case Action::Hide:
+      hidden_ = true;
+      hoveredButton_.reset();
+      indicatorHovered_ = false;
+      setFocused(false, interaction);
+      interaction.changed = true;
+      interaction.layoutChanged = true;
+      break;
+    case Action::Show:
+      hidden_ = false;
+      indicatorHovered_ = false;
+      selectedButton_ = 0;
+      if (source == ActivationSource::Pointer) {
+        setFocused(false, interaction);
+      }
+      interaction.changed = true;
+      interaction.layoutChanged = true;
+      break;
+  }
+}
+
 Interaction State::handle(const InputEvent& event, const Bounds& bounds,
+                          const IndicatorLayout& indicator,
                           const MediaTaskCardModel& task) {
   Interaction result;
   if (event.type == InputEvent::Type::PointerLeave) {
-    if (hoveredButton_) {
+    if (hoveredButton_ || indicatorHovered_) {
       hoveredButton_.reset();
+      indicatorHovered_ = false;
       result.changed = true;
     }
     return result;
@@ -68,7 +117,7 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
   }
   if (event.type == InputEvent::Type::Key) {
     if (!focused_) {
-      if (event.key.vk == VK_TAB && !actions.empty()) {
+      if (event.key.vk == VK_TAB && (hidden_ || !actions.empty())) {
         setFocused(true, result);
         result.consumed = true;
       }
@@ -82,17 +131,26 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
         setFocused(false, result);
         break;
       case VK_LEFT:
-        selectedButton_ = tui_button_row::selectAdjacent(
-            selectedButton_, actions.size(), -1);
-        result.changed = true;
+        if (!hidden_) {
+          selectedButton_ = tui_button_row::selectAdjacent(selectedButton_,
+                                                           actions.size(), -1);
+          result.changed = true;
+        }
         break;
       case VK_RIGHT:
-        selectedButton_ = tui_button_row::selectAdjacent(
-            selectedButton_, actions.size(), 1);
-        result.changed = true;
+        if (!hidden_) {
+          selectedButton_ = tui_button_row::selectAdjacent(selectedButton_,
+                                                           actions.size(), 1);
+          result.changed = true;
+        }
         break;
       case VK_RETURN:
-        result.activatedAction = actionAt(actions, selectedButton_);
+        if (hidden_) {
+          activate(Action::Show, ActivationSource::Keyboard, result);
+        } else if (const std::optional<Action> action =
+                       actionAt(actions, selectedButton_)) {
+          activate(*action, ActivationSource::Keyboard, result);
+        }
         break;
       default:
         break;
@@ -105,16 +163,32 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
 
   const Layout currentLayout = layout(bounds, task);
   const MouseEvent& mouse = event.mouse;
+  if (hidden_) {
+    const bool hovered = indicator.contains(mouse.pos.X, mouse.pos.Y);
+    if (indicatorHovered_ != hovered) {
+      indicatorHovered_ = hovered;
+      result.changed = true;
+    }
+    result.consumed = hovered;
+    if (!hovered && focused_ && mouse.kind == MouseEventKind::Press) {
+      setFocused(false, result);
+    }
+    if (hovered && mouse.kind == MouseEventKind::Press &&
+        isMouseButtonDown(mouse, MouseButton::Left)) {
+      activate(Action::Show, ActivationSource::Pointer, result);
+      result.consumed = true;
+    }
+    return result;
+  }
+
   const std::optional<std::size_t> hovered =
-      tui_button_row::hitTest(currentLayout.buttons, mouse.pos.X,
-                              mouse.pos.Y);
+      tui_button_row::hitTest(currentLayout.buttons, mouse.pos.X, mouse.pos.Y);
   if (hoveredButton_ != hovered) {
     hoveredButton_ = hovered;
     result.changed = true;
   }
   result.consumed = currentLayout.contains(mouse.pos.X, mouse.pos.Y);
-  if (!result.consumed && focused_ &&
-      mouse.kind == MouseEventKind::Press) {
+  if (!result.consumed && focused_ && mouse.kind == MouseEventKind::Press) {
     setFocused(false, result);
   }
   if (focused_ && hovered && selectedButton_ != *hovered) {
@@ -126,19 +200,22 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
     if (hovered) {
       selectedButton_ = *hovered;
     }
-    result.activatedAction = actionAt(actions, hovered);
+    if (const std::optional<Action> action = actionAt(actions, hovered)) {
+      activate(*action, ActivationSource::Pointer, result);
+    }
     result.consumed = result.consumed || result.activatedAction.has_value();
   }
   return result;
 }
 
-std::vector<tui_button_row::Button> actionsFor(
-    const MediaTaskCardModel& task) {
+std::vector<tui_button_row::Button> actionsFor(const MediaTaskCardModel& task) {
   std::vector<tui_button_row::Button> actions;
   if (task.cancellable) {
     actions.push_back(
         {static_cast<tui_button_row::ButtonId>(Action::Cancel), "Cancel"});
   }
+  actions.push_back(
+      {static_cast<tui_button_row::ButtonId>(Action::Hide), "Hide"});
   return actions;
 }
 
@@ -149,9 +226,9 @@ Layout layout(const Bounds& bounds, const MediaTaskCardModel& task) {
   }
 
   const std::vector<tui_button_row::Button> actions = actionsFor(task);
-  int contentWidth = std::max(
-      {utf8DisplayWidth(task.title), utf8DisplayWidth(task.sourceName),
-       utf8DisplayWidth(task.detail)});
+  int contentWidth =
+      std::max({utf8DisplayWidth(task.title), utf8DisplayWidth(task.sourceName),
+                utf8DisplayWidth(task.detail)});
   for (const tui_button_row::Button& action : actions) {
     contentWidth = std::max(contentWidth, utf8DisplayWidth(action.label) + 4);
   }
@@ -166,23 +243,44 @@ Layout layout(const Bounds& bounds, const MediaTaskCardModel& task) {
     ++contentRows;
   }
   const int actionRows = actions.empty() ? 0 : 2;
-  result.height = std::min(contentRows + actionRows + 2,
-                           bounds.height - bounds.top);
+  result.height =
+      std::min(contentRows + actionRows + 2, bounds.height - bounds.top);
   result.progressY = result.y + (task.detail.empty() ? 3 : 4);
   if (!actions.empty() && result.height >= contentRows + 4) {
-    result.buttons = tui_button_row::layout(
-        actions, result.x, result.width, result.y + result.height - 2);
+    result.buttons = tui_button_row::layout(actions, result.x, result.width,
+                                            result.y + result.height - 2);
   }
   result.valid = result.height >= 3;
+  return result;
+}
+
+std::string indicatorText(const MediaTaskCardModel& task) {
+  std::string text = task.title;
+  if (task.progress) {
+    const int percent = static_cast<int>(
+        std::round(std::clamp(*task.progress, 0.0f, 1.0f) * 100.0f));
+    text += " " + std::to_string(percent) + "%";
+  }
+  return text;
+}
+
+IndicatorLayout indicatorLayout(int availableWidth, int y,
+                                const MediaTaskCardModel& task) {
+  IndicatorLayout result;
+  if (availableWidth <= 0 || y < 0) return result;
+  result.x = 0;
+  result.y = y;
+  result.width = std::min(availableWidth,
+                          utf8DisplayWidth("[ " + indicatorText(task) + " ]"));
+  result.valid = result.width > 0;
   return result;
 }
 
 tui_dialog::Content cancellationDialog(const MediaTaskCardModel& task) {
   tui_dialog::Content content;
   content.title = "Cancel " + task.operationName + "?";
-  content.text.push_back(
-      {"Progress on " + task.sourceName + " will be lost.",
-       tui_dialog::TextTone::Normal});
+  content.text.push_back({"Progress on " + task.sourceName + " will be lost.",
+                          tui_dialog::TextTone::Normal});
   content.buttons.push_back({kCancelTaskButton, "Cancel task"});
   content.buttons.push_back({kKeepRunningButton, "Keep running"});
   content.initiallySelectedButton = kKeepRunningButton;

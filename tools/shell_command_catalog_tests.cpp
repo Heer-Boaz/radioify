@@ -93,14 +93,19 @@ int main() {
 
   Context tasks;
   tasks.activeMediaTaskCancellable = true;
+  tasks.mediaTaskPanelHidden = true;
   tasks.mediaTaskFailureAvailable = true;
   const Catalog taskCommands = shell_command_catalog::build(tasks);
   const auto* cancelTask =
       findIntent(taskCommands, "Cancel Background Task");
+  const auto* showTask =
+      findIntent(taskCommands, "Show Background Task");
   const auto* showFailure =
       findIntent(taskCommands, "Show Last Task Error");
   ok &= expect(
-      cancelTask &&
+      showTask &&
+          std::get_if<shell_command_catalog::ShowMediaTaskPanel>(showTask) &&
+          cancelTask &&
           std::get_if<shell_command_catalog::CancelMediaTask>(cancelTask) &&
           showFailure &&
           std::get_if<shell_command_catalog::ShowMediaTaskFailure>(

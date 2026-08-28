@@ -498,6 +498,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   int progressBarY = -1;
   int progressBarWidth = 0;
   ActionStripLayout actionStrip;
+  tui_media_task_panel::IndicatorLayout mediaTaskIndicator;
   BrowserInteractionState browserInteraction;
   bool searchBarClearHover = false;
   const int searchBarClearButtonWidth = 5;
@@ -724,8 +725,11 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         selectedOptionsSubject().has_value();
     const std::optional<MediaTaskStatusModel>& mediaTaskStatus =
         mediaTasks.snapshot().latestStatus;
+    const std::optional<MediaTaskCardModel>& activeTask =
+        mediaTasks.snapshot().activeCard;
     chromeInput.hasMediaTaskStatus =
-        mediaTaskStatus && !mediaTaskStatus->text.empty();
+        mediaTaskPanel.indicatorVisible(activeTask) ||
+        (!activeTask && mediaTaskStatus && !mediaTaskStatus->text.empty());
     chromeInput.hasWarning =
         !mediaCommandError.empty() || !audioPlayback.warning().empty();
     chromeInput.viewMode = browser.viewMode;
@@ -1127,6 +1131,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     context.activeMediaTaskCancellable =
         mediaTasks.snapshot().activeCard &&
         mediaTasks.snapshot().activeCard->cancellable;
+    context.mediaTaskPanelHidden = mediaTaskPanel.indicatorVisible(
+        mediaTasks.snapshot().activeCard);
     context.mediaTaskFailureAvailable =
         mediaTasks.snapshot().latestFailure.has_value();
     return shell_command_catalog::build(context);
@@ -1161,6 +1167,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
                 playbackPresenter.model();
             if (current.currentTarget) {
               browserPlaybackRevealer.reveal(*current.currentTarget);
+            }
+          } else if constexpr (
+              std::is_same_v<Intent,
+                             shell_command_catalog::ShowMediaTaskPanel>) {
+            if (mediaTaskPanel.show()) {
+              markLayoutDirty();
             }
           } else if constexpr (
               std::is_same_v<Intent,
@@ -1459,6 +1471,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         const tui_media_task_panel::Interaction interaction =
             mediaTaskPanel.handle(
                 ev, tui_media_task_panel::Bounds{width, height, listTop},
+                mediaTaskIndicator,
                 *task);
         if (interaction.focusChanged && mediaTaskPanel.focused()) {
           setBrowserSearchFocus(browser, BrowserSearchFocus::None);
@@ -1470,7 +1483,9 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           }
           return;
         }
-        if (interaction.changed) {
+        if (interaction.layoutChanged) {
+          markLayoutDirty();
+        } else if (interaction.changed) {
           markDirty();
         }
         if (interaction.consumed) {
@@ -1855,15 +1870,23 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         }
       }
       if (line < height && browserChrome.footer.showMediaTaskStatus) {
-        const std::optional<MediaTaskStatusModel>& status =
-            mediaTasks.snapshot().latestStatus;
-        if (status) {
-          if (!status->text.empty()) {
-            screen.writeText(
-                0, line++, fitLine(" " + status->text, width),
-                status->succeeded ? theme.dim : theme.alert);
+        const std::optional<MediaTaskCardModel>& activeTask =
+            mediaTasks.snapshot().activeCard;
+        if (activeTask && mediaTaskPanel.indicatorVisible(activeTask)) {
+          mediaTaskIndicator = drawMediaTaskIndicator(
+              screen, width, line++, *activeTask, mediaTaskPanel,
+              theme.mediaTaskCardStyles());
+        } else if (!activeTask) {
+          const std::optional<MediaTaskStatusModel>& status =
+              mediaTasks.snapshot().latestStatus;
+          if (status && !status->text.empty()) {
+            screen.writeText(0, line++,
+                             fitLine(" " + status->text, width),
+                             status->succeeded ? theme.dim : theme.alert);
           }
         }
+      } else {
+        mediaTaskIndicator = {};
       }
       const std::string& nowLabel = browserChrome.nowPlayingLabel;
       if (browserChrome.footer.showNowPlaying) {
@@ -1945,7 +1968,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       progressBarWidth = footerResult.progressBarWidth;
 
       if (const std::optional<MediaTaskCardModel>& taskCard =
-              mediaTasks.snapshot().activeCard) {
+              mediaTasks.snapshot().activeCard;
+          mediaTaskPanel.visible(taskCard)) {
         drawMediaTaskCard(screen, width, height, listTop, *taskCard,
                           mediaTaskPanel,
                           theme.mediaTaskCardStyles());

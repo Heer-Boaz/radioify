@@ -20,6 +20,9 @@ std::string browserShortcutLabel(browser_input::KeyAction action) {
 
 Catalog build(const Context& context) {
   Catalog catalog;
+  if (context.mediaTaskPanelHidden) {
+    catalog.add("Show Background Task", "", ShowMediaTaskPanel{});
+  }
   if (context.activeMediaTaskCancellable) {
     catalog.add("Cancel Background Task", "", CancelMediaTask{});
   }
