@@ -6,6 +6,7 @@
 #include "core/native_wait_handle.h"
 #include "playback/framebuffer/presenter.h"
 #include "playback/session/presentation_policy.h"
+#include "playback/video/playback.h"
 #include "state.h"
 
 class Player;
@@ -20,7 +21,8 @@ class PlaybackOutputController {
   PlaybackOutputController(
       Player& player, GpuRuntime& gpu, std::string mediaTitle,
       std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
-          presentationSource);
+          presentationSource,
+      SystemMediaCommandOwner systemMediaCommandOwner);
   ~PlaybackOutputController();
 
   PlaybackOutputController(PlaybackOutputController&&) noexcept;

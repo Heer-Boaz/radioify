@@ -104,9 +104,13 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     }
 
     if (window_input_events::isKeyDownMessage(uMsg, wParam)) {
-        pThis->m_input.push(
-            window_input_events::keyFromVirtualKey(
-                static_cast<WORD>(wParam)));
+        const WORD key = static_cast<WORD>(wParam);
+        if (pThis->m_systemMediaInputEnabled.load(
+                std::memory_order_relaxed) ||
+            !window_input_events::isSystemMediaVirtualKey(key)) {
+            pThis->m_input.push(
+                window_input_events::keyFromVirtualKey(key));
+        }
         return 0;
     }
 
@@ -127,8 +131,13 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     }
 
     if (uMsg == WM_APPCOMMAND) {
+        const auto mediaPolicy =
+            pThis->m_systemMediaInputEnabled.load(std::memory_order_relaxed)
+                ? window_input_events::SystemMediaInputPolicy::Translate
+                : window_input_events::SystemMediaInputPolicy::Ignore;
         if (auto event =
-                window_input_events::inputEventFromAppCommand(lParam)) {
+                window_input_events::inputEventFromAppCommand(lParam,
+                                                               mediaPolicy)) {
             pThis->m_input.push(std::move(*event));
             return TRUE;
         }

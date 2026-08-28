@@ -76,7 +76,8 @@ struct WindowPresenter::Impl {
   std::thread thread;
   Impl(Player& player, GpuRuntime& gpu, std::string mediaTitle,
        std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
-           presentationSource)
+           presentationSource,
+       SystemMediaCommandOwner systemMediaCommandOwner)
       : player(player),
         gpu(gpu),
         nativeWindowTitle(nativePlaybackWindowTitle(mediaTitle)),
@@ -86,6 +87,9 @@ struct WindowPresenter::Impl {
       throw std::invalid_argument(
           "WindowPresenter requires a presentation source");
     }
+    window.SetSystemMediaInputEnabled(
+        systemMediaCommandOwner ==
+        SystemMediaCommandOwner::NativeWindowFallback);
     window.SetVsync(true);
   }
 
@@ -300,10 +304,11 @@ struct WindowPresenter::Impl {
 WindowPresenter::WindowPresenter(
     Player& player, GpuRuntime& gpu, std::string mediaTitle,
     std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
-        presentationSource)
+        presentationSource,
+    SystemMediaCommandOwner systemMediaCommandOwner)
     : impl_(std::make_unique<Impl>(
           player, gpu, std::move(mediaTitle),
-          std::move(presentationSource))) {}
+          std::move(presentationSource), systemMediaCommandOwner)) {}
 
 WindowPresenter::~WindowPresenter() = default;
 

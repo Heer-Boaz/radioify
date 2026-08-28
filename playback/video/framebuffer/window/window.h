@@ -162,6 +162,9 @@ public:
     void SetVsync(bool enabled);
     std::string GetSubtitleRenderError() const;
     void SetCaptureAllMouseInput(bool enabled) { m_captureAllMouseInput = enabled; }
+    void SetSystemMediaInputEnabled(bool enabled) {
+        m_systemMediaInputEnabled.store(enabled, std::memory_order_relaxed);
+    }
     playback_overlay::InteractionHit OverlayHitAt(
         double x, double y, bool capturedProgress = false) const;
     bool OverlayEditBoundaryHandleAt(double x, double y) const;
@@ -403,6 +406,7 @@ private:
     WindowRestoreState m_pictureInPictureRestoreState;
     WindowDisplayLifecycle m_displayLifecycle;
     bool m_captureAllMouseInput = false;
+    std::atomic<bool> m_systemMediaInputEnabled{true};
     bool m_leftMouseCaptureActive = false;
     bool m_editBoundaryCaptureActive = false;
     std::atomic<bool> m_cursorVisible{true};

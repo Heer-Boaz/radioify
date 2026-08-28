@@ -193,6 +193,10 @@ radioify_add_module_object_library(
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_control_session_mailbox_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_window_input_events_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/window_input_events_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_melody_visualization_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/melody_visualization_tests.cpp
 )

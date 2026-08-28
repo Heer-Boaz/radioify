@@ -1000,6 +1000,15 @@ radioify_link_repo_target(playback_control_session_mailbox_tests)
 add_test(NAME playback_control_session_mailbox_tests
          COMMAND $<TARGET_FILE:playback_control_session_mailbox_tests>)
 
+add_executable(window_input_events_tests)
+target_sources(window_input_events_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_window_input_events_tests>
+  ${CMAKE_SOURCE_DIR}/playback/video/framebuffer/window/input_events.cpp
+)
+radioify_link_repo_target(window_input_events_tests)
+add_test(NAME window_input_events_tests
+         COMMAND $<TARGET_FILE:window_input_events_tests>)
+
 add_executable(melody_visualization_tests)
 target_sources(melody_visualization_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_melody_visualization_tests>

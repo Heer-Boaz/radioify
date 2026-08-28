@@ -14,13 +14,20 @@
 
 namespace window_input_events {
 
+enum class SystemMediaInputPolicy {
+  Ignore,
+  Translate,
+};
+
 bool isKeyDownMessage(UINT message, WPARAM key);
 bool isSuppressedSystemCharacter(UINT message, WPARAM key);
+bool isSystemMediaVirtualKey(WORD key);
 
 InputEvent keyFromVirtualKey(WORD key);
 
 std::optional<InputEvent> inputEventFromXButton(WPARAM wParam);
-std::optional<InputEvent> inputEventFromAppCommand(LPARAM lParam);
+std::optional<InputEvent> inputEventFromAppCommand(
+    LPARAM lParam, SystemMediaInputPolicy mediaPolicy);
 
 MouseButtons mouseButtonsFromWParam(WPARAM wParam);
 InputEvent mouseEvent(int x, int y, MouseEventKind kind, MouseButtons buttons,

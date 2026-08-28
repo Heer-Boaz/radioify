@@ -6,6 +6,7 @@
 
 #include "core/native_wait_handle.h"
 #include "playback/framebuffer/window_presentation.h"
+#include "playback/video/playback.h"
 #include "playback/video/gpu/gpu_runtime.h"
 #include "presenter.h"
 #include "playback/video/player.h"
@@ -16,7 +17,8 @@ class WindowPresenter {
   WindowPresenter(
       Player& player, GpuRuntime& gpu, std::string mediaTitle,
       std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
-          presentationSource);
+          presentationSource,
+      SystemMediaCommandOwner systemMediaCommandOwner);
   ~WindowPresenter();
 
   WindowPresenter(const WindowPresenter&) = delete;

@@ -186,7 +186,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
                 screenResources})),
         videoEditWorkspace(file, core.player(), timelinePreviewModel,
                            timelinePreviewProvider),
-        output(args.player, gpu, windowTitle, presentationModel) {
+        output(args.player, gpu, windowTitle, presentationModel,
+               config.systemMediaCommandOwner) {
     core.initialize(screen);
     const playback_video_timeline_preview::Source previewSource{
         file, core.player().videoStreamIndex(), core.player().durationUs(),

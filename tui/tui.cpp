@@ -374,7 +374,13 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   screen.init();
   input.enableTerminalMouseInput();
 
+  PlaybackSystemControls systemControls;
+  const bool systemMediaTransportControlsAvailable =
+      systemControls.initialize();
+
   VideoWindow tuiWindow(gpu);
+  tuiWindow.SetSystemMediaInputEnabled(
+      !systemMediaTransportControlsAvailable);
   bool windowTuiEnabled = o.enableWindow;
   if (windowTuiEnabled) {
     const WindowClientSize clientSize = initialWindowTuiClientSize(screen);
@@ -392,8 +398,6 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
   }
 
-  PlaybackSystemControls systemControls;
-  systemControls.initialize();
   PlaybackNotificationAreaControls notificationAreaControls;
   notificationAreaControls.initialize();
 
@@ -401,6 +405,10 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   videoConfig.enableAscii = o.enableAscii;
   videoConfig.enableAudio = o.enableAudio;
   videoConfig.debugOverlay = o.asciiDebugOverlay;
+  videoConfig.systemMediaCommandOwner =
+      systemMediaTransportControlsAvailable
+          ? SystemMediaCommandOwner::SystemMediaTransportControls
+          : SystemMediaCommandOwner::NativeWindowFallback;
 
   std::optional<OpenFilesRequest> initialOpenRequest;
 

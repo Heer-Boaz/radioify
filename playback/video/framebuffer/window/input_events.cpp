@@ -61,6 +61,18 @@ bool isSuppressedSystemCharacter(UINT message, WPARAM key) {
   return message == WM_SYSCHAR && key == VK_RETURN;
 }
 
+bool isSystemMediaVirtualKey(WORD key) {
+  switch (key) {
+    case VK_MEDIA_PLAY_PAUSE:
+    case VK_MEDIA_STOP:
+    case VK_MEDIA_PREV_TRACK:
+    case VK_MEDIA_NEXT_TRACK:
+      return true;
+    default:
+      return false;
+  }
+}
+
 InputEvent keyFromVirtualKey(WORD key) {
   if (key == VK_BROWSER_BACK) {
     return inputActionEvent(InputAction::Back);
@@ -82,7 +94,8 @@ std::optional<InputEvent> inputEventFromXButton(WPARAM wParam) {
   }
 }
 
-std::optional<InputEvent> inputEventFromAppCommand(LPARAM lParam) {
+std::optional<InputEvent> inputEventFromAppCommand(
+    LPARAM lParam, SystemMediaInputPolicy mediaPolicy) {
   const int command = GET_APPCOMMAND_LPARAM(lParam);
   switch (command) {
     case APPCOMMAND_BROWSER_BACKWARD:
@@ -90,18 +103,24 @@ std::optional<InputEvent> inputEventFromAppCommand(LPARAM lParam) {
     case APPCOMMAND_BROWSER_FORWARD:
       return inputActionEvent(InputAction::Forward);
     case APPCOMMAND_MEDIA_PLAY_PAUSE:
+      if (mediaPolicy == SystemMediaInputPolicy::Ignore) return std::nullopt;
       return keyEvent(VK_MEDIA_PLAY_PAUSE);
     case APPCOMMAND_MEDIA_PLAY:
+      if (mediaPolicy == SystemMediaInputPolicy::Ignore) return std::nullopt;
       return keyEvent(kPlaybackVkMediaPlay);
     case APPCOMMAND_MEDIA_PAUSE:
+      if (mediaPolicy == SystemMediaInputPolicy::Ignore) return std::nullopt;
       return keyEvent(kPlaybackVkMediaPause);
     case APPCOMMAND_MEDIA_STOP:
+      if (mediaPolicy == SystemMediaInputPolicy::Ignore) return std::nullopt;
       return keyEvent(VK_MEDIA_STOP);
     case APPCOMMAND_MEDIA_PREVIOUSTRACK:
     case APPCOMMAND_MEDIA_CHANNEL_DOWN:
+      if (mediaPolicy == SystemMediaInputPolicy::Ignore) return std::nullopt;
       return keyEvent(VK_MEDIA_PREV_TRACK);
     case APPCOMMAND_MEDIA_NEXTTRACK:
     case APPCOMMAND_MEDIA_CHANNEL_UP:
+      if (mediaPolicy == SystemMediaInputPolicy::Ignore) return std::nullopt;
       return keyEvent(VK_MEDIA_NEXT_TRACK);
     default:
       return std::nullopt;
