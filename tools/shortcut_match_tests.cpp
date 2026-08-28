@@ -174,6 +174,17 @@ int main() {
               makeActionEvent(InputAction::Back)) ==
               playback_session_bootstrap_input::Action::Cancel,
       "playback initialization must publish typed cancel and quit intents");
+  const std::optional<PlaybackInputMatch> globalQuit = matchPlaybackInput(
+      makeKeyEvent('Q', 'q', LEFT_CTRL_PRESSED),
+      kPlaybackShortcutContextGlobal);
+  ok &= expect(
+      globalQuit &&
+          std::get<PlaybackAction>(globalQuit->command) ==
+              PlaybackAction::Quit &&
+          !matchPlaybackInput(makeKeyEvent('Q', 'q', LEFT_CTRL_PRESSED),
+                              kPlaybackShortcutContextShared),
+      "Ctrl+Q must remain an application-global accelerator instead of a "
+      "focused child-control shortcut");
   ok &= expect(resolvePlaybackAction(
                    makeKey(VK_ESCAPE), kPlaybackShortcutContextPlaybackSession)
                    .value() == PlaybackAction::ExitPlaybackSession,

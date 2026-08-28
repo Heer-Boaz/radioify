@@ -348,8 +348,7 @@ class BrowserInputController {
     // browser), fall back to handling playback shortcuts as before.
     if (const std::optional<PlaybackInputMatch> match =
             (capabilities.playMode || capabilities.decoderReady)
-                ? matchPlaybackInput(ev, kPlaybackShortcutContextShared |
-                                             kPlaybackShortcutContextGlobal)
+                ? matchPlaybackInput(ev, kPlaybackShortcutContextShared)
                 : std::nullopt) {
       publishPlaybackCommand(result.commands, match->command);
       result.dirty = true;
@@ -359,13 +358,6 @@ class BrowserInputController {
 
   void handleKey(const InputEvent& ev) {
     const KeyEvent& key = ev.key;
-    if (const std::optional<PlaybackInputMatch> global =
-            matchPlaybackInput(ev, kPlaybackShortcutContextGlobal)) {
-      publishPlaybackCommand(result.commands, global->command);
-      result.dirty = true;
-      return;
-    }
-
     if (capabilities.interactionEnabled && browserSearchFocused(browser)) {
       handleFocusedSearchKey(key);
       return;

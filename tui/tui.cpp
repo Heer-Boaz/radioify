@@ -1466,6 +1466,14 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           return;
         }
       }
+      // Application-global accelerators belong to the shell, above focused
+      // non-modal widgets but below input-modal overlays. Child controls may
+      // therefore consume unrelated keys without trapping Ctrl+Q.
+      if (const std::optional<PlaybackInputMatch> global =
+              matchPlaybackInput(ev, kPlaybackShortcutContextGlobal)) {
+        dispatchPlaybackCommand(global->command);
+        return;
+      }
       if (const std::optional<MediaTaskCardModel>& task =
               mediaTasks.snapshot().activeCard) {
         const tui_media_task_panel::Interaction interaction =
