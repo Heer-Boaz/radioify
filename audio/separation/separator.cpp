@@ -17,6 +17,7 @@
 #include "audio/flac_writer.h"
 #include "audio/separation/mask_model.h"
 #include "audio/separation/spectral_transform.h"
+#include "core/file_output.h"
 #include "runtime_helpers.h"
 
 namespace audio_separation {
@@ -494,7 +495,8 @@ bool separateMediaAudioUsingModel(
     const ProgressCallback& onProgress,
     const DiagnosticReporter& diagnostics,
     const ExecutionControl& control,
-    std::string* error) {
+    std::string* error,
+    const OutputCommitStarted& outputCommitStarted) {
   if (!checkpoint(control, error)) return false;
   report(onProgress, 0.01f, "Preparing audio separation");
   reportDiagnostic(diagnostics, DiagnosticLevel::Info, "model",
@@ -526,18 +528,20 @@ bool separateMediaAudioUsingModel(
   RawAudioReader reader;
   if (!reader.open(rawPath, error)) return false;
   const ChunkPlan plan = buildChunkPlan(sourceFrames);
-  const ArtifactPaths temporaryPaths = temporaryArtifactPathsFor(mediaPath);
-  struct TemporaryArtifactCleanup {
-    const ArtifactPaths& paths;
-    bool published = false;
-    ~TemporaryArtifactCleanup() {
-      if (!published) removeArtifacts(paths);
-    }
-  } cleanup{temporaryPaths};
+  std::vector<file_output::TransactionDestination> destinations;
+  destinations.reserve(kStemCount);
+  for (const std::filesystem::path& outputPath : outputPaths) {
+    destinations.push_back(
+        {outputPath, file_output::PublishMode::ReplaceExisting});
+  }
+  std::optional<file_output::TransactionGroup> outputs =
+      file_output::TransactionGroup::begin(std::move(destinations), error);
+  if (!outputs) return false;
 
   std::array<audio_file::FlacWriter, kStemCount> writers;
   for (std::size_t stem = 0; stem < kStemCount; ++stem) {
-    if (!writers[stem].open(temporaryPaths[stem], kSampleRate, kChannels,
+    if (!writers[stem].open(outputs->temporaryPath(stem), kSampleRate,
+                            kChannels,
                             error)) {
       return false;
     }
@@ -624,8 +628,11 @@ bool separateMediaAudioUsingModel(
   for (audio_file::FlacWriter& writer : writers) {
     if (!writer.finish(error)) return false;
   }
-  if (!publishArtifactSet(temporaryPaths, outputPaths, error)) return false;
-  cleanup.published = true;
+  if (outputCommitStarted && !outputCommitStarted()) {
+    setError(error, "Audio separation cancelled before publication.");
+    return false;
+  }
+  if (!outputs->publish(error)) return false;
   report(onProgress, 1.0f, "Audio stems ready");
   return true;
 }
@@ -639,7 +646,8 @@ bool separateMediaAudioWithModel(
     const ProgressCallback& onProgress,
     const DiagnosticReporter& diagnostics,
     const ExecutionControl& control,
-    std::string* error) {
+    std::string* error,
+    const OutputCommitStarted& outputCommitStarted) {
   if (error) error->clear();
   if (!validateRequest(mediaPath, control, error) ||
       !validateModelPath(modelPath, error)) {
@@ -647,7 +655,7 @@ bool separateMediaAudioWithModel(
   }
   return separateMediaAudioUsingModel(mediaPath, modelPath, outputPaths,
                                       onProgress, diagnostics,
-                                      control, error);
+                                      control, error, outputCommitStarted);
 }
 
 bool separateMediaAudio(const std::filesystem::path& mediaPath,
@@ -655,7 +663,8 @@ bool separateMediaAudio(const std::filesystem::path& mediaPath,
                         const ProgressCallback& onProgress,
                         const DiagnosticReporter& diagnostics,
                         const ExecutionControl& control,
-                        std::string* error) {
+                        std::string* error,
+                        const OutputCommitStarted& outputCommitStarted) {
   if (error) error->clear();
   if (!validateRequest(mediaPath, control, error)) return false;
 
@@ -663,7 +672,7 @@ bool separateMediaAudio(const std::filesystem::path& mediaPath,
   if (!resolveBundledModelPath(&modelPath, error)) return false;
   return separateMediaAudioUsingModel(mediaPath, modelPath, outputPaths,
                                       onProgress, diagnostics,
-                                      control, error);
+                                      control, error, outputCommitStarted);
 }
 
 }  // namespace audio_separation

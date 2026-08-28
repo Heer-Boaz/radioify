@@ -16,13 +16,15 @@ struct Progress {
 };
 
 using ProgressCallback = std::function<void(const Progress&)>;
+using OutputCommitStarted = std::function<bool()>;
 
 bool separateMediaAudio(const std::filesystem::path& mediaPath,
                         const ArtifactPaths& outputPaths,
                         const ProgressCallback& onProgress,
                         const DiagnosticReporter& diagnostics,
                         const ExecutionControl& control,
-                        std::string* error);
+                        std::string* error,
+                        const OutputCommitStarted& outputCommitStarted = {});
 
 // Explicit model selection is reserved for diagnostic tools and tests.
 // Production playback uses the bundled, build-verified model above.
@@ -33,6 +35,7 @@ bool separateMediaAudioWithModel(
     const ProgressCallback& onProgress,
     const DiagnosticReporter& diagnostics,
     const ExecutionControl& control,
-    std::string* error);
+    std::string* error,
+    const OutputCommitStarted& outputCommitStarted = {});
 
 }  // namespace audio_separation

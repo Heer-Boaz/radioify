@@ -3,6 +3,7 @@
 #include "audio/separation/job.h"
 #include "audio/separation/operation.h"
 #include "audio/separation/spectral_transform.h"
+#include "core/file_output.h"
 #include "audio/ffmpegaudio.h"
 
 #include <algorithm>
@@ -61,42 +62,61 @@ bool testArtifactContract(const std::filesystem::path& directory) {
                    !separation::isManagedArtifactPath(media),
                "managed output recognition must prevent recursive separation");
 
-  const separation::ArtifactPaths temporaryPaths =
-      separation::temporaryArtifactPathsFor(media);
+  std::vector<file_output::TransactionDestination> destinations;
+  for (const std::filesystem::path& path : finalPaths) {
+    destinations.push_back(
+        {path, file_output::PublishMode::ReplaceExisting});
+    ok &= expect(writeText(path, "old"),
+                 "artifact fixture files must be writable");
+  }
+  std::string error;
+  auto outputs =
+      file_output::TransactionGroup::begin(std::move(destinations), &error);
+  separation::ArtifactPaths temporaryPaths{};
+  if (outputs) {
+    for (std::size_t index = 0; index < separation::kStemCount; ++index) {
+      temporaryPaths[index] = outputs->temporaryPath(index);
+    }
+  }
   ok &= expect(
-      std::all_of(temporaryPaths.begin(), temporaryPaths.end(),
+      outputs && std::all_of(temporaryPaths.begin(), temporaryPaths.end(),
                   [](const std::filesystem::path& path) {
                     return path.extension() == L".tmp" &&
                            !separation::isManagedArtifactPath(path);
                   }),
       "staging stems must not have a playable media extension");
   for (std::size_t index = 0; index < separation::kStemCount; ++index) {
-    ok &= expect(writeText(finalPaths[index], "old") &&
-                     writeText(temporaryPaths[index], "new"),
+    ok &= expect(writeText(temporaryPaths[index], "new"),
                  "artifact fixture files must be writable");
   }
-  std::string error;
-  ok &= expect(separation::publishArtifactSet(temporaryPaths, finalPaths,
-                                               &error),
+  ok &= expect(outputs && outputs->publish(&error),
                "a complete stem set must publish transactionally");
   for (const std::filesystem::path& path : finalPaths) {
     ok &= expect(readText(path) == "new",
-                 "publishing must atomically replace the managed set");
+                 "successful grouped publication must replace the complete "
+                 "managed set");
   }
   ok &= expect(separation::artifactsExistFor(media),
                "only a complete published set must count as existing stems");
 
-  const separation::ArtifactPaths incomplete =
-      separation::temporaryArtifactPathsFor(media);
-  ok &= expect(writeText(incomplete.front(), "partial"),
-               "incomplete fixture must be writable");
-  ok &= expect(!separation::publishArtifactSet(incomplete, finalPaths, &error),
+  std::vector<file_output::TransactionDestination> retryDestinations;
+  for (const std::filesystem::path& path : finalPaths) {
+    retryDestinations.push_back(
+        {path, file_output::PublishMode::ReplaceExisting});
+  }
+  auto incomplete = file_output::TransactionGroup::begin(
+      std::move(retryDestinations), &error);
+  if (incomplete) {
+    writeText(incomplete->temporaryPath(0), "partial");
+    std::error_code injectedFailure;
+    std::filesystem::remove(incomplete->temporaryPath(1), injectedFailure);
+  }
+  ok &= expect(incomplete && !incomplete->publish(&error),
                "an incomplete set must be rejected before replacement");
   for (const std::filesystem::path& path : finalPaths) {
     ok &= expect(readText(path) == "new",
                  "a failed publish must preserve every existing stem");
   }
-  separation::removeArtifacts(incomplete);
   return ok;
 }
 
@@ -215,10 +235,12 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
       [](const std::filesystem::path&, const separation::ArtifactPaths&,
          const separation::Job::ProgressReporter& progress,
          const separation::Job::DiagnosticReporter& diagnostics,
-         const separation::ExecutionControl&, std::string*) {
+         const separation::ExecutionControl&,
+         const separation::Job::CommitStarted& beginCommit,
+         std::string*) {
         diagnostics(DiagnosticLevel::Info, "test", "operation invoked");
         progress(0.4f, "Separating test audio");
-        return true;
+        return beginCommit();
       });
   bool ok = true;
   ok &= expect(!unconfigured.configured() && job.configured() &&
@@ -264,7 +286,7 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
               "clip.mp4", separation::artifactPathsFor("clip.mp4"),
               [](float, std::string) {},
               [](DiagnosticLevel, std::string_view, std::string_view) {},
-              explicitModelControl,
+              explicitModelControl, []() { return true; },
               &explicitModelError) &&
           explicitModelError.find("missing-explicit-model.onnx") !=
               std::string::npos,
@@ -275,7 +297,8 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
       [&](const std::filesystem::path&, const separation::ArtifactPaths&,
           const separation::Job::ProgressReporter& progress,
           const separation::Job::DiagnosticReporter&,
-          const separation::ExecutionControl& control, std::string* error) {
+          const separation::ExecutionControl& control,
+          const separation::Job::CommitStarted&, std::string* error) {
         progress(0.2f, "Separating test audio");
         operationStarted.store(true, std::memory_order_release);
         while (!control.cancellationRequested()) {
@@ -316,9 +339,11 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
       [&](const std::filesystem::path&, const separation::ArtifactPaths&,
           const separation::Job::ProgressReporter&,
           const separation::Job::DiagnosticReporter&,
-          const separation::ExecutionControl&, std::string*) {
+          const separation::ExecutionControl&,
+          const separation::Job::CommitStarted& beginCommit,
+          std::string*) {
         initiallyPausedOperationEntered.store(true, std::memory_order_release);
-        return true;
+        return beginCommit();
       });
   ok &= expect(initiallyPaused.tryStart(
                    "initially-paused.mp4",
@@ -366,7 +391,9 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
       [&](const std::filesystem::path&, const separation::ArtifactPaths&,
           const separation::Job::ProgressReporter&,
           const separation::Job::DiagnosticReporter&,
-        const separation::ExecutionControl& control, std::string*) {
+          const separation::ExecutionControl& control,
+          const separation::Job::CommitStarted& beginCommit,
+          std::string*) {
         pauseOperationStarted.store(true, std::memory_order_release);
         auto interruption = control.registerInterruption([&]() {
           pauseInterruptObserved.store(true, std::memory_order_release);
@@ -384,7 +411,7 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
           return false;
         }
         passedPauseCheckpoint.store(true, std::memory_order_release);
-        return true;
+        return beginCommit();
       });
   ok &= expect(pausable.tryStart("pause.mp4"),
                "a pausable operation must start");
@@ -452,12 +479,14 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
       [&](const std::filesystem::path&, const separation::ArtifactPaths&,
           const separation::Job::ProgressReporter&,
           const separation::Job::DiagnosticReporter&,
-          const separation::ExecutionControl& control, std::string* error) {
+          const separation::ExecutionControl& control,
+          const separation::Job::CommitStarted& beginCommit,
+          std::string* error) {
         pausedCancelOperationStarted.store(true, std::memory_order_release);
         while (!enterPausedCancelCheckpoint.load(std::memory_order_acquire)) {
           std::this_thread::yield();
         }
-        if (control.checkpoint()) return true;
+        if (control.checkpoint()) return beginCommit();
         if (error) *error = "Controlled cancellation while paused.";
         return false;
       });
@@ -488,6 +517,80 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
   if (pausedCancellation && !pausedCancellation->diagnosticLog.empty()) {
     std::error_code ignored;
     std::filesystem::remove(pausedCancellation->diagnosticLog, ignored);
+  }
+
+  std::atomic<bool> commitEntered{false};
+  std::atomic<bool> releaseCommit{false};
+  separation::Job committing(
+      [&](const std::filesystem::path&, const separation::ArtifactPaths&,
+          const separation::Job::ProgressReporter&,
+          const separation::Job::DiagnosticReporter&,
+          const separation::ExecutionControl& control,
+          const separation::Job::CommitStarted& beginCommit,
+          std::string*) {
+        if (!beginCommit()) return false;
+        commitEntered.store(true, std::memory_order_release);
+        while (!releaseCommit.load(std::memory_order_acquire)) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return !control.cancellationRequested();
+      });
+  ok &= expect(committing.tryStart("publishing.mp4"),
+               "a commit-barrier operation must start");
+  for (int attempt = 0;
+       attempt < 100 && !commitEntered.load(std::memory_order_acquire);
+       ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  const separation::JobSnapshot publishing = committing.snapshot();
+  const bool lateCancellationRejected = !committing.requestCancel();
+  releaseCommit.store(true, std::memory_order_release);
+  std::optional<separation::JobSnapshot> published;
+  for (int attempt = 0; attempt < 100 && !published; ++attempt) {
+    published = committing.takeCompletion();
+    if (!published) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  ok &= expect(commitEntered.load(std::memory_order_acquire) &&
+                   publishing.state == separation::JobState::Publishing &&
+                   publishing.running() && !publishing.cancellable() &&
+                   publishing.phase == "Publishing audio stems" &&
+                   lateCancellationRejected && published &&
+                   published->succeeded(),
+               "audio separation must remove Cancel at its linearized "
+               "publication boundary");
+  if (published && !published->diagnosticLog.empty()) {
+    std::error_code ignored;
+    std::filesystem::remove(published->diagnosticLog, ignored);
+  }
+
+  separation::Job missingBarrier(
+      [](const std::filesystem::path&, const separation::ArtifactPaths&,
+         const separation::Job::ProgressReporter&,
+         const separation::Job::DiagnosticReporter&,
+         const separation::ExecutionControl&,
+         const separation::Job::CommitStarted&, std::string*) {
+        return true;
+      });
+  ok &= expect(missingBarrier.tryStart("missing-barrier.mp4"),
+               "a controlled contract-violation fixture must start");
+  std::optional<separation::JobSnapshot> invalidCompletion;
+  for (int attempt = 0; attempt < 100 && !invalidCompletion; ++attempt) {
+    invalidCompletion = missingBarrier.takeCompletion();
+    if (!invalidCompletion) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  ok &= expect(invalidCompletion &&
+                   invalidCompletion->state == separation::JobState::Failed &&
+                   invalidCompletion->error.find("commit barrier") !=
+                       std::string::npos,
+               "a backend may not report success without claiming the "
+               "publication boundary");
+  if (invalidCompletion && !invalidCompletion->diagnosticLog.empty()) {
+    std::error_code ignored;
+    std::filesystem::remove(invalidCompletion->diagnosticLog, ignored);
   }
   return ok;
 }

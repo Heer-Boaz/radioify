@@ -20,6 +20,7 @@ enum class JobState : std::uint8_t {
   Idle,
   Running,
   Cancelling,
+  Publishing,
   Succeeded,
   Failed,
   Cancelled,
@@ -42,9 +43,11 @@ struct JobSnapshot {
   JobSchedulingState scheduling = JobSchedulingState::Running;
 
   bool running() const {
-    return state == JobState::Running || state == JobState::Cancelling;
+    return state == JobState::Running || state == JobState::Cancelling ||
+           state == JobState::Publishing;
   }
   bool cancelling() const { return state == JobState::Cancelling; }
+  bool cancellable() const { return state == JobState::Running; }
   bool finished() const {
     return state == JobState::Succeeded || state == JobState::Failed ||
            state == JobState::Cancelled;
@@ -65,10 +68,11 @@ class Job {
  public:
   using ProgressReporter = std::function<void(float, std::string)>;
   using DiagnosticReporter = audio_separation::DiagnosticReporter;
+  using CommitStarted = std::function<bool()>;
   using Operation = std::function<bool(
       const std::filesystem::path&, const ArtifactPaths&,
       const ProgressReporter&, const DiagnosticReporter&,
-      const ExecutionControl&, std::string*)>;
+      const ExecutionControl&, const CommitStarted&, std::string*)>;
 
   explicit Job(Operation operation);
   Job(Operation operation, WakeNotifier ownerWake);

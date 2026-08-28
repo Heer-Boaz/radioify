@@ -8,13 +8,15 @@ GenerationJob::Operation GenerationJob::productionOperation() {
   return [](const std::filesystem::path& videoPath,
             const std::filesystem::path& outputPath,
             const ProgressReporter& reportProgress,
-            const std::atomic<bool>* cancelRequested, std::string* error) {
+            const std::atomic<bool>* cancelRequested,
+            const CommitStarted& outputCommitStarted,
+            std::string* error) {
     return createIndexedTranscript(
         videoPath, outputPath, TranscriptPublishMode::ReplaceExisting,
         [&](const Progress& progress) {
           reportProgress(progress.fraction, progress.phase);
         },
-        cancelRequested, error);
+        cancelRequested, error, outputCommitStarted);
   };
 }
 

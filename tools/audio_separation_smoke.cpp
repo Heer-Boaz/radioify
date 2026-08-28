@@ -32,7 +32,8 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   }
   const audio_separation::ExecutionControl control(&cancelRequested);
-  const bool succeeded = operation(
+  bool outputCommitStarted = false;
+  bool succeeded = operation(
       media, outputs,
       [&](float fraction, const std::string& phase) {
         const int percent = static_cast<int>(fraction * 100.0f);
@@ -51,7 +52,17 @@ int main(int argc, char** argv) {
         std::cerr << '[' << levelName << ":" << component << "] "
                   << message << '\n';
       },
-      control, &error);
+      control,
+      [&]() {
+        if (outputCommitStarted) return false;
+        outputCommitStarted = true;
+        return true;
+      },
+      &error);
+  if (succeeded && !outputCommitStarted) {
+    succeeded = false;
+    error = "The backend did not claim its output commit boundary.";
+  }
   const double elapsedSeconds = std::chrono::duration<double>(
                                     std::chrono::steady_clock::now() - started)
                                     .count();

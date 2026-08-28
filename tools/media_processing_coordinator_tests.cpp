@@ -151,13 +151,16 @@ int main() {
       [&](const std::filesystem::path&, const std::filesystem::path&,
           const playback_video_transcript::GenerationJob::ProgressReporter&
               progress,
-          const std::atomic<bool>*, std::string*) {
+          const std::atomic<bool>*,
+          const playback_video_transcript::GenerationJob::CommitStarted&
+              beginCommit,
+          std::string*) {
         progress(0.3f, "Transcribing audio");
         subtitlesStarted.store(true, std::memory_order_release);
         while (!releaseSubtitles.load(std::memory_order_acquire)) {
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        return true;
+        return beginCommit();
       };
   operations.separateAudio =
       [&](const std::filesystem::path&,
@@ -165,6 +168,7 @@ int main() {
           const audio_separation::Job::ProgressReporter& progress,
           const audio_separation::Job::DiagnosticReporter&,
           const audio_separation::ExecutionControl& control,
+          const audio_separation::Job::CommitStarted&,
           std::string* error) {
         progress(0.2f, "Separating dialogue, music and effects on GPU");
         separationStarted.store(true, std::memory_order_release);

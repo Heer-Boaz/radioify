@@ -153,7 +153,9 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
                              TranscriptPublishMode publishMode,
                              const ProgressCallback& onProgress,
                              const std::atomic<bool>* cancelRequested,
-                             std::string* error) {
+                             std::string* error,
+                             const TranscriptCommitStarted&
+                                 outputCommitStarted) {
   if (error) error->clear();
   if (videoPath.empty() || outputPath.empty()) {
     setError(error, "Video or transcript path is empty.");
@@ -327,7 +329,8 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
 
   finalizeSubtitleCueTimeline(&segments);
   report(onProgress, 0.98f, "Saving subtitles");
-  if (!writeIndexedTranscript(outputPath, segments, publishMode, error)) {
+  if (!writeIndexedTranscript(outputPath, segments, publishMode, error,
+                              outputCommitStarted)) {
     return false;
   }
   report(onProgress, 1.0f, "Transcript complete");

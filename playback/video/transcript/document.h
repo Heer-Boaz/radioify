@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -12,6 +13,8 @@ enum class TranscriptPublishMode {
   CreateNew,
   ReplaceExisting,
 };
+
+using TranscriptOutputCommitStarted = std::function<bool()>;
 
 // Reads ordinary SRT timing/text into the transcript domain. Keeping this
 // parser here prevents downstream analysis from treating subtitle
@@ -27,6 +30,8 @@ bool readIndexedTranscript(const std::filesystem::path& inputPath,
 bool writeIndexedTranscript(const std::filesystem::path& outputPath,
                             const std::vector<Segment>& segments,
                             TranscriptPublishMode publishMode,
-                            std::string* error);
+                            std::string* error,
+                            const TranscriptOutputCommitStarted&
+                                outputCommitStarted = {});
 
 }  // namespace playback_video_transcript

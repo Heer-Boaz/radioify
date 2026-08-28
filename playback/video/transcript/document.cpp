@@ -197,7 +197,9 @@ bool readIndexedTranscript(const std::filesystem::path& inputPath,
 bool writeIndexedTranscript(const std::filesystem::path& outputPath,
                             const std::vector<Segment>& segments,
                             TranscriptPublishMode publishMode,
-                            std::string* error) {
+                            std::string* error,
+                            const TranscriptOutputCommitStarted&
+                                outputCommitStarted) {
   if (error) error->clear();
   if (outputPath.empty() || outputPath.filename().empty()) {
     setError(error, "Transcript output path is empty.");
@@ -282,6 +284,10 @@ bool writeIndexedTranscript(const std::filesystem::path& outputPath,
     }
   }
 
+  if (outputCommitStarted && !outputCommitStarted()) {
+    setError(error, "Transcript cancelled before publication.");
+    return false;
+  }
   return transaction->publish(error);
 }
 

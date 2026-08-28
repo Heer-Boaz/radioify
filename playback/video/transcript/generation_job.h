@@ -17,6 +17,7 @@ enum class GenerationJobState : uint8_t {
   Idle,
   Running,
   Cancelling,
+  Publishing,
   Succeeded,
   Failed,
   Cancelled,
@@ -32,10 +33,14 @@ struct GenerationJobSnapshot {
 
   bool running() const {
     return state == GenerationJobState::Running ||
-           state == GenerationJobState::Cancelling;
+           state == GenerationJobState::Cancelling ||
+           state == GenerationJobState::Publishing;
   }
   bool cancelling() const {
     return state == GenerationJobState::Cancelling;
+  }
+  bool cancellable() const {
+    return state == GenerationJobState::Running;
   }
   bool finished() const {
     return state == GenerationJobState::Succeeded ||
@@ -53,9 +58,11 @@ struct GenerationJobSnapshot {
 class GenerationJob {
  public:
   using ProgressReporter = std::function<void(float, std::string)>;
+  using CommitStarted = std::function<bool()>;
   using Operation = std::function<bool(
       const std::filesystem::path&, const std::filesystem::path&,
-      const ProgressReporter&, const std::atomic<bool>*, std::string*)>;
+      const ProgressReporter&, const std::atomic<bool>*,
+      const CommitStarted&, std::string*)>;
 
   // Uses Radioify's configured Whisper/Vulkan transcription operation.
   GenerationJob();

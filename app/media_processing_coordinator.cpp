@@ -411,7 +411,7 @@ std::optional<TaskActivity> Coordinator::activity() const {
       activity.progress = std::clamp(snapshot.progress, 0.0f, 1.0f);
       activity.phase = snapshot.phase;
       activity.cancelling = snapshot.cancelling();
-      activity.cancellable = !activity.cancelling;
+      activity.cancellable = snapshot.cancellable();
       return activity;
     }
   }
@@ -425,7 +425,7 @@ std::optional<TaskActivity> Coordinator::activity() const {
       activity.progress = std::clamp(snapshot.progress, 0.0f, 1.0f);
       activity.phase = snapshot.phase;
       activity.cancelling = snapshot.cancelling();
-      activity.cancellable = !activity.cancelling;
+      activity.cancellable = snapshot.cancellable();
       switch (snapshot.scheduling) {
         case audio_separation::JobSchedulingState::Running:
           break;

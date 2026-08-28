@@ -5,7 +5,6 @@
 #include <cctype>
 #include <chrono>
 #include <system_error>
-#include <utility>
 
 #ifdef _WIN32
 #include <process.h>
@@ -42,10 +41,6 @@ std::filesystem::path stemPath(const std::filesystem::path& mediaPath,
   result += suffix;
   result += ".flac";
   return result;
-}
-
-void setError(std::string* error, std::string message) {
-  if (error) *error = std::move(message);
 }
 
 }  // namespace
@@ -106,97 +101,12 @@ bool isManagedArtifactPath(const std::filesystem::path& path) {
          stemExtension == stemFileSuffix(Stem::Effects);
 }
 
-ArtifactPaths temporaryArtifactPathsFor(
-    const std::filesystem::path& mediaPath) {
-  ArtifactPaths paths = artifactPathsFor(mediaPath);
-  const std::string unique = uniquePart();
-  for (std::filesystem::path& path : paths) {
-    // The FLAC writer selects its muxer explicitly, so staging files do not
-    // need a media extension. Keep the terminal extension non-media: browser
-    // refreshes must never surface a partial stem as playable content.
-    path += ".radioify-" + unique + ".tmp";
-  }
-  return paths;
-}
-
 std::filesystem::path temporaryRawAudioPathFor(
     const std::filesystem::path& mediaPath) {
   if (mediaPath.empty()) return {};
   std::filesystem::path filename = mediaPath.filename();
   filename += ".radioify-" + uniquePart() + ".tmp.f32";
   return mediaPath.parent_path() / filename;
-}
-
-void removeArtifacts(const ArtifactPaths& paths) {
-  for (const std::filesystem::path& path : paths) {
-    std::error_code ignored;
-    std::filesystem::remove(path, ignored);
-  }
-}
-
-bool publishArtifactSet(const ArtifactPaths& temporaryPaths,
-                        const ArtifactPaths& finalPaths,
-                        std::string* error) {
-  if (error) error->clear();
-  const std::string unique = uniquePart();
-  ArtifactPaths backups{};
-  std::array<bool, kStemCount> backupCreated{};
-  std::array<bool, kStemCount> published{};
-
-  for (std::size_t index = 0; index < kStemCount; ++index) {
-    std::error_code ec;
-    if (!std::filesystem::is_regular_file(temporaryPaths[index], ec) || ec) {
-      setError(error, "A completed audio stem is missing: " +
-                          temporaryPaths[index].filename().string());
-      return false;
-    }
-  }
-
-  auto rollBack = [&]() {
-    for (std::size_t index = 0; index < kStemCount; ++index) {
-      std::error_code ignored;
-      if (published[index]) std::filesystem::remove(finalPaths[index], ignored);
-    }
-    for (std::size_t index = 0; index < kStemCount; ++index) {
-      if (!backupCreated[index]) continue;
-      std::error_code ignored;
-      std::filesystem::rename(backups[index], finalPaths[index], ignored);
-    }
-  };
-
-  for (std::size_t index = 0; index < kStemCount; ++index) {
-    std::error_code ec;
-    if (!std::filesystem::exists(finalPaths[index], ec) || ec) continue;
-    backups[index] = finalPaths[index];
-    backups[index] += ".radioify-" + unique + ".backup";
-    std::filesystem::rename(finalPaths[index], backups[index], ec);
-    if (ec) {
-      rollBack();
-      setError(error, "Could not preserve the existing audio stems: " +
-                          ec.message());
-      return false;
-    }
-    backupCreated[index] = true;
-  }
-
-  for (std::size_t index = 0; index < kStemCount; ++index) {
-    std::error_code ec;
-    std::filesystem::rename(temporaryPaths[index], finalPaths[index], ec);
-    if (ec) {
-      rollBack();
-      setError(error, "Could not publish the separated audio stems: " +
-                          ec.message());
-      return false;
-    }
-    published[index] = true;
-  }
-
-  for (std::size_t index = 0; index < kStemCount; ++index) {
-    if (!backupCreated[index]) continue;
-    std::error_code ignored;
-    std::filesystem::remove(backups[index], ignored);
-  }
-  return true;
 }
 
 }  // namespace audio_separation

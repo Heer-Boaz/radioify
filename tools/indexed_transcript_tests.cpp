@@ -294,6 +294,21 @@ int main() {
   const std::vector<transcript::Segment> replacement = {
       {60'000'000, 61'000'000, "vervangen"},
   };
+  const std::string transcriptBeforeCancelledCommit = readFile(output);
+  bool cancelledCommitReached = false;
+  ok &= expect(
+      !transcript::writeIndexedTranscript(
+          output, replacement,
+          transcript::TranscriptPublishMode::ReplaceExisting, &error,
+          [&]() {
+            cancelledCommitReached = true;
+            return false;
+          }) &&
+          cancelledCommitReached &&
+          error == "Transcript cancelled before publication." &&
+          readFile(output) == transcriptBeforeCancelledCommit,
+      "cancellation at the commit boundary must preserve the active "
+      "transcript");
   ok &= expect(transcript::writeIndexedTranscript(
                    output, replacement,
                    transcript::TranscriptPublishMode::ReplaceExisting,

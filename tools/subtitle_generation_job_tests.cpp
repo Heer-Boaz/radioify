@@ -17,6 +17,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -33,7 +34,10 @@ class ControlledOperation {
       const std::filesystem::path& output,
       const playback_video_transcript::GenerationJob::ProgressReporter&
           reportProgress,
-      const std::atomic<bool>* cancelRequested, std::string* error) {
+      const std::atomic<bool>* cancelRequested,
+      const playback_video_transcript::GenerationJob::CommitStarted&
+          beginCommit,
+      std::string* error) {
     int invocation = 0;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -52,7 +56,7 @@ class ControlledOperation {
       changed_.wait(lock, [&]() { return released_ >= invocation; });
     }
 
-    if (invocation == 1) return true;
+    if (invocation == 1) return beginCommit();
     if (cancelRequested &&
         cancelRequested->load(std::memory_order_relaxed)) {
       if (error) *error = "Controlled cancellation.";
@@ -120,9 +124,11 @@ int main() {
       [&](const std::filesystem::path& source,
           const std::filesystem::path& output,
           const transcript::GenerationJob::ProgressReporter& reportProgress,
-          const std::atomic<bool>* cancelRequested, std::string* error) {
+          const std::atomic<bool>* cancelRequested,
+          const transcript::GenerationJob::CommitStarted& beginCommit,
+          std::string* error) {
         return controlled.run(source, output, reportProgress, cancelRequested,
-                              error);
+                              beginCommit, error);
       });
 
   ok &= expect(!unconfigured.configured() && job.configured(),
@@ -184,6 +190,60 @@ int main() {
                    failed->state == transcript::GenerationJobState::Failed &&
                    failed->error == "Controlled generation failure.",
                "backend failures must remain typed and retain their detail");
+
+  std::atomic<bool> commitEntered{false};
+  std::atomic<bool> releaseCommit{false};
+  transcript::GenerationJob committing(
+      [&](const std::filesystem::path&, const std::filesystem::path&,
+          const transcript::GenerationJob::ProgressReporter&,
+          const std::atomic<bool>*,
+          const transcript::GenerationJob::CommitStarted& beginCommit,
+          std::string*) {
+        if (!beginCommit()) return false;
+        commitEntered.store(true, std::memory_order_release);
+        while (!releaseCommit.load(std::memory_order_acquire)) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return true;
+      });
+  ok &= expect(committing.tryStart("publishing.mp4"),
+               "a commit-barrier operation must start");
+  for (int attempt = 0;
+       attempt < 100 && !commitEntered.load(std::memory_order_acquire);
+       ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  const transcript::GenerationJobSnapshot publishing = committing.snapshot();
+  const bool lateCancellationRejected = !committing.requestCancel();
+  releaseCommit.store(true, std::memory_order_release);
+  const auto published = waitForCompletion(committing);
+  ok &= expect(commitEntered.load(std::memory_order_acquire) &&
+                   publishing.state ==
+                       transcript::GenerationJobState::Publishing &&
+                   publishing.running() && !publishing.cancellable() &&
+                   publishing.phase == "Publishing subtitles" &&
+                   lateCancellationRejected && published &&
+                   published->succeeded(),
+               "subtitle generation must remove Cancel at its linearized "
+               "publication boundary");
+
+  transcript::GenerationJob missingBarrier(
+      [](const std::filesystem::path&, const std::filesystem::path&,
+         const transcript::GenerationJob::ProgressReporter&,
+         const std::atomic<bool>*,
+         const transcript::GenerationJob::CommitStarted&, std::string*) {
+        return true;
+      });
+  ok &= expect(missingBarrier.tryStart("missing-barrier.mp4"),
+               "a controlled contract-violation fixture must start");
+  const auto invalidCompletion = waitForCompletion(missingBarrier);
+  ok &= expect(invalidCompletion &&
+                   invalidCompletion->state ==
+                       transcript::GenerationJobState::Failed &&
+                   invalidCompletion->error.find("commit barrier") !=
+                       std::string::npos,
+               "a backend may not report success without claiming the "
+               "publication boundary");
 
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

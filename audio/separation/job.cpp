@@ -91,8 +91,32 @@ struct Job::Impl {
     if (activeInterrupt) activeInterrupt();
   }
 
+  bool beginCommit() {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      if (state.state != JobState::Running ||
+          cancelRequested.load(std::memory_order_acquire)) {
+        return false;
+      }
+      state.state = JobState::Publishing;
+      state.phase = "Publishing audio stems";
+      state.scheduling = JobSchedulingState::Running;
+      suspensionRequested.store(false, std::memory_order_release);
+    }
+    notifyChanged();
+    return true;
+  }
+
   void finish(bool succeeded, std::string error,
               const std::shared_ptr<DiagnosticLog>& diagnosticLog) {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      if (succeeded && state.state != JobState::Publishing) {
+        succeeded = false;
+        error = "The audio-separation backend completed without publishing "
+                "through the commit barrier.";
+      }
+    }
     if (diagnosticLog) {
       if (succeeded) {
         diagnosticLog->append(DiagnosticLevel::Info, "job",
@@ -179,7 +203,7 @@ struct Job::Impl {
                 diagnosticLog->append(level, component, message);
               }
             },
-            control, &error);
+            control, [this]() { return beginCommit(); }, &error);
       }
     } catch (const std::exception& exception) {
       error = std::string("Audio separation failed: ") + exception.what();
@@ -284,7 +308,7 @@ bool Job::requestCancel() {
   if (!impl_) return false;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (impl_->state.state != JobState::Running) return false;
+    if (!impl_->state.cancellable()) return false;
     impl_->cancelRequested.store(true, std::memory_order_relaxed);
     impl_->state.state = JobState::Cancelling;
     impl_->state.phase = "Cancelling audio separation";

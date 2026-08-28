@@ -41,9 +41,28 @@ struct GenerationJob::Impl {
     notifyChanged();
   }
 
+  bool beginCommit() {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      if (state.state != GenerationJobState::Running ||
+          cancelRequested.load(std::memory_order_acquire)) {
+        return false;
+      }
+      state.state = GenerationJobState::Publishing;
+      state.phase = "Publishing subtitles";
+    }
+    notifyChanged();
+    return true;
+  }
+
   void finish(bool succeeded, std::string error) {
     {
       std::lock_guard<std::mutex> lock(mutex);
+      if (succeeded && state.state != GenerationJobState::Publishing) {
+        succeeded = false;
+        error = "The subtitle backend completed without publishing through "
+                "the commit barrier.";
+      }
       if (succeeded) {
         state.state = GenerationJobState::Succeeded;
         state.progress = 1.0f;
@@ -72,7 +91,7 @@ struct GenerationJob::Impl {
           [this](float fraction, std::string phase) {
             updateProgress(fraction, std::move(phase));
           },
-          &cancelRequested, &error);
+          &cancelRequested, [this]() { return beginCommit(); }, &error);
     } catch (const std::exception& exception) {
       error = std::string("Subtitle generation failed: ") + exception.what();
     } catch (...) {
@@ -147,7 +166,7 @@ bool GenerationJob::requestCancel() {
   if (!impl_) return false;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (impl_->state.state != GenerationJobState::Running) return false;
+    if (!impl_->state.cancellable()) return false;
     impl_->cancelRequested.store(true, std::memory_order_relaxed);
     impl_->state.state = GenerationJobState::Cancelling;
     impl_->state.phase = "Cancelling subtitle generation";

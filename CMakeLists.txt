@@ -1350,6 +1350,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
     ${CMAKE_SOURCE_DIR}/audio/flac_writer.cpp
     ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
     ${CMAKE_SOURCE_DIR}/core/diagnostic_log.cpp
+    ${CMAKE_SOURCE_DIR}/core/file_output.cpp
     ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
     ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
   )
@@ -1372,6 +1373,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
     ${CMAKE_SOURCE_DIR}/audio/flac_writer.cpp
     ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
     ${CMAKE_SOURCE_DIR}/core/diagnostic_log.cpp
+    ${CMAKE_SOURCE_DIR}/core/file_output.cpp
     ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
     ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
   )
@@ -1388,6 +1390,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
     ${CMAKE_SOURCE_DIR}/audio/flac_writer.cpp
     ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
     ${CMAKE_SOURCE_DIR}/core/diagnostic_log.cpp
+    ${CMAKE_SOURCE_DIR}/core/file_output.cpp
     ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
     ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
   )
