@@ -94,12 +94,16 @@ tui_media_task_panel::IndicatorLayout drawMediaTaskIndicator(
       tui_media_task_panel::indicatorLayout(screenWidth, y, model);
   if (!layout.valid) return layout;
 
-  const Style style =
-      state.indicatorHighlighted() ? styles.selectedButton : styles.progress;
-  screen.writeText(
-      layout.x, layout.y,
-      fitLine("[ " + tui_media_task_panel::indicatorText(model) + " ]",
-              layout.width),
-      style);
+  if (layout.statusWidth > 0) {
+    screen.writeText(layout.x, layout.y,
+                     fitLine(layout.statusText, layout.statusWidth),
+                     styles.progress);
+  }
+  if (layout.actionVisible) {
+    const Style actionStyle = state.indicatorHighlighted()
+                                  ? styles.selectedButton
+                                  : styles.button;
+    screen.writeText(layout.showX, layout.y, "[ Show ]", actionStyle);
+  }
   return layout;
 }

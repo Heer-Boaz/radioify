@@ -27,10 +27,12 @@ InputEvent pointerEvent(MouseEventKind kind, int x, int y,
   return event;
 }
 
-InputEvent keyEvent(WORD key) {
+InputEvent keyEvent(WORD key, char ch = 0, DWORD control = 0) {
   InputEvent event;
   event.type = InputEvent::Type::Key;
   event.key.vk = key;
+  event.key.ch = ch;
+  event.key.control = control;
   return event;
 }
 
@@ -77,6 +79,16 @@ int main() {
   ok &= expect(!interaction.consumed && !compactState.focused(),
                "keyboard focus must never enter an invisible button row");
 
+  State narrowState;
+  narrowState.synchronize(task);
+  const Bounds narrowBounds{12, 30, 2};
+  ok &= expect(layout(narrowBounds, task).buttons.buttons.empty(),
+               "a narrow surface must not publish clipped button labels");
+  interaction =
+      narrowState.handle(keyEvent(VK_TAB), narrowBounds, noIndicator, task);
+  ok &= expect(!interaction.consumed && !narrowState.focused(),
+               "an unrecognizable partial button row must not be focusable");
+
   interaction = state.handle(
       pointerEvent(MouseEventKind::Press, cancel.x, card.buttons.y, true),
       bounds, noIndicator, task);
@@ -109,6 +121,11 @@ int main() {
                    state.focused() && state.highlightedButton() == 0,
                "Tab must move focus from the browser into an actionable "
                "task panel");
+  interaction = state.handle(keyEvent(VK_SPACE, ' '), bounds, noIndicator,
+                             task);
+  ok &= expect(
+      interaction.consumed && interaction.activatedAction == Action::Cancel,
+      "Space must activate the selected task-panel button");
   interaction = state.handle(keyEvent(VK_RETURN), bounds, noIndicator, task);
   ok &= expect(
       interaction.consumed && interaction.activatedAction == Action::Cancel,
@@ -129,8 +146,12 @@ int main() {
                "visible geometry");
 
   const IndicatorLayout indicator = indicatorLayout(100, 25, task);
-  ok &= expect(indicator.valid && indicatorText(task) == "Separating audio 10%",
-               "a hidden task must retain a compact measurable status");
+  ok &= expect(
+      indicator.valid && indicator.actionVisible &&
+          indicatorText(task) ==
+              "Background task: NTE.mp4 - Separating audio 10%",
+      "a hidden task must identify its source and expose an explicit Show "
+      "action");
   interaction = state.handle(keyEvent(VK_TAB), bounds, indicator, task);
   ok &= expect(
       interaction.consumed && state.focused() && state.indicatorHighlighted(),
@@ -145,30 +166,66 @@ int main() {
       interaction.consumed && interaction.focusChanged && !state.focused(),
       "Escape must return task-panel focus to the browser");
 
+  interaction = state.handle(keyEvent(VK_TAB, 0, SHIFT_PRESSED), bounds,
+                             noIndicator, task);
+  ok &= expect(interaction.consumed && state.focused() &&
+                   state.highlightedButton() == 1,
+               "Shift+Tab must enter the panel in reverse focus order");
+  interaction = state.handle(keyEvent(VK_TAB, 0, SHIFT_PRESSED), bounds,
+                             noIndicator, task);
+  ok &= expect(interaction.consumed && !state.focused(),
+               "Shift+Tab must return reverse focus to the browser");
+
   state.handle(keyEvent(VK_TAB), bounds, noIndicator, task);
-  state.handle(keyEvent(VK_RIGHT), bounds, noIndicator, task);
+  interaction = state.handle(keyEvent('Q', 'q', LEFT_CTRL_PRESSED), bounds,
+                             noIndicator, task);
+  ok &= expect(!interaction.consumed && interaction.focusChanged &&
+                   !state.focused(),
+               "an unrelated accelerator must leave the modeless panel and "
+               "continue through the shell router");
+
+  state.handle(keyEvent(VK_TAB, 0, SHIFT_PRESSED), bounds, noIndicator, task);
   state.handle(keyEvent(VK_RETURN), bounds, noIndicator, task);
+  interaction = state.handle(
+      pointerEvent(MouseEventKind::Move, indicator.x, indicator.y), bounds,
+      indicator, task);
+  ok &= expect(!interaction.consumed && !state.indicatorHighlighted(),
+               "read-only footer status must not masquerade as an action");
   interaction =
-      state.handle(pointerEvent(MouseEventKind::Move, indicator.x, indicator.y),
+      state.handle(pointerEvent(MouseEventKind::Move, indicator.showX,
+                                indicator.y),
                    bounds, indicator, task);
   ok &= expect(interaction.consumed && interaction.changed &&
                    state.indicatorHighlighted(),
                "the hidden-task indicator must expose pointer hover");
   interaction = state.handle(
-      pointerEvent(MouseEventKind::Press, indicator.x, indicator.y, true),
+      pointerEvent(MouseEventKind::Press, indicator.showX, indicator.y, true),
       bounds, indicator, task);
   ok &= expect(
       interaction.consumed && !interaction.activatedAction && state.hidden(),
       "pressing the footer indicator must arm it without restoring "
       "the panel early");
   interaction = state.handle(
-      pointerEvent(MouseEventKind::Release, indicator.x, indicator.y), bounds,
-      indicator, task);
+      pointerEvent(MouseEventKind::Release, indicator.showX, indicator.y),
+      bounds, indicator, task);
   ok &= expect(interaction.consumed && interaction.layoutChanged &&
                    interaction.activatedAction == Action::Show &&
                    !state.hidden() && !state.focused(),
                "clicking the footer indicator must restore the panel without "
                "stealing browser focus");
+
+  const IndicatorLayout statusOnlyIndicator = indicatorLayout(7, 25, task);
+  State statusOnlyState;
+  statusOnlyState.synchronize(task);
+  statusOnlyState.handle(keyEvent(VK_TAB), bounds, noIndicator, task);
+  statusOnlyState.handle(keyEvent(VK_RIGHT), bounds, noIndicator, task);
+  statusOnlyState.handle(keyEvent(VK_RETURN), bounds, noIndicator, task);
+  interaction = statusOnlyState.handle(keyEvent(VK_TAB), bounds,
+                                       statusOnlyIndicator, task);
+  ok &= expect(statusOnlyIndicator.valid &&
+                   !statusOnlyIndicator.actionVisible &&
+                   !interaction.consumed && !statusOnlyState.focused(),
+               "a clipped Show label must remain read-only and unfocusable");
 
   state.handle(keyEvent(VK_TAB), bounds, noIndicator, task);
   interaction = state.handle(

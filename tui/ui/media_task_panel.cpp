@@ -18,6 +18,16 @@ std::optional<Action> actionAt(
   return static_cast<Action>(actions[*index].id);
 }
 
+std::string taskProgressText(const MediaTaskCardModel& task) {
+  std::string text = task.title;
+  if (task.progress) {
+    const int percent = static_cast<int>(
+        std::round(std::clamp(*task.progress, 0.0f, 1.0f) * 100.0f));
+    text += " " + std::to_string(percent) + "%";
+  }
+  return text;
+}
+
 void clearDialogSession(std::optional<tui_dialog::DialogId>& dialog,
                         std::optional<DialogContext>& context) {
   dialog.reset();
@@ -77,7 +87,8 @@ bool Layout::contains(int pointerX, int pointerY) const {
 }
 
 bool IndicatorLayout::contains(int pointerX, int pointerY) const {
-  return valid && pointerY == y && pointerX >= x && pointerX < x + width;
+  return actionVisible && pointerY == y && pointerX >= showX &&
+         pointerX < showX + showWidth;
 }
 
 void State::synchronize(const std::optional<MediaTaskCardModel>& task) {
@@ -175,49 +186,66 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
   const std::vector<tui_button_row::Button> actions = actionsFor(task);
   const Layout currentLayout = hidden_ ? Layout{} : layout(bounds, task);
   const std::size_t visibleActionCount = currentLayout.buttons.buttons.size();
-  const bool focusable = hidden_ ? indicator.valid : visibleActionCount > 0;
+  const bool focusable =
+      hidden_ ? indicator.actionVisible : visibleActionCount > 0;
   if (focused_ && !focusable) {
     setFocused(false, result);
   }
   if (event.type == InputEvent::Type::Action) {
     if (focused_) {
-      result.consumed = true;
       if (event.action == InputAction::Back) {
+        result.consumed = true;
+        setFocused(false, result);
+      } else {
         setFocused(false, result);
       }
     }
     return result;
   }
   if (event.type == InputEvent::Type::Key) {
+    const tui_button_row::KeyboardAction keyboardAction =
+        tui_button_row::resolveKeyboardAction(event.key);
     if (!focused_) {
-      if (event.key.vk == VK_TAB && focusable) {
+      if ((keyboardAction == tui_button_row::KeyboardAction::FocusNext ||
+           keyboardAction ==
+               tui_button_row::KeyboardAction::FocusPrevious) &&
+          focusable) {
+        if (!hidden_ &&
+            keyboardAction ==
+                tui_button_row::KeyboardAction::FocusPrevious) {
+          selectedButton_ = visibleActionCount - 1;
+        }
         setFocused(true, result);
         result.consumed = true;
       }
       return result;
     }
 
-    result.consumed = true;
-    switch (event.key.vk) {
-      case VK_TAB:
-      case VK_ESCAPE:
+    switch (keyboardAction) {
+      case tui_button_row::KeyboardAction::FocusPrevious:
+      case tui_button_row::KeyboardAction::FocusNext:
+      case tui_button_row::KeyboardAction::Dismiss:
+        result.consumed = true;
         setFocused(false, result);
         break;
-      case VK_LEFT:
+      case tui_button_row::KeyboardAction::SelectPrevious:
+        result.consumed = true;
         if (!hidden_) {
           selectedButton_ = tui_button_row::selectAdjacent(
               selectedButton_, visibleActionCount, -1);
           result.changed = true;
         }
         break;
-      case VK_RIGHT:
+      case tui_button_row::KeyboardAction::SelectNext:
+        result.consumed = true;
         if (!hidden_) {
           selectedButton_ = tui_button_row::selectAdjacent(
               selectedButton_, visibleActionCount, 1);
           result.changed = true;
         }
         break;
-      case VK_RETURN:
+      case tui_button_row::KeyboardAction::Activate:
+        result.consumed = true;
         if (hidden_) {
           activate(Action::Show, ActivationSource::Keyboard, result);
         } else if (const std::optional<Action> action =
@@ -225,7 +253,10 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
           activate(*action, ActivationSource::Keyboard, result);
         }
         break;
-      default:
+      case tui_button_row::KeyboardAction::None:
+        // This is a modeless panel. An unrelated key transfers focus back to
+        // the browser and continues through the shell router.
+        setFocused(false, result);
         break;
     }
     return result;
@@ -238,8 +269,9 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
   if (hidden_) {
     tui_button_row::Layout indicatorButtons;
     indicatorButtons.y = indicator.y;
-    if (indicator.valid) {
-      indicatorButtons.buttons.push_back({0, indicator.x, indicator.width});
+    if (indicator.actionVisible) {
+      indicatorButtons.buttons.push_back(
+          {0, indicator.showX, indicator.showWidth});
     }
     const tui_button_row::PointerInteraction pointer =
         buttonPointer_.handle(event, indicatorButtons);
@@ -328,23 +360,43 @@ Layout layout(const Bounds& bounds, const MediaTaskCardModel& task) {
 }
 
 std::string indicatorText(const MediaTaskCardModel& task) {
-  std::string text = task.title;
-  if (task.progress) {
-    const int percent = static_cast<int>(
-        std::round(std::clamp(*task.progress, 0.0f, 1.0f) * 100.0f));
-    text += " " + std::to_string(percent) + "%";
-  }
-  return text;
+  return "Background task: " + task.sourceName + " - " +
+         taskProgressText(task);
 }
 
 IndicatorLayout indicatorLayout(int availableWidth, int y,
                                 const MediaTaskCardModel& task) {
   IndicatorLayout result;
   if (availableWidth <= 0 || y < 0) return result;
+  constexpr int kShowWidth = 8;
+  constexpr int kStatusGap = 2;
   result.x = 0;
   result.y = y;
-  result.width = std::min(availableWidth,
-                          utf8DisplayWidth("[ " + indicatorText(task) + " ]"));
+  const std::string status = indicatorText(task);
+  if (availableWidth >= kShowWidth) {
+    const int maximumStatusWidth =
+        std::max(0, availableWidth - kShowWidth - kStatusGap);
+    if (maximumStatusWidth > 0) {
+      const std::string compactStatus =
+          task.sourceName + " - " + taskProgressText(task);
+      const std::string& preferredStatus =
+          utf8DisplayWidth(status) <= maximumStatusWidth ? status
+                                                         : compactStatus;
+      result.statusText =
+          utf8TakeDisplayWidth(preferredStatus, maximumStatusWidth);
+      result.statusWidth = utf8DisplayWidth(result.statusText);
+    }
+    result.showX = result.statusWidth > 0
+                       ? result.statusWidth + kStatusGap
+                       : 0;
+    result.showWidth = kShowWidth;
+    result.actionVisible = true;
+    result.width = result.showX + result.showWidth;
+  } else {
+    result.statusText = utf8TakeDisplayWidth(status, availableWidth);
+    result.statusWidth = utf8DisplayWidth(result.statusText);
+    result.width = result.statusWidth;
+  }
   result.valid = result.width > 0;
   return result;
 }

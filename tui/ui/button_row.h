@@ -37,6 +37,16 @@ struct PointerInteraction {
   std::optional<std::size_t> activated;
 };
 
+enum class KeyboardAction {
+  None,
+  Activate,
+  SelectPrevious,
+  SelectNext,
+  FocusPrevious,
+  FocusNext,
+  Dismiss,
+};
+
 // Implements the desktop button contract shared by dialogs and panels: arm on
 // left-button press, activate only when that same press is released over the
 // same button, and cancel the gesture when pointer ownership is lost.
@@ -51,6 +61,8 @@ class PointerState {
   std::optional<std::size_t> hovered_;
   std::optional<std::size_t> armed_;
 };
+
+KeyboardAction resolveKeyboardAction(const KeyEvent& key);
 
 // Centers one row of buttons inside the supplied horizontal bounds. Layout,
 // hit-testing and keyboard selection are shared by modal dialogs and non-modal

@@ -6,6 +6,31 @@
 
 namespace tui_button_row {
 
+KeyboardAction resolveKeyboardAction(const KeyEvent& key) {
+  constexpr DWORD kCtrlAltMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED |
+                                 LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED;
+  if ((key.control & kCtrlAltMask) != 0) {
+    return KeyboardAction::None;
+  }
+  switch (key.vk) {
+    case VK_RETURN:
+    case VK_SPACE:
+      return KeyboardAction::Activate;
+    case VK_LEFT:
+      return KeyboardAction::SelectPrevious;
+    case VK_RIGHT:
+      return KeyboardAction::SelectNext;
+    case VK_TAB:
+      return (key.control & SHIFT_PRESSED) != 0
+                 ? KeyboardAction::FocusPrevious
+                 : KeyboardAction::FocusNext;
+    case VK_ESCAPE:
+      return KeyboardAction::Dismiss;
+    default:
+      return KeyboardAction::None;
+  }
+}
+
 PointerInteraction PointerState::handle(const InputEvent& event,
                                         const Layout& layout) {
   PointerInteraction result;
@@ -68,22 +93,24 @@ Layout layout(const std::vector<Button>& buttons, int x, int width, int y) {
   }
 
   const int gapCount = std::max(0, static_cast<int>(buttons.size()) - 1);
-  const int availableWidth = std::max(1, width - 2 - gapCount);
-  const int maximumButtonWidth =
-      std::max(1, availableWidth / static_cast<int>(buttons.size()));
+  std::vector<int> buttonWidths;
+  buttonWidths.reserve(buttons.size());
   int totalWidth = gapCount;
   for (const Button& button : buttons) {
-    totalWidth += std::min(
-        maximumButtonWidth,
-        std::max(4, utf8DisplayWidth(button.label) + 4));
+    const int buttonWidth = std::max(4, utf8DisplayWidth(button.label) + 4);
+    buttonWidths.push_back(buttonWidth);
+    totalWidth += buttonWidth;
+  }
+  // Never publish a hitbox for an unrecognizable fragment such as "[". A
+  // containing surface can choose a compact or stacked presentation instead.
+  if (totalWidth > width - 2) {
+    return result;
   }
 
   int buttonX = x + std::max(1, (width - totalWidth) / 2);
   result.buttons.reserve(buttons.size());
   for (std::size_t index = 0; index < buttons.size(); ++index) {
-    const int buttonWidth = std::min(
-        maximumButtonWidth,
-        std::max(4, utf8DisplayWidth(buttons[index].label) + 4));
+    const int buttonWidth = buttonWidths[index];
     result.buttons.push_back({index, buttonX, buttonWidth});
     buttonX += buttonWidth + 1;
   }

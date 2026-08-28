@@ -14,10 +14,11 @@ bool expect(bool condition, const char* message) {
   return false;
 }
 
-InputEvent keyEvent(WORD key) {
+InputEvent keyEvent(WORD key, DWORD control = 0) {
   InputEvent event;
   event.type = InputEvent::Type::Key;
   event.key.vk = key;
+  event.key.control = control;
   return event;
 }
 
@@ -140,6 +141,21 @@ int main() {
                  interaction.dialogActivation->button == 3 &&
                  overlays.activeLayer() == Layer::None,
              "a dialog must honor an explicitly selected safe default");
+
+  tui_dialog::Content keyboardDialog;
+  keyboardDialog.title = "Keyboard grammar";
+  keyboardDialog.buttons = {{6, "First"}, {7, "Second"}};
+  const tui_dialog::DialogId keyboardDialogId =
+      overlays.openDialog(std::move(keyboardDialog));
+  interaction = overlays.handle(keyEvent(VK_TAB), bounds, catalog);
+  interaction =
+      overlays.handle(keyEvent(VK_TAB, SHIFT_PRESSED), bounds, catalog);
+  interaction = overlays.handle(keyEvent(VK_SPACE), bounds, catalog);
+  ok &= expect(interaction.dialogActivation &&
+                   interaction.dialogActivation->dialog == keyboardDialogId &&
+                   interaction.dialogActivation->button == 6,
+               "dialog buttons must support reverse Tab navigation and Space "
+               "activation");
 
   tui_dialog::Content pointerDialog;
   pointerDialog.title = "Pointer activation";

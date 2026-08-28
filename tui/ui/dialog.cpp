@@ -170,39 +170,51 @@ Interaction Model::handle(const InputEvent& event, const Bounds& bounds) {
 
   Layout currentLayout = layout(bounds);
   if (event.type == InputEvent::Type::Key) {
-    switch (event.key.vk) {
-      case VK_ESCAPE:
+    const tui_button_row::KeyboardAction keyboardAction =
+        tui_button_row::resolveKeyboardAction(event.key);
+    switch (keyboardAction) {
+      case tui_button_row::KeyboardAction::Dismiss:
         result.dismissedDialog = activeDialog_;
         result.changed = dismiss();
         break;
-      case VK_LEFT:
+      case tui_button_row::KeyboardAction::SelectPrevious:
+      case tui_button_row::KeyboardAction::FocusPrevious:
         selectAdjacentButton(-1);
         result.changed = true;
         break;
-      case VK_RIGHT:
-      case VK_TAB:
+      case tui_button_row::KeyboardAction::SelectNext:
+      case tui_button_row::KeyboardAction::FocusNext:
         selectAdjacentButton(1);
         result.changed = true;
         break;
-      case VK_UP:
-        scrollBy(-1, currentLayout);
-        result.changed = true;
+      case tui_button_row::KeyboardAction::Activate:
+        if (!currentLayout.buttons.empty()) {
+          return activateSelected();
+        }
         break;
-      case VK_DOWN:
-        scrollBy(1, currentLayout);
-        result.changed = true;
-        break;
-      case VK_PRIOR:
-        scrollBy(-std::max(1, currentLayout.visibleContentRows), currentLayout);
-        result.changed = true;
-        break;
-      case VK_NEXT:
-        scrollBy(std::max(1, currentLayout.visibleContentRows), currentLayout);
-        result.changed = true;
-        break;
-      case VK_RETURN:
-        return activateSelected();
-      default:
+      case tui_button_row::KeyboardAction::None:
+        switch (event.key.vk) {
+          case VK_UP:
+            scrollBy(-1, currentLayout);
+            result.changed = true;
+            break;
+          case VK_DOWN:
+            scrollBy(1, currentLayout);
+            result.changed = true;
+            break;
+          case VK_PRIOR:
+            scrollBy(-std::max(1, currentLayout.visibleContentRows),
+                     currentLayout);
+            result.changed = true;
+            break;
+          case VK_NEXT:
+            scrollBy(std::max(1, currentLayout.visibleContentRows),
+                     currentLayout);
+            result.changed = true;
+            break;
+          default:
+            break;
+        }
         break;
     }
     return result;

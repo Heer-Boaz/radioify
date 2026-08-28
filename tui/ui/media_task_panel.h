@@ -49,7 +49,12 @@ struct IndicatorLayout {
   int x = 0;
   int y = -1;
   int width = 0;
+  int statusWidth = 0;
+  int showX = 0;
+  int showWidth = 0;
+  std::string statusText;
   bool valid = false;
+  bool actionVisible = false;
 
   bool contains(int pointerX, int pointerY) const;
 };
