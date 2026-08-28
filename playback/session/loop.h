@@ -90,7 +90,6 @@ class PlaybackLoopRunner {
   void requestStop();
   void requestQuit();
   void shutdown();
-  void renderFailureScreen();
   bool quitApplicationRequested() const;
   PlaybackSessionContinuationState continuationState() const;
 

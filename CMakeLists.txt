@@ -1154,6 +1154,17 @@ radioify_link_repo_target(application_exit_tests)
 add_test(NAME application_exit_tests
          COMMAND $<TARGET_FILE:application_exit_tests>)
 
+add_executable(playback_dialogs_tests)
+target_sources(playback_dialogs_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_playback_dialogs_tests>
+  ${CMAKE_SOURCE_DIR}/tui/ui/playback_dialogs.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+)
+radioify_link_repo_target(playback_dialogs_tests)
+add_test(NAME playback_dialogs_tests
+         COMMAND $<TARGET_FILE:playback_dialogs_tests>)
+
 add_executable(media_task_cancellation_tests)
 target_sources(media_task_cancellation_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_media_task_cancellation_tests>

@@ -18,6 +18,7 @@
 #include "playback/session/session.h"
 #include "playback/target.h"
 #include "tui/image_viewer_sequence.h"
+#include "tui/media_activation_decision.h"
 
 struct InputEvent;
 namespace media_processing {
@@ -45,6 +46,10 @@ class TuiMediaCoordinator {
   struct AudioPlaybackFailed {
     std::filesystem::path file;
   };
+  struct VideoPlaybackFailed {
+    std::filesystem::path file;
+    playback_session::Problem problem;
+  };
   struct ShowImages {
     playback_route::AudioPictureInPicturePlan audioPictureInPicture =
         playback_route::AudioPictureInPicturePlan::Keep;
@@ -58,9 +63,10 @@ class TuiMediaCoordinator {
   };
 
   using Event = std::variant<ApplyAudioPictureInPicture, CommandErrorChanged,
-                             AudioPlaybackFailed, ShowImages, QuitRequested,
-                             PresentationFinished, ActivateBrowserSurface,
-                             OpenBrowserDirectory,
+                             AudioPlaybackFailed, VideoPlaybackFailed,
+                             tui_media_activation::AudioFallbackRequest,
+                             ShowImages, QuitRequested, PresentationFinished,
+                             ActivateBrowserSurface, OpenBrowserDirectory,
                              playback_session::MediaTaskCancellationRequested>;
 
   struct PollResult {
@@ -114,6 +120,8 @@ class TuiMediaCoordinator {
   bool togglePictureInPicture();
   bool toggleFullscreen();
   bool activateVideoPresentation();
+  bool resolveAudioFallback(tui_media_activation::DecisionId decision,
+                            bool playAudio);
 
   void requestQuit();
 

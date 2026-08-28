@@ -25,16 +25,13 @@ struct PlaybackSession::Impl {
         enableAscii(request.config.enableAscii),
         enableAudio(request.config.enableAudio &&
                     dependencies.audioPlayback.enabled()),
-        host({request.file, dependencies.input, dependencies.screen,
-              dependencies.gpu,
-              dependencies.appearance.baseStyle,
-              dependencies.appearance.accentStyle,
-              dependencies.appearance.dimStyle, enableAscii}),
+        host({request.file, dependencies.screen, dependencies.gpu,
+              enableAscii}),
         player(dependencies.audioPlayback, dependencies.gpu) {}
 
   ~Impl() { shutdownLoop(); }
 
-  PlaybackSessionBootstrapOutcome bootstrap() {
+  playback_session::OpenOutcome bootstrap() {
     PlaybackSessionBootstrap bootstrapper(
         {request.file,
          dependencies.input,
@@ -94,58 +91,63 @@ struct PlaybackSession::Impl {
     }
   }
 
-  void finalizePlayback() {
+  std::optional<playback_session::Problem> finalizePlayback() {
     if (!loop) {
-      return;
+      return std::nullopt;
     }
 
     shutdownLoop();
     if (!loop->hasRenderFailure()) {
-      return;
+      return std::nullopt;
     }
 
-    host.reportVideoError(loop->renderFailureMessage(),
-                          loop->renderFailureDetail());
-    loop->renderFailureScreen();
+    return host.recordVideoError(loop->renderFailureMessage(),
+                                 loop->renderFailureDetail());
   }
 
   PlaybackSessionCompletion completePlayback() {
-    PlaybackSessionCompletion completion{
+    const PlaybackSessionExitIntent intent =
         loop->quitApplicationRequested()
             ? PlaybackSessionExitIntent::QuitApplication
-            : PlaybackSessionExitIntent::Stop,
-        loop->continuationState()};
-    finalizePlayback();
+            : PlaybackSessionExitIntent::Stop;
+    PlaybackSessionContinuationState continuityState =
+        loop->continuationState();
+    std::optional<playback_session::Problem> failure = finalizePlayback();
+    PlaybackSessionCompletion completion{intent, std::move(continuityState),
+                                         std::move(failure)};
     lifecycle = Lifecycle::Finished;
     return completion;
   }
 
-  PlaybackSessionOpenOutcome open() {
+  playback_session::OpenOutcome open() {
     assert(lifecycle == Lifecycle::Created);
-    if (!host.initialize()) {
+    if (std::optional<playback_session::Problem> failure =
+            host.tryInitialize()) {
       lifecycle = Lifecycle::Finished;
-      return PlaybackSessionOpenOutcome::HandledWithoutPlayback;
+      return playback_session::OpenFailure{std::move(*failure)};
     }
 
-    const PlaybackSessionBootstrapOutcome bootstrapOutcome = bootstrap();
-    if (bootstrapOutcome ==
-        PlaybackSessionBootstrapOutcome::QuitApplication) {
+    playback_session::OpenOutcome bootstrapOutcome = bootstrap();
+    if (std::holds_alternative<playback_session::OpenQuitApplication>(
+            bootstrapOutcome)) {
       lifecycle = Lifecycle::Finished;
-      return PlaybackSessionOpenOutcome::QuitApplicationRequested;
+      return bootstrapOutcome;
     }
-    if (bootstrapOutcome == PlaybackSessionBootstrapOutcome::PlayAudioOnly) {
+    if (std::holds_alternative<playback_session::OpenAudioFallback>(
+            bootstrapOutcome)) {
       lifecycle = Lifecycle::Finished;
-      return PlaybackSessionOpenOutcome::AudioFallbackRequested;
+      return bootstrapOutcome;
     }
-    if (bootstrapOutcome == PlaybackSessionBootstrapOutcome::Handled) {
+    if (!std::holds_alternative<playback_session::OpenReady>(
+            bootstrapOutcome)) {
       lifecycle = Lifecycle::Finished;
-      return PlaybackSessionOpenOutcome::HandledWithoutPlayback;
+      return bootstrapOutcome;
     }
 
     prepareSubtitles();
     createLoop();
     lifecycle = Lifecycle::Ready;
-    return PlaybackSessionOpenOutcome::Ready;
+    return playback_session::OpenReady{};
   }
 
   std::optional<PlaybackSessionCompletion> pump() {
@@ -187,7 +189,9 @@ PlaybackSession::PlaybackSession(PlaybackSession&&) noexcept = default;
 PlaybackSession& PlaybackSession::operator=(PlaybackSession&&) noexcept =
     default;
 
-PlaybackSessionOpenOutcome PlaybackSession::open() { return impl_->open(); }
+playback_session::OpenOutcome PlaybackSession::open() {
+  return impl_->open();
+}
 
 std::optional<PlaybackSessionCompletion> PlaybackSession::pump() {
   return impl_->pump();

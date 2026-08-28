@@ -13,6 +13,7 @@
 #include "playback/control/transport.h"
 #include "playback/media_processing_actions.h"
 #include "playback/session/event.h"
+#include "playback/session/open_outcome.h"
 #include "playback/session/presentation_policy.h"
 #include "playback/session/state.h"
 #include "playback/video/playback.h"
@@ -24,13 +25,6 @@ class AudioPlaybackRuntime;
 class GpuRuntime;
 struct InputEvent;
 
-enum class PlaybackSessionOpenOutcome {
-  Ready,
-  HandledWithoutPlayback,
-  AudioFallbackRequested,
-  QuitApplicationRequested,
-};
-
 enum class PlaybackSessionExitIntent {
   Stop,
   QuitApplication,
@@ -39,6 +33,7 @@ enum class PlaybackSessionExitIntent {
 struct PlaybackSessionCompletion {
   PlaybackSessionExitIntent intent = PlaybackSessionExitIntent::Stop;
   PlaybackSessionContinuationState continuityState;
+  std::optional<playback_session::Problem> failure;
 };
 
 class PlaybackSession {
@@ -87,7 +82,7 @@ class PlaybackSession {
   PlaybackSession(const PlaybackSession&) = delete;
   PlaybackSession& operator=(const PlaybackSession&) = delete;
 
-  PlaybackSessionOpenOutcome open();
+  playback_session::OpenOutcome open();
   std::optional<PlaybackSessionCompletion> pump();
   PlaybackShellTerminalRole terminalRole() const;
   std::vector<NativeWaitHandle> activityWaitHandles() const;

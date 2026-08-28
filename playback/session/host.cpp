@@ -3,10 +3,10 @@
 #include <fstream>
 #include <mutex>
 #include <string>
+#include <utility>
 
 #include "consolescreen.h"
 #include "playback/video/gpu/gpu_runtime.h"
-#include "playback_dialog.h"
 #include "runtime_helpers.h"
 #include "playback/video/subtitle/manager.h"
 #include "timing_log.h"
@@ -14,12 +14,8 @@
 #include "playback/video/playback.h"
 
 PlaybackSessionHost::PlaybackSessionHost(const Args& args)
-    : input_(args.input),
-      screen_(args.screen),
+    : screen_(args.screen),
       gpu_(args.gpu),
-      baseStyle_(args.baseStyle),
-      accentStyle_(args.accentStyle),
-      dimStyle_(args.dimStyle),
       fullRedrawEnabled_(args.enableAscii),
       logPath_(radioifyLogPath()),
       windowTitle_(toUtf8String(args.file.filename())) {
@@ -34,18 +30,16 @@ PlaybackSessionHost::~PlaybackSessionHost() {
   gpu_.resetSessionState();
 }
 
-bool PlaybackSessionHost::initialize() {
+std::optional<playback_session::Problem>
+PlaybackSessionHost::tryInitialize() {
   std::string logError;
   configureFfmpegVideoLog(logPath_);
   if (!perfLogOpen(&perfLog_, logPath_, &logError)) {
-    playback_dialog::showInfoDialog(input_, screen_, baseStyle_, accentStyle_,
-                                    dimStyle_, "Video error",
-                                    "Failed to open timing log file.", logError,
-                                    "");
-    return false;
+    return playback_session::Problem{"Failed to open timing log file.",
+                                     std::move(logError)};
   }
   perfLogAppendf(&perfLog_, "video_start file=%s", windowTitle_.c_str());
-  return true;
+  return std::nullopt;
 }
 
 void PlaybackSessionHost::logSubtitleDetection(
@@ -56,8 +50,8 @@ void PlaybackSessionHost::logSubtitleDetection(
                  subtitleManager.activeTrackLabel().c_str());
 }
 
-bool PlaybackSessionHost::reportVideoError(const std::string& message,
-                                           const std::string& detail) {
+playback_session::Problem PlaybackSessionHost::recordVideoError(
+    const std::string& message, const std::string& detail) {
 #if RADIOIFY_ENABLE_VIDEO_ERROR_LOG
   std::string line = message.empty() ? "Video error." : message;
   std::string extra = detail;
@@ -87,10 +81,8 @@ bool PlaybackSessionHost::reportVideoError(const std::string& message,
   if (uiMessage.empty() && uiDetail.empty()) {
     uiDetail = "Video playback encountered an unexpected error.";
   }
-  playback_dialog::showInfoDialog(input_, screen_, baseStyle_, accentStyle_,
-                                  dimStyle_, "Video error", uiMessage,
-                                  uiDetail, "");
-  return true;
+  return playback_session::Problem{std::move(uiMessage),
+                                   std::move(uiDetail)};
 }
 
 PerfLog& PlaybackSessionHost::perfLog() { return perfLog_; }

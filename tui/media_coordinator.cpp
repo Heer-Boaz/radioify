@@ -1,5 +1,6 @@
 #include "tui/media_coordinator.h"
 
+#include <cassert>
 #include <cstdint>
 #include <utility>
 #include <variant>
@@ -201,7 +202,8 @@ struct TuiMediaCoordinator::Impl {
   }
 
   bool canAcceptExternalMediaChange() const {
-    return !driving_ && !pendingCommand_ && externalHandoff_.empty();
+    return !driving_ && !pendingCommand_ && !pendingAudioFallback_ &&
+           externalHandoff_.empty();
   }
 
   void setExternalInputModal(bool modal) {
@@ -317,15 +319,27 @@ struct TuiMediaCoordinator::Impl {
     if (videoSession_) {
       videoSession_->requestQuit();
     } else {
+      pendingAudioFallback_.reset();
       pendingCommand_.reset();
       releaseForegroundPlayback();
       publishEvent(QuitRequested{});
     }
   }
 
+  bool resolveAudioFallback(tui_media_activation::DecisionId decision,
+                            bool playAudio) {
+    return resolveAudioFallbackImpl(decision, playAudio);
+  }
+
  private:
   struct PreparedPlayback {
     playback_queue::Queue::PreparedActivation activation;
+  };
+
+  struct PendingAudioFallback {
+    tui_media_activation::DecisionId decision;
+    playback_queue::Queue::PreparedActivation activation;
+    std::filesystem::path file;
   };
 
   struct Quit {};
@@ -544,7 +558,7 @@ struct TuiMediaCoordinator::Impl {
 
   MediaCommandResult submit(Command command) {
     if (videoSession_) return requestVideoHandoff(std::move(command));
-    if (pendingCommand_) {
+    if (pendingCommand_ || pendingAudioFallback_) {
       return reject(MediaCommandFailureKind::Busy, {});
     }
     if (driving_) {
@@ -578,7 +592,10 @@ struct TuiMediaCoordinator::Impl {
   }
 
   std::optional<MediaCommandResult> drainPendingCommands() {
-    if (videoSession_ || driving_ || !pendingCommand_) return std::nullopt;
+    if (videoSession_ || pendingAudioFallback_ || driving_ ||
+        !pendingCommand_) {
+      return std::nullopt;
+    }
     Command command = std::move(*pendingCommand_);
     pendingCommand_.reset();
     return drive(std::move(command));
@@ -671,33 +688,40 @@ struct TuiMediaCoordinator::Impl {
     videoSession_.emplace(std::move(sessionRequest),
                           services_.sessionDependencies);
 
-    const PlaybackSessionOpenOutcome openOutcome = videoSession_->open();
-    if (openOutcome == PlaybackSessionOpenOutcome::Ready) {
+    playback_session::OpenOutcome openOutcome = videoSession_->open();
+    if (std::holds_alternative<playback_session::OpenReady>(openOutcome)) {
       services_.queue.commit(std::move(activation));
       videoTarget_ = target;
       beginControlSession();
       presentationFinished();
       return MediaCommandResult::applied();
     }
-    if (openOutcome == PlaybackSessionOpenOutcome::AudioFallbackRequested) {
+    if (auto* fallback =
+            std::get_if<playback_session::OpenAudioFallback>(&openOutcome)) {
       videoSession_.reset();
-      releaseForegroundPlayback();
-      if (!audioPlayback().startFile(targetFile, 0)) {
-        publishEvent(AudioPlaybackFailed{targetFile});
-        return MediaCommandResult::rejected(
-            {MediaCommandFailureKind::PlaybackFailed, {}});
-      }
-      services_.queue.commit(std::move(activation));
-      beginControlSession();
-      return MediaCommandResult::applied();
+      const tui_media_activation::DecisionId decision = nextDecisionId();
+      pendingAudioFallback_.emplace(
+          PendingAudioFallback{decision, std::move(activation), targetFile});
+      publishEvent(tui_media_activation::AudioFallbackRequest{
+          decision, targetFile, std::move(fallback->reason)});
+      presentationFinished();
+      return MediaCommandResult::deferred();
     }
-    if (openOutcome ==
-        PlaybackSessionOpenOutcome::QuitApplicationRequested) {
+    if (std::holds_alternative<playback_session::OpenQuitApplication>(
+            openOutcome)) {
       videoSession_.reset();
       releaseForegroundPlayback();
       enqueueQuit();
       presentationFinished();
       return MediaCommandResult::handledWithoutPlayback();
+    }
+    if (auto* failure =
+            std::get_if<playback_session::OpenFailure>(&openOutcome)) {
+      publishEvent(VideoPlaybackFailed{targetFile,
+                                       std::move(failure->problem)});
+    } else {
+      assert(std::holds_alternative<playback_session::OpenCancelled>(
+          openOutcome));
     }
     videoSession_.reset();
     releaseForegroundPlayback();
@@ -706,6 +730,9 @@ struct TuiMediaCoordinator::Impl {
   }
 
   void finishVideoSession(PlaybackSessionCompletion completion) {
+    const std::filesystem::path completedFile =
+        videoTarget_ ? playbackTargetFile(*videoTarget_)
+                     : std::filesystem::path{};
     continuationState_ = std::move(completion.continuityState);
     endControlSession();
     videoSession_.reset();
@@ -719,6 +746,10 @@ struct TuiMediaCoordinator::Impl {
     externalHandoff_.clear();
     if (completion.intent == PlaybackSessionExitIntent::QuitApplication) {
       enqueueQuit();
+    }
+    if (completion.failure) {
+      publishEvent(VideoPlaybackFailed{completedFile,
+                                       std::move(*completion.failure)});
     }
     if (!pendingCommand_) releaseForegroundPlayback();
     presentationFinished();
@@ -785,6 +816,35 @@ struct TuiMediaCoordinator::Impl {
     publishEvent(PresentationFinished{});
   }
 
+  tui_media_activation::DecisionId nextDecisionId() {
+    ++lastDecisionValue_;
+    if (lastDecisionValue_ == 0) ++lastDecisionValue_;
+    return {lastDecisionValue_};
+  }
+
+  bool resolveAudioFallbackImpl(tui_media_activation::DecisionId decision,
+                                bool playAudio) {
+    if (!pendingAudioFallback_ ||
+        pendingAudioFallback_->decision != decision) {
+      return false;
+    }
+
+    PendingAudioFallback pending = std::move(*pendingAudioFallback_);
+    pendingAudioFallback_.reset();
+    releaseForegroundPlayback();
+    if (playAudio) {
+      if (!audioPlayback().startFile(pending.file, 0)) {
+        publishEvent(AudioPlaybackFailed{pending.file});
+      } else {
+        services_.queue.commit(std::move(pending.activation));
+        beginControlSession();
+      }
+    }
+    presentationFinished();
+    clearCommandError();
+    return true;
+  }
+
   void beginControlSession() {
     ++lastControlSessionValue_;
     if (lastControlSessionValue_ == 0) ++lastControlSessionValue_;
@@ -803,9 +863,11 @@ struct TuiMediaCoordinator::Impl {
       interactivePlayback_;
   std::optional<PlaybackSession> videoSession_;
   std::optional<PlaybackTarget> videoTarget_;
+  std::optional<PendingAudioFallback> pendingAudioFallback_;
   std::optional<Command> pendingCommand_;
   tui_media_handoff::DeferredCommand<Command> externalHandoff_;
   std::uint64_t lastControlSessionValue_ = 0;
+  std::uint64_t lastDecisionValue_ = 0;
   PlaybackControlSessionId controlSessionId_;
   std::string commandError_;
   // Commands and session pumping are owner-thread operations. Keeping their
@@ -918,6 +980,11 @@ bool TuiMediaCoordinator::toggleFullscreen() {
 
 bool TuiMediaCoordinator::activateVideoPresentation() {
   return impl_->activateVideoPresentation();
+}
+
+bool TuiMediaCoordinator::resolveAudioFallback(
+    tui_media_activation::DecisionId decision, bool playAudio) {
+  return impl_->resolveAudioFallback(decision, playAudio);
 }
 
 void TuiMediaCoordinator::requestQuit() { impl_->requestQuit(); }

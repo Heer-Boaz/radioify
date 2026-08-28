@@ -4,12 +4,12 @@
 #include <chrono>
 #include <cmath>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
 #include "consoleinput.h"
 #include "consolescreen.h"
-#include "playback_dialog.h"
 #include "playback/session/bootstrap_input.h"
 #include "playback/video/player.h"
 #include "runtime_helpers.h"
@@ -65,25 +65,6 @@ void renderPreparingScreen(
   screen.draw();
 }
 
-bool showError(ConsoleInput& input, ConsoleScreen& screen,
-               const Style& baseStyle, const Style& accentStyle,
-               const Style& dimStyle, const std::string& message,
-               const std::string& detail) {
-  playback_dialog::showInfoDialog(input, screen, baseStyle, accentStyle,
-                                  dimStyle, "Video error", message, detail,
-                                  "");
-  return true;
-}
-
-bool showAudioFallbackPrompt(ConsoleInput& input, ConsoleScreen& screen,
-                             const Style& baseStyle, const Style& accentStyle,
-                             const Style& dimStyle, const std::string& message,
-                             const std::string& detail) {
-  return playback_dialog::showConfirmDialog(
-             input, screen, baseStyle, accentStyle, dimStyle, "Audio only?",
-             message, detail, "") == playback_dialog::DialogResult::Confirmed;
-}
-
 }  // namespace
 
 struct PlaybackSessionBootstrap::Impl {
@@ -104,19 +85,17 @@ struct PlaybackSessionBootstrap::Impl {
 
   void requestQuit() { quitApplicationRequested = true; }
 
-  bool openPlayer() {
+  std::optional<playback_session::Problem> openPlayer() {
     auto playerConfig = PlayerConfig{};
     playerConfig.file = file;
     playerConfig.enableAudio = enableAudio;
     playerConfig.allowDecoderScale = enableAscii;
 
     if (player.open(playerConfig, nullptr)) {
-      return true;
+      return std::nullopt;
     }
 
-    showError(input, screen, baseStyle, accentStyle, dimStyle,
-              "Failed to open video.", "");
-    return false;
+    return playback_session::Problem{"Failed to open video.", {}};
   }
 
   void drawPreparingFrame(std::chrono::steady_clock::time_point initStart,
@@ -163,44 +142,40 @@ struct PlaybackSessionBootstrap::Impl {
     return true;
   }
 
-  PlaybackSessionBootstrapOutcome handleInitFailure() {
+  playback_session::OpenOutcome handleInitFailure() {
     player.close();
     std::string initError = player.initError();
     if (initError.rfind("No video stream found", 0) == 0) {
       if (!enableAudio) {
-        showError(input, screen, baseStyle, accentStyle, dimStyle,
-                  "No video stream found.",
-                  "Audio playback is disabled.");
-        return PlaybackSessionBootstrapOutcome::Handled;
+        return playback_session::OpenFailure{{
+            "No video stream found.", "Audio playback is disabled."}};
       }
-      bool playAudio = showAudioFallbackPrompt(
-          input, screen, baseStyle, accentStyle, dimStyle,
+      return playback_session::OpenAudioFallback{{
           "No video stream found.",
-          "This file can be played as audio only.");
-      return playAudio ? PlaybackSessionBootstrapOutcome::PlayAudioOnly
-                       : PlaybackSessionBootstrapOutcome::Handled;
+          "This file can be played as audio only."}};
     }
     if (initError.empty()) {
       initError = "Failed to open video.";
     }
-    showError(input, screen, baseStyle, accentStyle, dimStyle, initError, "");
-    return PlaybackSessionBootstrapOutcome::Handled;
+    return playback_session::OpenFailure{{std::move(initError), {}}};
   }
 
-  PlaybackSessionBootstrapOutcome run() {
-    if (!openPlayer()) {
-      return PlaybackSessionBootstrapOutcome::Handled;
+  playback_session::OpenOutcome run() {
+    if (std::optional<playback_session::Problem> failure = openPlayer()) {
+      return playback_session::OpenFailure{std::move(*failure)};
     }
     if (!waitForInitialization()) {
       player.close();
       return quitApplicationRequested
-                 ? PlaybackSessionBootstrapOutcome::QuitApplication
-                 : PlaybackSessionBootstrapOutcome::Handled;
+                 ? playback_session::OpenOutcome(
+                       playback_session::OpenQuitApplication{})
+                 : playback_session::OpenOutcome(
+                       playback_session::OpenCancelled{});
     }
     if (!player.initOk()) {
       return handleInitFailure();
     }
-    return PlaybackSessionBootstrapOutcome::ContinueVideo;
+    return playback_session::OpenReady{};
   }
 
   const std::filesystem::path& file;
@@ -230,6 +205,6 @@ PlaybackSessionBootstrap::PlaybackSessionBootstrap(
 PlaybackSessionBootstrap& PlaybackSessionBootstrap::operator=(
     PlaybackSessionBootstrap&&) noexcept = default;
 
-PlaybackSessionBootstrapOutcome PlaybackSessionBootstrap::run() {
+playback_session::OpenOutcome PlaybackSessionBootstrap::run() {
   return impl_->run();
 }

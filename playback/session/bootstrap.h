@@ -3,18 +3,13 @@
 #include <filesystem>
 #include <memory>
 
+#include "playback/session/open_outcome.h"
+
 class ConsoleInput;
 class ConsoleScreen;
 class Player;
 struct Color;
 struct Style;
-
-enum class PlaybackSessionBootstrapOutcome {
-  ContinueVideo,
-  PlayAudioOnly,
-  Handled,
-  QuitApplication,
-};
 
 class PlaybackSessionBootstrap {
  public:
@@ -43,7 +38,7 @@ class PlaybackSessionBootstrap {
   PlaybackSessionBootstrap(PlaybackSessionBootstrap&&) noexcept;
   PlaybackSessionBootstrap& operator=(PlaybackSessionBootstrap&&) noexcept;
 
-  PlaybackSessionBootstrapOutcome run();
+  playback_session::OpenOutcome run();
 
  private:
   struct Impl;

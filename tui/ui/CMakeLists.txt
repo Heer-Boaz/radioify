@@ -31,6 +31,7 @@ radioify_add_module_object_library(radioify_ui
   ${CMAKE_CURRENT_SOURCE_DIR}/optionsbrowser.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/optionsbrowser_target.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_presentation.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/playback_dialogs.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_target_match.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/popup_menu.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/popup_menu_renderer.cpp

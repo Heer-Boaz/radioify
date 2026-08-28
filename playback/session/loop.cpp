@@ -1413,13 +1413,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     return state;
   }
 
-  void renderFailureScreen() {
-    const playback_screen_renderer::PlaybackScreenModel model =
-        buildScreenModel(true, true);
-    publishPresentation(model);
-    renderTerminal(model);
-  }
-
   bool pump() {
     if (finished) {
       return false;
@@ -1759,8 +1752,6 @@ void PlaybackLoopRunner::requestStop() { impl_->requestStop(); }
 void PlaybackLoopRunner::requestQuit() { impl_->requestQuit(); }
 
 void PlaybackLoopRunner::shutdown() { impl_->shutdown(); }
-
-void PlaybackLoopRunner::renderFailureScreen() { impl_->renderFailureScreen(); }
 
 bool PlaybackLoopRunner::quitApplicationRequested() const {
   return impl_->quitApplicationRequested;
