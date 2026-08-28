@@ -36,36 +36,47 @@ int main() {
   ok &= expect(!window_input_events::isSystemMediaVirtualKey('W'),
                "ordinary window shortcuts must not be classified as media keys");
 
-  ok &= expect(!window_input_events::inputEventFromAppCommand(
-                   appCommand(APPCOMMAND_MEDIA_PAUSE),
-                   SystemMediaInputPolicy::Ignore),
-               "an externally owned pause command must not enter window input");
-  ok &= expect(!window_input_events::inputEventFromAppCommand(
-                   appCommand(APPCOMMAND_MEDIA_PLAY_PAUSE),
-                   SystemMediaInputPolicy::Ignore),
-               "an externally owned toggle command must not enter window input");
-  ok &= expect(!window_input_events::inputEventFromAppCommand(
-                   appCommand(APPCOMMAND_MEDIA_STOP),
-                   SystemMediaInputPolicy::Ignore),
-               "an externally owned stop command must not enter window input");
+  const auto ignoredPause = window_input_events::translateAppCommand(
+      appCommand(APPCOMMAND_MEDIA_PAUSE), SystemMediaInputPolicy::Ignore);
+  const auto ignoredToggle = window_input_events::translateAppCommand(
+      appCommand(APPCOMMAND_MEDIA_PLAY_PAUSE),
+      SystemMediaInputPolicy::Ignore);
+  const auto ignoredStop = window_input_events::translateAppCommand(
+      appCommand(APPCOMMAND_MEDIA_STOP), SystemMediaInputPolicy::Ignore);
+  ok &= expect(ignoredPause.handled && !ignoredPause.event,
+               "an externally owned pause command must be consumed without "
+               "entering window input");
+  ok &= expect(ignoredToggle.handled && !ignoredToggle.event,
+               "an externally owned toggle command must be consumed without "
+               "entering window input");
+  ok &= expect(ignoredStop.handled && !ignoredStop.event,
+               "an externally owned stop command must be consumed without "
+               "entering window input");
 
-  const auto browserBack = window_input_events::inputEventFromAppCommand(
+  const auto browserBack = window_input_events::translateAppCommand(
       appCommand(APPCOMMAND_BROWSER_BACKWARD),
       SystemMediaInputPolicy::Ignore);
-  ok &= expect(browserBack && browserBack->type == InputEvent::Type::Action &&
-                   browserBack->action == InputAction::Back,
+  ok &= expect(browserBack.handled && browserBack.event &&
+                   browserBack.event->type == InputEvent::Type::Action &&
+                   browserBack.event->action == InputAction::Back,
                "browser commands must remain available under external media ownership");
 
-  ok &= expect(isKey(window_input_events::inputEventFromAppCommand(
+  ok &= expect(isKey(window_input_events::translateAppCommand(
                          appCommand(APPCOMMAND_MEDIA_PAUSE),
-                         SystemMediaInputPolicy::Translate),
+                         SystemMediaInputPolicy::Translate).event,
                      kPlaybackVkMediaPause),
                "the window fallback must translate an explicit pause command");
-  ok &= expect(isKey(window_input_events::inputEventFromAppCommand(
+  ok &= expect(isKey(window_input_events::translateAppCommand(
                          appCommand(APPCOMMAND_MEDIA_PLAY_PAUSE),
-                         SystemMediaInputPolicy::Translate),
+                         SystemMediaInputPolicy::Translate).event,
                      VK_MEDIA_PLAY_PAUSE),
                "the window fallback must translate a play/pause toggle");
+
+  const auto unknown = window_input_events::translateAppCommand(
+      appCommand(APPCOMMAND_VOLUME_MUTE), SystemMediaInputPolicy::Ignore);
+  ok &= expect(!unknown.handled && !unknown.event,
+               "unowned application commands must remain available to the "
+               "default window procedure");
 
   return ok ? 0 : 1;
 }

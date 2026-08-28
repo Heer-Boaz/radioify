@@ -19,6 +19,11 @@ enum class SystemMediaInputPolicy {
   Translate,
 };
 
+struct AppCommandTranslation {
+  bool handled = false;
+  std::optional<InputEvent> event;
+};
+
 bool isKeyDownMessage(UINT message, WPARAM key);
 bool isSuppressedSystemCharacter(UINT message, WPARAM key);
 bool isSystemMediaVirtualKey(WORD key);
@@ -26,7 +31,7 @@ bool isSystemMediaVirtualKey(WORD key);
 InputEvent keyFromVirtualKey(WORD key);
 
 std::optional<InputEvent> inputEventFromXButton(WPARAM wParam);
-std::optional<InputEvent> inputEventFromAppCommand(
+AppCommandTranslation translateAppCommand(
     LPARAM lParam, SystemMediaInputPolicy mediaPolicy);
 
 MouseButtons mouseButtonsFromWParam(WPARAM wParam);

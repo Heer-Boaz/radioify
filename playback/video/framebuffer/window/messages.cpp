@@ -135,12 +135,12 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
             pThis->m_systemMediaInputEnabled.load(std::memory_order_relaxed)
                 ? window_input_events::SystemMediaInputPolicy::Translate
                 : window_input_events::SystemMediaInputPolicy::Ignore;
-        if (auto event =
-                window_input_events::inputEventFromAppCommand(lParam,
-                                                               mediaPolicy)) {
-            pThis->m_input.push(std::move(*event));
-            return TRUE;
+        window_input_events::AppCommandTranslation translation =
+            window_input_events::translateAppCommand(lParam, mediaPolicy);
+        if (translation.event) {
+            pThis->m_input.push(std::move(*translation.event));
         }
+        if (translation.handled) return TRUE;
     }
 
     auto queueWindowMouseEvent = [&](int x, int y, MouseEventKind kind,
