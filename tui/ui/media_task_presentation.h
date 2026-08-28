@@ -22,6 +22,7 @@ struct MediaTaskCardModel {
   std::string detail;
   std::optional<float> progress;
   bool cancellable = false;
+  bool cancelling = false;
 };
 
 enum class MediaTaskStatusTone {

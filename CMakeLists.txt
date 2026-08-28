@@ -1145,6 +1145,15 @@ radioify_link_repo_target(media_task_panel_tests)
 add_test(NAME media_task_panel_tests
          COMMAND $<TARGET_FILE:media_task_panel_tests>)
 
+add_executable(application_exit_tests)
+target_sources(application_exit_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_application_exit_tests>
+  ${CMAKE_SOURCE_DIR}/tui/ui/application_exit.cpp
+)
+radioify_link_repo_target(application_exit_tests)
+add_test(NAME application_exit_tests
+         COMMAND $<TARGET_FILE:application_exit_tests>)
+
 add_executable(media_task_cancellation_tests)
 target_sources(media_task_cancellation_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_media_task_cancellation_tests>

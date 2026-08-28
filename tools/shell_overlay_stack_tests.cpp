@@ -121,7 +121,9 @@ int main() {
   overlays.toggleCommandPalette();
   const tui_dialog::DialogId failureDialogId =
       overlays.openDialog(std::move(failureDialog));
-  ok &= expect(failureDialogId && overlays.activeLayer() == Layer::Dialog,
+  ok &= expect(failureDialogId &&
+                   overlays.activeDialogId() == failureDialogId &&
+                   overlays.activeLayer() == Layer::Dialog,
                "a dialog must replace every less important transient layer");
   ok &= expect(overlays.inputModal(),
                "only a dialog must identify itself as input-modal");
@@ -136,6 +138,7 @@ int main() {
   ok &= expect(interaction.dialogActivation &&
                    interaction.dialogActivation->dialog == failureDialogId &&
                    interaction.dialogActivation->button == 1 &&
+                   !overlays.activeDialogId() &&
                    overlays.activeLayer() == Layer::None,
                "dialog buttons must publish a typed result without nesting "
                "an event loop");

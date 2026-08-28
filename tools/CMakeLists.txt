@@ -242,6 +242,10 @@ radioify_add_module_object_library(radioify_tool_media_task_panel_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/media_task_panel_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_application_exit_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/application_exit_tests.cpp
+)
+
 radioify_add_module_object_library(
   radioify_tool_media_task_cancellation_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/media_task_cancellation_tests.cpp

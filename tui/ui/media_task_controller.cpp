@@ -89,11 +89,12 @@ Update Controller::poll() {
 }
 
 bool Controller::cancelActive(media_processing::TaskId expectedTask) {
-  if (!coordinator_.cancelActive(expectedTask)) {
-    return false;
-  }
+  const bool accepted = coordinator_.cancelActive(expectedTask);
+  // Cancellation races the worker's commit barrier. Refresh on rejection too,
+  // so callers can distinguish a stale Cancel surface from a real backend
+  // failure without waiting for the next event-loop poll.
   refreshSnapshot();
-  return true;
+  return accepted;
 }
 
 NativeWaitHandle Controller::waitHandle() const {

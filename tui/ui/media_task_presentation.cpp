@@ -204,6 +204,7 @@ MediaTaskCardModel mediaTaskCardModel(
     model.progress = std::clamp(*activity.progress, 0.0f, 1.0f);
   }
   model.cancellable = activity.cancellable;
+  model.cancelling = activity.cancelling;
   return model;
 }
 

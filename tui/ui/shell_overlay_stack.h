@@ -50,6 +50,9 @@ class Model {
   Layer activeLayer() const;
   bool active() const { return activeLayer() != Layer::None; }
   bool inputModal() const { return activeLayer() == Layer::Dialog; }
+  std::optional<tui_dialog::DialogId> activeDialogId() const {
+    return dialog_.activeId();
+  }
 
   bool openMediaMenu(BrowserEntry entry,
                      std::vector<playback_media_actions::Item> items,

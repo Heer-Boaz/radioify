@@ -402,6 +402,7 @@ int main() {
       presenter.activeCard();
   ok &= expect(cancellingLoopCard &&
                    !cancellingLoopCard->cancellable &&
+                   cancellingLoopCard->cancelling &&
                    cancellingLoopCard->title == "Cancelling loop split",
                "generic cancellation must reach the shared task card");
   const auto cancelledLoopCompletion = waitForCompletion(coordinator);
@@ -551,7 +552,8 @@ int main() {
                    separationSourceState.audioSeparationRunning &&
                    mediaTaskCardModel(*cancelling).title ==
                        "Cancelling audio separation" &&
-                   !mediaTaskCardModel(*cancelling).cancellable,
+                   !mediaTaskCardModel(*cancelling).cancellable &&
+                   mediaTaskCardModel(*cancelling).cancelling,
                "cancellation must remain an explicit generic activity state");
   releaseSeparation.store(true, std::memory_order_release);
   const auto separationCompletion = waitForCompletion(coordinator);
@@ -791,7 +793,8 @@ int main() {
           cancellationAccepted && cancellationReachedWorker &&
           cancellingCard &&
           cancellingCard->title == "Cancelling audio separation" &&
-          !cancellingCard->cancellable && controllerCancellation &&
+          !cancellingCard->cancellable && cancellingCard->cancelling &&
+          controllerCancellation &&
           controllerCancellation->id == cancellableCard->taskId &&
           controllerCancellation->outcome ==
               processing::TaskOutcome::Cancelled &&
@@ -800,15 +803,22 @@ int main() {
               "Audio separation cancelled.",
       "the TUI task controller must own cancellation and stable presentation");
 
+  std::atomic<bool> commitPreparationEntered{false};
+  std::atomic<bool> allowCommitBarrier{false};
   std::atomic<bool> commitBarrierEntered{false};
   std::atomic<bool> releaseCommitBarrier{false};
   processing::Coordinator::Operations commitBarrierOperations;
   commitBarrierOperations.exportAudio =
       [&](const std::filesystem::path&, const std::filesystem::path&,
           const processing::Coordinator::ProgressReporter&,
-          const processing::Coordinator::CancellationRequested& cancellation,
-          const processing::Coordinator::CommitStarted& beginCommit,
-          std::string*) {
+           const processing::Coordinator::CancellationRequested& cancellation,
+           const processing::Coordinator::CommitStarted& beginCommit,
+           std::string*) {
+        commitPreparationEntered.store(true, std::memory_order_release);
+        while (!allowCommitBarrier.load(std::memory_order_acquire) &&
+               !cancellation()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
         if (cancellation() || !beginCommit()) return false;
         commitBarrierEntered.store(true, std::memory_order_release);
         while (!releaseCommitBarrier.load(std::memory_order_acquire)) {
@@ -818,27 +828,45 @@ int main() {
       };
   processing::Coordinator commitBarrierCoordinator(
       std::move(commitBarrierOperations));
+  processing::Actions commitBarrierActions(commitBarrierCoordinator);
+  tui_media_tasks::Controller commitBarrierTaskController(
+      commitBarrierCoordinator, commitBarrierActions);
   const auto commitBarrierStart =
       commitBarrierCoordinator.requestAudioExport("commit-barrier.mp4");
+  const bool commitPreparationRunning = waitUntil([&]() {
+    return commitPreparationEntered.load(std::memory_order_acquire);
+  });
+  commitBarrierTaskController.poll();
+  const auto staleCancellableCard =
+      commitBarrierTaskController.snapshot().activeCard;
+  allowCommitBarrier.store(true, std::memory_order_release);
   const bool commitBarrierRunning = waitUntil([&]() {
     return commitBarrierEntered.load(std::memory_order_acquire);
   });
   const auto committingActivity = commitBarrierCoordinator.activity();
   const bool lateCancellationRejected =
-      committingActivity &&
-      !commitBarrierCoordinator.cancelActive(committingActivity->id);
+      staleCancellableCard &&
+      !commitBarrierTaskController.cancelActive(staleCancellableCard->taskId);
+  const auto refreshedCommittingCard =
+      commitBarrierTaskController.snapshot().activeCard;
   releaseCommitBarrier.store(true, std::memory_order_release);
   const auto commitBarrierCompletion =
-      waitForCompletion(commitBarrierCoordinator);
+      waitForCompletion(commitBarrierTaskController);
   ok &= expect(
-      commitBarrierStart.wasAccepted() && commitBarrierRunning &&
+      commitBarrierStart.wasAccepted() && commitPreparationRunning &&
+          staleCancellableCard && staleCancellableCard->cancellable &&
+          commitBarrierRunning &&
           committingActivity && !committingActivity->cancellable &&
           !committingActivity->cancelling &&
           committingActivity->phase == "Publishing output" &&
-          lateCancellationRejected && commitBarrierCompletion &&
+          lateCancellationRejected && refreshedCommittingCard &&
+          !refreshedCommittingCard->cancellable &&
+          !refreshedCommittingCard->cancelling &&
+          refreshedCommittingCard->detail == "Publishing output" &&
+          commitBarrierCompletion &&
           commitBarrierCompletion->succeeded(),
-      "claiming the output commit barrier must remove Cancel before the "
-      "point of no return and reject stale cancellation");
+      "a stale Cancel must be rejected at the commit barrier and refresh the "
+      "TUI to its non-cancellable publication state immediately");
 
   std::atomic<bool> shutdownCommitEntered{false};
   std::atomic<bool> releaseShutdownCommit{false};
