@@ -991,6 +991,15 @@ radioify_link_repo_target(playback_presentation_tests)
 add_test(NAME playback_presentation_tests
          COMMAND $<TARGET_FILE:playback_presentation_tests>)
 
+add_executable(playback_control_session_mailbox_tests)
+target_sources(playback_control_session_mailbox_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_playback_control_session_mailbox_tests>
+  ${CMAKE_SOURCE_DIR}/playback/control/session_command_mailbox.cpp
+)
+radioify_link_repo_target(playback_control_session_mailbox_tests)
+add_test(NAME playback_control_session_mailbox_tests
+         COMMAND $<TARGET_FILE:playback_control_session_mailbox_tests>)
+
 add_executable(melody_visualization_tests)
 target_sources(melody_visualization_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_melody_visualization_tests>

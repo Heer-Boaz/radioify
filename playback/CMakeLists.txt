@@ -1,6 +1,7 @@
 add_subdirectory(video)
 
 radioify_add_module_object_library(radioify_playback
+  ${CMAKE_CURRENT_SOURCE_DIR}/control/session_command_mailbox.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_action_catalog.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_action_context.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_processing_actions.cpp

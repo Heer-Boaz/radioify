@@ -93,6 +93,7 @@ class TuiMediaCoordinator {
       const media_processing::TaskCompletion& completion);
 
   bool videoActive() const;
+  PlaybackControlSessionId controlSessionId() const;
   PlaybackShellTerminalRole terminalRole() const;
   std::optional<VideoSnapshot> videoSnapshot() const;
   std::vector<NativeWaitHandle> waitHandles() const;
@@ -101,6 +102,8 @@ class TuiMediaCoordinator {
 
   bool handleVideoInputEvent(const InputEvent& event);
   bool handleControlCommand(PlaybackControlCommand command);
+  bool handleSystemControlCommand(
+      const PlaybackControlCommandEvent& event);
   bool seekToRatio(double ratio);
   bool toggleWindowPresentation();
   bool togglePictureInPicture();

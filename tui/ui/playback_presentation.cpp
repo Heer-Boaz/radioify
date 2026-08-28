@@ -18,8 +18,10 @@ std::optional<PlaybackTarget> playbackTargetForAudio(
 }
 
 PlaybackControlState controlStateForAudio(const AudioPlaybackSnapshot& audio,
-                                          PlaybackTarget target) {
+                                          PlaybackTarget target,
+                                          PlaybackControlSessionId session) {
   PlaybackControlState state(std::move(target), false);
+  state.session = session;
   state.positionSec = audio.positionSec;
   if (std::isfinite(audio.durationSec) && audio.durationSec > 0.0) {
     state.durationSec = audio.durationSec;
@@ -42,7 +44,7 @@ PlaybackControlState controlStateForAudio(const AudioPlaybackSnapshot& audio,
 }  // namespace
 
 PlaybackPresentationModel playbackPresentationModel(
-    AudioPlaybackSnapshot audio,
+    AudioPlaybackSnapshot audio, PlaybackControlSessionId controlSession,
     std::optional<PlaybackControlState> videoControl,
     std::optional<PlaybackPresentationState> videoPresentation) {
   PlaybackPresentationModel model;
@@ -58,7 +60,8 @@ PlaybackPresentationModel playbackPresentationModel(
 
   model.currentTarget = model.audioTarget;
   if (model.audioTarget) {
-    model.control = controlStateForAudio(model.audio, *model.audioTarget);
+    model.control =
+        controlStateForAudio(model.audio, *model.audioTarget, controlSession);
   }
   return model;
 }

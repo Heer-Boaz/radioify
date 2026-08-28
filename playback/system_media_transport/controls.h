@@ -23,7 +23,7 @@ class PlaybackSystemControls {
   bool available() const;
   void clear();
   void update(const State& state);
-  bool pollCommand(PlaybackControlCommand* out);
+  bool pollCommand(PlaybackControlCommandEvent* out);
 
  private:
   struct Impl;

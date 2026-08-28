@@ -21,8 +21,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cwchar>
-#include <deque>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
@@ -33,6 +31,7 @@
 #include <winrt/Windows.Media.h>
 #include <winrt/Windows.Storage.Streams.h>
 
+#include "playback/control/session_command_mailbox.h"
 #include "playback/media/metadata_catalog.h"
 
 namespace {
@@ -133,8 +132,7 @@ struct PlaybackSystemControls::Impl {
   std::optional<double> lastTimelinePositionSec;
   std::optional<double> lastTimelineDurationSec;
 
-  std::mutex queueMutex;
-  std::deque<PlaybackControlCommand> pendingCommands;
+  PlaybackControlSessionCommandMailbox commandMailbox;
 
   bool initialize() {
     if (initialized) {
@@ -202,8 +200,7 @@ struct PlaybackSystemControls::Impl {
           if (!command.has_value()) {
             return;
           }
-          std::lock_guard<std::mutex> lock(queueMutex);
-          pendingCommands.push_back(*command);
+          commandMailbox.publish(*command);
         });
     available = true;
     return true;
@@ -270,6 +267,7 @@ struct PlaybackSystemControls::Impl {
   }
 
   void clear() {
+    commandMailbox.deactivate();
     if (!available) {
       return;
     }
@@ -288,7 +286,12 @@ struct PlaybackSystemControls::Impl {
       clear();
       return;
     }
+    if (!state.session.valid()) {
+      clear();
+      return;
+    }
 
+    commandMailbox.activate(state.session);
     controls.IsEnabled(true);
 
     const bool metadataChanged =
@@ -323,17 +326,8 @@ struct PlaybackSystemControls::Impl {
     lastState = state;
   }
 
-  bool pollCommand(PlaybackControlCommand* out) {
-    if (!out) {
-      return false;
-    }
-    std::lock_guard<std::mutex> lock(queueMutex);
-    if (pendingCommands.empty()) {
-      return false;
-    }
-    *out = pendingCommands.front();
-    pendingCommands.pop_front();
-    return true;
+  bool pollCommand(PlaybackControlCommandEvent* out) {
+    return commandMailbox.poll(out);
   }
 
   ~Impl() {
@@ -369,6 +363,6 @@ void PlaybackSystemControls::clear() { impl_->clear(); }
 
 void PlaybackSystemControls::update(const State& state) { impl_->update(state); }
 
-bool PlaybackSystemControls::pollCommand(PlaybackControlCommand* out) {
+bool PlaybackSystemControls::pollCommand(PlaybackControlCommandEvent* out) {
   return impl_->pollCommand(out);
 }

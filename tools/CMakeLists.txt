@@ -188,6 +188,11 @@ radioify_add_module_object_library(radioify_tool_playback_presentation_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_presentation_tests.cpp
 )
 
+radioify_add_module_object_library(
+  radioify_tool_playback_control_session_mailbox_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/playback_control_session_mailbox_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_melody_visualization_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/melody_visualization_tests.cpp
 )

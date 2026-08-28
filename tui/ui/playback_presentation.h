@@ -19,6 +19,6 @@ struct PlaybackPresentationModel {
 // presentation priority while the audio state remains available for meters and
 // audio-only controls.
 PlaybackPresentationModel playbackPresentationModel(
-    AudioPlaybackSnapshot audio,
+    AudioPlaybackSnapshot audio, PlaybackControlSessionId controlSession,
     std::optional<PlaybackControlState> videoControl,
     std::optional<PlaybackPresentationState> videoPresentation);

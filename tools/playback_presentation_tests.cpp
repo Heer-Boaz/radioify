@@ -16,9 +16,10 @@ bool expect(bool condition, const char* message) {
 
 int main() {
   bool ok = true;
+  const PlaybackControlSessionId session{42};
 
   const PlaybackPresentationModel inactive = playbackPresentationModel(
-      AudioPlaybackSnapshot{}, std::nullopt, std::nullopt);
+      AudioPlaybackSnapshot{}, {}, std::nullopt, std::nullopt);
   ok &= expect(!inactive.audioTarget && !inactive.currentTarget &&
                    !inactive.control && !inactive.videoPresentation,
                "inactive runtimes must project no synthetic target");
@@ -30,7 +31,8 @@ int main() {
   audio.positionSec = 12.5;
   audio.durationSec = 90.0;
   const PlaybackPresentationModel audioOnly = playbackPresentationModel(
-      audio, std::nullopt, PlaybackPresentationState::nativeWindowed());
+      audio, session, std::nullopt,
+      PlaybackPresentationState::nativeWindowed());
   ok &= expect(audioOnly.audioTarget && audioOnly.currentTarget &&
                    samePlaybackTarget(*audioOnly.audioTarget,
                                       *audioOnly.currentTarget) &&
@@ -38,6 +40,7 @@ int main() {
                    audioOnly.control && !audioOnly.control->isVideo &&
                    audioOnly.control->status ==
                        PlaybackControlStatus::Paused &&
+                   audioOnly.control->session == session &&
                    audioOnly.control->positionSec == 12.5 &&
                    audioOnly.control->durationSec == 90.0 &&
                    !audioOnly.videoPresentation,
@@ -46,11 +49,12 @@ int main() {
 
   PlaybackControlState videoControl(
       playbackFileTarget(std::filesystem::path("movie.mp4")), true);
+  videoControl.session = session;
   videoControl.status = PlaybackControlStatus::Playing;
   PlaybackPresentationState videoPresentation =
       PlaybackPresentationState::nativeWindowed().togglePictureInPicture();
   const PlaybackPresentationModel video = playbackPresentationModel(
-      audio, videoControl, videoPresentation);
+      audio, session, videoControl, videoPresentation);
   ok &= expect(video.audioTarget && video.currentTarget && video.control &&
                    video.control->isVideo &&
                    playbackTargetFile(*video.currentTarget) == "movie.mp4" &&
@@ -63,7 +67,7 @@ int main() {
   finishedAudio.finished = true;
   finishedAudio.durationSec = std::numeric_limits<double>::quiet_NaN();
   const PlaybackPresentationModel finished = playbackPresentationModel(
-      finishedAudio, std::nullopt, std::nullopt);
+      finishedAudio, session, std::nullopt, std::nullopt);
   ok &= expect(finished.control &&
                    finished.control->status ==
                        PlaybackControlStatus::Stopped &&

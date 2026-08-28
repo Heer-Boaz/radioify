@@ -4,6 +4,7 @@
 #include <optional>
 #include <utility>
 
+#include "playback/control/command.h"
 #include "playback/target.h"
 
 enum class PlaybackControlStatus : uint8_t {
@@ -18,6 +19,7 @@ struct PlaybackControlState {
       : target(std::move(playbackTarget)), isVideo(video) {}
 
   PlaybackTarget target;
+  PlaybackControlSessionId session;
   bool isVideo = false;
   PlaybackControlStatus status = PlaybackControlStatus::Stopped;
   double positionSec = 0.0;

@@ -1062,9 +1062,11 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   };
 
   auto processShellPlaybackCommands = [&]() {
-    PlaybackControlCommand command;
-    while (systemControls.pollCommand(&command)) {
-      handlePlaybackControlCommand(command);
+    PlaybackControlCommandEvent event;
+    while (systemControls.pollCommand(&event)) {
+      if (mediaCoordinator.handleSystemControlCommand(event)) {
+        markDirty();
+      }
     }
     PlaybackNotificationAreaCommand notificationCommand;
     while (notificationAreaControls.pollCommand(&notificationCommand)) {

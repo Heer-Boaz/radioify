@@ -10,10 +10,13 @@ PlaybackPresentationModel TuiPlaybackPresenter::model() const {
   std::optional<TuiMediaCoordinator::VideoSnapshot> video =
       coordinator_.videoSnapshot();
   if (!video) {
-    return playbackPresentationModel(std::move(audio), std::nullopt,
+    return playbackPresentationModel(std::move(audio),
+                                     coordinator_.controlSessionId(),
+                                     std::nullopt,
                                      std::nullopt);
   }
   return playbackPresentationModel(std::move(audio),
+                                   coordinator_.controlSessionId(),
                                    std::move(video->control),
                                    std::move(video->presentation));
 }
