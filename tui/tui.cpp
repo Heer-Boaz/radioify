@@ -502,7 +502,6 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   BrowserInteractionState browserInteraction;
   bool searchBarClearHover = false;
   const int searchBarClearButtonWidth = 5;
-  int headerLines = 0;
   int listTop = 0;
   int breadcrumbY = 0;
   int searchBarY = -1;
@@ -693,10 +692,10 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   shell_overlay_stack::Model shellOverlays;
   tui_media_task_panel::State mediaTaskPanel;
   tui_media_task_panel::DialogSession mediaTaskDialogs;
+  tui_media_task_panel::DeferredFailureState deferredMediaTaskFailure;
   const shell_overlay_stack::Styles shellOverlayStyles{
       theme.popupMenuStyles(), theme.commandPaletteStyles(),
       theme.dialogStyles()};
-  std::optional<MediaTaskFailureDialogModel> pendingMediaTaskFailure;
 
   auto selectedOptionsSubject = [&]()
       -> std::optional<OptionsBrowserSubject> {
@@ -757,22 +756,22 @@ int runTui(Options o, ApplicationRuntime& runtime) {
                                       searchBarClearButtonWidth);
     width = viewport.width;
     height = viewport.height;
-    headerLines = viewport.headerLines;
     searchBarY = viewport.searchBarY;
     searchBarWidth = viewport.searchBarWidth;
     searchBarClearStart = viewport.searchBarClearStart;
     searchBarClearEnd = viewport.searchBarClearEnd;
     breadcrumbY = viewport.breadcrumbY;
     listTop = viewport.listTop;
-    if (browserInteractionEnabled) {
-      listTop = std::max(listTop, breadcrumbY + 1);
+    listHeight = viewport.listHeight;
+    if (searchBarY < 0) {
+      setBrowserSearchFocus(browser, BrowserSearchFocus::None);
+      browserInteraction.searchBarHover = false;
+      searchBarClearHover = false;
     }
-    listHeight =
-        std::max(1, height - listTop - browserChrome.footer.reservedLines);
     layout = buildLayout(browser, width, listHeight);
     applyBrowserViewportRestore(browser, layout);
     breadcrumbLine = buildBreadcrumbLine(browser.location, width);
-    if (!browserInteractionEnabled) {
+    if (!browserInteractionEnabled || breadcrumbY < 0) {
       browserInteraction.breadcrumbHover = -1;
     } else if (browserInteraction.breadcrumbHover >=
                static_cast<int>(breadcrumbLine.crumbs.size())) {
@@ -1192,6 +1191,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
                              shell_command_catalog::ShowMediaTaskFailure>) {
             const auto& failure = mediaTasks.snapshot().latestFailure;
             if (failure) {
+              deferredMediaTaskFailure.take();
               openMediaTaskDialog(
                   tui_media_task_panel::failureDialogRequest(*failure));
               markDirty();
@@ -1265,9 +1265,11 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       handleMediaCoordinatorEvent(std::move(event));
     }
     tui_media_tasks::Update taskUpdate = mediaTasks.poll();
-    mediaTaskPanel.synchronize(mediaTasks.snapshot().activeCard);
+    const tui_media_tasks::Snapshot& taskSnapshot = mediaTasks.snapshot();
+    mediaTaskPanel.synchronize(taskSnapshot.activeCard);
     if (const std::optional<tui_dialog::DialogId> obsoleteDialog =
-            mediaTaskDialogs.synchronize(mediaTasks.snapshot().activeCard)) {
+            mediaTaskDialogs.synchronize(taskSnapshot.activeCard,
+                                         taskSnapshot.latestFailure)) {
       if (shellOverlays.dismissDialog(*obsoleteDialog)) {
         markDirty();
       }
@@ -1275,11 +1277,13 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     for (const media_processing::TaskCompletion& completion :
          taskUpdate.completions) {
       mediaCoordinator.handleMediaTaskCompletion(completion);
-      if (std::optional<MediaTaskFailureDialogModel> failure =
-              mediaTaskFailureDialogModel(completion)) {
-        pendingMediaTaskFailure = std::move(*failure);
-      }
+      deferredMediaTaskFailure.observe(
+          mediaTaskFailureDialogModel(completion), taskSnapshot.activeCard);
     }
+    // A newly active task is newer than every completion delivered by this
+    // poll. Apply that lifecycle edge last so an old completion cannot be
+    // re-deferred behind newer work.
+    deferredMediaTaskFailure.synchronize(taskSnapshot.activeCard);
     if (taskUpdate.layoutChanged) {
       markLayoutDirty();
     } else if (mediaUpdate.playbackChanged || taskUpdate.changed) {
@@ -1296,11 +1300,14 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       forceFullRedraw = true;
     }
     if (terminalRole == PlaybackShellTerminalRole::Browser &&
-        pendingMediaTaskFailure) {
-      openMediaTaskDialog(tui_media_task_panel::failureDialogRequest(
-          *pendingMediaTaskFailure));
-      pendingMediaTaskFailure.reset();
-      markDirty();
+        !taskSnapshot.activeCard && deferredMediaTaskFailure.pending() &&
+        !shellOverlays.active()) {
+      if (std::optional<MediaTaskFailureDialogModel> failure =
+              deferredMediaTaskFailure.take()) {
+        openMediaTaskDialog(
+            tui_media_task_panel::failureDialogRequest(*failure));
+        markDirty();
+      }
     }
     while (std::optional<BrowserContentService::Completion>
                browserContentCompletion = browserContentService.poll()) {
@@ -1471,7 +1478,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
                       media_processing::captureActionRequest(
                           value.action, value.sourceFile, std::nullopt,
                           o.output, audioPlayback);
-                  const auto retry = mediaTasks.execute(request);
+                  const auto retry = mediaTasks.retry(value.taskId, request);
                   if (retry) {
                     mediaCommandError =
                         retry->accepted ? std::string() : retry->feedback;
@@ -1765,7 +1772,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         screen.writeChar(headerTitleX + i, 0, ch, titleAttr);
       }
       breadcrumbLine = buildBreadcrumbLine(browser.location, width);
-      if (browserInteractionEnabled) {
+      if (browserInteractionEnabled && searchBarY >= 0) {
         const bool searchFocused = browserSearchFocused(browser);
         Style searchStyle =
             searchFocused
@@ -1799,7 +1806,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
               fitLine(" [x] ", searchBarClearEnd - searchBarClearStart),
               clearStyle);
         }
-
+      }
+      if (browserInteractionEnabled && breadcrumbY >= 0) {
         if (browserInteraction.breadcrumbHover >=
             static_cast<int>(breadcrumbLine.crumbs.size())) {
           browserInteraction.breadcrumbHover = -1;
@@ -1813,7 +1821,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           screen.writeText(crumb.startX, breadcrumbY, hoverText,
                            theme.breadcrumbHover);
         }
-      } else {
+      } else if (breadcrumbY < 0 || !browserInteractionEnabled) {
         browserInteraction.breadcrumbHover = -1;
       }
       const std::optional<PlaybackTarget>& nowPlayingTarget =
@@ -1836,8 +1844,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       } else {
         showingLabel.clear();
       }
-      if (!showingLabel.empty()) {
-        screen.writeText(0, std::min(height - 1, searchBarY + 1),
+      if (!showingLabel.empty() && viewport.headerLabelY >= 0) {
+        screen.writeText(0, viewport.headerLabelY,
                          fitLine(showingLabel, width), theme.dim);
       }
       tui_melody_visualization::Observation melodyObservation;

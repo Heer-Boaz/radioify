@@ -1094,6 +1094,15 @@ radioify_link_repo_target(ui_footer_layout_tests)
 add_test(NAME ui_footer_layout_tests
          COMMAND $<TARGET_FILE:ui_footer_layout_tests>)
 
+add_executable(ui_viewport_tests)
+target_sources(ui_viewport_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_ui_viewport_tests>
+  ${CMAKE_SOURCE_DIR}/tui/ui/ui_viewport.cpp
+)
+radioify_link_repo_target(ui_viewport_tests)
+add_test(NAME ui_viewport_tests
+         COMMAND $<TARGET_FILE:ui_viewport_tests>)
+
 add_executable(media_task_panel_tests)
 target_sources(media_task_panel_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_media_task_panel_tests>

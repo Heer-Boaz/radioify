@@ -70,24 +70,62 @@ int main() {
       "covered browser cell");
 
   State compactState;
+  compactState.synchronize(task);
   const Bounds compactBounds{80, 6, 2};
-  ok &= expect(layout(compactBounds, task).buttons.buttons.empty(),
-               "a compact surface must not publish hitboxes for clipped "
-               "buttons");
+  const Layout compactLayout = layout(compactBounds, task);
+  ok &= expect(compactLayout.buttons.buttons.size() == 2 &&
+                   compactLayout.buttons.rowCount == 1 &&
+                   compactLayout.contentRows == 1,
+               "a short surface must preserve the complete action row before "
+               "optional task detail");
   interaction =
       compactState.handle(keyEvent(VK_TAB), compactBounds, noIndicator, task);
-  ok &= expect(!interaction.consumed && !compactState.focused(),
-               "keyboard focus must never enter an invisible button row");
+  ok &= expect(interaction.consumed && compactState.focused(),
+               "responsive compact actions must remain keyboard reachable");
+
+  const Bounds chromeConstrainedBounds{49, 4, 3};
+  const Layout chromeConstrainedLayout = layout(chromeConstrainedBounds, task);
+  ok &= expect(chromeConstrainedLayout.valid &&
+                   chromeConstrainedLayout.y == 0 &&
+                   chromeConstrainedLayout.buttons.buttons.size() == 2 &&
+                   chromeConstrainedLayout.contentRows == 1,
+               "active task actions must reclaim browser chrome on an "
+               "extremely short terminal");
 
   State narrowState;
   narrowState.synchronize(task);
   const Bounds narrowBounds{12, 30, 2};
-  ok &= expect(layout(narrowBounds, task).buttons.buttons.empty(),
-               "a narrow surface must not publish clipped button labels");
+  const Layout narrowLayout = layout(narrowBounds, task);
+  ok &= expect(narrowLayout.buttons.buttons.size() == 2 &&
+                   narrowLayout.buttons.rowCount == 2 &&
+                   narrowLayout.buttons.buttons[0].y !=
+                       narrowLayout.buttons.buttons[1].y,
+               "a narrow surface must stack complete labels instead of "
+               "publishing clipped controls");
   interaction =
       narrowState.handle(keyEvent(VK_TAB), narrowBounds, noIndicator, task);
-  ok &= expect(!interaction.consumed && !narrowState.focused(),
-               "an unrecognizable partial button row must not be focusable");
+  ok &= expect(interaction.consumed && narrowState.focused(),
+               "stacked task actions must remain focusable");
+  interaction = narrowState.handle(keyEvent(VK_RIGHT), narrowBounds,
+                                   noIndicator, task);
+  ok &= expect(interaction.consumed &&
+                   narrowState.highlightedButton() == 1,
+               "arrow navigation must traverse vertically reflowed task "
+               "actions");
+  const tui_button_row::Placement& stackedHide =
+      narrowLayout.buttons.buttons[1];
+  interaction = narrowState.handle(
+      pointerEvent(MouseEventKind::Press, stackedHide.x, stackedHide.y, true),
+      narrowBounds, noIndicator, task);
+  ok &= expect(interaction.consumed && !interaction.activatedAction,
+               "a stacked action must arm on pointer press");
+  interaction = narrowState.handle(
+      pointerEvent(MouseEventKind::Release, stackedHide.x, stackedHide.y),
+      narrowBounds, noIndicator, task);
+  ok &= expect(interaction.consumed &&
+                   interaction.activatedAction == Action::Hide &&
+                   narrowState.hidden(),
+               "a stacked action must activate on release at its own row");
 
   interaction = state.handle(
       pointerEvent(MouseEventKind::Press, cancel.x, card.buttons.y, true),
@@ -248,7 +286,7 @@ int main() {
   DialogSession dialogSession;
   const tui_dialog::DialogId cancellationDialogId{7};
   dialogSession.opened(cancellationDialogId, confirmation.context);
-  ok &= expect(!dialogSession.synchronize(task),
+  ok &= expect(!dialogSession.synchronize(task, std::nullopt),
                "a cancellation dialog must remain open for its exact active "
                "task");
   const std::optional<DialogIntent> cancellationIntent =
@@ -262,7 +300,8 @@ int main() {
   dialogSession.opened(cancellationDialogId, confirmation.context);
   MediaTaskCardModel differentTask = task;
   differentTask.taskId = media_processing::TaskId{99};
-  ok &= expect(dialogSession.synchronize(differentTask) == cancellationDialogId,
+  ok &= expect(dialogSession.synchronize(differentTask, std::nullopt) ==
+                   cancellationDialogId,
                "a stale cancellation dialog must request only its own "
                "conditional dismissal");
 
@@ -275,6 +314,9 @@ int main() {
   const DialogRequest retryRequest = failureDialogRequest(failure);
   const tui_dialog::DialogId failureDialogId{8};
   dialogSession.opened(failureDialogId, retryRequest.context);
+  ok &= expect(!dialogSession.synchronize(std::nullopt, failure),
+               "a failure dialog must remain current only while its exact "
+               "failure is the latest result");
   const std::optional<DialogIntent> retryIntent =
       dialogSession.handle({failureDialogId, kMediaTaskDialogRetry});
   const RetryTask* retryTask =
@@ -284,6 +326,34 @@ int main() {
                    retryTask->action == *failure.retryAction,
                "a failure dialog must publish a typed retry for the failure "
                "it displays");
+
+  dialogSession.opened(failureDialogId, retryRequest.context);
+  MediaTaskFailureDialogModel newerFailure = failure;
+  newerFailure.taskId = media_processing::TaskId{101};
+  ok &= expect(dialogSession.synchronize(std::nullopt, newerFailure) ==
+                   failureDialogId,
+               "a newer completion must invalidate an open stale failure "
+               "dialog");
+
+  DeferredFailureState deferredFailure;
+  deferredFailure.observe(failure, std::nullopt);
+  ok &= expect(deferredFailure.pending(),
+               "a failure may be deferred while playback owns the terminal");
+  MediaTaskCardModel newerTask = task;
+  newerTask.taskId = media_processing::TaskId{102};
+  deferredFailure.synchronize(newerTask);
+  ok &= expect(!deferredFailure.pending(),
+               "starting newer work must retire a deferred old failure");
+  deferredFailure.observe(failure, newerTask);
+  ok &= expect(!deferredFailure.pending(),
+               "an old completion must not be deferred behind newer active "
+               "work");
+  deferredFailure.observe(failure, std::nullopt);
+  const std::optional<MediaTaskFailureDialogModel> presentedFailure =
+      deferredFailure.take();
+  ok &= expect(presentedFailure && presentedFailure->taskId == failure.taskId &&
+                   !deferredFailure.pending() && !deferredFailure.take(),
+               "a deferred failure must be presented at most once");
 
   task.cancellable = false;
   const std::vector<tui_button_row::Button> nonCancellableActions =

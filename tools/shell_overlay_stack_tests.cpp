@@ -168,13 +168,13 @@ int main() {
   const tui_dialog::Layout pointerLayout = pointerModel.layout(pointerBounds);
   const tui_dialog::ButtonBounds& confirm = pointerLayout.buttons.front();
   tui_dialog::Interaction pointerInteraction = pointerModel.handle(
-      mouseEvent(MouseEventKind::Press, confirm.x, pointerLayout.buttonY),
+      mouseEvent(MouseEventKind::Press, confirm.x, confirm.y),
       pointerBounds);
   ok &= expect(pointerInteraction.consumed && !pointerInteraction.activation &&
                    pointerModel.active(),
                "a dialog button press must not activate before release");
   pointerInteraction = pointerModel.handle(
-      mouseEvent(MouseEventKind::Release, confirm.x, pointerLayout.buttonY),
+      mouseEvent(MouseEventKind::Release, confirm.x, confirm.y),
       pointerBounds);
   ok &= expect(pointerInteraction.activation &&
                    pointerInteraction.activation->dialog == pointerDialogId &&
@@ -182,6 +182,42 @@ int main() {
                    !pointerModel.active(),
                "a dialog button must activate on release over the armed "
                "button");
+
+  tui_dialog::Content responsiveDialog;
+  responsiveDialog.title = "Cancel separation?";
+  responsiveDialog.buttons = {{8, "Cancel task", "Stop"},
+                              {9, "Keep running", "Keep"}};
+  responsiveDialog.initiallySelectedButton = 9;
+  tui_dialog::Model responsiveModel;
+  responsiveModel.open(std::move(responsiveDialog));
+  const tui_dialog::Layout compactDialog =
+      responsiveModel.layout({20, 4, 0});
+  ok &= expect(compactDialog.valid && compactDialog.buttons.size() == 2 &&
+                   compactDialog.buttons[0].compact &&
+                   compactDialog.buttons[1].compact,
+               "a short dialog must preserve both actions with explicit "
+               "compact labels");
+  const tui_dialog::Layout chromeConstrainedDialog =
+      responsiveModel.layout({20, 4, 3});
+  ok &= expect(chromeConstrainedDialog.valid &&
+                   chromeConstrainedDialog.y == 0 &&
+                   chromeConstrainedDialog.buttons.size() == 2,
+               "a modal dialog must reclaim browser chrome on an extremely "
+               "short terminal");
+  const tui_dialog::Layout stackedDialog =
+      responsiveModel.layout({12, 6, 0});
+  ok &= expect(stackedDialog.valid && stackedDialog.buttons.size() == 2 &&
+                   stackedDialog.buttons[0].y !=
+                       stackedDialog.buttons[1].y,
+               "a narrow dialog must vertically reflow complete compact "
+               "actions");
+  const tui_dialog::Interaction impossibleDialog =
+      responsiveModel.handle(keyEvent('A'), {6, 3, 0});
+  ok &= expect(impossibleDialog.consumed && impossibleDialog.changed &&
+                   impossibleDialog.dismissedDialog &&
+                   !responsiveModel.active(),
+               "an unrenderable dialog must dismiss without allowing its "
+               "triggering event to click through");
 
   tui_dialog::Content replacementDialog;
   replacementDialog.title = "Stable dialog identity";

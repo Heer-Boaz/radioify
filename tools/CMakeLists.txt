@@ -225,6 +225,10 @@ radioify_add_module_object_library(radioify_tool_ui_footer_layout_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/ui_footer_layout_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_ui_viewport_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/ui_viewport_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_media_task_panel_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/media_task_panel_tests.cpp
 )

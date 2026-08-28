@@ -34,6 +34,9 @@ class Controller {
 
   std::optional<playback_media_processing::ActionResult> execute(
       const media_processing::ActionRequest& request);
+  std::optional<playback_media_processing::ActionResult> retry(
+      media_processing::TaskId expectedFailure,
+      const media_processing::ActionRequest& request);
   playback_media_actions::Context contextForSource(
       const std::filesystem::path& sourceFile) const;
 

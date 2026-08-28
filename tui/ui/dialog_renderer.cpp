@@ -68,11 +68,12 @@ void draw(ConsoleScreen& screen, Model& model, const Bounds& bounds,
         fitLine(contentLine.text, layout.innerWidth),
         lineStyle(contentLine.tone, styles));
   }
-  if (layout.firstContentLine > 0) {
+  if (layout.visibleContentRows > 0 && layout.firstContentLine > 0) {
     screen.writeChar(layout.x + layout.width - 2, layout.contentY, L'^',
                      styles.border);
   }
-  if (endLine < static_cast<int>(layout.contentLines.size())) {
+  if (layout.visibleContentRows > 0 &&
+      endLine < static_cast<int>(layout.contentLines.size())) {
     screen.writeChar(layout.x + layout.width - 2,
                      layout.contentY + layout.visibleContentRows - 1,
                      L'v', styles.border);
@@ -83,15 +84,18 @@ void draw(ConsoleScreen& screen, Model& model, const Bounds& bounds,
       continue;
     }
     const Button& button = model.content().buttons[buttonBounds.index];
-    std::string label = "[ " + button.label + " ]";
+    std::string label =
+        "[ " + tui_button_row::labelFor(button, buttonBounds) + " ]";
     label = fitLine(label, buttonBounds.width);
+    const int buttonY =
+        buttonBounds.y >= 0 ? buttonBounds.y : layout.buttonY;
     screen.writeRun(
-        buttonBounds.x, layout.buttonY, buttonBounds.width, L' ',
+        buttonBounds.x, buttonY, buttonBounds.width, L' ',
         buttonBounds.index == model.selectedButton()
             ? styles.selectedButton
             : styles.button);
     screen.writeText(
-        buttonBounds.x, layout.buttonY, label,
+        buttonBounds.x, buttonY, label,
         buttonBounds.index == model.selectedButton()
             ? styles.selectedButton
             : styles.button);

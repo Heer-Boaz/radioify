@@ -1,10 +1,11 @@
 #pragma once
 
 struct BrowserViewport {
-  int width = 40;
-  int height = 10;
-  int headerLines = 1;
-  int listTop = 1;
+  int width = 1;
+  int height = 1;
+  int headerLines = 0;
+  int listTop = 0;
+  int headerLabelY = -1;
   int breadcrumbY = -1;
   int searchBarY = -1;
   int searchBarWidth = 0;

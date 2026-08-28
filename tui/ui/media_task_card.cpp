@@ -16,13 +16,6 @@ void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth, int screenHeight,
       tui_media_task_panel::layout({screenWidth, screenHeight, top}, model);
   if (!layout.valid) return;
 
-  std::vector<std::pair<std::string, Style>> lines;
-  lines.push_back({model.title, styles.title});
-  lines.push_back({model.sourceName, styles.secondary});
-  if (!model.detail.empty()) {
-    lines.push_back({model.detail, styles.secondary});
-  }
-
   std::string progressLine;
   if (model.progress) {
     const float progress = std::clamp(*model.progress, 0.0f, 1.0f);
@@ -43,7 +36,17 @@ void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth, int screenHeight,
   } else {
     progressLine = "Working...";
   }
-  lines.push_back({std::move(progressLine), styles.progress});
+  std::vector<std::pair<std::string, Style>> lines;
+  lines.push_back({model.title, styles.title});
+  if (layout.contentRows >= 2) {
+    lines.push_back({model.sourceName, styles.secondary});
+  }
+  if (layout.contentRows >= 4 && !model.detail.empty()) {
+    lines.push_back({model.detail, styles.secondary});
+  }
+  if (layout.contentRows >= 3) {
+    lines.push_back({std::move(progressLine), styles.progress});
+  }
   for (int y = 0; y < layout.height; ++y) {
     screen.writeRun(layout.x, layout.y + y, layout.width, L' ',
                     styles.background);
@@ -64,7 +67,7 @@ void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth, int screenHeight,
   }
 
   const int visibleLines =
-      std::min(static_cast<int>(lines.size()), layout.height - 2);
+      std::min(static_cast<int>(lines.size()), layout.contentRows);
   for (int line = 0; line < visibleLines; ++line) {
     screen.writeText(
         layout.x + 1, layout.y + 1 + line,
@@ -78,10 +81,15 @@ void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth, int screenHeight,
     if (buttonBounds.index >= actions.size()) continue;
     const bool selected = state.highlightedButton() == buttonBounds.index;
     const Style style = selected ? styles.selectedButton : styles.button;
-    const std::string label = "[ " + actions[buttonBounds.index].label + " ]";
-    screen.writeRun(buttonBounds.x, layout.buttons.y, buttonBounds.width, L' ',
+    const std::string label =
+        "[ " + tui_button_row::labelFor(actions[buttonBounds.index],
+                                          buttonBounds) +
+        " ]";
+    const int buttonY =
+        buttonBounds.y >= 0 ? buttonBounds.y : layout.buttons.y;
+    screen.writeRun(buttonBounds.x, buttonY, buttonBounds.width, L' ',
                     style);
-    screen.writeText(buttonBounds.x, layout.buttons.y,
+    screen.writeText(buttonBounds.x, buttonY,
                      fitLine(label, buttonBounds.width), style);
   }
 }

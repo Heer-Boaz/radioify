@@ -39,6 +39,7 @@ struct Layout {
   int height = 0;
   int innerWidth = 0;
   int progressY = 0;
+  int contentRows = 0;
   tui_button_row::Layout buttons;
   bool valid = false;
 
@@ -103,7 +104,8 @@ class DialogSession {
  public:
   void opened(tui_dialog::DialogId dialog, DialogContext context);
   std::optional<tui_dialog::DialogId> synchronize(
-      const std::optional<MediaTaskCardModel>& activeTask);
+      const std::optional<MediaTaskCardModel>& activeTask,
+      const std::optional<MediaTaskFailureDialogModel>& latestFailure);
   std::optional<DialogIntent> handle(
       const tui_dialog::ButtonActivation& activation);
   void dismissed(tui_dialog::DialogId dialog);
@@ -111,6 +113,24 @@ class DialogSession {
  private:
   std::optional<tui_dialog::DialogId> dialog_;
   std::optional<DialogContext> context_;
+};
+
+// Owns automatic error presentation while playback temporarily prevents the
+// browser shell from showing a dialog. A new task or any newer completion
+// supersedes the deferred failure; errors never reappear outside the lifecycle
+// that produced them.
+class DeferredFailureState {
+ public:
+  void observe(
+      std::optional<MediaTaskFailureDialogModel> completedTaskFailure,
+      const std::optional<MediaTaskCardModel>& activeTask);
+  void synchronize(const std::optional<MediaTaskCardModel>& activeTask);
+  std::optional<MediaTaskFailureDialogModel> take();
+
+  bool pending() const { return pending_.has_value(); }
+
+ private:
+  std::optional<MediaTaskFailureDialogModel> pending_;
 };
 
 class State {

@@ -750,6 +750,57 @@ int main() {
               "Audio separation cancelled.",
       "the TUI task controller must own cancellation and stable presentation");
 
+  std::atomic<int> retryRuns{0};
+  processing::Coordinator::Operations retryOperations;
+  retryOperations.exportAudio =
+      [&](const std::filesystem::path&, const std::filesystem::path&,
+          const processing::Coordinator::ProgressReporter&,
+          const processing::Coordinator::CancellationRequested& cancellation,
+          std::string* error) {
+        const int run = retryRuns.fetch_add(1, std::memory_order_acq_rel) + 1;
+        if (run == 1) {
+          if (error) *error = "Controlled first-attempt failure.";
+          return false;
+        }
+        while (!cancellation()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return false;
+      };
+  processing::Coordinator retryCoordinator(std::move(retryOperations));
+  processing::Actions retryActions(retryCoordinator);
+  tui_media_tasks::Controller retryController(retryCoordinator, retryActions);
+  processing::ActionRequest retryRequest;
+  retryRequest.action = playback_media_actions::Action::ExportAudio;
+  retryRequest.sourceFile = "retry.mp4";
+  const auto firstAttempt = retryController.execute(retryRequest);
+  const auto firstFailure = waitForCompletion(retryController);
+  const auto failureSnapshot = retryController.snapshot().latestFailure;
+  const processing::TaskId staleFailure{
+      failureSnapshot ? failureSnapshot->taskId.value + 1 : 1};
+  const auto staleRetry = retryController.retry(staleFailure, retryRequest);
+  const auto acceptedRetry = failureSnapshot
+                                 ? retryController.retry(
+                                       failureSnapshot->taskId, retryRequest)
+                                 : std::nullopt;
+  const bool retryStarted = waitUntil([&]() {
+    return retryRuns.load(std::memory_order_acquire) == 2;
+  });
+  const auto retryCard = retryController.snapshot().activeCard;
+  const bool retryCancelled =
+      retryCard && retryController.cancelActive(retryCard->taskId);
+  const auto retryCompletion = waitForCompletion(retryController);
+  ok &= expect(firstAttempt && firstAttempt->accepted && firstFailure &&
+                   firstFailure->outcome == processing::TaskOutcome::Failed &&
+                   failureSnapshot && !staleRetry && acceptedRetry &&
+                   acceptedRetry->accepted && retryStarted && retryCancelled &&
+                   retryCompletion &&
+                   retryCompletion->outcome ==
+                       processing::TaskOutcome::Cancelled,
+               "Retry must be accepted only for the exact latest failure "
+               "identity and must start a new cancellable task");
+  retryCoordinator.shutdown();
+
   coordinator.shutdown();
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

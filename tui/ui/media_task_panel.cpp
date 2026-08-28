@@ -42,12 +42,19 @@ void DialogSession::opened(tui_dialog::DialogId dialog, DialogContext context) {
 }
 
 std::optional<tui_dialog::DialogId> DialogSession::synchronize(
-    const std::optional<MediaTaskCardModel>& activeTask) {
-  if (!dialog_ || !context_ || context_->kind != DialogKind::Cancellation) {
+    const std::optional<MediaTaskCardModel>& activeTask,
+    const std::optional<MediaTaskFailureDialogModel>& latestFailure) {
+  if (!dialog_ || !context_) {
     return std::nullopt;
   }
-  if (activeTask && activeTask->taskId == context_->taskId &&
-      activeTask->cancellable) {
+
+  const bool current = context_->kind == DialogKind::Cancellation
+                           ? activeTask &&
+                                 activeTask->taskId == context_->taskId &&
+                                 activeTask->cancellable
+                           : !activeTask && latestFailure &&
+                                 latestFailure->taskId == context_->taskId;
+  if (current) {
     return std::nullopt;
   }
   const tui_dialog::DialogId obsolete = *dialog_;
@@ -79,6 +86,29 @@ void DialogSession::dismissed(tui_dialog::DialogId dialog) {
   if (dialog_ && *dialog_ == dialog) {
     clearDialogSession(dialog_, context_);
   }
+}
+
+void DeferredFailureState::observe(
+    std::optional<MediaTaskFailureDialogModel> completedTaskFailure,
+    const std::optional<MediaTaskCardModel>& activeTask) {
+  if (activeTask) {
+    pending_.reset();
+    return;
+  }
+  pending_ = std::move(completedTaskFailure);
+}
+
+void DeferredFailureState::synchronize(
+    const std::optional<MediaTaskCardModel>& activeTask) {
+  if (activeTask) {
+    pending_.reset();
+  }
+}
+
+std::optional<MediaTaskFailureDialogModel> DeferredFailureState::take() {
+  std::optional<MediaTaskFailureDialogModel> result = std::move(pending_);
+  pending_.reset();
+  return result;
 }
 
 bool Layout::contains(int pointerX, int pointerY) const {
@@ -316,21 +346,34 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
 std::vector<tui_button_row::Button> actionsFor(const MediaTaskCardModel& task) {
   std::vector<tui_button_row::Button> actions;
   if (task.cancellable) {
-    actions.push_back(
-        {static_cast<tui_button_row::ButtonId>(Action::Cancel), "Cancel"});
+    actions.push_back({static_cast<tui_button_row::ButtonId>(Action::Cancel),
+                       "Cancel", "Stop"});
   }
   actions.push_back(
-      {static_cast<tui_button_row::ButtonId>(Action::Hide), "Hide"});
+      {static_cast<tui_button_row::ButtonId>(Action::Hide), "Hide", "Hide"});
   return actions;
 }
 
 Layout layout(const Bounds& bounds, const MediaTaskCardModel& task) {
   Layout result;
-  if (bounds.width < 4 || bounds.height - bounds.top < 3) {
+  if (bounds.width < 4 || bounds.height < 3) {
     return result;
   }
 
   const std::vector<tui_button_row::Button> actions = actionsFor(task);
+  const int requestedTop =
+      std::clamp(bounds.top, 0, std::max(0, bounds.height - 1));
+  const int minimumActionableHeight = actions.empty() ? 3 : 4;
+  // Active work and its direct actions outrank persistent browser chrome on
+  // an extremely short terminal. The panel remains modeless and Hide still
+  // returns the available surface to browser content.
+  result.y = std::min(
+      requestedTop, std::max(0, bounds.height - minimumActionableHeight));
+  const int availableHeight = bounds.height - result.y;
+  if (availableHeight < 3) {
+    return result;
+  }
+
   int contentWidth =
       std::max({utf8DisplayWidth(task.title), utf8DisplayWidth(task.sourceName),
                 utf8DisplayWidth(task.detail)});
@@ -341,20 +384,30 @@ Layout layout(const Bounds& bounds, const MediaTaskCardModel& task) {
   result.width = std::clamp(desiredWidth, 4, bounds.width);
   result.innerWidth = std::max(1, result.width - 2);
   result.x = std::max(0, bounds.width - result.width - 1);
-  result.y = bounds.top;
 
-  int contentRows = 3;
+  int preferredContentRows = 3;
   if (!task.detail.empty()) {
-    ++contentRows;
+    ++preferredContentRows;
   }
-  const int actionRows = actions.empty() ? 0 : 2;
-  result.height =
-      std::min(contentRows + actionRows + 2, bounds.height - bounds.top);
-  result.progressY = result.y + (task.detail.empty() ? 3 : 4);
-  if (!actions.empty() && result.height >= contentRows + 4) {
-    result.buttons = tui_button_row::layout(actions, result.x, result.width,
-                                            result.y + result.height - 2);
+  const int maximumButtonRows = std::max(0, availableHeight - 3);
+  if (!actions.empty() && maximumButtonRows > 0) {
+    result.buttons = tui_button_row::responsiveLayout(
+        actions, result.x, result.width, 0, maximumButtonRows);
   }
+  const int actionRows = result.buttons.rowCount;
+  const int preferredGapRows = actionRows > 0 ? 1 : 0;
+  const int desiredHeight =
+      preferredContentRows + actionRows + preferredGapRows + 2;
+  result.height = std::min(desiredHeight, availableHeight);
+  const int interiorRows = std::max(0, result.height - 2);
+  result.contentRows = std::min(
+      preferredContentRows, std::max(0, interiorRows - actionRows));
+  const int buttonBottomY = result.y + result.height - 2;
+  if (actionRows > 0) {
+    result.buttons = tui_button_row::responsiveLayout(
+        actions, result.x, result.width, buttonBottomY, actionRows);
+  }
+  result.progressY = result.y + std::max(1, result.contentRows);
   result.valid = result.height >= 3;
   return result;
 }
@@ -409,8 +462,10 @@ DialogRequest cancellationDialogRequest(const MediaTaskCardModel& task) {
   request.content.text.push_back(
       {"Progress on " + task.sourceName + " will be lost.",
        tui_dialog::TextTone::Normal});
-  request.content.buttons.push_back({kCancelTaskButton, "Cancel task"});
-  request.content.buttons.push_back({kKeepRunningButton, "Keep running"});
+  request.content.buttons.push_back(
+      {kCancelTaskButton, "Cancel task", "Stop"});
+  request.content.buttons.push_back(
+      {kKeepRunningButton, "Keep running", "Keep"});
   request.content.initiallySelectedButton = kKeepRunningButton;
   return request;
 }

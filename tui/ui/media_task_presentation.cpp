@@ -257,9 +257,10 @@ std::optional<MediaTaskFailureDialogModel> mediaTaskFailureDialogModel(
         {"Diagnostics: " + toUtf8String(completion.diagnosticLog),
          tui_dialog::TextTone::Secondary});
   }
-  model.content.buttons.push_back({kMediaTaskDialogClose, "Close"});
+  model.content.buttons.push_back({kMediaTaskDialogClose, "Close", "OK"});
   if (model.retryAction) {
-    model.content.buttons.push_back({kMediaTaskDialogRetry, "Retry"});
+    model.content.buttons.push_back(
+        {kMediaTaskDialogRetry, "Retry", "Retry"});
   }
   return model;
 }

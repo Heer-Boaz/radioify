@@ -115,31 +115,74 @@ bool Model::dismiss(DialogId expectedDialog) {
 
 Layout Model::layout(const Bounds& bounds) {
   Layout result;
-  if (!active_ || bounds.width < 4 || bounds.height < 6) {
+  if (!active_ || bounds.width < 4 || bounds.height < 4) {
     return result;
   }
 
-  const int topInset =
+  const int requestedTopInset =
       std::clamp(bounds.topInset, 0, std::max(0, bounds.height - 1));
+  // A modal decision takes precedence over persistent browser chrome. On a
+  // short terminal, reclaim those rows before considering the dialog
+  // unrenderable so the user never loses sight of the pending decision.
+  const int topInset =
+      std::min(requestedTopInset, std::max(0, bounds.height - 4));
   const int availableHeight = bounds.height - topInset;
-  if (availableHeight < 6) {
+  if (availableHeight < 4) {
     return result;
   }
 
   const int desiredWidth = std::clamp(bounds.width - 4, 44, 84);
   result.width = std::min(bounds.width, desiredWidth);
+  result.x = std::max(0, (bounds.width - result.width) / 2);
   result.innerWidth = std::max(1, result.width - 4);
   result.contentLines = buildLines(content_, result.innerWidth);
 
-  const int desiredHeight =
-      std::max(6, static_cast<int>(result.contentLines.size()) + 4);
+  const std::size_t selected =
+      content_.buttons.empty()
+          ? 0
+          : std::min(selectedButton_, content_.buttons.size() - 1);
+  auto arrangeButtons = [&](int bottomY, int maximumRows) {
+    tui_button_row::Layout buttons = tui_button_row::responsiveLayout(
+        content_.buttons, result.x, result.width, bottomY, maximumRows);
+    if (!buttons.buttons.empty() || content_.buttons.empty()) {
+      return buttons;
+    }
+
+    // At the smallest usable sizes, retain one complete selected command as
+    // a viewport onto the action group. Left/Right and Tab still move through
+    // every action, and resizing restores the full row or stack.
+    const std::vector<Button> selectedOnly{content_.buttons[selected]};
+    buttons = tui_button_row::responsiveLayout(
+        selectedOnly, result.x, result.width, bottomY, 1);
+    if (!buttons.buttons.empty()) {
+      buttons.buttons.front().index = selected;
+    }
+    return buttons;
+  };
+
+  const int maximumButtonRows = std::max(1, availableHeight - 3);
+  tui_button_row::Layout buttonLayout =
+      arrangeButtons(0, maximumButtonRows);
+  if (buttonLayout.buttons.empty()) {
+    return {};
+  }
+
+  const int buttonRows = std::max(1, buttonLayout.rowCount);
+  const int minimumHeight = buttonRows + 3;
+  const int desiredHeight = std::max(
+      minimumHeight,
+      static_cast<int>(result.contentLines.size()) + buttonRows + 3);
   result.height = std::min(availableHeight, desiredHeight);
-  result.x = std::max(0, (bounds.width - result.width) / 2);
   result.y = topInset + std::max(0, (availableHeight - result.height) / 2);
   result.titleY = result.y + 1;
   result.contentY = result.y + 2;
   result.buttonY = result.y + result.height - 2;
-  result.visibleContentRows = std::max(0, result.buttonY - result.contentY);
+  buttonLayout = arrangeButtons(result.buttonY, maximumButtonRows);
+  const int firstButtonY = buttonLayout.buttons.empty()
+                               ? result.buttonY
+                               : buttonLayout.y;
+  result.visibleContentRows =
+      std::max(0, firstButtonY - result.contentY);
 
   const int maximumFirstLine =
       std::max(0, static_cast<int>(result.contentLines.size()) -
@@ -147,10 +190,8 @@ Layout Model::layout(const Bounds& bounds) {
   firstVisibleLine_ = std::clamp(firstVisibleLine_, 0, maximumFirstLine);
   result.firstContentLine = firstVisibleLine_;
 
-  result.buttons = tui_button_row::layout(content_.buttons, result.x,
-                                          result.width, result.buttonY)
-                       .buttons;
-  result.valid = true;
+  result.buttons = std::move(buttonLayout.buttons);
+  result.valid = !result.buttons.empty();
   return result;
 }
 
@@ -160,15 +201,27 @@ Interaction Model::handle(const InputEvent& event, const Bounds& bounds) {
     return result;
   }
 
-  result.consumed = true;
   if (event.type == InputEvent::Type::Action &&
       event.action == InputAction::Back) {
+    result.consumed = true;
     result.dismissedDialog = activeDialog_;
     result.changed = dismiss();
     return result;
   }
 
   Layout currentLayout = layout(bounds);
+  if (!currentLayout.valid) {
+    // A modal surface that cannot represent any complete action must never
+    // become an invisible input trap. Dismiss it without activating an action,
+    // but consume the triggering event so it cannot click through to browser
+    // content; persistent failures remain available from Commands.
+    result.consumed = true;
+    result.dismissedDialog = activeDialog_;
+    result.changed = dismiss();
+    return result;
+  }
+
+  result.consumed = true;
   if (event.type == InputEvent::Type::Key) {
     const tui_button_row::KeyboardAction keyboardAction =
         tui_button_row::resolveKeyboardAction(event.key);
@@ -226,7 +279,7 @@ Interaction Model::handle(const InputEvent& event, const Bounds& bounds) {
   }
 
   const tui_button_row::PointerInteraction pointer = buttonPointer_.handle(
-      event, {currentLayout.buttonY, currentLayout.buttons});
+      event, {currentLayout.buttonY, 0, currentLayout.buttons});
   result.changed = pointer.changed;
   if (buttonPointer_.hovered() &&
       selectedButton_ != *buttonPointer_.hovered()) {

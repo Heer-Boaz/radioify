@@ -22,6 +22,17 @@ std::optional<playback_media_processing::ActionResult> Controller::execute(
   return result;
 }
 
+std::optional<playback_media_processing::ActionResult> Controller::retry(
+    media_processing::TaskId expectedFailure,
+    const media_processing::ActionRequest& request) {
+  refreshSnapshot();
+  if (snapshot_.activeCard || !snapshot_.latestFailure ||
+      snapshot_.latestFailure->taskId != expectedFailure) {
+    return std::nullopt;
+  }
+  return execute(request);
+}
+
 playback_media_actions::Context Controller::contextForSource(
     const std::filesystem::path& sourceFile) const {
   return actions_.contextForSource(sourceFile);
