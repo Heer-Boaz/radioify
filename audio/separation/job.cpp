@@ -1,6 +1,7 @@
 #include "audio/separation/job.h"
 
 #include <algorithm>
+#include <condition_variable>
 #include <exception>
 #include <mutex>
 #include <thread>
@@ -17,6 +18,7 @@ struct Job::Impl {
         ownerWake(std::move(ownerWakeNotifier)) {}
 
   mutable std::mutex mutex;
+  std::condition_variable runCondition;
   std::thread worker;
   std::atomic<bool> cancelRequested{false};
   WaitableSignal changed;
@@ -24,6 +26,7 @@ struct Job::Impl {
   WakeNotifier ownerWake;
   JobSnapshot state;
   std::optional<JobSnapshot> completion;
+  std::shared_ptr<DiagnosticLog> activeDiagnosticLog;
 
   void notifyChanged() {
     changed.signal();
@@ -39,6 +42,15 @@ struct Job::Impl {
       if (!state.cancelling()) state.phase = std::move(phase);
     }
     notifyChanged();
+  }
+
+  bool waitUntilRunnable() {
+    std::unique_lock<std::mutex> lock(mutex);
+    runCondition.wait(lock, [this]() {
+      return !state.paused ||
+             cancelRequested.load(std::memory_order_relaxed);
+    });
+    return !cancelRequested.load(std::memory_order_relaxed);
   }
 
   void finish(bool succeeded, std::string error,
@@ -72,7 +84,9 @@ struct Job::Impl {
                           : std::move(error);
       }
       state.phase.clear();
+      state.paused = false;
       completion = state;
+      activeDiagnosticLog.reset();
     }
     notifyChanged();
   }
@@ -92,6 +106,8 @@ struct Job::Impl {
     try {
       int lastLoggedPercent = -5;
       std::string lastLoggedPhase;
+      const ExecutionControl control(
+          &cancelRequested, [this]() { return waitUntilRunnable(); });
       succeeded = operation(
           mediaPath, outputPaths,
           [this, diagnosticLog, lastLoggedPercent,
@@ -117,7 +133,7 @@ struct Job::Impl {
               diagnosticLog->append(level, component, message);
             }
           },
-          &cancelRequested, &error);
+          control, &error);
     } catch (const std::exception& exception) {
       error = std::string("Audio separation failed: ") + exception.what();
     } catch (...) {
@@ -170,6 +186,7 @@ bool Job::tryStart(const std::filesystem::path& mediaPath) {
     if (diagnosticLog) {
       impl_->state.diagnosticLog = diagnosticLog->path();
     }
+    impl_->activeDiagnosticLog = diagnosticLog;
 
     try {
       impl_->worker = std::thread(
@@ -189,6 +206,7 @@ bool Job::tryStart(const std::filesystem::path& mediaPath) {
         impl_->state.error += " Diagnostics: " + diagnosticError;
       }
       impl_->completion = impl_->state;
+      impl_->activeDiagnosticLog.reset();
     } catch (...) {
       impl_->state.state = JobState::Failed;
       impl_->state.phase.clear();
@@ -197,6 +215,7 @@ bool Job::tryStart(const std::filesystem::path& mediaPath) {
         impl_->state.error += " Diagnostics: " + diagnosticError;
       }
       impl_->completion = impl_->state;
+      impl_->activeDiagnosticLog.reset();
     }
   }
   impl_->notifyChanged();
@@ -211,6 +230,33 @@ bool Job::requestCancel() {
     impl_->cancelRequested.store(true, std::memory_order_relaxed);
     impl_->state.state = JobState::Cancelling;
     impl_->state.phase = "Cancelling audio separation";
+    impl_->state.paused = false;
+  }
+  impl_->runCondition.notify_all();
+  impl_->notifyChanged();
+  return true;
+}
+
+bool Job::setPaused(bool paused) {
+  if (!impl_) return false;
+  std::shared_ptr<DiagnosticLog> diagnosticLog;
+  {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (impl_->state.state != JobState::Running ||
+        impl_->state.paused == paused) {
+      return false;
+    }
+    impl_->state.paused = paused;
+    diagnosticLog = impl_->activeDiagnosticLog;
+  }
+  if (diagnosticLog) {
+    diagnosticLog->append(
+        DiagnosticLevel::Info, "scheduler",
+        paused ? "Paused while foreground video is playing."
+               : "Resumed after foreground video playback yielded.");
+  }
+  if (!paused) {
+    impl_->runCondition.notify_all();
   }
   impl_->notifyChanged();
   return true;

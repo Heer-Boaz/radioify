@@ -1239,6 +1239,14 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
     if (!running) break;
     syncShellControls();
+    const PlaybackPresentationModel currentPlayback =
+        playbackPresenter.model();
+    const bool videoPlaying =
+        currentPlayback.control && currentPlayback.control->isVideo &&
+        currentPlayback.control->status == PlaybackControlStatus::Playing;
+    if (mediaTasks.setInteractivePlaybackActive(videoPlaying)) {
+      markDirty(UiDirtyFlags::Async);
+    }
     const PlaybackShellTerminalRole terminalRole =
         mediaCoordinator.terminalRole();
     if (terminalRole != previousTerminalRole) {

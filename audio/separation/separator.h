@@ -1,12 +1,12 @@
 #pragma once
 
-#include <atomic>
 #include <filesystem>
 #include <functional>
 #include <string>
 
 #include "audio/separation/artifact.h"
 #include "audio/separation/diagnostics.h"
+#include "audio/separation/execution_control.h"
 
 namespace audio_separation {
 
@@ -21,7 +21,7 @@ bool separateMediaAudio(const std::filesystem::path& mediaPath,
                         const ArtifactPaths& outputPaths,
                         const ProgressCallback& onProgress,
                         const DiagnosticReporter& diagnostics,
-                        const std::atomic<bool>* cancelRequested,
+                        const ExecutionControl& control,
                         std::string* error);
 
 // Explicit model selection is reserved for diagnostic tools and tests.
@@ -32,7 +32,7 @@ bool separateMediaAudioWithModel(
     const ArtifactPaths& outputPaths,
     const ProgressCallback& onProgress,
     const DiagnosticReporter& diagnostics,
-    const std::atomic<bool>* cancelRequested,
+    const ExecutionControl& control,
     std::string* error);
 
 }  // namespace audio_separation

@@ -35,6 +35,7 @@ struct TaskActivity {
   std::string phase;
   bool cancelling = false;
   bool cancellable = false;
+  bool paused = false;
 };
 
 struct TaskCompletion {
@@ -140,6 +141,11 @@ class Coordinator final : public playback_media_processing::Service {
       const std::filesystem::path& sourceFile) const;
 
   bool cancelActive();
+
+  // Foreground playback owns latency-sensitive GPU and media I/O. The
+  // coordinator applies that policy only to resource-intensive work that can
+  // be safely checkpointed, while retaining task progress and ownership.
+  bool setInteractivePlaybackActive(bool active);
 
   PollResult poll();
   // One owner event fans in every worker family; UI loops never depend on the

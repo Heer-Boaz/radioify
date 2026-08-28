@@ -35,9 +35,12 @@ void setError(std::string* error, std::string message) {
   if (error) *error = std::move(message);
 }
 
-bool cancelled(const std::atomic<bool>* cancelRequested) {
-  return cancelRequested &&
-         cancelRequested->load(std::memory_order_relaxed);
+bool checkpoint(const ExecutionControl& control, std::string* error) {
+  if (control.checkpoint()) {
+    return true;
+  }
+  setError(error, "Audio separation cancelled.");
+  return false;
 }
 
 void report(const ProgressCallback& callback, float fraction,
@@ -97,17 +100,13 @@ bool resolveBundledModelPath(std::filesystem::path* modelPath,
 }
 
 bool validateRequest(const std::filesystem::path& mediaPath,
-                     const std::atomic<bool>* cancelRequested,
+                     const ExecutionControl& control,
                      std::string* error) {
   if (mediaPath.empty()) {
     setError(error, "The media path is empty.");
     return false;
   }
-  if (cancelled(cancelRequested)) {
-    setError(error, "Audio separation cancelled.");
-    return false;
-  }
-  return true;
+  return checkpoint(control, error);
 }
 
 bool validateModelPath(const std::filesystem::path& modelPath,
@@ -128,7 +127,7 @@ bool validateModelPath(const std::filesystem::path& modelPath,
 bool decodeToRawFile(const std::filesystem::path& mediaPath,
                      const std::filesystem::path& rawPath,
                      const ProgressCallback& onProgress,
-                     const std::atomic<bool>* cancelRequested,
+                     const ExecutionControl& control,
                      std::uint64_t* outputFrames, std::string* error) {
   if (!outputFrames) return false;
   *outputFrames = 0;
@@ -156,8 +155,7 @@ bool decodeToRawFile(const std::filesystem::path& mediaPath,
   std::uint64_t skippedFrames = 0;
   std::uint64_t writtenFrames = 0;
   for (;;) {
-    if (cancelled(cancelRequested)) {
-      setError(error, "Audio separation cancelled.");
+    if (!checkpoint(control, error)) {
       return false;
     }
     std::uint64_t framesRead = 0;
@@ -423,8 +421,9 @@ bool separateMediaAudioUsingModel(
     const ArtifactPaths& outputPaths,
     const ProgressCallback& onProgress,
     const DiagnosticReporter& diagnostics,
-    const std::atomic<bool>* cancelRequested,
+    const ExecutionControl& control,
     std::string* error) {
+  if (!checkpoint(control, error)) return false;
   report(onProgress, 0.01f, "Loading DirectML separation model");
   BanditMaskModel model;
   std::string modelError;
@@ -436,12 +435,13 @@ bool separateMediaAudioUsingModel(
   }
   BanditSpectralTransform spectral;
   if (!spectral.initialize(error)) return false;
+  if (!checkpoint(control, error)) return false;
   report(onProgress, 0.03f, "DirectML GPU ready");
 
   const std::filesystem::path rawPath = temporaryRawAudioPathFor(mediaPath);
   ScopedTemporaryFile rawTemporary(rawPath);
   std::uint64_t sourceFrames = 0;
-  if (!decodeToRawFile(mediaPath, rawPath, onProgress, cancelRequested,
+  if (!decodeToRawFile(mediaPath, rawPath, onProgress, control,
                        &sourceFrames, error)) {
     return false;
   }
@@ -480,8 +480,7 @@ bool separateMediaAudioUsingModel(
 
   for (std::uint64_t chunkIndex = 0; chunkIndex < plan.chunkCount;
        ++chunkIndex) {
-    if (cancelled(cancelRequested)) {
-      setError(error, "Audio separation cancelled.");
+    if (!checkpoint(control, error)) {
       return false;
     }
     const std::uint64_t chunkStart = chunkIndex * kChunkHopFrames;
@@ -489,13 +488,14 @@ bool separateMediaAudioUsingModel(
       return false;
     }
     for (std::uint32_t channel = 0; channel < kChannels; ++channel) {
+      if (!checkpoint(control, error)) return false;
       for (std::size_t frame = 0; frame < monoChunk.size(); ++frame) {
         monoChunk[frame] =
             interleavedChunk[frame * kChannels + channel];
       }
       if (!spectral.forward(monoChunk.data(), monoChunk.size(), &spectrogram,
                             error) ||
-          !model.run(spectrogram, &masks, cancelRequested, error)) {
+          !model.run(spectrogram, &masks, control.cancellationFlag(), error)) {
         return false;
       }
       for (std::size_t stem = 0; stem < kStemCount; ++stem) {
@@ -527,10 +527,7 @@ bool separateMediaAudioUsingModel(
     setError(error, "Audio separation produced an incomplete timeline.");
     return false;
   }
-  if (cancelled(cancelRequested)) {
-    setError(error, "Audio separation cancelled.");
-    return false;
-  }
+  if (!checkpoint(control, error)) return false;
   report(onProgress, 0.97f, "Finalizing lossless audio stems");
   for (audio_file::FlacWriter& writer : writers) {
     if (!writer.finish(error)) return false;
@@ -549,32 +546,32 @@ bool separateMediaAudioWithModel(
     const ArtifactPaths& outputPaths,
     const ProgressCallback& onProgress,
     const DiagnosticReporter& diagnostics,
-    const std::atomic<bool>* cancelRequested,
+    const ExecutionControl& control,
     std::string* error) {
   if (error) error->clear();
-  if (!validateRequest(mediaPath, cancelRequested, error) ||
+  if (!validateRequest(mediaPath, control, error) ||
       !validateModelPath(modelPath, error)) {
     return false;
   }
   return separateMediaAudioUsingModel(mediaPath, modelPath, outputPaths,
                                       onProgress, diagnostics,
-                                      cancelRequested, error);
+                                      control, error);
 }
 
 bool separateMediaAudio(const std::filesystem::path& mediaPath,
                         const ArtifactPaths& outputPaths,
                         const ProgressCallback& onProgress,
                         const DiagnosticReporter& diagnostics,
-                        const std::atomic<bool>* cancelRequested,
+                        const ExecutionControl& control,
                         std::string* error) {
   if (error) error->clear();
-  if (!validateRequest(mediaPath, cancelRequested, error)) return false;
+  if (!validateRequest(mediaPath, control, error)) return false;
 
   std::filesystem::path modelPath;
   if (!resolveBundledModelPath(&modelPath, error)) return false;
   return separateMediaAudioUsingModel(mediaPath, modelPath, outputPaths,
                                       onProgress, diagnostics,
-                                      cancelRequested, error);
+                                      control, error);
 }
 
 }  // namespace audio_separation

@@ -10,6 +10,7 @@
 
 #include "audio/separation/artifact.h"
 #include "audio/separation/diagnostics.h"
+#include "audio/separation/execution_control.h"
 #include "core/native_wait_handle.h"
 #include "core/wake_event.h"
 
@@ -32,6 +33,7 @@ struct JobSnapshot {
   std::filesystem::path sourceFile;
   std::filesystem::path diagnosticLog;
   ArtifactPaths outputFiles{};
+  bool paused = false;
 
   bool running() const {
     return state == JobState::Running || state == JobState::Cancelling;
@@ -54,7 +56,7 @@ class Job {
   using Operation = std::function<bool(
       const std::filesystem::path&, const ArtifactPaths&,
       const ProgressReporter&, const DiagnosticReporter&,
-      const std::atomic<bool>*, std::string*)>;
+      const ExecutionControl&, std::string*)>;
 
   explicit Job(Operation operation);
   Job(Operation operation, WakeNotifier ownerWake);
@@ -64,6 +66,7 @@ class Job {
   Job& operator=(const Job&) = delete;
 
   bool tryStart(const std::filesystem::path& mediaPath);
+  bool setPaused(bool paused);
   bool requestCancel();
   void cancelAndJoin();
   JobSnapshot snapshot() const;

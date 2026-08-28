@@ -31,6 +31,7 @@ int main(int argc, char** argv) {
     std::cerr << "Audio separation failed: operation is not configured\n";
     return EXIT_FAILURE;
   }
+  const audio_separation::ExecutionControl control(&cancelRequested);
   const bool succeeded = operation(
       media, outputs,
       [&](float fraction, const std::string& phase) {
@@ -50,7 +51,7 @@ int main(int argc, char** argv) {
         std::cerr << '[' << levelName << ":" << component << "] "
                   << message << '\n';
       },
-      &cancelRequested, &error);
+      control, &error);
   const double elapsedSeconds = std::chrono::duration<double>(
                                     std::chrono::steady_clock::now() - started)
                                     .count();

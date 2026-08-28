@@ -10,6 +10,9 @@ namespace {
 
 std::string activityTitle(const media_processing::TaskActivity& activity) {
   using Kind = media_processing::TaskKind;
+  if (activity.paused && activity.kind == Kind::AudioSeparation) {
+    return "Audio separation paused";
+  }
   switch (activity.kind) {
     case Kind::MelodyAnalysis:
       return activity.cancelling ? "Cancelling melody analysis"

@@ -12,14 +12,14 @@ Job::Operation makeModelOperation(std::filesystem::path modelPath) {
              const ArtifactPaths& outputPaths,
              const Job::ProgressReporter& reportProgress,
              const Job::DiagnosticReporter& reportDiagnostic,
-             const std::atomic<bool>* cancelRequested, std::string* error) {
+             const ExecutionControl& control, std::string* error) {
     return separateMediaAudioWithModel(
         mediaPath, modelPath, outputPaths,
         [&](const Progress& progress) {
           reportProgress(progress.fraction, progress.phase);
         },
         reportDiagnostic,
-        cancelRequested, error);
+        control, error);
   };
 }
 
@@ -28,14 +28,14 @@ Job::Operation makeProductionOperation() {
             const ArtifactPaths& outputPaths,
             const Job::ProgressReporter& reportProgress,
             const Job::DiagnosticReporter& reportDiagnostic,
-            const std::atomic<bool>* cancelRequested, std::string* error) {
+            const ExecutionControl& control, std::string* error) {
     return separateMediaAudio(
         mediaPath, outputPaths,
         [&](const Progress& progress) {
           reportProgress(progress.fraction, progress.phase);
         },
         reportDiagnostic,
-        cancelRequested, error);
+        control, error);
   };
 }
 

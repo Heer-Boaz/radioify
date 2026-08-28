@@ -161,10 +161,11 @@ int main() {
           const audio_separation::ArtifactPaths&,
           const audio_separation::Job::ProgressReporter& progress,
           const audio_separation::Job::DiagnosticReporter&,
-          const std::atomic<bool>* cancelRequested, std::string* error) {
+          const audio_separation::ExecutionControl& control,
+          std::string* error) {
         progress(0.2f, "Separating dialogue, music and effects on GPU");
         separationStarted.store(true, std::memory_order_release);
-        while (!cancelRequested->load(std::memory_order_relaxed)) {
+        while (control.checkpoint()) {
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         separationCancellationObserved.store(true, std::memory_order_release);
@@ -449,6 +450,8 @@ int main() {
                        "Subtitles ready: movie.transcript.srt",
                "subtitle completion must retain its canonical sidecar");
 
+  const bool playbackPriorityStored =
+      coordinator.setInteractivePlaybackActive(true);
   const std::optional<playback_media_processing::ActionResult>
       separationStart =
       playbackActions.execute(playback_media_actions::Action::SeparateAudio,
@@ -460,14 +463,33 @@ int main() {
                    waitUntil([&]() {
                      return separationStarted.load(std::memory_order_acquire);
                    }) &&
-                   coordinator.audioSeparationRunningFor("movie.mp4") &&
-                   coordinator.cancelActive() &&
+                   coordinator.audioSeparationRunningFor("movie.mp4"),
+               "foreground playback policy must still allow a resumable "
+               "separation task to start");
+  const std::optional<processing::TaskActivity> pausedSeparation =
+      coordinator.activity();
+  const std::optional<MediaTaskCardModel> pausedSeparationCard =
+      presenter.activeCard();
+  const bool playbackPriorityReleased =
+      coordinator.setInteractivePlaybackActive(false);
+  ok &= expect(playbackPriorityStored && pausedSeparation &&
+                   pausedSeparation->paused &&
+                   pausedSeparation->phase ==
+                       "Video playback has priority" &&
+                   pausedSeparationCard &&
+                   pausedSeparationCard->title ==
+                       "Audio separation paused" &&
+                   playbackPriorityReleased,
+               "resource priority must surface as a typed paused state and "
+               "remain resumable");
+  ok &= expect(coordinator.cancelActive() &&
                    !coordinator.cancelActive() &&
                    waitUntil([&]() {
                      return separationCancellationObserved.load(
                          std::memory_order_acquire);
                    }),
-               "cancellation must dispatch through the active task owner");
+               "resumed separation must remain cancellable through its "
+               "owner");
   const std::optional<processing::TaskActivity> cancelling =
       coordinator.activity();
   const playback_media_processing::SourceState separationSourceState =

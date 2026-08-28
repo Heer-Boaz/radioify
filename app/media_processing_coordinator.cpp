@@ -305,6 +305,7 @@ struct Coordinator::Impl {
   std::unique_ptr<audio_separation::Job> audioSeparation;
   bool subtitleCompletionPending = false;
   bool audioSeparationCompletionPending = false;
+  bool interactivePlaybackActive = false;
   std::vector<TaskCompletion> queuedCompletions;
   std::optional<TaskCompletion> latestCompletion;
 
@@ -369,6 +370,10 @@ std::optional<TaskActivity> Coordinator::activity() const {
       activity.phase = snapshot.phase;
       activity.cancelling = snapshot.cancelling();
       activity.cancellable = !activity.cancelling;
+      activity.paused = snapshot.paused;
+      if (activity.paused) {
+        activity.phase = "Video playback has priority";
+      }
       return activity;
     }
   }
@@ -693,6 +698,7 @@ RequestResult Coordinator::requestAudioSeparation(
     return rejected(RequestFailure::InternalError,
                     "the audio-separation worker rejected the request");
   }
+  impl_->audioSeparation->setPaused(impl_->interactivePlaybackActive);
   impl_->audioSeparationCompletionPending = true;
   impl_->latestCompletion.reset();
   return RequestResult::accepted();
@@ -845,6 +851,15 @@ bool Coordinator::cancelActive() {
     return requestAudioSeparationCancellation().wasAccepted();
   }
   return false;
+}
+
+bool Coordinator::setInteractivePlaybackActive(bool active) {
+  if (!impl_) return false;
+  const bool policyChanged = impl_->interactivePlaybackActive != active;
+  impl_->interactivePlaybackActive = active;
+  const bool taskChanged =
+      impl_->audioSeparation && impl_->audioSeparation->setPaused(active);
+  return policyChanged || taskChanged;
 }
 
 PollResult Coordinator::poll() {

@@ -207,7 +207,7 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
       [](const std::filesystem::path&, const separation::ArtifactPaths&,
          const separation::Job::ProgressReporter& progress,
          const separation::Job::DiagnosticReporter& diagnostics,
-         const std::atomic<bool>*, std::string*) {
+         const separation::ExecutionControl&, std::string*) {
         diagnostics(DiagnosticLevel::Info, "test", "operation invoked");
         progress(0.4f, "Separating test audio");
         return true;
@@ -248,6 +248,7 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
   const separation::Job::Operation explicitModelOperation =
       separation::makeModelOperation(missingModel);
   std::atomic<bool> notCancelled{false};
+  const separation::ExecutionControl explicitModelControl(&notCancelled);
   std::string explicitModelError;
   ok &= expect(
       explicitModelOperation &&
@@ -255,7 +256,7 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
               "clip.mp4", separation::artifactPathsFor("clip.mp4"),
               [](float, std::string) {},
               [](DiagnosticLevel, std::string_view, std::string_view) {},
-              &notCancelled,
+              explicitModelControl,
               &explicitModelError) &&
           explicitModelError.find("missing-explicit-model.onnx") !=
               std::string::npos,
@@ -266,10 +267,10 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
       [&](const std::filesystem::path&, const separation::ArtifactPaths&,
           const separation::Job::ProgressReporter& progress,
           const separation::Job::DiagnosticReporter&,
-          const std::atomic<bool>* cancelRequested, std::string* error) {
+          const separation::ExecutionControl& control, std::string* error) {
         progress(0.2f, "Separating test audio");
         operationStarted.store(true, std::memory_order_release);
-        while (!cancelRequested->load(std::memory_order_relaxed)) {
+        while (!control.cancellationRequested()) {
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         if (error) *error = "Controlled cancellation.";
@@ -300,6 +301,107 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
   if (cancelled && !cancelled->diagnosticLog.empty()) {
     std::error_code ignored;
     std::filesystem::remove(cancelled->diagnosticLog, ignored);
+  }
+
+  std::atomic<bool> pauseOperationStarted{false};
+  std::atomic<bool> enterPauseCheckpoint{false};
+  std::atomic<bool> passedPauseCheckpoint{false};
+  separation::Job pausable(
+      [&](const std::filesystem::path&, const separation::ArtifactPaths&,
+          const separation::Job::ProgressReporter&,
+          const separation::Job::DiagnosticReporter&,
+          const separation::ExecutionControl& control, std::string*) {
+        pauseOperationStarted.store(true, std::memory_order_release);
+        while (!enterPauseCheckpoint.load(std::memory_order_acquire)) {
+          std::this_thread::yield();
+        }
+        if (!control.checkpoint()) return false;
+        passedPauseCheckpoint.store(true, std::memory_order_release);
+        return true;
+      });
+  ok &= expect(pausable.tryStart("pause.mp4"),
+               "a pausable operation must start");
+  for (int attempt = 0;
+       attempt < 100 &&
+       !pauseOperationStarted.load(std::memory_order_acquire);
+       ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  const bool pauseAccepted = pausable.setPaused(true);
+  enterPauseCheckpoint.store(true, std::memory_order_release);
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  const separation::JobSnapshot pausedSnapshot = pausable.snapshot();
+  const bool stayedPaused =
+      !passedPauseCheckpoint.load(std::memory_order_acquire);
+  const bool resumeAccepted = pausable.setPaused(false);
+  std::optional<separation::JobSnapshot> resumedCompletion;
+  for (int attempt = 0; attempt < 100 && !resumedCompletion; ++attempt) {
+    resumedCompletion = pausable.takeCompletion();
+    if (!resumedCompletion) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  ok &= expect(pauseAccepted && pausedSnapshot.paused && stayedPaused &&
+                   resumeAccepted && resumedCompletion &&
+                   resumedCompletion->succeeded() &&
+                   passedPauseCheckpoint.load(std::memory_order_acquire),
+               "pause must block at a checkpoint and resume without losing "
+               "the job");
+  if (resumedCompletion && !resumedCompletion->diagnosticLog.empty()) {
+    const std::string pauseDiagnostics =
+        readText(resumedCompletion->diagnosticLog);
+    ok &= expect(pauseDiagnostics.find("Paused while foreground video") !=
+                         std::string::npos &&
+                     pauseDiagnostics.find(
+                         "Resumed after foreground video") !=
+                         std::string::npos,
+                 "the task log must explain scheduler-driven pauses");
+    std::error_code ignored;
+    std::filesystem::remove(resumedCompletion->diagnosticLog, ignored);
+  }
+
+  std::atomic<bool> pausedCancelOperationStarted{false};
+  std::atomic<bool> enterPausedCancelCheckpoint{false};
+  separation::Job cancelWhilePaused(
+      [&](const std::filesystem::path&, const separation::ArtifactPaths&,
+          const separation::Job::ProgressReporter&,
+          const separation::Job::DiagnosticReporter&,
+          const separation::ExecutionControl& control, std::string* error) {
+        pausedCancelOperationStarted.store(true, std::memory_order_release);
+        while (!enterPausedCancelCheckpoint.load(std::memory_order_acquire)) {
+          std::this_thread::yield();
+        }
+        if (control.checkpoint()) return true;
+        if (error) *error = "Controlled cancellation while paused.";
+        return false;
+      });
+  ok &= expect(cancelWhilePaused.tryStart("paused-cancel.mp4"),
+               "a paused cancellation operation must start");
+  for (int attempt = 0;
+       attempt < 100 &&
+       !pausedCancelOperationStarted.load(std::memory_order_acquire);
+       ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  const bool pausedBeforeCancellation = cancelWhilePaused.setPaused(true);
+  enterPausedCancelCheckpoint.store(true, std::memory_order_release);
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  const bool pausedCancellationAccepted = cancelWhilePaused.requestCancel();
+  std::optional<separation::JobSnapshot> pausedCancellation;
+  for (int attempt = 0; attempt < 100 && !pausedCancellation; ++attempt) {
+    pausedCancellation = cancelWhilePaused.takeCompletion();
+    if (!pausedCancellation) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  ok &= expect(pausedBeforeCancellation && pausedCancellationAccepted &&
+                   pausedCancellation &&
+                   pausedCancellation->state ==
+                       separation::JobState::Cancelled,
+               "cancelling a paused job must wake and join its worker");
+  if (pausedCancellation && !pausedCancellation->diagnosticLog.empty()) {
+    std::error_code ignored;
+    std::filesystem::remove(pausedCancellation->diagnosticLog, ignored);
   }
   return ok;
 }
