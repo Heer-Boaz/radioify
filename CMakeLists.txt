@@ -1313,6 +1313,22 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
     WindowsML::OnnxRuntime)
   radioify_deploy_windows_ml(audio_separation_smoke)
 
+  add_executable(audio_separation_scheduler_smoke)
+  target_sources(audio_separation_scheduler_smoke PRIVATE
+    $<TARGET_OBJECTS:radioify_tool_audio_separation_scheduler_smoke>
+    $<TARGET_OBJECTS:radioify_audio_separation>
+    ${CMAKE_SOURCE_DIR}/audio/ffmpegaudio.cpp
+    ${CMAKE_SOURCE_DIR}/audio/flac_writer.cpp
+    ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+    ${CMAKE_SOURCE_DIR}/core/diagnostic_log.cpp
+    ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+    ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
+  )
+  radioify_link_repo_target(audio_separation_scheduler_smoke)
+  target_link_libraries(audio_separation_scheduler_smoke PRIVATE
+    WindowsML::OnnxRuntime)
+  radioify_deploy_windows_ml(audio_separation_scheduler_smoke)
+
   add_executable(audio_separation_model_stress)
   target_sources(audio_separation_model_stress PRIVATE
     $<TARGET_OBJECTS:radioify_tool_audio_separation_model_stress>
@@ -1396,6 +1412,8 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   )
   add_dependencies(radioify radioify_audio_separation_runtime_model)
   add_dependencies(audio_separation_smoke
+                   radioify_audio_separation_runtime_model)
+  add_dependencies(audio_separation_scheduler_smoke
                    radioify_audio_separation_runtime_model)
 endif()
 
@@ -1979,6 +1997,8 @@ if (FFMPEG_LIBRARY_DIRS)
                             ${FFMPEG_LIBRARY_DIRS})
     target_link_directories(audio_separation_smoke PRIVATE
                             ${FFMPEG_LIBRARY_DIRS})
+    target_link_directories(audio_separation_scheduler_smoke PRIVATE
+                            ${FFMPEG_LIBRARY_DIRS})
   endif()
 endif()
 
@@ -1996,6 +2016,8 @@ target_link_libraries(scene_analysis_smoke PRIVATE ${FFMPEG_LIBRARIES})
 if (RADIOIFY_HAS_AUDIO_SEPARATION)
   target_link_libraries(audio_separation_tests PRIVATE ${FFMPEG_LIBRARIES})
   target_link_libraries(audio_separation_smoke PRIVATE ${FFMPEG_LIBRARIES})
+  target_link_libraries(audio_separation_scheduler_smoke PRIVATE
+                        ${FFMPEG_LIBRARIES})
 endif()
 
 set(RADIOIFY_HAS_LIBASS OFF)

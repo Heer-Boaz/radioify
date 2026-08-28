@@ -288,6 +288,11 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   )
 
   radioify_add_module_object_library(
+    radioify_tool_audio_separation_scheduler_smoke
+    ${CMAKE_CURRENT_SOURCE_DIR}/audio_separation_scheduler_smoke.cpp
+  )
+
+  radioify_add_module_object_library(
     radioify_tool_audio_separation_model_stress
     ${CMAKE_CURRENT_SOURCE_DIR}/audio_separation_model_stress.cpp
   )
