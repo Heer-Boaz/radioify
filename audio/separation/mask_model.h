@@ -3,6 +3,7 @@
 #include <atomic>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -12,6 +13,10 @@ namespace audio_separation {
 
 class BanditMaskModel {
  public:
+  // A batch of one keeps DirectML's peak activation memory bounded. Stereo
+  // channels are evaluated sequentially through the same reusable buffers.
+  static constexpr std::size_t kBatchSize = 1;
+
   BanditMaskModel();
   ~BanditMaskModel();
 
@@ -21,8 +26,8 @@ class BanditMaskModel {
   bool initialize(const std::filesystem::path& modelPath,
                   DiagnosticReporter diagnostics,
                   std::string* error);
-  bool run(const std::vector<float>& spectrogramRealImag,
-           std::vector<float>* masksRealImag,
+  bool run(std::span<const float> spectrogramRealImag,
+           std::span<const float>* masksRealImag,
            const std::atomic<bool>* cancelRequested,
            std::string* error);
 

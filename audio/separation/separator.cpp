@@ -8,6 +8,7 @@
 #include <fstream>
 #include <limits>
 #include <numbers>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -469,7 +470,7 @@ bool separateMediaAudioUsingModel(
   std::vector<float> interleavedChunk;
   std::vector<float> monoChunk(static_cast<std::size_t>(kChunkFrames));
   std::vector<float> spectrogram;
-  std::vector<float> masks;
+  std::span<const float> masks;
   std::vector<float> reconstructed;
   std::array<std::vector<float>, kStemCount> overlap;
   for (std::vector<float>& stem : overlap) {

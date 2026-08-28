@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <span>
 #include <sstream>
 #include <utility>
 
@@ -16,6 +17,25 @@ namespace {
 
 constexpr const char* kInputName = "spectrogram_ri";
 constexpr const char* kOutputName = "masks_ri";
+constexpr std::array<std::int64_t, 5> kInputShape = {
+    static_cast<std::int64_t>(BanditMaskModel::kBatchSize),
+    1,
+    static_cast<std::int64_t>(BanditSpectralTransform::kFrequencyBins),
+    static_cast<std::int64_t>(BanditSpectralTransform::kTimeFrames),
+    2};
+constexpr std::array<std::int64_t, 6> kOutputShape = {
+    static_cast<std::int64_t>(BanditMaskModel::kBatchSize),
+    static_cast<std::int64_t>(kStemCount),
+    1,
+    static_cast<std::int64_t>(BanditSpectralTransform::kFrequencyBins),
+    static_cast<std::int64_t>(BanditSpectralTransform::kTimeFrames),
+    2};
+constexpr std::size_t kOutputValues =
+    BanditMaskModel::kBatchSize * kStemCount *
+    BanditSpectralTransform::kRealImagValues;
+constexpr std::size_t kInputValues =
+    BanditMaskModel::kBatchSize *
+    BanditSpectralTransform::kRealImagValues;
 
 void setError(std::string* error, std::string message) {
   if (error) *error = std::move(message);
@@ -26,8 +46,35 @@ bool cancelled(const std::atomic<bool>* cancelRequested) {
          cancelRequested->load(std::memory_order_relaxed);
 }
 
-bool isDimension(std::int64_t actual, std::int64_t expected) {
-  return actual <= 0 || actual == expected;
+template <std::size_t Size>
+bool matchesShape(const std::vector<std::int64_t>& actual,
+                  const std::array<std::int64_t, Size>& expected) {
+  return actual.size() == expected.size() &&
+         std::equal(actual.begin(), actual.end(), expected.begin());
+}
+
+std::string shapeDescription(const std::vector<std::int64_t>& dimensions) {
+  std::ostringstream description;
+  description << '[';
+  for (std::size_t index = 0; index < dimensions.size(); ++index) {
+    if (index > 0) description << ',';
+    description << dimensions[index];
+  }
+  description << ']';
+  return description.str();
+}
+
+std::string symbolicShapeDescription(
+    const std::vector<const char*>& dimensions) {
+  std::ostringstream description;
+  description << '[';
+  for (std::size_t index = 0; index < dimensions.size(); ++index) {
+    if (index > 0) description << ',';
+    const char* name = dimensions[index];
+    description << (name && name[0] != '\0' ? name : "-");
+  }
+  description << ']';
+  return description.str();
 }
 
 DiagnosticLevel diagnosticLevel(OrtLoggingLevel level) {
@@ -79,7 +126,9 @@ std::string elementTypeName(ONNXTensorElementDataType type) {
   }
 }
 
-bool matchesModelContract(Ort::Session& session, std::string* error) {
+bool matchesModelContract(Ort::Session& session,
+                          const DiagnosticReporter& diagnostics,
+                          std::string* error) {
   if (session.GetInputCount() != 1 || session.GetOutputCount() != 1) {
     setError(error, "The audio-separation model has an unexpected graph interface.");
     return false;
@@ -110,16 +159,20 @@ bool matchesModelContract(Ort::Session& session, std::string* error) {
   }
   const std::vector<std::int64_t> inputShape = inputInfo.GetShape();
   const std::vector<std::int64_t> outputShape = outputInfo.GetShape();
-  if (inputShape.size() != 5 || outputShape.size() != 6 ||
-      !isDimension(inputShape[1], 1) ||
-      !isDimension(inputShape[2], 1025) ||
-      !isDimension(inputShape[4], 2) ||
-      !isDimension(outputShape[1],
-                   static_cast<std::int64_t>(kStemCount)) ||
-      !isDimension(outputShape[2], 1) ||
-      !isDimension(outputShape[3], 1025) ||
-      !isDimension(outputShape[5], 2)) {
-    setError(error, "The audio-separation model dimensions are incompatible.");
+  const std::vector<const char*> inputSymbols =
+      inputInfo.GetSymbolicDimensions();
+  const std::vector<const char*> outputSymbols =
+      outputInfo.GetSymbolicDimensions();
+  reportDiagnostic(diagnostics, DiagnosticLevel::Info, "model",
+                   "Graph input " + shapeDescription(inputShape) +
+                       " " + symbolicShapeDescription(inputSymbols) +
+                       "; output " + shapeDescription(outputShape) + " " +
+                       symbolicShapeDescription(outputSymbols));
+  if (!matchesShape(inputShape, kInputShape) ||
+      !matchesShape(outputShape, kOutputShape)) {
+    setError(error, "The audio-separation model dimensions are incompatible: " +
+                        shapeDescription(inputShape) + " -> " +
+                        shapeDescription(outputShape) + ".");
     return false;
   }
   return true;
@@ -138,6 +191,21 @@ struct BanditMaskModel::Impl {
   std::unique_ptr<Ort::Session> session;
   Ort::MemoryInfo cpuMemory =
       Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+  std::vector<float> inputBuffer;
+  std::vector<float> outputBuffer;
+  Ort::Value inputValue{nullptr};
+  Ort::Value outputValue{nullptr};
+
+  void allocateIoBuffers() {
+    inputBuffer.resize(kInputValues);
+    outputBuffer.resize(kOutputValues);
+    inputValue = Ort::Value::CreateTensor<float>(
+        cpuMemory, inputBuffer.data(), inputBuffer.size(), kInputShape.data(),
+        kInputShape.size());
+    outputValue = Ort::Value::CreateTensor<float>(
+        cpuMemory, outputBuffer.data(), outputBuffer.size(),
+        kOutputShape.data(), kOutputShape.size());
+  }
 };
 
 BanditMaskModel::BanditMaskModel() = default;
@@ -183,14 +251,21 @@ bool BanditMaskModel::initialize(const std::filesystem::path& modelPath,
     options.DisableMemPattern();
     options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
     options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+    options.AddFreeDimensionOverrideByName("batch", kInputShape[0]);
+    options.AddFreeDimensionOverrideByName("time", kInputShape[3]);
     Ort::KeyValuePairs providerOptions;
     options.AppendExecutionProvider_V2(implementation->environment,
                                        directMlDevices, providerOptions);
     implementation->session = std::make_unique<Ort::Session>(
         implementation->environment, modelPath.c_str(), options);
-    if (!matchesModelContract(*implementation->session, error)) return false;
+    if (!matchesModelContract(*implementation->session,
+                              implementation->diagnostics, error)) {
+      return false;
+    }
+    implementation->allocateIoBuffers();
     reportDiagnostic(implementation->diagnostics, DiagnosticLevel::Info,
-                     "directml", "Model session initialized successfully.");
+                     "directml",
+                     "Model session and reusable I/O buffers initialized.");
     impl_ = std::move(implementation);
     return true;
   } catch (const Ort::Exception& exception) {
@@ -204,14 +279,24 @@ bool BanditMaskModel::initialize(const std::filesystem::path& modelPath,
   }
 }
 
-bool BanditMaskModel::run(const std::vector<float>& spectrogramRealImag,
-                          std::vector<float>* masksRealImag,
+bool BanditMaskModel::run(std::span<const float> spectrogramRealImag,
+                          std::span<const float>* masksRealImag,
                           const std::atomic<bool>* cancelRequested,
                           std::string* error) {
-  if (!impl_ || !impl_->session || !masksRealImag ||
-      spectrogramRealImag.size() !=
-          BanditSpectralTransform::kRealImagValues) {
+  if (error) error->clear();
+  if (!impl_ || !impl_->session) {
     setError(error, "The DirectML separation session is not ready.");
+    return false;
+  }
+  if (!masksRealImag) {
+    setError(error, "No destination was provided for separation masks.");
+    return false;
+  }
+  if (spectrogramRealImag.size() != kInputValues) {
+    setError(error, "The DirectML separation session expected " +
+                        std::to_string(kInputValues) +
+                        " input values but received " +
+                        std::to_string(spectrogramRealImag.size()) + ".");
     return false;
   }
   if (cancelled(cancelRequested)) {
@@ -219,37 +304,20 @@ bool BanditMaskModel::run(const std::vector<float>& spectrogramRealImag,
     return false;
   }
   try {
-    const std::array<std::int64_t, 5> inputShape = {
-        1,
-        1,
-        static_cast<std::int64_t>(BanditSpectralTransform::kFrequencyBins),
-        static_cast<std::int64_t>(BanditSpectralTransform::kTimeFrames),
-        2};
-    Ort::Value input = Ort::Value::CreateTensor<float>(
-        impl_->cpuMemory, const_cast<float*>(spectrogramRealImag.data()),
-        spectrogramRealImag.size(), inputShape.data(), inputShape.size());
+    std::copy(spectrogramRealImag.begin(), spectrogramRealImag.end(),
+              impl_->inputBuffer.begin());
     const char* inputNames[] = {kInputName};
     const char* outputNames[] = {kOutputName};
-    std::vector<Ort::Value> output = impl_->session->Run(
-        Ort::RunOptions{nullptr}, inputNames, &input, 1, outputNames, 1);
+    impl_->session->Run(Ort::RunOptions{nullptr}, inputNames,
+                        &impl_->inputValue, 1, outputNames,
+                        &impl_->outputValue, 1);
     if (cancelled(cancelRequested)) {
       setError(error, "Audio separation cancelled.");
       return false;
     }
-    if (output.size() != 1 || !output[0].IsTensor()) {
-      setError(error, "DirectML returned no audio-separation masks.");
-      return false;
-    }
-    const std::size_t expectedValues =
-        kStemCount * BanditSpectralTransform::kRealImagValues;
-    const auto outputInfo = output[0].GetTensorTypeAndShapeInfo();
-    if (outputInfo.GetElementCount() != expectedValues ||
-        outputInfo.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-      setError(error, "DirectML returned incompatible separation masks.");
-      return false;
-    }
-    const float* values = output[0].GetTensorData<float>();
-    masksRealImag->assign(values, values + expectedValues);
+    // The session contract and the bound output tensor were validated once at
+    // initialization. Keep the repeated inference path allocation-free.
+    *masksRealImag = std::span<const float>(impl_->outputBuffer);
     return true;
   } catch (const Ort::Exception& exception) {
     setError(error, std::string("DirectML audio separation failed: ") +

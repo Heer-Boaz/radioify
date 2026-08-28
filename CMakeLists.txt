@@ -1293,6 +1293,20 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   target_link_libraries(audio_separation_smoke PRIVATE
     WindowsML::OnnxRuntime)
   radioify_deploy_windows_ml(audio_separation_smoke)
+
+  add_executable(audio_separation_model_stress)
+  target_sources(audio_separation_model_stress PRIVATE
+    $<TARGET_OBJECTS:radioify_tool_audio_separation_model_stress>
+    ${CMAKE_SOURCE_DIR}/audio/separation/mask_model.cpp
+  )
+  set_target_properties(audio_separation_model_stress PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+  )
+  radioify_link_repo_target(audio_separation_model_stress)
+  target_link_libraries(audio_separation_model_stress PRIVATE
+    WindowsML::OnnxRuntime)
+  radioify_deploy_windows_ml(audio_separation_model_stress)
 endif()
 
 add_executable(windows_console_window_tests)
