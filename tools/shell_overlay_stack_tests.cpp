@@ -67,6 +67,10 @@ int main() {
       shell_command_catalog::build({});
 
   shell_overlay_stack::Model overlays;
+  const shell_overlay_stack::DialogOwner failureOwner =
+      overlays.createDialogOwner();
+  const shell_overlay_stack::DialogOwner decisionOwner =
+      overlays.createDialogOwner();
   ok &= expect(!overlays.active() && !overlays.inputModal() &&
                    overlays.activeLayer() == Layer::None,
                "the overlay stack must start empty");
@@ -119,10 +123,12 @@ int main() {
       {"Reason: DirectML device was removed", tui_dialog::TextTone::Error});
   failureDialog.buttons = {{0, "Close"}, {1, "Retry"}};
   overlays.toggleCommandPalette();
-  const tui_dialog::DialogId failureDialogId =
-      overlays.openDialog(std::move(failureDialog));
+  const shell_overlay_stack::DialogOpening failureOpening =
+      overlays.openDialog(failureOwner, std::move(failureDialog));
+  const tui_dialog::DialogId failureDialogId = failureOpening.lease.dialog;
   ok &= expect(failureDialogId &&
-                   overlays.activeDialogId() == failureDialogId &&
+                   overlays.activeDialog() == failureOpening.lease &&
+                   !failureOpening.replaced &&
                    overlays.activeLayer() == Layer::Dialog,
                "a dialog must replace every less important transient layer");
   ok &= expect(overlays.inputModal(),
@@ -135,10 +141,11 @@ int main() {
       "an input-modal dialog must consume unrelated shortcuts");
   interaction = overlays.handle(keyEvent(VK_TAB), bounds, catalog);
   interaction = overlays.handle(keyEvent(VK_RETURN), bounds, catalog);
-  ok &= expect(interaction.dialogActivation &&
-                   interaction.dialogActivation->dialog == failureDialogId &&
-                   interaction.dialogActivation->button == 1 &&
-                   !overlays.activeDialogId() &&
+  ok &= expect(interaction.dialogResolution &&
+                   interaction.dialogResolution->lease ==
+                       failureOpening.lease &&
+                   interaction.dialogResolution->activatedButton == 1 &&
+                   !overlays.activeDialog() &&
                    overlays.activeLayer() == Layer::None,
                "dialog buttons must publish a typed result without nesting "
                "an event loop");
@@ -147,8 +154,10 @@ int main() {
   safeDefaultDialog.title = "Cancel task?";
   safeDefaultDialog.buttons = {{2, "Cancel task"}, {3, "Keep running"}};
   safeDefaultDialog.initiallySelectedButton = 3;
+  const shell_overlay_stack::DialogOpening safeDefaultOpening =
+      overlays.openDialog(decisionOwner, std::move(safeDefaultDialog));
   const tui_dialog::DialogId safeDefaultDialogId =
-      overlays.openDialog(std::move(safeDefaultDialog));
+      safeDefaultOpening.lease.dialog;
   interaction = overlays.handle(resizeEvent(32, 8), {32, 8, 1}, catalog);
   ok &= expect(interaction.consumed && overlays.inputModal() &&
                    overlays.activeLayer() == Layer::Dialog,
@@ -156,9 +165,11 @@ int main() {
                "host bounds without dismissing a renderable decision");
   interaction = overlays.handle(keyEvent(VK_RETURN), bounds, catalog);
   ok &=
-      expect(interaction.dialogActivation &&
-                 interaction.dialogActivation->dialog == safeDefaultDialogId &&
-                 interaction.dialogActivation->button == 3 &&
+      expect(interaction.dialogResolution &&
+                 interaction.dialogResolution->lease.dialog ==
+                     safeDefaultDialogId &&
+                 interaction.dialogResolution->lease.owner == decisionOwner &&
+                 interaction.dialogResolution->activatedButton == 3 &&
                  overlays.activeLayer() == Layer::None &&
                  !overlays.inputModal(),
              "a dialog must honor an explicitly selected safe default");
@@ -166,15 +177,17 @@ int main() {
   tui_dialog::Content keyboardDialog;
   keyboardDialog.title = "Keyboard grammar";
   keyboardDialog.buttons = {{6, "First"}, {7, "Second"}};
-  const tui_dialog::DialogId keyboardDialogId =
-      overlays.openDialog(std::move(keyboardDialog));
+  const shell_overlay_stack::DialogOpening keyboardOpening =
+      overlays.openDialog(decisionOwner, std::move(keyboardDialog));
+  const tui_dialog::DialogId keyboardDialogId = keyboardOpening.lease.dialog;
   interaction = overlays.handle(keyEvent(VK_TAB), bounds, catalog);
   interaction =
       overlays.handle(keyEvent(VK_TAB, SHIFT_PRESSED), bounds, catalog);
   interaction = overlays.handle(keyEvent(VK_SPACE), bounds, catalog);
-  ok &= expect(interaction.dialogActivation &&
-                   interaction.dialogActivation->dialog == keyboardDialogId &&
-                   interaction.dialogActivation->button == 6,
+  ok &= expect(interaction.dialogResolution &&
+                   interaction.dialogResolution->lease.dialog ==
+                       keyboardDialogId &&
+                   interaction.dialogResolution->activatedButton == 6,
                "dialog buttons must support reverse Tab navigation and Space "
                "activation");
 
@@ -271,8 +284,9 @@ int main() {
 
   tui_dialog::Content replacementDialog;
   replacementDialog.title = "Stable dialog identity";
-  const tui_dialog::DialogId replacementId =
-      overlays.openDialog(std::move(replacementDialog));
+  const shell_overlay_stack::DialogOpening replacementOpening =
+      overlays.openDialog(decisionOwner, std::move(replacementDialog));
+  const tui_dialog::DialogId replacementId = replacementOpening.lease.dialog;
   ok &= expect(!overlays.dismissDialog(failureDialogId) &&
                    overlays.activeLayer() == Layer::Dialog &&
                    overlays.dismissDialog(replacementId) &&
@@ -283,8 +297,26 @@ int main() {
   ok &= expect(overlays.openMediaMenu(mediaEntry("empty.mp4"), {}) &&
                    overlays.activeLayer() == Layer::None,
                "an empty media menu request must still close the prior layer");
-  ok &= expect(!overlays.dismiss(),
+  ok &= expect(!overlays.dismiss().changed,
                "dismissing an empty stack must be idempotent");
+
+  tui_dialog::Content ownedDialog;
+  ownedDialog.title = "Owned replacement";
+  const shell_overlay_stack::DialogOpening firstOwned =
+      overlays.openDialog(failureOwner, std::move(ownedDialog));
+  tui_dialog::Content replacingDialog;
+  replacingDialog.title = "New owner";
+  const shell_overlay_stack::DialogOpening secondOwned =
+      overlays.openDialog(decisionOwner, std::move(replacingDialog));
+  ok &= expect(secondOwned.replaced == firstOwned.lease &&
+                   overlays.activeDialog() == secondOwned.lease,
+               "opening a dialog must return the exact displaced owner lease");
+  interaction = overlays.handle(
+      inputActionEvent(InputAction::Back), bounds, catalog);
+  ok &= expect(interaction.dialogResolution &&
+                   interaction.dialogResolution->lease == secondOwned.lease &&
+                   !interaction.dialogResolution->activatedButton,
+               "dismissal must resolve only the owner of the active lease");
 
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -1,8 +1,23 @@
 #include "shell_overlay_stack.h"
 
+#include <cassert>
 #include <utility>
 
 namespace shell_overlay_stack {
+
+DialogOwner Model::createDialogOwner() {
+  DialogOwner owner{nextDialogOwnerValue_++};
+  if (nextDialogOwnerValue_ == 0) {
+    nextDialogOwnerValue_ = 1;
+  }
+  return owner;
+}
+
+std::optional<DialogLease> Model::activeDialog() const {
+  const std::optional<tui_dialog::DialogId> dialog = dialog_.activeId();
+  if (!dialog || !dialogOwner_) return std::nullopt;
+  return DialogLease{*dialogOwner_, *dialog};
+}
 
 Layer Model::activeLayer() const {
   if (dialog_.active()) {
@@ -42,21 +57,39 @@ bool Model::toggleCommandPalette() {
   return true;
 }
 
-tui_dialog::DialogId Model::openDialog(tui_dialog::Content content) {
+DialogOpening Model::openDialog(DialogOwner owner,
+                                tui_dialog::Content content) {
+  assert(owner && "dialogs require an explicit owner");
+  const std::optional<DialogLease> replaced = activeDialog();
   mediaMenu_.dismiss();
   commandPalette_.dismiss();
-  return dialog_.open(std::move(content));
+  const tui_dialog::DialogId dialog = dialog_.open(std::move(content));
+  dialogOwner_ = owner;
+  return DialogOpening{DialogLease{owner, dialog}, replaced};
 }
 
-bool Model::dismissDialog(tui_dialog::DialogId expectedDialog) {
-  return dialog_.dismiss(expectedDialog);
+std::optional<DialogLease> Model::dismissDialog(
+    tui_dialog::DialogId expectedDialog) {
+  const std::optional<DialogLease> lease = activeDialog();
+  if (!lease || lease->dialog != expectedDialog ||
+      !dialog_.dismiss(expectedDialog)) {
+    return std::nullopt;
+  }
+  dialogOwner_.reset();
+  return lease;
 }
 
-bool Model::dismiss() {
+Dismissal Model::dismiss() {
+  Dismissal result;
+  result.dialog = activeDialog();
   const bool mediaMenuDismissed = mediaMenu_.dismiss();
   const bool paletteDismissed = commandPalette_.dismiss();
   const bool dialogDismissed = dialog_.dismiss();
-  return mediaMenuDismissed || paletteDismissed || dialogDismissed;
+  if (dialogDismissed) dialogOwner_.reset();
+  result.changed =
+      mediaMenuDismissed || paletteDismissed || dialogDismissed;
+  if (!dialogDismissed) result.dialog.reset();
+  return result;
 }
 
 Interaction Model::handle(const InputEvent& event, const Bounds& bounds,
@@ -93,6 +126,7 @@ Interaction Model::handle(const InputEvent& event, const Bounds& bounds,
       break;
     }
     case Layer::Dialog: {
+      const std::optional<DialogLease> lease = activeDialog();
       tui_dialog::Bounds dialogBounds;
       dialogBounds.width = bounds.width;
       dialogBounds.height = bounds.height;
@@ -101,8 +135,15 @@ Interaction Model::handle(const InputEvent& event, const Bounds& bounds,
           dialog_.handle(event, dialogBounds);
       result.consumed = interaction.consumed;
       result.changed = interaction.changed;
-      result.dismissedDialog = interaction.dismissedDialog;
-      result.dialogActivation = interaction.activation;
+      if (lease && interaction.dismissedDialog == lease->dialog) {
+        DialogResolution resolution;
+        resolution.lease = *lease;
+        if (interaction.activation) {
+          resolution.activatedButton = interaction.activation->button;
+        }
+        result.dialogResolution = resolution;
+        dialogOwner_.reset();
+      }
       break;
     }
     case Layer::None:

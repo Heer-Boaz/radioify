@@ -459,6 +459,39 @@ int runTui(Options o, ApplicationRuntime& runtime) {
 
   const TuiTheme theme = radioifyTuiTheme();
 
+  shell_overlay_stack::Model shellOverlays;
+  const shell_overlay_stack::DialogOwner informationDialogOwner =
+      shellOverlays.createDialogOwner();
+  const shell_overlay_stack::DialogOwner applicationExitDialogOwner =
+      shellOverlays.createDialogOwner();
+  const shell_overlay_stack::DialogOwner mediaTaskDialogOwner =
+      shellOverlays.createDialogOwner();
+  tui_application_exit::Controller applicationExit;
+  tui_media_task_panel::State mediaTaskPanel;
+  tui_media_task_panel::DialogSession mediaTaskDialogs;
+  tui_media_task_panel::DeferredFailureState deferredMediaTaskFailure;
+  const shell_overlay_stack::Styles shellOverlayStyles{
+      theme.popupMenuStyles(), theme.commandPaletteStyles(),
+      theme.dialogStyles()};
+
+  const auto retireShellDialog =
+      [&](const shell_overlay_stack::DialogLease& lease) {
+        if (lease.owner == applicationExitDialogOwner) {
+          applicationExit.dismissed(lease.dialog);
+        } else if (lease.owner == mediaTaskDialogOwner) {
+          mediaTaskDialogs.dismissed(lease.dialog);
+        }
+      };
+
+  const auto openShellDialog =
+      [&](shell_overlay_stack::DialogOwner owner,
+          tui_dialog::Content content) {
+        shell_overlay_stack::DialogOpening opening =
+            shellOverlays.openDialog(owner, std::move(content));
+        if (opening.replaced) retireShellDialog(*opening.replaced);
+        return opening.lease.dialog;
+      };
+
   auto showPlaybackErrorDialog = [&](const std::filesystem::path& file) {
     std::string error = audioPlayback.warning();
     if (error.empty()) {
@@ -478,9 +511,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           "to radioify.exe, or in " RADIOIFY_APP_NAME "'s launch directory.";
     }
 
-    playback_dialog::showInfoDialog(
-        input, screen, theme.normal, theme.accent, theme.dim, title, message,
-        detail, "Enter/Space/Esc: close");
+    tui_dialog::Content content;
+    content.title = std::move(title);
+    content.text.push_back({std::move(message), tui_dialog::TextTone::Error});
+    content.text.push_back({std::move(detail), tui_dialog::TextTone::Normal});
+    content.buttons.push_back({0, "Close"});
+    openShellDialog(informationDialogOwner, std::move(content));
   };
 
   if (!o.input.empty() && o.play) {
@@ -535,11 +571,14 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         audioPictureInPicture.lastError().empty()
             ? "The picture-in-picture window did not open."
             : audioPictureInPicture.lastError();
-    playback_dialog::showInfoDialog(input, screen, theme.normal, theme.accent,
-                                    theme.dim, "Picture-in-Picture Error",
-                                    RADIOIFY_APP_NAME
-                                    " could not open picture-in-picture.",
-                                    detail, "Enter/Space/Esc: close");
+    tui_dialog::Content content;
+    content.title = "Picture-in-Picture Error";
+    content.text.push_back(
+        {RADIOIFY_APP_NAME " could not open picture-in-picture.",
+         tui_dialog::TextTone::Error});
+    content.text.push_back({detail, tui_dialog::TextTone::Normal});
+    content.buttons.push_back({0, "Close"});
+    openShellDialog(informationDialogOwner, std::move(content));
   };
   auto applyAudioPictureInPicturePlan =
       [&](playback_route::AudioPictureInPicturePlan plan) {
@@ -597,6 +636,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
               std::is_same_v<Event,
                              TuiMediaCoordinator::AudioPlaybackFailed>) {
             showPlaybackErrorDialog(value.file);
+            markDirty();
           } else if constexpr (
               std::is_same_v<Event, TuiMediaCoordinator::ShowImages>) {
             applyAudioPictureInPicturePlan(value.audioPictureInPicture);
@@ -705,14 +745,6 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
   }
 
-  shell_overlay_stack::Model shellOverlays;
-  tui_application_exit::Controller applicationExit;
-  tui_media_task_panel::State mediaTaskPanel;
-  tui_media_task_panel::DialogSession mediaTaskDialogs;
-  tui_media_task_panel::DeferredFailureState deferredMediaTaskFailure;
-  const shell_overlay_stack::Styles shellOverlayStyles{
-      theme.popupMenuStyles(), theme.commandPaletteStyles(),
-      theme.dialogStyles()};
   const auto openFileRequestWakeHandle = [&]() {
     return shellOverlays.inputModal() ||
                    !mediaCoordinator.canAcceptExternalMediaChange()
@@ -875,7 +907,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       browserInteraction.breadcrumbHover = -1;
       browserInteraction.actionHover = -1;
     }
-    shellOverlays.dismiss();
+    const shell_overlay_stack::Dismissal dismissal = shellOverlays.dismiss();
+    if (dismissal.dialog) retireShellDialog(*dismissal.dialog);
     markLayoutDirty();
   };
   auto toggleOptions = [&]() {
@@ -1173,29 +1206,15 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     return shell_command_catalog::build(context);
   };
 
-  const auto retireShellDialogOwner =
-      [&](tui_dialog::DialogId dialog) {
-        applicationExit.dismissed(dialog);
-        mediaTaskDialogs.dismissed(dialog);
-      };
-
   auto openApplicationExitDialog = [&](tui_dialog::Content content) {
-    if (const std::optional<tui_dialog::DialogId> previous =
-            shellOverlays.activeDialogId()) {
-      retireShellDialogOwner(*previous);
-    }
     const tui_dialog::DialogId dialog =
-        shellOverlays.openDialog(std::move(content));
+        openShellDialog(applicationExitDialogOwner, std::move(content));
     applicationExit.opened(dialog);
   };
 
   auto openMediaTaskDialog = [&](tui_media_task_panel::DialogRequest request) {
-    if (const std::optional<tui_dialog::DialogId> previous =
-            shellOverlays.activeDialogId()) {
-      retireShellDialogOwner(*previous);
-    }
     const tui_dialog::DialogId dialog =
-        shellOverlays.openDialog(std::move(request.content));
+        openShellDialog(mediaTaskDialogOwner, std::move(request.content));
     mediaTaskDialogs.opened(dialog, std::move(request.context));
   };
 
@@ -1203,8 +1222,9 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       [&](tui_application_exit::Transition transition) {
         for (;;) {
           if (transition.dismissDialog) {
-            if (shellOverlays.dismissDialog(*transition.dismissDialog)) {
-              retireShellDialogOwner(*transition.dismissDialog);
+            if (const std::optional<shell_overlay_stack::DialogLease> dismissed =
+                    shellOverlays.dismissDialog(*transition.dismissDialog)) {
+              retireShellDialog(*dismissed);
               markDirty();
             }
           }
@@ -1386,7 +1406,9 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     if (const std::optional<tui_dialog::DialogId> obsoleteDialog =
             mediaTaskDialogs.synchronize(taskSnapshot.activeCard,
                                          taskSnapshot.latestFailure)) {
-      if (shellOverlays.dismissDialog(*obsoleteDialog)) {
+      if (const std::optional<shell_overlay_stack::DialogLease> dismissed =
+              shellOverlays.dismissDialog(*obsoleteDialog)) {
+        retireShellDialog(*dismissed);
         markDirty();
       }
     }
@@ -1632,19 +1654,24 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           dispatchPaletteIntent(*interaction.paletteIntent);
         }
         std::optional<tui_media_task_panel::DialogIntent> taskDialogIntent;
-        if (interaction.dialogActivation) {
-          tui_application_exit::Transition exitTransition =
-              applicationExit.handle(*interaction.dialogActivation,
-                                     mediaTasks.snapshot().activeCard);
-          if (exitTransition.handled) {
-            applyApplicationExitTransition(std::move(exitTransition));
-          } else {
-            taskDialogIntent =
-                mediaTaskDialogs.handle(*interaction.dialogActivation);
+        if (interaction.dialogResolution) {
+          const shell_overlay_stack::DialogResolution& resolution =
+              *interaction.dialogResolution;
+          if (resolution.activatedButton) {
+            const tui_dialog::ButtonActivation activation{
+                resolution.lease.dialog, *resolution.activatedButton};
+            if (resolution.lease.owner == applicationExitDialogOwner) {
+              tui_application_exit::Transition exitTransition =
+                  applicationExit.handle(
+                      activation, mediaTasks.snapshot().activeCard);
+              if (exitTransition.handled) {
+                applyApplicationExitTransition(std::move(exitTransition));
+              }
+            } else if (resolution.lease.owner == mediaTaskDialogOwner) {
+              taskDialogIntent = mediaTaskDialogs.handle(activation);
+            }
           }
-        }
-        if (interaction.dismissedDialog) {
-          retireShellDialogOwner(*interaction.dismissedDialog);
+          retireShellDialog(resolution.lease);
         }
         if (taskDialogIntent) {
           std::visit(
