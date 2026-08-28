@@ -63,6 +63,16 @@ int main() {
       "hovering the task button must be visible and consume the "
       "covered browser cell");
 
+  State compactState;
+  const Bounds compactBounds{80, 6, 2};
+  ok &= expect(layout(compactBounds, task).buttons.buttons.empty(),
+               "a compact surface must not publish hitboxes for clipped "
+               "buttons");
+  interaction =
+      compactState.handle(keyEvent(VK_TAB), compactBounds, noIndicator, task);
+  ok &= expect(!interaction.consumed && !compactState.focused(),
+               "keyboard focus must never enter an invisible button row");
+
   interaction = state.handle(
       pointerEvent(MouseEventKind::Press, cancel.x, card.buttons.y, true),
       bounds, noIndicator, task);
@@ -95,6 +105,11 @@ int main() {
                    state.hidden() && !state.focused(),
                "Hide must return focus to the browser and replace the panel "
                "with its compact status");
+
+  interaction = state.handle(keyEvent(VK_TAB), bounds, noIndicator, task);
+  ok &= expect(!interaction.consumed && !state.focused(),
+               "a hidden indicator must not receive focus before it has "
+               "visible geometry");
 
   const IndicatorLayout indicator = indicatorLayout(100, 25, task);
   ok &= expect(indicator.valid && indicatorText(task) == "Separating audio 10%",

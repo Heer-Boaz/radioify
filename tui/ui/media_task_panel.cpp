@@ -106,6 +106,12 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
   }
 
   const std::vector<tui_button_row::Button> actions = actionsFor(task);
+  const Layout currentLayout = hidden_ ? Layout{} : layout(bounds, task);
+  const std::size_t visibleActionCount = currentLayout.buttons.buttons.size();
+  const bool focusable = hidden_ ? indicator.valid : visibleActionCount > 0;
+  if (focused_ && !focusable) {
+    setFocused(false, result);
+  }
   if (event.type == InputEvent::Type::Action) {
     if (focused_) {
       result.consumed = true;
@@ -117,7 +123,7 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
   }
   if (event.type == InputEvent::Type::Key) {
     if (!focused_) {
-      if (event.key.vk == VK_TAB && (hidden_ || !actions.empty())) {
+      if (event.key.vk == VK_TAB && focusable) {
         setFocused(true, result);
         result.consumed = true;
       }
@@ -132,15 +138,15 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
         break;
       case VK_LEFT:
         if (!hidden_) {
-          selectedButton_ = tui_button_row::selectAdjacent(selectedButton_,
-                                                           actions.size(), -1);
+          selectedButton_ = tui_button_row::selectAdjacent(
+              selectedButton_, visibleActionCount, -1);
           result.changed = true;
         }
         break;
       case VK_RIGHT:
         if (!hidden_) {
-          selectedButton_ = tui_button_row::selectAdjacent(selectedButton_,
-                                                           actions.size(), 1);
+          selectedButton_ = tui_button_row::selectAdjacent(
+              selectedButton_, visibleActionCount, 1);
           result.changed = true;
         }
         break;
@@ -161,7 +167,6 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
     return result;
   }
 
-  const Layout currentLayout = layout(bounds, task);
   const MouseEvent& mouse = event.mouse;
   if (hidden_) {
     const bool hovered = indicator.contains(mouse.pos.X, mouse.pos.Y);
