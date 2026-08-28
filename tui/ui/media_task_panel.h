@@ -79,9 +79,11 @@ class State {
   bool show();
   std::optional<std::size_t> highlightedButton() const;
   bool indicatorHighlighted() const {
-    return hidden_ && (focused_ || indicatorHovered_);
+    return hidden_ && (focused_ || buttonPointer_.hovered().has_value());
   }
-  std::optional<std::size_t> hoveredButton() const { return hoveredButton_; }
+  std::optional<std::size_t> hoveredButton() const {
+    return hidden_ ? std::nullopt : buttonPointer_.hovered();
+  }
 
  private:
   void setFocused(bool focused, Interaction& interaction);
@@ -90,9 +92,8 @@ class State {
 
   bool hidden_ = false;
   bool focused_ = false;
-  bool indicatorHovered_ = false;
   std::size_t selectedButton_ = 0;
-  std::optional<std::size_t> hoveredButton_;
+  tui_button_row::PointerState buttonPointer_;
 };
 
 std::vector<tui_button_row::Button> actionsFor(const MediaTaskCardModel& task);

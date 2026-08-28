@@ -94,6 +94,7 @@ class Model {
   std::size_t selectedButton_ = 0;
   int firstVisibleLine_ = 0;
   bool active_ = false;
+  tui_button_row::PointerState buttonPointer_;
 };
 
 }  // namespace tui_dialog

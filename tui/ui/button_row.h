@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "tui/input_event.h"
+
 namespace tui_button_row {
 
 using ButtonId = std::uint32_t;
@@ -24,6 +26,30 @@ struct Placement {
 struct Layout {
   int y = -1;
   std::vector<Placement> buttons;
+};
+
+struct PointerInteraction {
+  bool changed = false;
+  // True while this event belongs to a press that began on a button. Callers
+  // use this as pointer capture so releasing outside cannot activate content
+  // underneath the button row.
+  bool captured = false;
+  std::optional<std::size_t> activated;
+};
+
+// Implements the desktop button contract shared by dialogs and panels: arm on
+// left-button press, activate only when that same press is released over the
+// same button, and cancel the gesture when pointer ownership is lost.
+class PointerState {
+ public:
+  PointerInteraction handle(const InputEvent& event, const Layout& layout);
+  void reset();
+
+  std::optional<std::size_t> hovered() const { return hovered_; }
+
+ private:
+  std::optional<std::size_t> hovered_;
+  std::optional<std::size_t> armed_;
 };
 
 // Centers one row of buttons inside the supplied horizontal bounds. Layout,

@@ -33,8 +33,7 @@ void State::synchronize(const std::optional<MediaTaskCardModel>& task) {
     hidden_ = false;
     focused_ = false;
     selectedButton_ = 0;
-    hoveredButton_.reset();
-    indicatorHovered_ = false;
+    buttonPointer_.reset();
     return;
   }
   const std::size_t actionCount = actionsFor(*task).size();
@@ -46,14 +45,14 @@ bool State::show() {
   if (!hidden_) return false;
   hidden_ = false;
   focused_ = false;
-  indicatorHovered_ = false;
+  buttonPointer_.reset();
   selectedButton_ = 0;
   return true;
 }
 
 std::optional<std::size_t> State::highlightedButton() const {
   return focused_ ? std::optional<std::size_t>(selectedButton_)
-                  : hoveredButton_;
+                  : buttonPointer_.hovered();
 }
 
 void State::setFocused(bool focused, Interaction& interaction) {
@@ -73,15 +72,14 @@ void State::activate(Action action, ActivationSource source,
       break;
     case Action::Hide:
       hidden_ = true;
-      hoveredButton_.reset();
-      indicatorHovered_ = false;
+      buttonPointer_.reset();
       setFocused(false, interaction);
       interaction.changed = true;
       interaction.layoutChanged = true;
       break;
     case Action::Show:
       hidden_ = false;
-      indicatorHovered_ = false;
+      buttonPointer_.reset();
       selectedButton_ = 0;
       if (source == ActivationSource::Pointer) {
         setFocused(false, interaction);
@@ -97,11 +95,10 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
                           const MediaTaskCardModel& task) {
   Interaction result;
   if (event.type == InputEvent::Type::PointerLeave) {
-    if (hoveredButton_ || indicatorHovered_) {
-      hoveredButton_.reset();
-      indicatorHovered_ = false;
-      result.changed = true;
-    }
+    const tui_button_row::PointerInteraction pointer =
+        buttonPointer_.handle(event, {});
+    result.changed = pointer.changed;
+    result.consumed = pointer.captured;
     return result;
   }
 
@@ -169,29 +166,31 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
 
   const MouseEvent& mouse = event.mouse;
   if (hidden_) {
-    const bool hovered = indicator.contains(mouse.pos.X, mouse.pos.Y);
-    if (indicatorHovered_ != hovered) {
-      indicatorHovered_ = hovered;
-      result.changed = true;
+    tui_button_row::Layout indicatorButtons;
+    indicatorButtons.y = indicator.y;
+    if (indicator.valid) {
+      indicatorButtons.buttons.push_back({0, indicator.x, indicator.width});
     }
+    const tui_button_row::PointerInteraction pointer =
+        buttonPointer_.handle(event, indicatorButtons);
+    const bool hovered = buttonPointer_.hovered().has_value();
+    result.changed = pointer.changed;
     result.consumed = hovered;
     if (!hovered && focused_ && mouse.kind == MouseEventKind::Press) {
       setFocused(false, result);
     }
-    if (hovered && mouse.kind == MouseEventKind::Press &&
-        isMouseButtonDown(mouse, MouseButton::Left)) {
+    if (pointer.activated) {
       activate(Action::Show, ActivationSource::Pointer, result);
-      result.consumed = true;
     }
+    result.consumed = result.consumed || pointer.captured ||
+                      result.activatedAction.has_value();
     return result;
   }
 
-  const std::optional<std::size_t> hovered =
-      tui_button_row::hitTest(currentLayout.buttons, mouse.pos.X, mouse.pos.Y);
-  if (hoveredButton_ != hovered) {
-    hoveredButton_ = hovered;
-    result.changed = true;
-  }
+  const tui_button_row::PointerInteraction pointer =
+      buttonPointer_.handle(event, currentLayout.buttons);
+  const std::optional<std::size_t> hovered = buttonPointer_.hovered();
+  result.changed = pointer.changed;
   result.consumed = currentLayout.contains(mouse.pos.X, mouse.pos.Y);
   if (!result.consumed && focused_ && mouse.kind == MouseEventKind::Press) {
     setFocused(false, result);
@@ -200,16 +199,15 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
     selectedButton_ = *hovered;
     result.changed = true;
   }
-  if (mouse.kind == MouseEventKind::Press &&
-      isMouseButtonDown(mouse, MouseButton::Left)) {
-    if (hovered) {
-      selectedButton_ = *hovered;
-    }
-    if (const std::optional<Action> action = actionAt(actions, hovered)) {
+  if (pointer.activated) {
+    selectedButton_ = *pointer.activated;
+    if (const std::optional<Action> action =
+            actionAt(actions, pointer.activated)) {
       activate(*action, ActivationSource::Pointer, result);
     }
-    result.consumed = result.consumed || result.activatedAction.has_value();
   }
+  result.consumed = result.consumed || pointer.captured ||
+                    result.activatedAction.has_value();
   return result;
 }
 

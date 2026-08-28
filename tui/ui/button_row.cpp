@@ -6,6 +6,60 @@
 
 namespace tui_button_row {
 
+PointerInteraction PointerState::handle(const InputEvent& event,
+                                        const Layout& layout) {
+  PointerInteraction result;
+  if (event.type == InputEvent::Type::PointerLeave) {
+    result.changed = hovered_.has_value() || armed_.has_value();
+    result.captured = armed_.has_value();
+    reset();
+    return result;
+  }
+  if (event.type != InputEvent::Type::Mouse) {
+    return result;
+  }
+
+  const MouseEvent& mouse = event.mouse;
+  const std::optional<std::size_t> hovered =
+      hitTest(layout, mouse.pos.X, mouse.pos.Y);
+  if (hovered_ != hovered) {
+    hovered_ = hovered;
+    result.changed = true;
+  }
+
+  if (mouse.kind == MouseEventKind::Press &&
+      mouse.button == MouseButton::Left &&
+      isMouseButtonDown(mouse, MouseButton::Left)) {
+    if (armed_ != hovered) {
+      armed_ = hovered;
+      result.changed = true;
+    }
+    result.captured = armed_.has_value();
+    return result;
+  }
+
+  if (mouse.kind == MouseEventKind::Release &&
+      mouse.button == MouseButton::Left) {
+    const std::optional<std::size_t> armed = armed_;
+    result.captured = armed.has_value();
+    if (armed_ && hovered_ == armed_) {
+      result.activated = armed_;
+    }
+    if (armed_) {
+      armed_.reset();
+      result.changed = true;
+    }
+    return result;
+  }
+  result.captured = armed_.has_value();
+  return result;
+}
+
+void PointerState::reset() {
+  hovered_.reset();
+  armed_.reset();
+}
+
 Layout layout(const std::vector<Button>& buttons, int x, int width, int y) {
   Layout result;
   result.y = y;

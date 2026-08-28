@@ -19,7 +19,9 @@ InputEvent pointerEvent(MouseEventKind kind, int x, int y,
   event.mouse.pos.X = static_cast<SHORT>(x);
   event.mouse.pos.Y = static_cast<SHORT>(y);
   event.mouse.button =
-      kind == MouseEventKind::Press ? MouseButton::Left : MouseButton::None;
+      (kind == MouseEventKind::Press || kind == MouseEventKind::Release)
+          ? MouseButton::Left
+          : MouseButton::None;
   event.mouse.buttons =
       leftButtonDown ? MouseButtons::Left : MouseButtons::None;
   return event;
@@ -77,13 +79,28 @@ int main() {
       pointerEvent(MouseEventKind::Press, cancel.x, card.buttons.y, true),
       bounds, noIndicator, task);
   ok &= expect(
+      interaction.consumed && !interaction.activatedAction,
+      "pressing Cancel must arm the button without activating it");
+  interaction = state.handle(
+      pointerEvent(MouseEventKind::Release, cancel.x, card.buttons.y), bounds,
+      noIndicator, task);
+  ok &= expect(
       interaction.consumed && interaction.activatedAction == Action::Cancel,
-      "clicking Cancel must publish a typed panel action");
+      "releasing over the armed Cancel button must publish its typed action");
+
+  state.handle(
+      pointerEvent(MouseEventKind::Press, cancel.x, card.buttons.y, true),
+      bounds, noIndicator, task);
+  interaction = state.handle(pointerEvent(MouseEventKind::Release, 0, 0),
+                             bounds, noIndicator, task);
+  ok &= expect(interaction.consumed && !interaction.activatedAction,
+               "releasing away from an armed button must cancel the click "
+               "without reaching browser content");
 
   interaction = state.handle(pointerEvent(MouseEventKind::Move, 0, 0), bounds,
                              noIndicator, task);
   ok &= expect(
-      !interaction.consumed && interaction.changed && !state.hoveredButton(),
+      !interaction.consumed && !state.hoveredButton(),
       "leaving the panel must clear hover without blocking browser "
       "input");
 
@@ -140,6 +157,13 @@ int main() {
   interaction = state.handle(
       pointerEvent(MouseEventKind::Press, indicator.x, indicator.y, true),
       bounds, indicator, task);
+  ok &= expect(interaction.consumed && !interaction.activatedAction &&
+                   state.hidden(),
+               "pressing the footer indicator must arm it without restoring "
+               "the panel early");
+  interaction = state.handle(
+      pointerEvent(MouseEventKind::Release, indicator.x, indicator.y), bounds,
+      indicator, task);
   ok &= expect(interaction.consumed && interaction.layoutChanged &&
                    interaction.activatedAction == Action::Show &&
                    !state.hidden() && !state.focused(),

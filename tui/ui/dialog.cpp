@@ -88,6 +88,7 @@ bool Model::open(Content content) {
     }
   }
   firstVisibleLine_ = 0;
+  buttonPointer_.reset();
   active_ = true;
   return true;
 }
@@ -100,6 +101,7 @@ bool Model::dismiss() {
   content_ = {};
   selectedButton_ = 0;
   firstVisibleLine_ = 0;
+  buttonPointer_.reset();
   active_ = false;
   return true;
 }
@@ -203,7 +205,24 @@ Interaction Model::handle(const InputEvent& event, const Bounds& bounds) {
     return result;
   }
 
-  if (event.type != InputEvent::Type::Mouse) {
+  if (event.type != InputEvent::Type::Mouse &&
+      event.type != InputEvent::Type::PointerLeave) {
+    return result;
+  }
+
+  const tui_button_row::PointerInteraction pointer = buttonPointer_.handle(
+      event, {currentLayout.buttonY, currentLayout.buttons});
+  result.changed = pointer.changed;
+  if (buttonPointer_.hovered() &&
+      selectedButton_ != *buttonPointer_.hovered()) {
+    selectedButton_ = *buttonPointer_.hovered();
+    result.changed = true;
+  }
+  if (pointer.activated) {
+    selectedButton_ = *pointer.activated;
+    return activateSelected();
+  }
+  if (event.type == InputEvent::Type::PointerLeave) {
     return result;
   }
 
@@ -216,24 +235,6 @@ Interaction Model::handle(const InputEvent& event, const Bounds& bounds) {
     return result;
   }
 
-  const std::optional<std::size_t> hoveredButton =
-      currentLayout.valid
-          ? tui_button_row::hitTest(
-                {currentLayout.buttonY, currentLayout.buttons}, mouse.pos.X,
-                mouse.pos.Y)
-          : std::nullopt;
-  if (mouse.kind == MouseEventKind::Move) {
-    if (hoveredButton && selectedButton_ != *hoveredButton) {
-      selectedButton_ = *hoveredButton;
-      result.changed = true;
-    }
-    return result;
-  }
-  if (mouse.kind == MouseEventKind::Press && hoveredButton &&
-      isMouseButtonDown(mouse, MouseButton::Left)) {
-    selectedButton_ = *hoveredButton;
-    return activateSelected();
-  }
   return result;
 }
 

@@ -21,6 +21,19 @@ InputEvent keyEvent(WORD key) {
   return event;
 }
 
+InputEvent mouseEvent(MouseEventKind kind, int x, int y) {
+  InputEvent event;
+  event.type = InputEvent::Type::Mouse;
+  event.mouse.kind = kind;
+  event.mouse.pos.X = static_cast<SHORT>(x);
+  event.mouse.pos.Y = static_cast<SHORT>(y);
+  event.mouse.button = MouseButton::Left;
+  event.mouse.buttons = kind == MouseEventKind::Press
+                            ? MouseButtons::Left
+                            : MouseButtons::None;
+  return event;
+}
+
 BrowserEntry mediaEntry(const char* name) {
   return BrowserEntry(name, std::filesystem::path(name),
                       browser_entry::OpenFile{});
@@ -122,6 +135,30 @@ int main() {
   ok &= expect(interaction.dialogButton == 3 &&
                    overlays.activeLayer() == Layer::None,
                "a dialog must honor an explicitly selected safe default");
+
+  tui_dialog::Content pointerDialog;
+  pointerDialog.title = "Pointer activation";
+  pointerDialog.buttons = {{4, "Confirm"}, {5, "Cancel"}};
+  tui_dialog::Model pointerModel;
+  pointerModel.open(std::move(pointerDialog));
+  const tui_dialog::Bounds pointerBounds{bounds.width, bounds.height,
+                                         bounds.topInset};
+  const tui_dialog::Layout pointerLayout = pointerModel.layout(pointerBounds);
+  const tui_dialog::ButtonBounds& confirm = pointerLayout.buttons.front();
+  tui_dialog::Interaction pointerInteraction = pointerModel.handle(
+      mouseEvent(MouseEventKind::Press, confirm.x, pointerLayout.buttonY),
+      pointerBounds);
+  ok &= expect(pointerInteraction.consumed &&
+                   !pointerInteraction.activatedButton &&
+                   pointerModel.active(),
+               "a dialog button press must not activate before release");
+  pointerInteraction = pointerModel.handle(
+      mouseEvent(MouseEventKind::Release, confirm.x, pointerLayout.buttonY),
+      pointerBounds);
+  ok &= expect(pointerInteraction.activatedButton == 4 &&
+                   !pointerModel.active(),
+               "a dialog button must activate on release over the armed "
+               "button");
 
   overlays.toggleCommandPalette();
   ok &= expect(overlays.openMediaMenu(mediaEntry("empty.mp4"), {}) &&
