@@ -15,6 +15,7 @@
 #endif
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cwctype>
 #include <cstdint>
@@ -41,23 +42,47 @@ std::uint64_t processId() {
 #endif
 }
 
-bool reserveFile(const std::filesystem::path& path) {
+enum class FileReservationStatus {
+  Reserved,
+  Collision,
+  Failed,
+};
+
+struct FileReservationResult {
+  FileReservationStatus status = FileReservationStatus::Failed;
+  std::error_code error;
+};
+
+FileReservationResult reserveFile(const std::filesystem::path& path) {
 #ifdef _WIN32
   const HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
                                   CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (file == INVALID_HANDLE_VALUE) return false;
+  if (file == INVALID_HANDLE_VALUE) {
+    const DWORD code = GetLastError();
+    return {code == ERROR_FILE_EXISTS || code == ERROR_ALREADY_EXISTS
+                ? FileReservationStatus::Collision
+                : FileReservationStatus::Failed,
+            std::error_code(static_cast<int>(code),
+                            std::system_category())};
+  }
   CloseHandle(file);
-  return true;
+  return {FileReservationStatus::Reserved, {}};
 #else
   const int file = open(path.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0600);
-  if (file < 0) return false;
+  if (file < 0) {
+    const int code = errno;
+    return {code == EEXIST ? FileReservationStatus::Collision
+                           : FileReservationStatus::Failed,
+            std::error_code(code, std::generic_category())};
+  }
   close(file);
-  return true;
+  return {FileReservationStatus::Reserved, {}};
 #endif
 }
 
 std::filesystem::path reserveTemporarySibling(
-    const std::filesystem::path& destination) {
+    const std::filesystem::path& destination, std::string* detail) {
+  if (detail) detail->clear();
   const auto ticks =
       std::chrono::steady_clock::now().time_since_epoch().count();
   for (std::uint32_t attempt = 0; attempt < 100; ++attempt) {
@@ -67,8 +92,20 @@ std::filesystem::path reserveTemporarySibling(
     candidate += L".radioify-" + std::to_wstring(processId()) + L"-" +
                  std::to_wstring(ticks) + L"-" +
                  std::to_wstring(sequence) + L".tmp";
-    if (reserveFile(candidate)) return candidate;
+    const FileReservationResult reservation = reserveFile(candidate);
+    if (reservation.status == FileReservationStatus::Reserved) {
+      return candidate;
+    }
+    if (reservation.status == FileReservationStatus::Failed) {
+      if (detail) {
+        *detail = reservation.error
+                      ? reservation.error.message()
+                      : "the operating system rejected the temporary file";
+      }
+      return {};
+    }
   }
+  if (detail) *detail = "too many temporary-name collisions";
   return {};
 }
 
@@ -169,10 +206,13 @@ std::optional<Transaction> Transaction::begin(
       return std::nullopt;
     }
   }
+  std::string reservationError;
   const std::filesystem::path temporary =
-      reserveTemporarySibling(destination);
+      reserveTemporarySibling(destination, &reservationError);
   if (temporary.empty()) {
-    setError(error, "Could not reserve temporary output storage.");
+    setError(error, "Could not reserve temporary output storage for " +
+                        toUtf8String(destination) + " (" +
+                        reservationError + ").");
     return std::nullopt;
   }
   return Transaction(destination, temporary, mode);
@@ -294,10 +334,13 @@ std::optional<TransactionGroup> TransactionGroup::begin(
         return std::nullopt;
       }
     }
+    std::string reservationError;
     std::filesystem::path temporary =
-        reserveTemporarySibling(destination.path);
+        reserveTemporarySibling(destination.path, &reservationError);
     if (temporary.empty()) {
-      setError(error, "Could not reserve temporary output storage.");
+      setError(error, "Could not reserve temporary output storage for " +
+                          toUtf8String(destination.path) + " (" +
+                          reservationError + ").");
       return std::nullopt;
     }
     group.entries_.push_back(
@@ -397,9 +440,13 @@ bool TransactionGroup::publish(std::string* error) {
       return false;
     }
     if (!exists) continue;
-    entry.backup = reserveTemporarySibling(entry.destination.path);
+    std::string reservationError;
+    entry.backup = reserveTemporarySibling(entry.destination.path,
+                                           &reservationError);
     if (entry.backup.empty()) {
-      setError(error, "Could not reserve output rollback storage.");
+      setError(error, "Could not reserve output rollback storage for " +
+                          toUtf8String(entry.destination.path) + " (" +
+                          reservationError + ").");
       std::string ignored;
       rollback(&ignored);
       return false;
