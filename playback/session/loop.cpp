@@ -28,6 +28,7 @@
 #include "playback/debug/lines.h"
 #include "playback/overlay/overlay.h"
 #include "playback/session/osd_timeline.h"
+#include "playback/session/shutdown_sequence.h"
 #include "playback/session/context_menu_controller.h"
 #include "playback/session/media_task_cancellation.h"
 #include "playback/session/video_edit_workspace.h"
@@ -138,6 +139,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   bool externalInputModal = false;
   bool initialized = false;
   bool finished = false;
+  bool shutdownFinished = false;
   std::chrono::steady_clock::time_point lastDebugRefresh =
       std::chrono::steady_clock::time_point::min();
   std::chrono::steady_clock::time_point lastUiHeartbeat =
@@ -145,9 +147,11 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
 
   pointer_input::MouseDoubleClickTracker mouseDoubleClickTracker;
   playback_session_input::PlaybackSeekGestureState seekState;
-  // Constructed last and therefore stopped first. The presenter cannot outlive
-  // any session-owned state referenced by its published presentation model.
+  // The presenter cannot outlive any session-owned state referenced by its
+  // published presentation model. The non-owning shutdown sequence is
+  // constructed after it and therefore releases its callbacks first.
   PlaybackOutputController output;
+  playback_session::ShutdownSequence shutdownSequence;
 
   explicit Impl(PlaybackLoopRunner::Args args)
       : screen(args.screen),
@@ -194,7 +198,43 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         videoEditWorkspace(file, core.player(), timelinePreviewModel,
                            timelinePreviewProvider),
         output(args.player, gpu, windowTitle, presentationModel,
-               config.systemMediaCommandOwner) {
+               config.systemMediaCommandOwner),
+        shutdownSequence(
+            std::vector<playback_session::ShutdownSequence::Participant>{
+                {[this]() { timelinePreviewProvider.requestStop(); },
+                 [this]() { return timelinePreviewProvider.stopReady(); },
+                 [this]() { return timelinePreviewProvider.finishStop(); },
+                 [this]() {
+                   return timelinePreviewProvider.stopWaitHandles();
+                 }},
+                {[this]() { videoEditWorkspace.requestStop(); },
+                 [this]() { return videoEditWorkspace.stopReady(); },
+                 [this]() { return videoEditWorkspace.finishStop(); },
+                 [this]() { return videoEditWorkspace.stopWaitHandles(); }},
+                {[this]() {
+                   perfLogAppendf(&perfLog,
+                                  "video_shutdown output_stop_begin");
+                   perfLogFlush(&perfLog);
+                   output.requestCloseWindow();
+                 },
+                 [this]() { return output.windowCloseReady(); },
+                 [this]() { return output.finishCloseWindow(); },
+                 [this]() {
+                   return std::vector<NativeWaitHandle>{
+                       output.windowShutdownWaitHandle()};
+                 }},
+                {[this]() {
+                   perfLogAppendf(&perfLog,
+                                  "video_shutdown player_close_begin");
+                   perfLogFlush(&perfLog);
+                   core.requestPlayerShutdown();
+                 },
+                 [this]() { return core.playerShutdownReady(); },
+                 [this]() { return core.finishPlayerShutdown(); },
+                 [this]() {
+                   return std::vector<NativeWaitHandle>{
+                       core.player().closeWaitHandle()};
+                 }}}) {
     core.initialize(screen);
     const playback_video_timeline_preview::Source previewSource{
         file, core.player().videoStreamIndex(), core.player().durationUs(),
@@ -1029,28 +1069,47 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     }
   }
 
-  void shutdown() {
+  void beginShutdown() {
+    if (shutdownSequence.requested()) return;
     perfLogAppendf(&perfLog, "video_shutdown begin");
     perfLogFlush(&perfLog);
-    timelinePreviewProvider.stop();
     timelinePreviewModel.stop();
     timelinePreviewStarted = false;
-    videoEditWorkspace.stop();
-    perfLogAppendf(&perfLog, "video_shutdown output_stop_begin");
-    perfLogFlush(&perfLog);
-    output.closeWindow();
+    (void)shutdownSequence.requestStop();
+  }
+
+  bool shutdownReady() {
+    return shutdownSequence.ready();
+  }
+
+  bool finishShutdown() {
+    if (shutdownFinished) return true;
+    if (!shutdownSequence.finish()) return false;
     perfLogAppendf(&perfLog, "video_shutdown output_stop_end");
     perfLogFlush(&perfLog);
-    perfLogAppendf(&perfLog, "video_shutdown player_close_begin");
-    perfLogFlush(&perfLog);
-    core.shutdownPlayer();
     perfLogAppendf(&perfLog, "video_shutdown player_close_end");
     perfLogFlush(&perfLog);
-    perfLogAppendf(&perfLog, "video_shutdown audio_stop_begin");
+    core.finishAudioShutdown();
+    perfLogAppendf(&perfLog, "video_shutdown audio_released");
     perfLogFlush(&perfLog);
-    core.shutdownAudio();
-    perfLogAppendf(&perfLog, "video_shutdown audio_stop_end");
-    perfLogFlush(&perfLog);
+    shutdownFinished = true;
+    return true;
+  }
+
+  std::vector<NativeWaitHandle> shutdownWaitHandles() const {
+    return shutdownSequence.waitHandles();
+  }
+
+  void shutdown() {
+    if (shutdownFinished) return;
+    beginShutdown();
+    timelinePreviewProvider.stop();
+    videoEditWorkspace.stop();
+    output.closeWindow();
+    core.shutdownPlayer();
+    (void)shutdownSequence.finish();
+    core.finishAudioShutdown();
+    shutdownFinished = true;
   }
 
   PlaybackSessionContinuationState buildContinuationState() {
@@ -1222,7 +1281,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
 
   void pollWindowEvents() {
     if (output.consumeWindowCloseRequested() ||
-        (presentationController.state().requiresNativeWindow() &&
+        (output.windowLifecycle() == PlaybackWindowLifecycle::Open &&
+         presentationController.state().requiresNativeWindow() &&
          !output.windowVisible())) {
       requestPlaybackExit(false);
     }
@@ -1285,16 +1345,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     if (!loopStopRequested) applyPresenterSync(syncPresentation());
     if (loopStopRequested) {
       loopState = PlaybackLoopState::Stopped;
-    }
-  }
-
-  void processWindowInputEvents(PlaybackLoopState& loopState) {
-    InputEvent event{};
-    while (output.pollWindowInput(event)) {
-      processInputEvent(
-          loopState, event,
-          playback_video_timeline_preview::PresentationSurface::VideoWindow);
-      if (loopState == PlaybackLoopState::Stopped) break;
     }
   }
 
@@ -1448,15 +1498,15 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       output.requestWindowPresent();
     }
     finalizeAudioStart();
-    pollWindowEvents();
     if (loopStopRequested) loopState = PlaybackLoopState::Stopped;
 
     emitHeartbeat();
     if (loopState == PlaybackLoopState::Running) {
-      processWindowInputEvents(loopState);
+      applyPresenterSync(syncPresentation());
+      pollWindowEvents();
+      if (loopStopRequested) loopState = PlaybackLoopState::Stopped;
     }
     if (loopState == PlaybackLoopState::Running) {
-      applyPresenterSync(syncPresentation());
       finalizeAudioStart();
       updateWindowCursor();
       flushQueuedSeek();
@@ -1488,20 +1538,24 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
 
   std::vector<NativeWaitHandle> activityWaitHandles() const {
     std::vector<NativeWaitHandle> handles;
-    handles.reserve(5);
+    handles.reserve(8);
     const auto append = [&](NativeWaitHandle handle) {
       if (handle) handles.push_back(handle);
     };
     append(output.windowOpen() ? core.player().statusChangeWaitHandle()
                                : core.videoFrameWaitHandle());
-    append(output.windowInputWaitHandle());
     if (output.windowOpen()) {
+      append(output.windowInputWaitHandle());
       append(output.windowCloseRequestedWaitHandle());
     }
+    append(output.windowTransitionWaitHandle());
     if (timelinePreviewStarted) {
       append(timelinePreviewProvider.changedWaitHandle());
     }
-    append(videoEditWorkspace.waitHandle());
+    for (const NativeWaitHandle handle :
+         videoEditWorkspace.activityWaitHandles()) {
+      append(handle);
+    }
     return handles;
   }
 
@@ -1539,6 +1593,19 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     processInputEvent(
         loopState, event,
         playback_video_timeline_preview::PresentationSurface::Terminal);
+    return true;
+  }
+
+  bool pollWindowInput(InputEvent& event) {
+    return !finished && output.pollWindowInput(event);
+  }
+
+  bool handleWindowInputEvent(const InputEvent& event) {
+    if (finished) return false;
+    PlaybackLoopState loopState = PlaybackLoopState::Running;
+    processInputEvent(
+        loopState, event,
+        playback_video_timeline_preview::PresentationSurface::VideoWindow);
     return true;
   }
 
@@ -1602,22 +1669,21 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     return false;
   }
 
-  bool reloadSubtitles(const std::filesystem::path& preferredTrack) {
-    bool selectedPreferred = false;
-    subtitleManager.loadForVideo(file);
-    hasSubtitles = subtitleManager.selectableTrackCount() > 0;
-    selectedPreferred =
-        hasSubtitles && subtitleManager.selectTrackForFile(preferredTrack);
-    subtitlesEnabled = selectedPreferred || hasSubtitles;
+  void subtitlesLoaded(bool available, bool reload,
+                       bool preferredTrackSelected) {
+    hasSubtitles = available;
+    subtitlesEnabled = available;
     redraw = true;
     forceRefreshArt = true;
     copiedFrameNeedsRender = true;
-    syncOverlayPresentation();
-    showEditMessage(selectedPreferred ? "Subtitles ready and enabled"
-                                      : (hasSubtitles
-                                             ? "Subtitles reloaded"
-                                             : "Subtitle file could not be loaded"));
-    return hasSubtitles;
+    if (initialized) syncOverlayPresentation();
+    if (reload) {
+      showEditMessage(
+          preferredTrackSelected
+              ? "Subtitles ready and enabled"
+              : (available ? "Subtitles reloaded"
+                           : "Subtitle file could not be loaded"));
+    }
   }
 
   void mediaTaskFinished(
@@ -1630,7 +1696,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     if (completion.operation ==
             playback_media_processing::Operation::SubtitleGeneration &&
         completion.succeeded()) {
-      reloadSubtitles(completion.outputFile);
+      syncOverlayPresentation();
+      showEditMessage("Subtitles generated; loading...");
       if (promptClosed) resumeDeferredNativeFileDrop();
       return;
     }
@@ -1704,6 +1771,14 @@ bool PlaybackLoopRunner::handleInputEvent(const InputEvent& event) {
   return impl_->handleInputEvent(event);
 }
 
+bool PlaybackLoopRunner::pollWindowInput(InputEvent& event) {
+  return impl_->pollWindowInput(event);
+}
+
+bool PlaybackLoopRunner::handleWindowInputEvent(const InputEvent& event) {
+  return impl_->handleWindowInputEvent(event);
+}
+
 bool PlaybackLoopRunner::handleControlCommand(PlaybackControlCommand command) {
   return impl_->handleControlCommand(command);
 }
@@ -1747,9 +1822,27 @@ void PlaybackLoopRunner::mediaTaskFinished(
   impl_->mediaTaskFinished(completion);
 }
 
+void PlaybackLoopRunner::subtitlesLoaded(bool available, bool reload,
+                                         bool preferredTrackSelected) {
+  impl_->subtitlesLoaded(available, reload, preferredTrackSelected);
+}
+
 void PlaybackLoopRunner::requestStop() { impl_->requestStop(); }
 
 void PlaybackLoopRunner::requestQuit() { impl_->requestQuit(); }
+
+void PlaybackLoopRunner::beginShutdown() { impl_->beginShutdown(); }
+
+bool PlaybackLoopRunner::shutdownReady() { return impl_->shutdownReady(); }
+
+bool PlaybackLoopRunner::finishShutdown() {
+  return impl_->finishShutdown();
+}
+
+std::vector<NativeWaitHandle>
+PlaybackLoopRunner::shutdownWaitHandles() const {
+  return impl_->shutdownWaitHandles();
+}
 
 void PlaybackLoopRunner::shutdown() { impl_->shutdown(); }
 

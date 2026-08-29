@@ -71,12 +71,16 @@ class SceneAnalysisJob {
 
   bool start(JobRequest request);
   bool cancel();
+  void requestStop();
+  bool stopReady() const;
+  bool finishStop();
   void stop();
 
   JobSnapshot snapshot() const;
   std::optional<JobSnapshot> takeCompletion();
   bool consumeChanged();
   NativeWaitHandle nativeWaitHandle() const;
+  NativeWaitHandle workerWaitHandle() const;
 
  private:
   struct Impl;

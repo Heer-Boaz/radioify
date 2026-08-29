@@ -14,9 +14,9 @@
 #include <deque>
 #include <mutex>
 #include <optional>
-#include <thread>
 #include <utility>
 
+#include "core/pumpable_worker_thread.h"
 #include "core/waitable_signal.h"
 #include "playback/video/image.h"
 #include "playback/video/timeline_preview_decoder.h"
@@ -49,8 +49,8 @@ struct Provider::Impl {
   std::deque<std::shared_ptr<const Image>> pendingPersistence;
   std::optional<Result> result;
   WaitableSignal changed;
-  std::thread worker;
-  std::thread cacheIo;
+  PumpableWorkerThread worker;
+  PumpableWorkerThread cacheIo;
   Cache cache;
   Cache persistenceCache;
   Decoder decoder;
@@ -140,6 +140,7 @@ struct Provider::Impl {
       persistenceCache.prunePersistent();
     }
     persistenceCache.close();
+    changed.signal();
   }
 
   void runWorker() {
@@ -190,22 +191,20 @@ struct Provider::Impl {
     }
     decoder.reset();
     cache.close();
+    changed.signal();
   }
 
   bool startWorkers() {
-    try {
-      cacheIo = std::thread([this]() { runPersistence(); });
+    if (cacheIo.start([this]() { runPersistence(); })) {
       persistenceStarted = true;
-    } catch (...) {
+    } else {
       // Persistent caching is optional; decoding and memory caching stay live.
       persistenceStarted = false;
     }
-    try {
-      worker = std::thread([this]() { runWorker(); });
-    } catch (...) {
+    if (!worker.start([this]() { runWorker(); })) {
       stopping.store(true, std::memory_order_relaxed);
       persistenceAvailable.notify_all();
-      if (cacheIo.joinable()) cacheIo.join();
+      cacheIo.join();
       persistenceStarted = false;
       return false;
     }
@@ -244,11 +243,14 @@ bool Provider::start(const Source& source) {
   return true;
 }
 
-void Provider::stop() {
+void Provider::requestStop() {
   if (!impl_) return;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (!impl_->started && !impl_->worker.joinable()) return;
+    if (!impl_->started && !impl_->worker.joinable() &&
+        !impl_->cacheIo.joinable()) {
+      return;
+    }
     impl_->stopping.store(true, std::memory_order_relaxed);
     impl_->latestRequestId.fetch_add(1, std::memory_order_relaxed);
     impl_->demand.reset();
@@ -256,8 +258,16 @@ void Provider::stop() {
   }
   impl_->workAvailable.notify_all();
   impl_->persistenceAvailable.notify_all();
-  if (impl_->worker.joinable()) impl_->worker.join();
-  if (impl_->cacheIo.joinable()) impl_->cacheIo.join();
+  impl_->changed.signal();
+}
+
+bool Provider::stopReady() const {
+  return !impl_ || (impl_->worker.ready() && impl_->cacheIo.ready());
+}
+
+bool Provider::finishStop() {
+  if (!impl_ || !stopReady()) return !impl_;
+  if (!impl_->worker.finish() || !impl_->cacheIo.finish()) return false;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->started = false;
@@ -267,6 +277,15 @@ void Provider::stop() {
     impl_->pendingPersistence.clear();
   }
   impl_->changed.clear();
+  return true;
+}
+
+void Provider::stop() {
+  if (!impl_) return;
+  requestStop();
+  impl_->worker.join();
+  impl_->cacheIo.join();
+  (void)finishStop();
 }
 
 bool Provider::submit(const Request& request) {
@@ -328,6 +347,21 @@ std::optional<Result> Provider::takeResult() {
 
 NativeWaitHandle Provider::changedWaitHandle() const {
   return impl_ ? impl_->changed.nativeWaitHandle() : NativeWaitHandle();
+}
+
+std::vector<NativeWaitHandle> Provider::stopWaitHandles() const {
+  std::vector<NativeWaitHandle> handles;
+  if (!impl_) return handles;
+  handles.reserve(2);
+  if (!impl_->worker.ready()) {
+    const NativeWaitHandle worker = impl_->worker.waitHandle();
+    handles.push_back(worker);
+  }
+  if (!impl_->cacheIo.ready()) {
+    const NativeWaitHandle cacheIo = impl_->cacheIo.waitHandle();
+    handles.push_back(cacheIo);
+  }
+  return handles;
 }
 
 }  // namespace playback_video_timeline_preview

@@ -39,7 +39,8 @@ PlaybackOutputController& PlaybackOutputController::operator=(
     PlaybackOutputController&&) noexcept = default;
 
 bool PlaybackOutputController::windowOpen() const {
-  return impl_->windowPresenter.isOpen();
+  return windowLifecycle() == PlaybackWindowLifecycle::Open &&
+         impl_->windowPresenter.isOpen();
 }
 
 bool PlaybackOutputController::windowVisible() const {
@@ -59,8 +60,58 @@ PlaybackOutputController::windowCloseRequestedWaitHandle() const {
   return impl_->windowPresenter.closeRequestedWaitHandle();
 }
 
-bool PlaybackOutputController::openWindow() {
-  return impl_->windowPresenter.start();
+PlaybackWindowLifecycle PlaybackOutputController::windowLifecycle() const {
+  switch (impl_->windowPresenter.lifecycle()) {
+    case WindowPresenter::Lifecycle::Closed:
+      return PlaybackWindowLifecycle::Closed;
+    case WindowPresenter::Lifecycle::Opening:
+      return PlaybackWindowLifecycle::Opening;
+    case WindowPresenter::Lifecycle::Open:
+      return PlaybackWindowLifecycle::Open;
+    case WindowPresenter::Lifecycle::Closing:
+      return PlaybackWindowLifecycle::Closing;
+    case WindowPresenter::Lifecycle::Failed:
+      return PlaybackWindowLifecycle::Failed;
+  }
+  return PlaybackWindowLifecycle::Failed;
+}
+
+bool PlaybackOutputController::consumeWindowLifecycleChange() {
+  return impl_->windowPresenter.consumeLifecycleChange();
+}
+
+bool PlaybackOutputController::requestOpenWindow() {
+  return impl_->windowPresenter.requestStart();
+}
+
+void PlaybackOutputController::requestCloseWindow() {
+  impl_->windowPresenter.requestStop();
+}
+
+bool PlaybackOutputController::windowCloseReady() const {
+  return impl_->windowPresenter.stopReady();
+}
+
+bool PlaybackOutputController::finishCloseWindow() {
+  return impl_->windowPresenter.finishStop();
+}
+
+NativeWaitHandle PlaybackOutputController::windowTransitionWaitHandle() const {
+  switch (windowLifecycle()) {
+    case PlaybackWindowLifecycle::Opening:
+    case PlaybackWindowLifecycle::Open:
+    case PlaybackWindowLifecycle::Failed:
+      return impl_->windowPresenter.lifecycleWaitHandle();
+    case PlaybackWindowLifecycle::Closing:
+      return impl_->windowPresenter.stopWaitHandle();
+    case PlaybackWindowLifecycle::Closed:
+      return {};
+  }
+  return {};
+}
+
+NativeWaitHandle PlaybackOutputController::windowShutdownWaitHandle() const {
+  return impl_->windowPresenter.stopWaitHandle();
 }
 
 void PlaybackOutputController::closeWindow() {

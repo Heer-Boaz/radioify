@@ -28,6 +28,17 @@ extern "C" {
 
 namespace {
 
+bool subtitleLoadCancelled(
+    const SubtitleManager::CancellationCheck& cancellation) {
+  return cancellation && cancellation();
+}
+
+int interruptSubtitleIo(void* opaque) {
+  const auto* cancellation =
+      static_cast<const SubtitleManager::CancellationCheck*>(opaque);
+  return cancellation && subtitleLoadCancelled(*cancellation) ? 1 : 0;
+}
+
 std::string toLowerAscii(std::string s) {
   for (char& ch : s) {
     ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
@@ -1487,14 +1498,19 @@ bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
   return !outCues->empty();
 }
 
-bool loadSubtitleTrackFile(const std::filesystem::path& path,
-                           SubtitleTrack* outTrack) {
-  auto tryParser = [](const std::string& payload,
-                      bool (*parser)(const std::string&, std::vector<SubtitleCue>*),
-                      std::vector<SubtitleCue>* outCues) {
-    if (!parser || !outCues) return false;
+bool loadSubtitleTrackFile(
+    const std::filesystem::path& path, SubtitleTrack* outTrack,
+    const SubtitleManager::CancellationCheck& cancellation) {
+  auto tryParser = [&](const std::string& payload,
+                       bool (*parser)(const std::string&,
+                                      std::vector<SubtitleCue>*),
+                       std::vector<SubtitleCue>* outCues) {
+    if (!parser || !outCues || subtitleLoadCancelled(cancellation)) {
+      return false;
+    }
     std::vector<SubtitleCue> parsed;
     if (!parser(payload, &parsed) || parsed.empty()) return false;
+    if (subtitleLoadCancelled(cancellation)) return false;
     *outCues = std::move(parsed);
     return true;
   };
@@ -1511,14 +1527,23 @@ bool loadSubtitleTrackFile(const std::filesystem::path& path,
     return false;
   };
 
-  if (!outTrack) return false;
+  if (!outTrack || subtitleLoadCancelled(cancellation)) return false;
   std::ifstream in(path, std::ios::binary);
   if (!in.is_open()) return false;
-  std::string rawBytes((std::istreambuf_iterator<char>(in)),
-                       std::istreambuf_iterator<char>());
+  std::string rawBytes;
+  std::array<char, 64 * 1024> readBuffer{};
+  while (in) {
+    if (subtitleLoadCancelled(cancellation)) return false;
+    in.read(readBuffer.data(), static_cast<std::streamsize>(readBuffer.size()));
+    const std::streamsize bytesRead = in.gcount();
+    if (bytesRead > 0) {
+      rawBytes.append(readBuffer.data(), static_cast<size_t>(bytesRead));
+    }
+  }
   if (rawBytes.empty()) return false;
+  if (subtitleLoadCancelled(cancellation)) return false;
   std::string raw = decodeSubtitleText(rawBytes);
-  if (raw.empty()) return false;
+  if (raw.empty() || subtitleLoadCancelled(cancellation)) return false;
 
   std::string ext = toLowerAscii(toUtf8String(path.extension()));
   bool ok = false;
@@ -1551,7 +1576,8 @@ bool loadSubtitleTrackFile(const std::filesystem::path& path,
       outTrack->assScript = std::make_shared<const std::string>(raw);
     }
   }
-  if (!ok || outTrack->cues.empty()) {
+  if (!ok || outTrack->cues.empty() ||
+      subtitleLoadCancelled(cancellation)) {
     outTrack->cues.clear();
     return false;
   }
@@ -1911,14 +1937,23 @@ bool packetSubtitleCue(AVCodecID codecId, const AVPacket& pkt, SubtitleCue* outC
   return true;
 }
 
-bool loadEmbeddedSubtitleTracks(const std::filesystem::path& videoPath,
-                                std::vector<SubtitleTrack>* outTracks) {
-  if (!outTracks) return false;
+bool loadEmbeddedSubtitleTracks(
+    const std::filesystem::path& videoPath,
+    std::vector<SubtitleTrack>* outTracks,
+    const SubtitleManager::CancellationCheck& cancellation) {
+  if (!outTracks || subtitleLoadCancelled(cancellation)) return false;
   outTracks->clear();
 
-  AVFormatContext* fmt = nullptr;
+  AVFormatContext* fmt = avformat_alloc_context();
+  if (!fmt) return false;
+  if (cancellation) {
+    fmt->interrupt_callback.callback = &interruptSubtitleIo;
+    fmt->interrupt_callback.opaque =
+        const_cast<SubtitleManager::CancellationCheck*>(&cancellation);
+  }
   std::string pathUtf8 = toUtf8String(videoPath);
   if (avformat_open_input(&fmt, pathUtf8.c_str(), nullptr, nullptr) < 0) {
+    if (fmt) avformat_free_context(fmt);
     return false;
   }
   struct Scope {
@@ -1929,6 +1964,7 @@ bool loadEmbeddedSubtitleTracks(const std::filesystem::path& videoPath,
   } scope{&fmt};
 
   (void)avformat_find_stream_info(fmt, nullptr);
+  if (subtitleLoadCancelled(cancellation)) return false;
 
   struct EmbeddedTrackInfo {
     int streamIndex = -1;
@@ -1981,7 +2017,8 @@ bool loadEmbeddedSubtitleTracks(const std::filesystem::path& videoPath,
     return !outTracks->empty();
   }
 
-  while (av_read_frame(fmt, pkt) >= 0) {
+  while (!subtitleLoadCancelled(cancellation) &&
+         av_read_frame(fmt, pkt) >= 0) {
     for (auto& ref : refs) {
       if (pkt->stream_index != ref.streamIndex) continue;
       if (!isTextSubtitleCodec(ref.codecId)) break;
@@ -2012,6 +2049,10 @@ bool loadEmbeddedSubtitleTracks(const std::filesystem::path& videoPath,
     av_packet_unref(pkt);
   }
   av_packet_free(&pkt);
+  if (subtitleLoadCancelled(cancellation)) {
+    outTracks->clear();
+    return false;
+  }
 
   for (auto& ref : refs) {
     if (!ref.track.cues.empty()) {
@@ -2064,18 +2105,25 @@ const SubtitleCue* SubtitleTrack::cueAt(int64_t clockUs) const {
 
 void SubtitleTrack::resetLookup() const { lastCueIndex = 0; }
 
-void SubtitleManager::loadForVideo(const std::filesystem::path& videoPath) {
+void SubtitleManager::loadForVideo(
+    const std::filesystem::path& videoPath,
+    const CancellationCheck& cancellation) {
   tracks_.clear();
   activeTrack_ = 0;
+  if (subtitleLoadCancelled(cancellation)) return;
 
   const std::string baseStem = toUtf8String(videoPath.stem());
   const std::vector<std::filesystem::path> files =
       playback_video_subtitle::discoverAutomaticSubtitleSidecars(videoPath);
   for (const auto& subtitleFile : files) {
+    if (subtitleLoadCancelled(cancellation)) {
+      tracks_.clear();
+      return;
+    }
     SubtitleTrack track;
     track.label = subtitleLabelFromPath(subtitleFile, baseStem);
     track.sourcePath = subtitleFile;
-    if (!loadSubtitleTrackFile(subtitleFile, &track)) {
+    if (!loadSubtitleTrackFile(subtitleFile, &track, cancellation)) {
       continue;
     }
     track.label = makeUniqueLabel(track.label);
@@ -2083,11 +2131,16 @@ void SubtitleManager::loadForVideo(const std::filesystem::path& videoPath) {
   }
 
   std::vector<SubtitleTrack> embeddedTracks;
-  if (loadEmbeddedSubtitleTracks(videoPath, &embeddedTracks)) {
+  if (loadEmbeddedSubtitleTracks(videoPath, &embeddedTracks, cancellation)) {
     for (auto& embedded : embeddedTracks) {
       embedded.label = makeUniqueLabel(embedded.label);
       tracks_.push_back(std::move(embedded));
     }
+  }
+
+  if (subtitleLoadCancelled(cancellation)) {
+    tracks_.clear();
+    return;
   }
 
   activeTrack_ = 0;

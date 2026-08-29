@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -14,6 +15,14 @@
 
 class WindowPresenter {
  public:
+  enum class Lifecycle : std::uint8_t {
+    Closed,
+    Opening,
+    Open,
+    Closing,
+    Failed,
+  };
+
   WindowPresenter(
       Player& player, GpuRuntime& gpu, std::string mediaTitle,
       std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
@@ -24,7 +33,14 @@ class WindowPresenter {
   WindowPresenter(const WindowPresenter&) = delete;
   WindowPresenter& operator=(const WindowPresenter&) = delete;
 
-  bool start();
+  bool requestStart();
+  Lifecycle lifecycle() const;
+  bool consumeLifecycleChange();
+  NativeWaitHandle lifecycleWaitHandle() const;
+  void requestStop();
+  bool stopReady() const;
+  bool finishStop();
+  NativeWaitHandle stopWaitHandle() const;
   void stop();
   void requestPresent();
   bool applyPresentation(WindowPresentationRequest request);

@@ -132,17 +132,29 @@ struct TuiMediaCoordinator::Impl {
       playbackChanged = videoSession_.has_value();
     }
     if (videoSession_) {
-      drainVideoSessionEvents();
-      resumeDeferredVideoHandoff();
-      if (std::optional<PlaybackSessionCompletion> completion =
-              videoSession_->pump()) {
-        drainVideoSessionEvents();
-        finishVideoSession(std::move(*completion));
-        drainPendingCommands();
-        playbackChanged = true;
+      if (videoSession_->opening()) {
+        if (std::optional<playback_session::OpenOutcome> outcome =
+                videoSession_->pumpOpen()) {
+          assert(pendingVideoOpen_);
+          PendingVideoOpen pending = std::move(*pendingVideoOpen_);
+          pendingVideoOpen_.reset();
+          finishVideoOpen(std::move(*outcome), std::move(pending));
+          drainPendingCommands();
+          playbackChanged = true;
+        }
       } else {
         drainVideoSessionEvents();
         resumeDeferredVideoHandoff();
+        if (std::optional<PlaybackSessionCompletion> completion =
+                videoSession_->pump()) {
+          drainVideoSessionEvents();
+          finishVideoSession(std::move(*completion));
+          drainPendingCommands();
+          playbackChanged = true;
+        } else {
+          drainVideoSessionEvents();
+          resumeDeferredVideoHandoff();
+        }
       }
     }
     std::vector<Event> events;
@@ -150,7 +162,9 @@ struct TuiMediaCoordinator::Impl {
     return PollResult{playbackChanged, std::move(events)};
   }
 
-  bool videoActive() const { return videoSession_.has_value(); }
+  bool videoReady() const {
+    return videoSession_ && videoSession_->ready();
+  }
 
   PlaybackControlSessionId controlSessionId() const {
     return controlSessionId_;
@@ -174,11 +188,17 @@ struct TuiMediaCoordinator::Impl {
   }
 
   std::optional<VideoSnapshot> videoSnapshot() const {
-    if (!videoSession_) return std::nullopt;
+    if (!videoSession_ || !videoSession_->ready()) return std::nullopt;
     PlaybackControlState control = videoSession_->controlState();
     control.session = controlSessionId_;
     return VideoSnapshot{std::move(control),
                          videoSession_->presentationState()};
+  }
+
+  std::optional<playback_session::TransitionSnapshot>
+  videoTransitionSnapshot() const {
+    return videoSession_ ? videoSession_->transitionSnapshot()
+                         : std::nullopt;
   }
 
   std::vector<NativeWaitHandle> waitHandles() const {
@@ -202,8 +222,10 @@ struct TuiMediaCoordinator::Impl {
   }
 
   bool canAcceptExternalMediaChange() const {
-    return !driving_ && !pendingCommand_ && !pendingAudioFallback_ &&
-           externalHandoff_.empty();
+    const bool sessionCanHandoff = !videoSession_ || videoSession_->ready();
+    return sessionCanHandoff && !driving_ && !pendingCommand_ &&
+           !pendingVideoOpen_ &&
+           !pendingAudioFallback_ && externalHandoff_.empty();
   }
 
   void setExternalInputModal(bool modal) {
@@ -213,6 +235,18 @@ struct TuiMediaCoordinator::Impl {
   bool handleVideoInputEvent(const InputEvent& event) {
     if (!videoSession_) return false;
     const bool handled = videoSession_->handleInputEvent(event);
+    drainVideoSessionEvents();
+    resumeDeferredVideoHandoff();
+    return handled;
+  }
+
+  bool pollVideoWindowInput(InputEvent& event) {
+    return videoSession_ && videoSession_->pollWindowInput(event);
+  }
+
+  bool handleVideoWindowInputEvent(const InputEvent& event) {
+    if (!videoSession_) return false;
+    const bool handled = videoSession_->handleWindowInputEvent(event);
     drainVideoSessionEvents();
     resumeDeferredVideoHandoff();
     return handled;
@@ -334,6 +368,11 @@ struct TuiMediaCoordinator::Impl {
  private:
   struct PreparedPlayback {
     playback_queue::Queue::PreparedActivation activation;
+  };
+
+  struct PendingVideoOpen {
+    playback_queue::Queue::PreparedActivation activation;
+    PlaybackTarget target;
   };
 
   struct PendingAudioFallback {
@@ -534,7 +573,7 @@ struct TuiMediaCoordinator::Impl {
   }
 
   MediaCommandResult requestVideoHandoff(Command command) {
-    if (!videoSession_) {
+    if (!videoSession_ || !videoSession_->ready()) {
       return reject(MediaCommandFailureKind::Busy, {});
     }
     if (pendingCommand_ || !externalHandoff_.empty()) {
@@ -688,12 +727,27 @@ struct TuiMediaCoordinator::Impl {
     videoSession_.emplace(std::move(sessionRequest),
                           services_.sessionDependencies);
 
-    playback_session::OpenOutcome openOutcome = videoSession_->open();
+    std::optional<playback_session::OpenOutcome> openOutcome =
+        videoSession_->startOpen();
+    PendingVideoOpen pending{std::move(activation), target};
+    if (!openOutcome) {
+      pendingVideoOpen_.emplace(std::move(pending));
+      playbackStateChanged();
+      return MediaCommandResult::deferred();
+    }
+    return finishVideoOpen(std::move(*openOutcome), std::move(pending));
+  }
+
+  MediaCommandResult finishVideoOpen(
+      playback_session::OpenOutcome openOutcome,
+      PendingVideoOpen pending) {
+    const std::filesystem::path& targetFile =
+        playbackTargetFile(pending.target);
     if (std::holds_alternative<playback_session::OpenReady>(openOutcome)) {
-      services_.queue.commit(std::move(activation));
-      videoTarget_ = target;
+      services_.queue.commit(std::move(pending.activation));
+      videoTarget_ = std::move(pending.target);
       beginControlSession();
-      presentationFinished();
+      playbackStateChanged();
       return MediaCommandResult::applied();
     }
     if (auto* fallback =
@@ -701,10 +755,11 @@ struct TuiMediaCoordinator::Impl {
       videoSession_.reset();
       const tui_media_activation::DecisionId decision = nextDecisionId();
       pendingAudioFallback_.emplace(
-          PendingAudioFallback{decision, std::move(activation), targetFile});
+          PendingAudioFallback{decision, std::move(pending.activation),
+                               targetFile});
       publishEvent(tui_media_activation::AudioFallbackRequest{
           decision, targetFile, std::move(fallback->reason)});
-      presentationFinished();
+      playbackStateChanged();
       return MediaCommandResult::deferred();
     }
     if (std::holds_alternative<playback_session::OpenQuitApplication>(
@@ -712,7 +767,7 @@ struct TuiMediaCoordinator::Impl {
       videoSession_.reset();
       releaseForegroundPlayback();
       enqueueQuit();
-      presentationFinished();
+      playbackStateChanged();
       return MediaCommandResult::handledWithoutPlayback();
     }
     if (auto* failure =
@@ -725,7 +780,7 @@ struct TuiMediaCoordinator::Impl {
     }
     videoSession_.reset();
     releaseForegroundPlayback();
-    presentationFinished();
+    playbackStateChanged();
     return MediaCommandResult::handledWithoutPlayback();
   }
 
@@ -752,7 +807,7 @@ struct TuiMediaCoordinator::Impl {
                                        std::move(*completion.failure)});
     }
     if (!pendingCommand_) releaseForegroundPlayback();
-    presentationFinished();
+    playbackStateChanged();
   }
 
   MediaCommandResult dispatch(PreparedPlayback playback) {
@@ -812,8 +867,8 @@ struct TuiMediaCoordinator::Impl {
     publishEvent(CommandErrorChanged{});
   }
 
-  void presentationFinished() {
-    publishEvent(PresentationFinished{});
+  void playbackStateChanged() {
+    publishEvent(PlaybackStateChanged{});
   }
 
   tui_media_activation::DecisionId nextDecisionId() {
@@ -840,7 +895,7 @@ struct TuiMediaCoordinator::Impl {
         beginControlSession();
       }
     }
-    presentationFinished();
+    playbackStateChanged();
     clearCommandError();
     return true;
   }
@@ -863,6 +918,7 @@ struct TuiMediaCoordinator::Impl {
       interactivePlayback_;
   std::optional<PlaybackSession> videoSession_;
   std::optional<PlaybackTarget> videoTarget_;
+  std::optional<PendingVideoOpen> pendingVideoOpen_;
   std::optional<PendingAudioFallback> pendingAudioFallback_;
   std::optional<Command> pendingCommand_;
   tui_media_handoff::DeferredCommand<Command> externalHandoff_;
@@ -913,7 +969,7 @@ void TuiMediaCoordinator::handleMediaTaskCompletion(
   impl_->handleMediaTaskCompletion(completion);
 }
 
-bool TuiMediaCoordinator::videoActive() const { return impl_->videoActive(); }
+bool TuiMediaCoordinator::videoReady() const { return impl_->videoReady(); }
 
 PlaybackControlSessionId TuiMediaCoordinator::controlSessionId() const {
   return impl_->controlSessionId();
@@ -926,6 +982,11 @@ PlaybackShellTerminalRole TuiMediaCoordinator::terminalRole() const {
 std::optional<TuiMediaCoordinator::VideoSnapshot>
 TuiMediaCoordinator::videoSnapshot() const {
   return impl_->videoSnapshot();
+}
+
+std::optional<playback_session::TransitionSnapshot>
+TuiMediaCoordinator::videoTransitionSnapshot() const {
+  return impl_->videoTransitionSnapshot();
 }
 
 std::vector<NativeWaitHandle> TuiMediaCoordinator::waitHandles() const {
@@ -950,6 +1011,15 @@ void TuiMediaCoordinator::setExternalInputModal(bool modal) {
 
 bool TuiMediaCoordinator::handleVideoInputEvent(const InputEvent& event) {
   return impl_->handleVideoInputEvent(event);
+}
+
+bool TuiMediaCoordinator::pollVideoWindowInput(InputEvent& event) {
+  return impl_->pollVideoWindowInput(event);
+}
+
+bool TuiMediaCoordinator::handleVideoWindowInputEvent(
+    const InputEvent& event) {
+  return impl_->handleVideoWindowInputEvent(event);
 }
 
 bool TuiMediaCoordinator::handleControlCommand(

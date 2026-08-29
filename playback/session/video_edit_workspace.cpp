@@ -893,8 +893,30 @@ VideoEditPollResult VideoEditWorkspace::poll() {
   return result;
 }
 
-NativeWaitHandle VideoEditWorkspace::waitHandle() const {
-  return impl_ ? impl_->wakeEvent.nativeWaitHandle() : NativeWaitHandle{};
+std::vector<NativeWaitHandle> VideoEditWorkspace::activityWaitHandles() const {
+  std::vector<NativeWaitHandle> handles;
+  if (!impl_) return handles;
+  handles.reserve(3);
+  const auto append = [&](NativeWaitHandle handle) {
+    if (handle) handles.push_back(handle);
+  };
+  append(impl_->wakeEvent.nativeWaitHandle());
+  append(impl_->sceneAnalysis.workerWaitHandle());
+  append(impl_->exporter.workerWaitHandle());
+  return handles;
+}
+
+std::vector<NativeWaitHandle> VideoEditWorkspace::stopWaitHandles() const {
+  std::vector<NativeWaitHandle> handles;
+  if (!impl_) return handles;
+  handles.reserve(2);
+  if (!impl_->sceneAnalysis.stopReady()) {
+    handles.push_back(impl_->sceneAnalysis.workerWaitHandle());
+  }
+  if (!impl_->exporter.stopReady()) {
+    handles.push_back(impl_->exporter.workerWaitHandle());
+  }
+  return handles;
 }
 
 bool VideoEditWorkspace::selectCutAt(int64_t timelineUs,
@@ -934,8 +956,25 @@ void VideoEditWorkspace::clearCutSelection() {
   if (impl_) impl_->selectedCut.reset();
 }
 
+void VideoEditWorkspace::requestStop() {
+  if (!impl_) return;
+  impl_->sceneAnalysis.requestStop();
+  impl_->exporter.requestStop();
+}
+
+bool VideoEditWorkspace::stopReady() const {
+  return !impl_ ||
+         (impl_->sceneAnalysis.stopReady() && impl_->exporter.stopReady());
+}
+
+bool VideoEditWorkspace::finishStop() {
+  if (!impl_ || !stopReady()) return !impl_;
+  return impl_->sceneAnalysis.finishStop() && impl_->exporter.finishStop();
+}
+
 void VideoEditWorkspace::stop() {
   if (!impl_) return;
+  requestStop();
   impl_->sceneAnalysis.stop();
   impl_->exporter.stop();
 }

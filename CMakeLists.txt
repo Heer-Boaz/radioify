@@ -618,6 +618,15 @@ radioify_link_repo_target(presentation_policy_tests)
 add_test(NAME presentation_policy_tests
          COMMAND $<TARGET_FILE:presentation_policy_tests>)
 
+add_executable(presentation_controller_tests)
+target_sources(presentation_controller_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_presentation_controller_tests>
+  ${CMAKE_SOURCE_DIR}/playback/session/presentation_controller.cpp
+)
+radioify_link_repo_target(presentation_controller_tests)
+add_test(NAME presentation_controller_tests
+         COMMAND $<TARGET_FILE:presentation_controller_tests>)
+
 add_executable(playback_exit_coordinator_tests)
 target_sources(playback_exit_coordinator_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_playback_exit_coordinator_tests>
@@ -665,6 +674,7 @@ target_sources(video_frame_step_smoke PRIVATE
   $<TARGET_OBJECTS:radioify_audiofilter>
   $<TARGET_OBJECTS:radioify_config>
   ${CMAKE_SOURCE_DIR}/core/file_output.cpp
+  ${CMAKE_SOURCE_DIR}/core/pumpable_worker_thread.cpp
 )
 radioify_configure_repo_target(video_frame_step_smoke)
 
@@ -688,6 +698,7 @@ target_sources(timeline_preview_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/decoder.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/sequence.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/timing/timeline.cpp
+  ${CMAKE_SOURCE_DIR}/core/pumpable_worker_thread.cpp
   ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
@@ -740,6 +751,7 @@ add_executable(exporter_job_tests)
 target_sources(exporter_job_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_exporter_job_tests>
   ${CMAKE_SOURCE_DIR}/playback/video/edit/export.cpp
+  ${CMAKE_SOURCE_DIR}/core/pumpable_worker_thread.cpp
   ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
 )
 radioify_link_repo_target(exporter_job_tests)
@@ -774,6 +786,15 @@ target_sources(waitable_signal_tests PRIVATE
 radioify_link_repo_target(waitable_signal_tests)
 add_test(NAME waitable_signal_tests
          COMMAND $<TARGET_FILE:waitable_signal_tests>)
+
+add_executable(pumpable_worker_thread_tests)
+target_sources(pumpable_worker_thread_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_pumpable_worker_thread_tests>
+  ${CMAKE_SOURCE_DIR}/core/pumpable_worker_thread.cpp
+)
+radioify_link_repo_target(pumpable_worker_thread_tests)
+add_test(NAME pumpable_worker_thread_tests
+         COMMAND $<TARGET_FILE:pumpable_worker_thread_tests>)
 
 add_executable(windows_message_pump_tests)
 target_sources(windows_message_pump_tests PRIVATE
@@ -1165,6 +1186,42 @@ radioify_link_repo_target(playback_dialogs_tests)
 add_test(NAME playback_dialogs_tests
          COMMAND $<TARGET_FILE:playback_dialogs_tests>)
 
+add_executable(playback_session_bootstrap_tests)
+target_sources(playback_session_bootstrap_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_playback_session_bootstrap_tests>
+  ${CMAKE_SOURCE_DIR}/playback/session/bootstrap.cpp
+)
+radioify_link_repo_target(playback_session_bootstrap_tests)
+add_test(NAME playback_session_bootstrap_tests
+         COMMAND $<TARGET_FILE:playback_session_bootstrap_tests>)
+
+add_executable(playback_shutdown_sequence_tests)
+target_sources(playback_shutdown_sequence_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_playback_shutdown_sequence_tests>
+  ${CMAKE_SOURCE_DIR}/playback/session/shutdown_sequence.cpp
+)
+radioify_link_repo_target(playback_shutdown_sequence_tests)
+add_test(NAME playback_shutdown_sequence_tests
+         COMMAND $<TARGET_FILE:playback_shutdown_sequence_tests>)
+
+add_executable(subtitle_loader_tests)
+target_sources(subtitle_loader_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_subtitle_loader_tests>
+  ${CMAKE_SOURCE_DIR}/playback/session/subtitle_loader.cpp
+  ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
+)
+radioify_link_repo_target(subtitle_loader_tests)
+add_test(NAME subtitle_loader_tests
+         COMMAND $<TARGET_FILE:subtitle_loader_tests>)
+
+add_executable(ui_input_pump_tests)
+target_sources(ui_input_pump_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_ui_input_pump_tests>
+)
+radioify_link_repo_target(ui_input_pump_tests)
+add_test(NAME ui_input_pump_tests
+         COMMAND $<TARGET_FILE:ui_input_pump_tests>)
+
 add_executable(media_task_cancellation_tests)
 target_sources(media_task_cancellation_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_media_task_cancellation_tests>
@@ -1326,6 +1383,7 @@ add_executable(scene_analysis_job_tests)
 target_sources(scene_analysis_job_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_scene_analysis_job_tests>
   ${CMAKE_SOURCE_DIR}/playback/video/analysis/scene_analysis_job.cpp
+  ${CMAKE_SOURCE_DIR}/core/pumpable_worker_thread.cpp
   ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
 )
 radioify_link_repo_target(scene_analysis_job_tests)

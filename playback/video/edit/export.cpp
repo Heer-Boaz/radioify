@@ -13,9 +13,9 @@
 #include <chrono>
 #include <exception>
 #include <mutex>
-#include <thread>
 #include <utility>
 
+#include "core/pumpable_worker_thread.h"
 #include "core/waitable_signal.h"
 
 namespace playback_video_edit {
@@ -63,7 +63,7 @@ struct Exporter::Impl {
 
   mutable std::mutex mutex;
   WaitableSignal changed;
-  std::thread worker;
+  PumpableWorkerThread worker;
   std::atomic<bool> cancelled{false};
   Operation operation;
   WakeNotifier ownerWake;
@@ -150,18 +150,12 @@ bool Exporter::start(ExportRequest request) {
       !request.decisions.hasValidShape()) {
     return false;
   }
-  std::thread previous;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (!impl_->operation || impl_->state.state == ExportState::Running ||
-        impl_->completion) {
+        impl_->completion || impl_->worker.joinable()) {
       return false;
     }
-    if (impl_->worker.joinable()) previous = std::move(impl_->worker);
-  }
-  if (previous.joinable()) previous.join();
-  {
-    std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->cancelled.store(false, std::memory_order_relaxed);
     impl_->state = ExportSnapshot{};
     impl_->state.state = ExportState::Running;
@@ -169,12 +163,16 @@ bool Exporter::start(ExportRequest request) {
     impl_->state.decisions = request.decisions;
     impl_->lastProgressNotification =
         std::chrono::steady_clock::time_point::min();
+    bool started = false;
     try {
-      impl_->worker = std::thread(
+      started = impl_->worker.start(
           [implementation = impl_.get(), request = std::move(request)]() mutable {
             implementation->run(std::move(request));
           });
     } catch (...) {
+      started = false;
+    }
+    if (!started) {
       impl_->state.state = ExportState::Failed;
       impl_->state.error = "Could not start the export worker.";
       impl_->completion = impl_->state;
@@ -197,10 +195,18 @@ bool Exporter::cancel() {
   return true;
 }
 
-void Exporter::stop() {
+void Exporter::requestStop() {
   if (!impl_) return;
   impl_->cancelled.store(true, std::memory_order_relaxed);
-  if (impl_->worker.joinable()) impl_->worker.join();
+  impl_->notifyChanged();
+}
+
+bool Exporter::stopReady() const {
+  return !impl_ || impl_->worker.ready();
+}
+
+bool Exporter::finishStop() {
+  if (!impl_ || !impl_->worker.finish()) return !impl_;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (impl_->state.state == ExportState::Running) {
@@ -209,6 +215,14 @@ void Exporter::stop() {
     }
   }
   impl_->changed.clear();
+  return true;
+}
+
+void Exporter::stop() {
+  if (!impl_) return;
+  requestStop();
+  impl_->worker.join();
+  (void)finishStop();
 }
 
 ExportSnapshot Exporter::snapshot() const {
@@ -218,20 +232,14 @@ ExportSnapshot Exporter::snapshot() const {
 }
 
 std::optional<ExportSnapshot> Exporter::takeCompletion() {
-  if (!impl_) return std::nullopt;
+  if (!impl_ || !impl_->worker.finish()) return std::nullopt;
   std::optional<ExportSnapshot> completion;
-  std::thread finishedWorker;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (!impl_->completion) return std::nullopt;
     completion = std::move(impl_->completion);
     impl_->completion.reset();
-    if (impl_->state.state != ExportState::Running &&
-        impl_->worker.joinable()) {
-      finishedWorker = std::move(impl_->worker);
-    }
   }
-  if (finishedWorker.joinable()) finishedWorker.join();
   return completion;
 }
 
@@ -241,6 +249,10 @@ bool Exporter::consumeChanged() {
 
 NativeWaitHandle Exporter::nativeWaitHandle() const {
   return impl_ ? impl_->changed.nativeWaitHandle() : NativeWaitHandle{};
+}
+
+NativeWaitHandle Exporter::workerWaitHandle() const {
+  return impl_ ? impl_->worker.waitHandle() : NativeWaitHandle{};
 }
 
 }  // namespace playback_video_edit

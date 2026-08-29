@@ -58,6 +58,10 @@ radioify_add_module_object_library(radioify_tool_presentation_policy_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/presentation_policy_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_presentation_controller_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/presentation_controller_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_playback_exit_coordinator_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_exit_coordinator_tests.cpp
 )
@@ -104,6 +108,10 @@ radioify_add_module_object_library(radioify_tool_gpu_text_grid_composition_tests
 
 radioify_add_module_object_library(radioify_tool_waitable_signal_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/waitable_signal_tests.cpp
+)
+
+radioify_add_module_object_library(radioify_tool_pumpable_worker_thread_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/pumpable_worker_thread_tests.cpp
 )
 
 radioify_add_module_object_library(radioify_tool_windows_message_pump_tests
@@ -238,6 +246,10 @@ radioify_add_module_object_library(radioify_tool_ui_viewport_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/ui_viewport_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_ui_input_pump_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/ui_input_pump_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_media_task_panel_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/media_task_panel_tests.cpp
 )
@@ -248,6 +260,20 @@ radioify_add_module_object_library(radioify_tool_application_exit_tests
 
 radioify_add_module_object_library(radioify_tool_playback_dialogs_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_dialogs_tests.cpp
+)
+
+radioify_add_module_object_library(
+  radioify_tool_playback_session_bootstrap_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/playback_session_bootstrap_tests.cpp
+)
+
+radioify_add_module_object_library(
+  radioify_tool_playback_shutdown_sequence_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/playback_shutdown_sequence_tests.cpp
+)
+
+radioify_add_module_object_library(radioify_tool_subtitle_loader_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/subtitle_loader_tests.cpp
 )
 
 radioify_add_module_object_library(

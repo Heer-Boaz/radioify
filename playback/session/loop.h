@@ -75,6 +75,8 @@ class PlaybackLoopRunner {
   bool capturesBrowserInput() const;
   void setExternalInputModal(bool modal);
   bool handleInputEvent(const InputEvent& event);
+  bool pollWindowInput(InputEvent& event);
+  bool handleWindowInputEvent(const InputEvent& event);
   bool handleControlCommand(PlaybackControlCommand command);
   bool seekToRatio(double ratio);
   bool toggleWindowPresentation();
@@ -87,8 +89,14 @@ class PlaybackLoopRunner {
   std::vector<playback_session::Event> drainEvents();
   void mediaTaskFinished(
       const playback_media_processing::Completion& completion);
+  void subtitlesLoaded(bool available, bool reload,
+                       bool preferredTrackSelected);
   void requestStop();
   void requestQuit();
+  void beginShutdown();
+  bool shutdownReady();
+  bool finishShutdown();
+  std::vector<NativeWaitHandle> shutdownWaitHandles() const;
   void shutdown();
   bool quitApplicationRequested() const;
   PlaybackSessionContinuationState continuationState() const;

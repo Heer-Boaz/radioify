@@ -106,10 +106,20 @@ bool waitUntilFinished(playback_video_analysis::SceneAnalysisJob& job) {
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds(2);
   while (std::chrono::steady_clock::now() < deadline) {
-    if (job.snapshot().finished()) return true;
+    if (job.snapshot().finished() && job.stopReady()) return true;
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
-  return job.snapshot().finished();
+  return job.snapshot().finished() && job.stopReady();
+}
+
+bool waitUntilStopReady(playback_video_analysis::SceneAnalysisJob& job) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (job.stopReady()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return job.stopReady();
 }
 
 }  // namespace
@@ -144,6 +154,9 @@ int main() {
                "an incomplete request must not start analysis");
   ok &= expect(job.start(request) && controlled.waitUntilReported(1),
                "a valid request must start the injected analysis");
+  ok &= expect(job.workerWaitHandle() &&
+                   waitNow(job.workerWaitHandle()) == WAIT_TIMEOUT,
+               "running analysis must expose its exact worker-exit handle");
   ok &= expect(waitNow(changeHandle) == WAIT_OBJECT_0 &&
                    waitNow(ownerWakeHandle) == WAIT_OBJECT_0 &&
                    job.consumeChanged() &&
@@ -177,6 +190,8 @@ int main() {
                    succeeded->suggestions.size() == 1 &&
                    succeeded->suggestions.front().id == 7,
                "successful completion must publish the full analysis once");
+  ok &= expect(!job.workerWaitHandle(),
+               "consuming a ready completion must reclaim its worker");
   ok &= expect(!job.takeCompletion(),
                "analysis completion must be consumed exactly once");
 
@@ -206,6 +221,17 @@ int main() {
   ok &= expect(failed && failed->state == analysis::JobState::Failed &&
                    failed->error == "Controlled analysis failure.",
                "analysis failures must retain backend detail");
+
+  ok &= expect(job.start(request) && controlled.waitUntilReported(4),
+               "the job must start controlled shutdown work");
+  job.requestStop();
+  ok &= expect(!job.stopReady(),
+               "requestStop must never join the analysis worker");
+  controlled.release(4);
+  ok &= expect(waitUntilStopReady(job),
+               "analysis completion must publish stop readiness");
+  ok &= expect(job.finishStop() && job.stopReady(),
+               "finishStop must reclaim only an already completed worker");
 
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

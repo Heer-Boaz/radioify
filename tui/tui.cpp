@@ -90,6 +90,7 @@
 #include "ui_inputlogic.h"
 #include "ui_input_pump.h"
 #include "ui_viewport.h"
+#include "video_transition_view.h"
 #include "media_task_card.h"
 #include "media_task_controller.h"
 #include "media_task_presentation.h"
@@ -171,11 +172,6 @@ struct WindowClientSize {
   int height = 1;
 };
 
-enum class BrowserInputSurface : std::uint8_t {
-  Terminal,
-  NativeWindow,
-};
-
 static int gridPixelExtent(int cells, double pixelsPerCell,
                            int fallbackPixelsPerCell) {
   const int resolvedCells = std::max(1, cells);
@@ -184,6 +180,38 @@ static int gridPixelExtent(int cells, double pixelsPerCell,
                           : static_cast<double>(fallbackPixelsPerCell);
   return std::max(
       1, static_cast<int>(std::lround(resolvedCells * resolvedPixelsPerCell)));
+}
+
+static void mapWindowPointerToGrid(InputEvent& event,
+                                   const VideoWindow& window,
+                                   const ConsoleScreen& screen) {
+  if (event.type != InputEvent::Type::Mouse ||
+      !isWindowMouseEvent(event.mouse)) {
+    return;
+  }
+  const int windowWidth = std::max(1, window.GetWidth());
+  const int windowHeight = std::max(1, window.GetHeight());
+  const int gridWidth = std::max(1, screen.width());
+  const int gridHeight = std::max(1, screen.height());
+  const int pixelX = event.mouse.hasPixelPosition ? event.mouse.pixelX
+                                                  : event.mouse.pos.X;
+  const int pixelY = event.mouse.hasPixelPosition ? event.mouse.pixelY
+                                                  : event.mouse.pos.Y;
+  event.mouse.hasPixelPosition = true;
+  event.mouse.pixelX = pixelX;
+  event.mouse.pixelY = pixelY;
+  event.mouse.unitWidth =
+      static_cast<double>(windowWidth) / static_cast<double>(gridWidth);
+  event.mouse.unitHeight =
+      static_cast<double>(windowHeight) / static_cast<double>(gridHeight);
+  event.mouse.pos.X = static_cast<SHORT>(std::clamp(
+      static_cast<int>((static_cast<int64_t>(pixelX) * gridWidth) /
+                       windowWidth),
+      0, gridWidth - 1));
+  event.mouse.pos.Y = static_cast<SHORT>(std::clamp(
+      static_cast<int>((static_cast<int64_t>(pixelY) * gridHeight) /
+                       windowHeight),
+      0, gridHeight - 1));
 }
 
 static WindowClientSize initialWindowTuiClientSize(const ConsoleScreen& screen) {
@@ -494,8 +522,20 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   const tui_melody_visualization::Styles melodyVisualizationStyles =
       theme.pitchMonitorStyles();
   std::vector<ScreenCell> windowCells;
+  const tui_video_transition_view::Styles videoTransitionStyles =
+      theme.videoTransitionStyles();
+  tui_video_transition_view::Layout videoTransitionLayout;
+  auto presentTextGrid = [&]() {
+    screen.draw();
+    if (!windowTuiEnabled || !tuiWindow.IsOpen()) return;
+    int gridWidth = 0;
+    int gridHeight = 0;
+    if (screen.snapshot(windowCells, gridWidth, gridHeight)) {
+      tuiWindow.PresentTextGrid(windowCells, gridWidth, gridHeight);
+    }
+  };
   AudioPictureInPictureWindow audioPictureInPicture(gpu);
-  ConsoleInputPump consoleInputPump;
+  ApplicationInputPump applicationInputPump;
   pointer_input::MouseDoubleClickTracker browserDoubleClickTracker;
   BrowserViewport viewport;
   browser_chrome::Model browserChrome;
@@ -525,7 +565,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       confirmedPlaybackTaskCancellations;
 
   PlaybackSession::Dependencies mediaSessionDependencies{
-      audioPlayback, gpu, input, screen, theme.playbackSessionAppearance()};
+      audioPlayback, gpu, screen, runtime.subtitleLoader(),
+      theme.playbackSessionAppearance()};
   playback_queue::Queue& playbackQueue = runtime.playbackQueue();
   media_processing::Coordinator& mediaProcessing = runtime.mediaProcessing();
   media_processing::Actions& mediaActions = runtime.mediaActions();
@@ -662,7 +703,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
             applicationQuitRequested = true;
           } else if constexpr (
               std::is_same_v<Event,
-                             TuiMediaCoordinator::PresentationFinished>) {
+                             TuiMediaCoordinator::PlaybackStateChanged>) {
             markDirty();
           } else if constexpr (
               std::is_same_v<Event,
@@ -766,6 +807,20 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         !shellModal && !mediaCoordinator.capturesBrowserInput();
     tuiWindow.SetFileDropAcceptanceEnabled(acceptsFileDrop);
     audioPictureInPicture.setFileDropAcceptanceEnabled(acceptsFileDrop);
+  };
+  const auto deferCommittedFileDrop = [&](InputEvent& event) {
+    if (event.type != InputEvent::Type::FileDrop ||
+        !isCommittedFileDropEvent(event.fileDrop)) {
+      return false;
+    }
+
+    // Native drops and same-instance shell opens share one durable ingress
+    // queue. The queue remains pending while either modal owner holds
+    // activation, then follows the same handoff path after resolution.
+    OpenFilesRequest request;
+    request.files = std::move(event.fileDrop.files);
+    openFileRequests.post(std::move(request));
+    return true;
   };
 
   auto selectedOptionsSubject = [&]()
@@ -1109,7 +1164,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       };
 
   auto activateRadioifySurface = [&]() {
-    if (mediaCoordinator.videoActive()) {
+    if (mediaCoordinator.videoReady()) {
       mediaCoordinator.activateVideoPresentation();
       return;
     }
@@ -1550,10 +1605,45 @@ int runTui(Options o, ApplicationRuntime& runtime) {
 
     if (mediaCoordinator.terminalRole() !=
         PlaybackShellTerminalRole::Browser) {
+      const std::optional<playback_session::TransitionSnapshot> transition =
+          mediaCoordinator.videoTransitionSnapshot();
+      if (transition) {
+        videoTransitionLayout = tui_video_transition_view::draw(
+            screen, *transition, videoTransitionStyles);
+        presentTextGrid();
+      } else {
+        videoTransitionLayout = {};
+      }
+
       InputEvent playbackEvent{};
-      if (consoleInputPump.pollNext(input, playbackEvent)) {
-        if (playbackEvent.type == InputEvent::Type::Resize) {
+      ApplicationInputSurface inputSurface =
+          ApplicationInputSurface::Terminal;
+      VideoWindow* shellInputWindow =
+          windowTuiEnabled && tuiWindow.IsOpen() ? &tuiWindow : nullptr;
+      const auto pollPlaybackWindow = [&](InputEvent& event) {
+        return mediaCoordinator.pollVideoWindowInput(event);
+      };
+      if (applicationInputPump.pollNext(input, shellInputWindow,
+                                        pollPlaybackWindow, playbackEvent,
+                                        inputSurface)) {
+        if (inputSurface == ApplicationInputSurface::ShellWindow) {
+          mapWindowPointerToGrid(playbackEvent, tuiWindow, screen);
+        }
+        if (inputSurface == ApplicationInputSurface::PlaybackWindow) {
+          mediaCoordinator.handleVideoWindowInputEvent(playbackEvent);
+          continue;
+        }
+        if (playbackEvent.type == InputEvent::Type::Resize &&
+            inputSurface == ApplicationInputSurface::Terminal) {
           screen.updateSize();
+        }
+        if (deferCommittedFileDrop(playbackEvent)) {
+          continue;
+        }
+        if (transition && tui_video_transition_view::cancelRequested(
+                              playbackEvent, videoTransitionLayout)) {
+          mediaCoordinator.handleControlCommand(PlaybackControlCommand::Stop);
+          continue;
         }
         mediaCoordinator.handleVideoInputEvent(playbackEvent);
         continue;
@@ -1575,9 +1665,9 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
 
     auto processInputEvent = [&](InputEvent ev,
-                                 BrowserInputSurface inputSurface) {
+                                 ApplicationInputSurface inputSurface) {
       if (ev.type == InputEvent::Type::Resize) {
-        if (inputSurface == BrowserInputSurface::Terminal) {
+        if (inputSurface == ApplicationInputSurface::Terminal) {
           handleResize();
           rebuildLayout();
         } else {
@@ -1593,21 +1683,14 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       } else {
         browserDoubleClickTracker.reset();
       }
-      if (ev.type == InputEvent::Type::FileDrop &&
-          isCommittedFileDropEvent(ev.fileDrop)) {
-        // Native drops and same-instance shell opens share one durable ingress
-        // queue. The queue remains pending while either modal owner holds
-        // activation, then follows the same handoff path after resolution.
-        OpenFilesRequest request;
-        request.files = std::move(ev.fileDrop.files);
-        openFileRequests.post(std::move(request));
+      if (deferCommittedFileDrop(ev)) {
         return;
       }
       if (mediaCoordinator.capturesBrowserInput()) {
         if (ev.type == InputEvent::Type::Key ||
             ev.type == InputEvent::Type::Action ||
             (ev.type == InputEvent::Type::Resize &&
-             inputSurface == BrowserInputSurface::Terminal)) {
+             inputSurface == ApplicationInputSurface::Terminal)) {
           mediaCoordinator.handleVideoInputEvent(ev);
           markDirty(UiDirtyFlags::Async);
         }
@@ -1615,27 +1698,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       }
       if (ev.type == InputEvent::Type::Mouse &&
           isWindowMouseEvent(ev.mouse)) {
-        int wndW = std::max(1, tuiWindow.GetWidth());
-        int wndH = std::max(1, tuiWindow.GetHeight());
-        int gridW = std::max(1, screen.width());
-        int gridH = std::max(1, screen.height());
-        const int pixelX = ev.mouse.hasPixelPosition ? ev.mouse.pixelX
-                                                     : ev.mouse.pos.X;
-        const int pixelY = ev.mouse.hasPixelPosition ? ev.mouse.pixelY
-                                                     : ev.mouse.pos.Y;
-        ev.mouse.hasPixelPosition = true;
-        ev.mouse.pixelX = pixelX;
-        ev.mouse.pixelY = pixelY;
-        ev.mouse.unitWidth = static_cast<double>(wndW) / gridW;
-        ev.mouse.unitHeight = static_cast<double>(wndH) / gridH;
-        int gx = static_cast<int>((static_cast<int64_t>(pixelX) * gridW) /
-                                  wndW);
-        int gy = static_cast<int>((static_cast<int64_t>(pixelY) * gridH) /
-                                  wndH);
-        gx = std::clamp(gx, 0, gridW - 1);
-        gy = std::clamp(gy, 0, gridH - 1);
-        ev.mouse.pos.X = static_cast<SHORT>(gx);
-        ev.mouse.pos.Y = static_cast<SHORT>(gy);
+        mapWindowPointerToGrid(ev, tuiWindow, screen);
       }
       const auto browserShellAction = tui_shell_shortcuts::resolve(
           ev, tui_shell_shortcuts::context(
@@ -1797,7 +1860,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         markDirty();
         return;
       }
-      if (mediaCoordinator.videoActive() && !browserSearchFocused(browser) &&
+      if (mediaCoordinator.videoReady() && !browserSearchFocused(browser) &&
           (ev.type == InputEvent::Type::Key ||
            ev.type == InputEvent::Type::Action)) {
         const std::optional<PlaybackAction> action =
@@ -1829,7 +1892,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     };
 
     auto dispatchInputEvent = [&](const InputEvent& event,
-                                  BrowserInputSurface inputSurface) -> bool {
+                                  ApplicationInputSurface inputSurface) -> bool {
       processShellPlaybackCommands();
       if (!running) return true;
       processInputEvent(event, inputSurface);
@@ -1845,23 +1908,24 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     const bool preInputOptionsMode = optionsBrowserIsActive(browser);
     const bool preInputTrackMode = isTrackBrowserActive(browser);
     InputEvent ev{};
-    if (windowTuiEnabled && tuiWindow.IsOpen()) {
-      while (running &&
-             mediaCoordinator.terminalRole() ==
-                 PlaybackShellTerminalRole::Browser &&
-             tuiWindow.PollInput(ev)) {
-        if (!dispatchInputEvent(ev, BrowserInputSurface::NativeWindow)) {
-          return 0;
-        }
-        if (!running) break;
-      }
-    }
-
+    ApplicationInputSurface inputSurface =
+        ApplicationInputSurface::Terminal;
+    VideoWindow* shellInputWindow =
+        windowTuiEnabled && tuiWindow.IsOpen() ? &tuiWindow : nullptr;
+    const auto pollPlaybackWindow = [&](InputEvent& event) {
+      return mediaCoordinator.pollVideoWindowInput(event);
+    };
     if (running &&
         mediaCoordinator.terminalRole() ==
             PlaybackShellTerminalRole::Browser &&
-        consoleInputPump.pollNext(input, ev)) {
-      if (!dispatchInputEvent(ev, BrowserInputSurface::Terminal)) return 0;
+        applicationInputPump.pollNext(input, shellInputWindow,
+                                      pollPlaybackWindow, ev, inputSurface)) {
+      if (inputSurface == ApplicationInputSurface::PlaybackWindow) {
+        mediaCoordinator.handleVideoWindowInputEvent(ev);
+        markDirty(UiDirtyFlags::Async);
+      } else if (!dispatchInputEvent(ev, inputSurface)) {
+        return 0;
+      }
     }
     if (didRender) {
       finalizeRenderedExit();
@@ -2246,15 +2310,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
             shellOverlayStyles);
       }
 
-      screen.draw();
+      presentTextGrid();
       screen.setAlwaysFullRedraw(false);
-      if (windowTuiEnabled && tuiWindow.IsOpen()) {
-        int gridW = 0;
-        int gridH = 0;
-        if (screen.snapshot(windowCells, gridW, gridH)) {
-          tuiWindow.PresentTextGrid(windowCells, gridW, gridH);
-        }
-      }
       renderAudioPictureInPicture();
       lastDraw = now;
       dirty = false;

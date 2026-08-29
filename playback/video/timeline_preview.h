@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include "core/native_wait_handle.h"
 #include "playback/video/timeline_preview_cache.h"
@@ -21,6 +22,9 @@ class Provider {
   Provider& operator=(const Provider&) = delete;
 
   bool start(const Source& source);
+  void requestStop();
+  bool stopReady() const;
+  bool finishStop();
   void stop();
 
   bool submit(const Request& request);
@@ -29,6 +33,7 @@ class Provider {
 
   std::optional<Result> takeResult();
   NativeWaitHandle changedWaitHandle() const;
+  std::vector<NativeWaitHandle> stopWaitHandles() const;
 
  private:
   struct Impl;

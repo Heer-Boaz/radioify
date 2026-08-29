@@ -55,6 +55,7 @@ extern "C" {
 }
 
 #include "audioplayback.h"
+#include "core/pumpable_worker_thread.h"
 #include "core/windows_handle.h"
 #include "playback/video/audio/output_clock_source.h"
 #include "playback/video/audio/output_timeline.h"
@@ -1563,13 +1564,14 @@ struct Player::Impl {
   PlayerConfig config;
   std::atomic<bool> running{false};
   std::atomic<bool> ctrlRunning{false};
+  std::atomic<bool> closeRequested{false};
   playback_video_state_machine::Controller playbackState;
   std::atomic<bool> pauseRequested{false};
   playback_video_serial_control::Controller serialControl;
   std::mutex eventMutex;
   std::condition_variable eventCv;
   std::deque<playback_video_control::Event> events;
-  std::thread controlThread;
+  PumpableWorkerThread controlThread;
   std::atomic<bool> initDone{false};
   std::atomic<bool> initOk{false};
   std::mutex initMutex;
@@ -2942,13 +2944,6 @@ struct Player::Impl {
                         nextLabel.empty() ? "N/A" : nextLabel.c_str());
         break;
       }
-      case playback_video_control::EventType::CloseRequest: {
-        ctrlRunning.store(false, std::memory_order_relaxed);
-        running.store(false, std::memory_order_relaxed);
-        commandPending.store(true, std::memory_order_relaxed);
-        appendTiming("ctrl_close_request");
-        break;
-      }
       case playback_video_control::EventType::SeekApplied: {
         if (serialControl.applySeekResult(ev.serial,
                                           static_cast<int>(ev.arg1))) {
@@ -2997,7 +2992,9 @@ struct Player::Impl {
   void controlMain() {
     resetControlState();
     applyStateChange(playbackState.beginOpening());
-    startThreads();
+    if (ctrlRunning.load(std::memory_order_acquire)) {
+      startThreads();
+    }
     while (ctrlRunning.load()) {
       std::deque<playback_video_control::Event> pending;
       {
@@ -3018,6 +3015,7 @@ struct Player::Impl {
     stopThreads();
     appendTimingFmt("control_main stop_threads_end");
     applyStateChange(playbackState.finishClosing());
+    SetEvent(statusChangedEvent.get());
   }
 
   void demuxMain() {
@@ -3038,6 +3036,7 @@ struct Player::Impl {
       }
       initOk.store(false);
       initDone.store(true);
+      SetEvent(statusChangedEvent.get());
       audioStartOk.store(false);
       audioStreamStarted.store(false, std::memory_order_relaxed);
       audioStartDone.store(true);
@@ -3176,6 +3175,7 @@ struct Player::Impl {
 
     initOk.store(true);
     initDone.store(true);
+    SetEvent(statusChangedEvent.get());
 
     videoDecodeThread = std::thread([this]() { videoDecodeMain(); });
     videoOutputThread = std::thread([this]() { videoOutputMain(); });
@@ -4657,16 +4657,58 @@ Player::Player(AudioPlaybackRuntime& audioPlayback, GpuRuntime& gpu)
 Player::~Player() { close(); }
 
 bool Player::open(const PlayerConfig& config, std::string* error) {
-  (void)error;
-  if (impl_->ctrlRunning.load()) {
+  if (impl_->controlThread.joinable()) {
     close();
   }
   impl_->config = config;
   impl_->videoStreamIndex.store(-1, std::memory_order_relaxed);
   impl_->logPath = config.logPath;
+  impl_->initDone.store(false, std::memory_order_relaxed);
+  impl_->initOk.store(false, std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(impl_->initMutex);
+    impl_->initError.clear();
+  }
+  ResetEvent(impl_->statusChangedEvent.get());
+  impl_->closeRequested.store(false, std::memory_order_relaxed);
   impl_->ctrlRunning.store(true, std::memory_order_relaxed);
-  impl_->controlThread = std::thread([this]() { impl_->controlMain(); });
+  if (!impl_->controlThread.start([this]() { impl_->controlMain(); })) {
+    impl_->ctrlRunning.store(false, std::memory_order_release);
+    impl_->running.store(false, std::memory_order_release);
+    if (error) *error = "Could not start the video control worker.";
+    return false;
+  }
   return true;
+}
+
+void Player::requestClose() {
+  if (!impl_->controlThread.joinable() ||
+      impl_->closeRequested.exchange(true, std::memory_order_acq_rel)) {
+    return;
+  }
+  impl_->appendTimingFmt("player_close request");
+  impl_->ctrlRunning.store(false, std::memory_order_release);
+  impl_->running.store(false, std::memory_order_release);
+  impl_->commandPending.store(true, std::memory_order_release);
+  impl_->eventCv.notify_one();
+}
+
+bool Player::closeReady() const {
+  return impl_->controlThread.ready();
+}
+
+bool Player::finishClose() {
+  if (impl_->controlThread.joinable()) {
+    if (!impl_->controlThread.ready()) return false;
+    impl_->appendTimingFmt("player_close completed_control_join_begin");
+    (void)impl_->controlThread.finish();
+    impl_->appendTimingFmt("player_close completed_control_join_end");
+  }
+  return true;
+}
+
+NativeWaitHandle Player::closeWaitHandle() const {
+  return impl_->controlThread.waitHandle();
 }
 
 void Player::close() {
@@ -4675,23 +4717,10 @@ void Player::close() {
                                                                              : 0,
                          impl_->controlThread.joinable() ? 1 : 0);
   if (impl_->controlThread.joinable()) {
-    if (impl_->ctrlRunning.load()) {
-      impl_->appendTimingFmt("player_close post_close_request");
-      playback_video_control::Event ev{};
-      ev.type = playback_video_control::EventType::CloseRequest;
-      impl_->postEvent(std::move(ev));
-    } else {
-      impl_->appendTimingFmt("player_close notify_control_thread");
-      impl_->eventCv.notify_one();
-    }
-    impl_->ctrlRunning.store(false, std::memory_order_relaxed);
+    requestClose();
     impl_->appendTimingFmt("player_close control_join_begin");
     impl_->controlThread.join();
     impl_->appendTimingFmt("player_close control_join_end");
-  } else {
-    impl_->appendTimingFmt("player_close stop_threads_without_control_begin");
-    impl_->stopThreads();
-    impl_->appendTimingFmt("player_close stop_threads_without_control_end");
   }
   impl_->appendTimingFmt("player_close end");
 }

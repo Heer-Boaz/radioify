@@ -5,6 +5,7 @@
 
 #include "core/native_wait_handle.h"
 #include "playback/framebuffer/presenter.h"
+#include "playback/session/presentation_backend.h"
 #include "playback/session/presentation_policy.h"
 #include "playback/video/playback.h"
 #include "state.h"
@@ -16,7 +17,7 @@ class GpuVideoFrameCache;
 struct InputEvent;
 struct WindowUiState;
 
-class PlaybackOutputController {
+class PlaybackOutputController final : public PlaybackPresentationBackend {
  public:
   PlaybackOutputController(
       Player& player, GpuRuntime& gpu, std::string mediaTitle,
@@ -36,18 +37,26 @@ class PlaybackOutputController {
   bool consumeWindowCloseRequested();
   NativeWaitHandle windowInputWaitHandle() const;
   NativeWaitHandle windowCloseRequestedWaitHandle() const;
-  bool openWindow();
+  PlaybackWindowLifecycle windowLifecycle() const override;
+  bool consumeWindowLifecycleChange() override;
+  bool requestOpenWindow() override;
+  void requestCloseWindow() override;
+  bool windowCloseReady() const override;
+  bool finishCloseWindow() override;
+  NativeWaitHandle windowTransitionWaitHandle() const;
+  NativeWaitHandle windowShutdownWaitHandle() const;
   void closeWindow();
 
   bool pollWindowInput(InputEvent& event);
   void updateWindowCursor(Player& player, PlaybackSessionState playbackState,
                           bool overlayVisible);
 
-  bool applyWindowPresentation(WindowPresentationRequest request);
+  bool applyWindowPresentation(
+      WindowPresentationRequest request) override;
   bool restoreWindowPresentation(
       WindowPresentationRequest request,
-      const WindowPlacementState& placement);
-  bool captureWindowPlacement(WindowPlacementState& placement);
+      const WindowPlacementState& placement) override;
+  bool captureWindowPlacement(WindowPlacementState& placement) override;
   bool activateWindow();
   VideoWindow& window();
   const VideoWindow& window() const;

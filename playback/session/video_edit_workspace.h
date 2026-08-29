@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "core/native_wait_handle.h"
 #include "playback/video/edit/command.h"
@@ -66,8 +67,15 @@ class VideoEditWorkspace {
   bool moveBoundary(playback_video_edit::EditBoundary boundary,
                     int64_t timelineUs);
   VideoEditPollResult poll();
-  // Export and scene-analysis changes share one workspace-owned wake event.
-  NativeWaitHandle waitHandle() const;
+  // Progress shares one workspace-owned wake event. Active worker handles let
+  // the running owner publish completions after exact thread exit.
+  std::vector<NativeWaitHandle> activityWaitHandles() const;
+  // Closing waits only on workers that have not exited yet. Already-signaled
+  // thread handles must not keep the owner in a busy wake loop.
+  std::vector<NativeWaitHandle> stopWaitHandles() const;
+  void requestStop();
+  bool stopReady() const;
+  bool finishStop();
   void stop();
 
   playback_video_edit::EditSnapshot edit() const;

@@ -94,10 +94,20 @@ bool waitUntilFinished(playback_video_edit::Exporter& exporter) {
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds(2);
   while (std::chrono::steady_clock::now() < deadline) {
-    if (exporter.snapshot().finished()) return true;
+    if (exporter.snapshot().finished() && exporter.stopReady()) return true;
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
-  return exporter.snapshot().finished();
+  return exporter.snapshot().finished() && exporter.stopReady();
+}
+
+bool waitUntilStopReady(playback_video_edit::Exporter& exporter) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (exporter.stopReady()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return exporter.stopReady();
 }
 
 playback_video_edit::ExportRequest requestFor(
@@ -138,6 +148,9 @@ int main() {
   ok &= expect(exporter.start(firstRequest) &&
                    controlled.waitUntilReported(1),
                "a valid request must start the injected export");
+  ok &= expect(exporter.workerWaitHandle() &&
+                   waitNow(exporter.workerWaitHandle()) == WAIT_TIMEOUT,
+               "a running export must expose its exact worker-exit handle");
   ok &= expect(waitNow(changeHandle) == WAIT_OBJECT_0 &&
                    waitNow(ownerWakeHandle) == WAIT_OBJECT_0 &&
                    exporter.consumeChanged() &&
@@ -174,6 +187,8 @@ int main() {
                    succeeded->decisions == firstRequest.decisions &&
                    succeeded->videoEncoder == "h264_nvenc",
                "successful completion must publish its exact revision once");
+  ok &= expect(!exporter.workerWaitHandle(),
+               "consuming a ready completion must reclaim its worker");
   ok &= expect(!exporter.takeCompletion(),
                "export completion must be consumed exactly once");
 
@@ -222,6 +237,18 @@ int main() {
                    malformed->error ==
                        "Export backend returned a non-terminal result.",
                "the worker boundary must reject non-terminal backend results");
+
+  ok &= expect(exporter.start(requestFor("shutdown.mp4")) &&
+                   controlled.waitUntilReported(5),
+               "the job must start controlled shutdown work");
+  exporter.requestStop();
+  ok &= expect(!exporter.stopReady(),
+               "requestStop must never pretend a running worker was joined");
+  controlled.release(5);
+  ok &= expect(waitUntilStopReady(exporter),
+               "worker completion must publish asynchronous stop readiness");
+  ok &= expect(exporter.finishStop() && exporter.stopReady(),
+               "finishStop must reclaim only an already completed worker");
 
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -18,7 +18,6 @@ enum class EventType {
   SetSequence,
   UpdateComposition,
   CycleAudioTrack,
-  CloseRequest,
   SeekApplied,
   FirstFramePresented,
 };

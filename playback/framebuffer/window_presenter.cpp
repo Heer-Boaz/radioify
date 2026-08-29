@@ -1,16 +1,16 @@
 #include "window_presenter.h"
 
 #include <cstdarg>
-#include <condition_variable>
 #include <cstdio>
 #include <fstream>
 #include <mutex>
 #include <stdexcept>
-#include <thread>
 #include <utility>
 
 #include "core/native_wait_handle.h"
+#include "core/pumpable_worker_thread.h"
 #include "core/thread_dispatch_queue.h"
+#include "core/waitable_signal.h"
 #include "core/windows_app_resources.h"
 #include "core/windows_handle.h"
 #include "playback/framebuffer/window_presentation.h"
@@ -45,13 +45,6 @@ void appendWindowPresenterTimingLog(const char* fmt, ...) {
 #endif
 }
 
-struct WindowStartGate {
-  std::mutex mutex;
-  std::condition_variable ready;
-  bool completed = false;
-  bool opened = false;
-};
-
 std::string nativePlaybackWindowTitle(const std::string& mediaTitle) {
   return mediaTitle.empty() ? std::string(RADIOIFY_APP_NAME)
                             : mediaTitle + " - " RADIOIFY_APP_NAME;
@@ -73,7 +66,10 @@ struct WindowPresenter::Impl {
   std::atomic<bool> cursorVisible{true};
   std::atomic<HWND> windowHandle{nullptr};
   UniqueWindowsHandle wakeEvent{CreateEventW(nullptr, FALSE, FALSE, nullptr)};
-  std::thread thread;
+  WaitableSignal lifecycleChanged;
+  std::atomic<WindowPresenter::Lifecycle> lifecycle{
+      WindowPresenter::Lifecycle::Closed};
+  PumpableWorkerThread thread;
   Impl(Player& player, GpuRuntime& gpu, std::string mediaTitle,
        std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
            presentationSource,
@@ -103,25 +99,25 @@ struct WindowPresenter::Impl {
     }
   }
 
-  bool start() {
-    if (thread.joinable()) {
-      HWND hwnd = nativeWindowHandle();
-      if (hwnd && IsWindow(hwnd)) {
-        threadState.store(WindowThreadState::Enabled,
-                          std::memory_order_relaxed);
-        forcePresent.store(true, std::memory_order_relaxed);
-        notify();
-        return true;
-      }
-      stop();
+  bool requestStart() {
+    const WindowPresenter::Lifecycle current =
+        lifecycle.load(std::memory_order_acquire);
+    if (current == WindowPresenter::Lifecycle::Open ||
+        current == WindowPresenter::Lifecycle::Opening) {
+      return true;
+    }
+    if (current != WindowPresenter::Lifecycle::Closed || thread.joinable()) {
+      return false;
     }
 
-    auto startGate = std::make_shared<WindowStartGate>();
+    lifecycleChanged.clear();
     windowHandle.store(nullptr, std::memory_order_release);
     cursorVisible.store(true, std::memory_order_relaxed);
     threadState.store(WindowThreadState::Enabled, std::memory_order_relaxed);
     forcePresent.store(true, std::memory_order_relaxed);
-    thread = std::thread([this, startGate]() {
+    lifecycle.store(WindowPresenter::Lifecycle::Opening,
+                    std::memory_order_release);
+    if (!thread.start([this]() {
       dispatch.openOnCurrentThread();
       const bool opened = window.Open(
           VideoWindow::kDefaultVideoClientWidth,
@@ -132,12 +128,18 @@ struct WindowPresenter::Impl {
                            std::memory_order_release);
         window.EnableFileDrop();
       }
-      {
-        std::lock_guard<std::mutex> lock(startGate->mutex);
-        startGate->opened = opened;
-        startGate->completed = true;
+      WindowPresenter::Lifecycle expected =
+          WindowPresenter::Lifecycle::Opening;
+      if (opened) {
+        (void)lifecycle.compare_exchange_strong(
+            expected, WindowPresenter::Lifecycle::Open,
+            std::memory_order_release, std::memory_order_acquire);
+      } else {
+        (void)lifecycle.compare_exchange_strong(
+            expected, WindowPresenter::Lifecycle::Failed,
+            std::memory_order_release, std::memory_order_acquire);
       }
-      startGate->ready.notify_one();
+      lifecycleChanged.signal();
 
       if (opened) {
         playback_framebuffer_presenter::runFramebufferPresenterLoop(
@@ -151,32 +153,28 @@ struct WindowPresenter::Impl {
       }
 
       threadState.store(WindowThreadState::Disabled,
-                        std::memory_order_relaxed);
+                        std::memory_order_release);
       forcePresent.store(false, std::memory_order_relaxed);
-    });
-
-    bool opened = false;
-    {
-      std::unique_lock<std::mutex> lock(startGate->mutex);
-      startGate->ready.wait(lock, [&]() { return startGate->completed; });
-      opened = startGate->opened;
-    }
-
-    if (!opened) {
-      threadState.store(WindowThreadState::Disabled, std::memory_order_relaxed);
-      forcePresent.store(false, std::memory_order_relaxed);
-      notify();
-      if (thread.joinable()) {
-        thread.join();
+      if (lifecycle.load(std::memory_order_acquire) ==
+          WindowPresenter::Lifecycle::Open) {
+        lifecycle.store(WindowPresenter::Lifecycle::Failed,
+                        std::memory_order_release);
       }
+      lifecycleChanged.signal();
+    })) {
+      threadState.store(WindowThreadState::Disabled,
+                        std::memory_order_release);
+      forcePresent.store(false, std::memory_order_relaxed);
+      lifecycle.store(WindowPresenter::Lifecycle::Failed,
+                      std::memory_order_release);
+      lifecycleChanged.signal();
       return false;
     }
-
     notify();
     return true;
   }
 
-  void stop() {
+  void requestStop() {
     HWND hwnd = nativeWindowHandle();
     appendWindowPresenterTimingLog(
         "window_presenter_stop begin joinable=%d open=%d visible=%d",
@@ -184,12 +182,24 @@ struct WindowPresenter::Impl {
         hwnd && IsWindowVisible(hwnd) ? 1 : 0);
 
     if (thread.joinable()) {
-      appendWindowPresenterTimingLog("window_presenter_stop join_begin");
+      lifecycle.store(WindowPresenter::Lifecycle::Closing,
+                      std::memory_order_release);
       threadState.store(WindowThreadState::Stopping, std::memory_order_relaxed);
       forcePresent.store(false, std::memory_order_relaxed);
       dispatch.close();
       notify();
-      thread.join();
+    }
+  }
+
+  bool stopReady() const {
+    return thread.ready();
+  }
+
+  bool finishStop() {
+    if (thread.joinable()) {
+      if (!thread.ready()) return false;
+      appendWindowPresenterTimingLog("window_presenter_stop join_begin");
+      (void)thread.finish();
       appendWindowPresenterTimingLog("window_presenter_stop join_end");
     }
 
@@ -197,11 +207,21 @@ struct WindowPresenter::Impl {
     forcePresent.store(false, std::memory_order_relaxed);
     windowHandle.store(nullptr, std::memory_order_release);
     cursorVisible.store(true, std::memory_order_relaxed);
+    lifecycle.store(WindowPresenter::Lifecycle::Closed,
+                    std::memory_order_release);
+    lifecycleChanged.clear();
     {
       std::lock_guard<std::recursive_mutex> lock(gpu.mutex());
       frameCache.Reset();
     }
     appendWindowPresenterTimingLog("window_presenter_stop end");
+    return true;
+  }
+
+  void stop() {
+    requestStop();
+    if (thread.joinable()) thread.join();
+    (void)finishStop();
   }
 
   void requestPresent() {
@@ -312,7 +332,29 @@ WindowPresenter::WindowPresenter(
 
 WindowPresenter::~WindowPresenter() = default;
 
-bool WindowPresenter::start() { return impl_->start(); }
+bool WindowPresenter::requestStart() { return impl_->requestStart(); }
+
+WindowPresenter::Lifecycle WindowPresenter::lifecycle() const {
+  return impl_->lifecycle.load(std::memory_order_acquire);
+}
+
+bool WindowPresenter::consumeLifecycleChange() {
+  return impl_->lifecycleChanged.consume();
+}
+
+NativeWaitHandle WindowPresenter::lifecycleWaitHandle() const {
+  return impl_->lifecycleChanged.nativeWaitHandle();
+}
+
+void WindowPresenter::requestStop() { impl_->requestStop(); }
+
+bool WindowPresenter::stopReady() const { return impl_->stopReady(); }
+
+bool WindowPresenter::finishStop() { return impl_->finishStop(); }
+
+NativeWaitHandle WindowPresenter::stopWaitHandle() const {
+  return impl_->thread.waitHandle();
+}
 
 void WindowPresenter::stop() { impl_->stop(); }
 

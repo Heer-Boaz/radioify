@@ -14,9 +14,9 @@
 #include <chrono>
 #include <exception>
 #include <mutex>
-#include <thread>
 #include <utility>
 
+#include "core/pumpable_worker_thread.h"
 #include "core/waitable_signal.h"
 #include "playback/video/analysis/scene_analyzer.h"
 
@@ -29,7 +29,7 @@ struct SceneAnalysisJob::Impl {
 
   mutable std::mutex mutex;
   WaitableSignal changed;
-  std::thread worker;
+  PumpableWorkerThread worker;
   std::atomic<bool> cancelled{false};
   Operation operation;
   WakeNotifier ownerWake;
@@ -124,30 +124,28 @@ bool SceneAnalysisJob::start(JobRequest request) {
   if (!impl_ || request.sourcePath.empty() || request.durationUs <= 0) {
     return false;
   }
-  std::thread previous;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (!impl_->operation || impl_->state.state == JobState::Running ||
-        impl_->completion) {
+        impl_->completion || impl_->worker.joinable()) {
       return false;
     }
-    if (impl_->worker.joinable()) previous = std::move(impl_->worker);
-  }
-  if (previous.joinable()) previous.join();
-  {
-    std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->cancelled.store(false, std::memory_order_relaxed);
     impl_->state = JobSnapshot{};
     impl_->state.state = JobState::Running;
     impl_->state.phase = "Starting segment detection";
     impl_->lastProgressNotification =
         std::chrono::steady_clock::time_point::min();
+    bool started = false;
     try {
-      impl_->worker = std::thread(
+      started = impl_->worker.start(
           [implementation = impl_.get(), request = std::move(request)]() mutable {
             implementation->run(std::move(request));
           });
     } catch (...) {
+      started = false;
+    }
+    if (!started) {
       impl_->state.state = JobState::Failed;
       impl_->state.phase = "Segment detection failed";
       impl_->state.error = "Could not start the segment-detection worker.";
@@ -171,10 +169,18 @@ bool SceneAnalysisJob::cancel() {
   return true;
 }
 
-void SceneAnalysisJob::stop() {
+void SceneAnalysisJob::requestStop() {
   if (!impl_) return;
   impl_->cancelled.store(true, std::memory_order_relaxed);
-  if (impl_->worker.joinable()) impl_->worker.join();
+  impl_->notifyChanged();
+}
+
+bool SceneAnalysisJob::stopReady() const {
+  return !impl_ || impl_->worker.ready();
+}
+
+bool SceneAnalysisJob::finishStop() {
+  if (!impl_ || !impl_->worker.finish()) return !impl_;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (impl_->state.state == JobState::Running) {
@@ -183,6 +189,14 @@ void SceneAnalysisJob::stop() {
     }
   }
   impl_->changed.clear();
+  return true;
+}
+
+void SceneAnalysisJob::stop() {
+  if (!impl_) return;
+  requestStop();
+  impl_->worker.join();
+  (void)finishStop();
 }
 
 JobSnapshot SceneAnalysisJob::snapshot() const {
@@ -192,19 +206,14 @@ JobSnapshot SceneAnalysisJob::snapshot() const {
 }
 
 std::optional<JobSnapshot> SceneAnalysisJob::takeCompletion() {
-  if (!impl_) return std::nullopt;
+  if (!impl_ || !impl_->worker.finish()) return std::nullopt;
   std::optional<JobSnapshot> completion;
-  std::thread finishedWorker;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (!impl_->completion) return std::nullopt;
     completion = std::move(impl_->completion);
     impl_->completion.reset();
-    if (impl_->state.state != JobState::Running && impl_->worker.joinable()) {
-      finishedWorker = std::move(impl_->worker);
-    }
   }
-  if (finishedWorker.joinable()) finishedWorker.join();
   return completion;
 }
 
@@ -214,6 +223,10 @@ bool SceneAnalysisJob::consumeChanged() {
 
 NativeWaitHandle SceneAnalysisJob::nativeWaitHandle() const {
   return impl_ ? impl_->changed.nativeWaitHandle() : NativeWaitHandle{};
+}
+
+NativeWaitHandle SceneAnalysisJob::workerWaitHandle() const {
+  return impl_ ? impl_->worker.waitHandle() : NativeWaitHandle{};
 }
 
 }  // namespace playback_video_analysis

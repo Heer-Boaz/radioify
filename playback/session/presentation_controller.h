@@ -2,10 +2,9 @@
 
 #include <optional>
 
+#include "presentation_backend.h"
 #include "presentation_policy.h"
 #include "state.h"
-
-class PlaybackOutputController;
 
 struct PlaybackPresentationSyncResult {
   PlaybackPresentationState previousState =
@@ -14,11 +13,13 @@ struct PlaybackPresentationSyncResult {
       PlaybackPresentationState::terminalAscii();
   bool previousWindowOpen = false;
   bool windowOpen = false;
+  bool transitionPending = false;
   bool transitionFailed = false;
   std::optional<PlaybackShellFocusTarget> shellFocusTarget;
 
   bool switchedAwayFromWindow() const {
-    return previousWindowOpen && !windowOpen;
+    return previousState.requiresNativeWindow() &&
+           !appliedState.requiresNativeWindow();
   }
 
   bool visualModeChanged() const {
@@ -38,12 +39,12 @@ class PlaybackPresentationController {
   bool toggleFullscreen();
 
   PlaybackPresentationSyncResult synchronize(
-      PlaybackOutputController& output);
-  void captureWindowPlacement(PlaybackOutputController& output,
+      PlaybackPresentationBackend& output);
+  void captureWindowPlacement(PlaybackPresentationBackend& output,
                               PlaybackSessionContinuationState& state);
 
   const PlaybackPresentationState& state() const {
-    return appliedState_ ? *appliedState_ : desiredState_;
+    return appliedState_;
   }
   PlaybackShellTerminalRole terminalRole() const {
     return state().terminalRole();
@@ -54,7 +55,9 @@ class PlaybackPresentationController {
                     WindowFocusPolicy focus);
 
   PlaybackPresentationState desiredState_;
-  std::optional<PlaybackPresentationState> appliedState_;
+  PlaybackPresentationState appliedState_ =
+      PlaybackPresentationState::terminalAscii();
   WindowFocusPolicy pendingFocus_ = WindowFocusPolicy::ActivateWindow;
   WindowPlacementState windowPlacement_;
+  bool transitionFailurePending_ = false;
 };

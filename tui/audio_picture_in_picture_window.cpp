@@ -200,7 +200,7 @@ AudioPictureInPictureWindow::pollEvents() {
   }
 
   InputEvent ev{};
-  while (window_.PollInput(ev)) {
+  if (window_.PollInput(ev)) {
     result.windowChanged = true;
     handleInput(ev);
   }

@@ -1,6 +1,7 @@
 #include "core.h"
 
 #include <algorithm>
+#include <cassert>
 #include <memory>
 #include <utility>
 
@@ -208,21 +209,41 @@ struct PlaybackSessionCore::Impl {
     redraw = true;
   }
 
+  void requestPlayerShutdown() {
+    if (playerShutdown || playerShutdownRequested) return;
+    playerShutdownRequested = true;
+    player.requestClose();
+  }
+
+  bool playerShutdownReady() const {
+    return playerShutdown ||
+           (playerShutdownRequested && player.closeReady());
+  }
+
+  bool finishPlayerShutdown() {
+    if (playerShutdown) return true;
+    requestPlayerShutdown();
+    if (!player.finishClose()) return false;
+    playerShutdown = true;
+    return true;
+  }
+
   void shutdownPlayer() {
-    if (playerShutdown) {
-      return;
-    }
+    if (playerShutdown) return;
+    requestPlayerShutdown();
     player.close();
     playerShutdown = true;
   }
 
-  void shutdownAudio() {
+  void finishAudioShutdown() {
     if (audioShutdown) {
       return;
     }
-    if (audioOk || audioStarting) {
-      audioPlayback.stop();
-    }
+    // Player owns the video audio stream and stops it on its control worker.
+    // Reaching this point after exact player-thread exit is the ownership
+    // handoff; stopping the shared application audio runtime a second time
+    // would add owner-thread blocking without releasing another resource.
+    assert(playerShutdown);
     audioOk = false;
     audioStarting = false;
     audioShutdown = true;
@@ -230,7 +251,7 @@ struct PlaybackSessionCore::Impl {
 
   void shutdown() {
     shutdownPlayer();
-    shutdownAudio();
+    finishAudioShutdown();
   }
 
   Player& player;
@@ -245,6 +266,7 @@ struct PlaybackSessionCore::Impl {
   bool pendingResize = false;
   int requestedTargetW = 0;
   int requestedTargetH = 0;
+  bool playerShutdownRequested = false;
   bool playerShutdown = false;
   bool audioShutdown = false;
 };
@@ -341,9 +363,23 @@ void PlaybackSessionCore::handlePendingResize(ConsoleScreen& screen,
   impl_->handlePendingResize(screen, visualMode, redraw);
 }
 
+void PlaybackSessionCore::requestPlayerShutdown() {
+  impl_->requestPlayerShutdown();
+}
+
+bool PlaybackSessionCore::playerShutdownReady() const {
+  return impl_->playerShutdownReady();
+}
+
+bool PlaybackSessionCore::finishPlayerShutdown() {
+  return impl_->finishPlayerShutdown();
+}
+
 void PlaybackSessionCore::shutdownPlayer() { impl_->shutdownPlayer(); }
 
-void PlaybackSessionCore::shutdownAudio() { impl_->shutdownAudio(); }
+void PlaybackSessionCore::finishAudioShutdown() {
+  impl_->finishAudioShutdown();
+}
 
 void PlaybackSessionCore::shutdown() { impl_->shutdown(); }
 

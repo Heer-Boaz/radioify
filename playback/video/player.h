@@ -83,6 +83,13 @@ class Player {
   ~Player();
 
   bool open(const PlayerConfig& config, std::string* error);
+  // Cooperative, owner-pumpable shutdown. requestClose() never joins; once
+  // closeReady() becomes true, finishClose() reclaims the completed control
+  // thread without waiting for media I/O.
+  void requestClose();
+  bool closeReady() const;
+  bool finishClose();
+  NativeWaitHandle closeWaitHandle() const;
   void close();
 
   bool requestSeek(int64_t targetUs);

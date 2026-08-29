@@ -46,4 +46,5 @@ radioify_add_module_object_library(radioify_ui
   ${CMAKE_CURRENT_SOURCE_DIR}/ui_inputlogic.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ui_input_pump.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ui_viewport.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/video_transition_view.cpp
 )

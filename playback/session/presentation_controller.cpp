@@ -1,6 +1,12 @@
 #include "presentation_controller.h"
 
-#include "output.h"
+namespace {
+
+bool isOpen(PlaybackWindowLifecycle lifecycle) {
+  return lifecycle == PlaybackWindowLifecycle::Open;
+}
+
+}  // namespace
 
 PlaybackPresentationController::PlaybackPresentationController(
     PlaybackPresentationState initialState,
@@ -37,57 +43,108 @@ bool PlaybackPresentationController::toggleFullscreen() {
 
 PlaybackPresentationSyncResult
 PlaybackPresentationController::synchronize(
-    PlaybackOutputController& output) {
+    PlaybackPresentationBackend& output) {
+  (void)output.consumeWindowLifecycleChange();
+
   PlaybackPresentationSyncResult result;
   result.previousState = state();
-  result.previousWindowOpen = output.windowOpen();
+  result.previousWindowOpen = isOpen(output.windowLifecycle());
 
   const auto finish =
       [this, &result, &output](
-          bool failed,
+          bool pending, bool failed,
           std::optional<PlaybackShellFocusTarget> focusTarget) {
         result.appliedState = state();
-        result.windowOpen = output.windowOpen();
+        result.windowOpen = isOpen(output.windowLifecycle());
+        result.transitionPending = pending;
         result.transitionFailed = failed;
         result.shellFocusTarget = focusTarget;
-        pendingFocus_ = WindowFocusPolicy::PreserveCurrent;
+        if (!pending) {
+          pendingFocus_ = WindowFocusPolicy::PreserveCurrent;
+          transitionFailurePending_ = false;
+        }
         return result;
       };
 
-  const bool statePending =
-      !appliedState_ || desiredState_ != *appliedState_;
-  const bool physicalStateMatches =
-      desiredState_.requiresNativeWindow() == output.windowOpen();
-  if (!statePending && physicalStateMatches) {
-    return finish(false, std::nullopt);
-  }
+  const auto pending = [&]() {
+    return finish(true, false, std::nullopt);
+  };
 
-  if (!desiredState_.requiresNativeWindow()) {
-    if (output.windowOpen()) {
-      if (appliedState_ && appliedState_->requiresNativeWindow()) {
-        output.captureWindowPlacement(windowPlacement_);
-      }
-      output.closeWindow();
-    }
+  const auto completeTerminal = [&]() {
     appliedState_ = desiredState_;
     std::optional<PlaybackShellFocusTarget> focusTarget =
-        shellFocusAfterTransition(result.previousState, *appliedState_);
-    if (!focusTarget && result.previousWindowOpen &&
+        shellFocusAfterTransition(result.previousState, appliedState_);
+    if (!focusTarget && result.previousState.requiresNativeWindow() &&
         pendingFocus_ == WindowFocusPolicy::ActivateWindow) {
       focusTarget = PlaybackShellFocusTarget::TerminalPlayback;
     }
-    return finish(false, focusTarget);
+    return finish(false, transitionFailurePending_, focusTarget);
+  };
+
+  const bool statePending = desiredState_ != appliedState_;
+  PlaybackWindowLifecycle lifecycle = output.windowLifecycle();
+  const bool physicalStateMatches =
+      desiredState_.requiresNativeWindow()
+          ? lifecycle == PlaybackWindowLifecycle::Open
+          : lifecycle == PlaybackWindowLifecycle::Closed;
+  if (!statePending && physicalStateMatches) {
+    return finish(false, false, std::nullopt);
   }
 
-  const std::optional<PlaybackPresentationState> previousApplied =
-      appliedState_;
-  const bool openedWindow = !output.windowOpen();
-  if (openedWindow && !output.openWindow()) {
+  if (!desiredState_.requiresNativeWindow()) {
+    if (lifecycle != PlaybackWindowLifecycle::Closed) {
+      if (lifecycle == PlaybackWindowLifecycle::Open &&
+          appliedState_.requiresNativeWindow()) {
+        output.captureWindowPlacement(windowPlacement_);
+      }
+      if (lifecycle != PlaybackWindowLifecycle::Closing) {
+        output.requestCloseWindow();
+      }
+      if (!output.windowCloseReady() || !output.finishCloseWindow()) {
+        return pending();
+      }
+    }
+    return completeTerminal();
+  }
+
+  const PlaybackPresentationState previousApplied = appliedState_;
+
+  if (lifecycle == PlaybackWindowLifecycle::Closing) {
+    if (!output.windowCloseReady() || !output.finishCloseWindow()) {
+      return pending();
+    }
+    lifecycle = PlaybackWindowLifecycle::Closed;
+  }
+
+  if (lifecycle == PlaybackWindowLifecycle::Failed) {
+    transitionFailurePending_ = true;
     desiredState_ = PlaybackPresentationState::terminalAscii();
-    appliedState_ = desiredState_;
-    return finish(true, PlaybackShellFocusTarget::TerminalPlayback);
+    output.requestCloseWindow();
+    if (!output.windowCloseReady() || !output.finishCloseWindow()) {
+      return pending();
+    }
+    return completeTerminal();
   }
 
+  if (lifecycle == PlaybackWindowLifecycle::Closed) {
+    if (!output.requestOpenWindow()) {
+      transitionFailurePending_ = true;
+      desiredState_ = PlaybackPresentationState::terminalAscii();
+      output.requestCloseWindow();
+      if (!output.windowCloseReady() || !output.finishCloseWindow()) {
+        return pending();
+      }
+      return completeTerminal();
+    }
+    return pending();
+  }
+
+  if (lifecycle == PlaybackWindowLifecycle::Opening) {
+    return pending();
+  }
+
+  const bool openedWindow =
+      !previousApplied.requiresNativeWindow();
   const auto request = windowPresentationRequest(desiredState_, pendingFocus_);
   const bool applied =
       request &&
@@ -97,34 +154,39 @@ PlaybackPresentationController::synchronize(
   if (applied) {
     appliedState_ = desiredState_;
     output.captureWindowPlacement(windowPlacement_);
-    return finish(false, shellFocusAfterTransition(result.previousState,
-                                                    *appliedState_));
+    return finish(false, false,
+                  shellFocusAfterTransition(result.previousState,
+                                            appliedState_));
   }
 
   const bool canRestorePreviousWindowState =
-      !openedWindow && previousApplied &&
-      previousApplied->requiresNativeWindow() && output.windowOpen();
+      !openedWindow && previousApplied.requiresNativeWindow() &&
+      output.windowLifecycle() == PlaybackWindowLifecycle::Open;
   if (canRestorePreviousWindowState) {
     const auto rollback = windowPresentationRequest(
-        *previousApplied, WindowFocusPolicy::PreserveCurrent);
+        previousApplied, WindowFocusPolicy::PreserveCurrent);
     if (rollback && output.applyWindowPresentation(*rollback)) {
-      desiredState_ = *previousApplied;
-      appliedState_ = *previousApplied;
-      return finish(true, std::nullopt);
+      desiredState_ = previousApplied;
+      appliedState_ = previousApplied;
+      return finish(false, true, std::nullopt);
     }
   }
 
-  output.closeWindow();
+  transitionFailurePending_ = true;
   desiredState_ = PlaybackPresentationState::terminalAscii();
-  appliedState_ = desiredState_;
-  return finish(true, PlaybackShellFocusTarget::TerminalPlayback);
+  output.requestCloseWindow();
+  if (!output.windowCloseReady() || !output.finishCloseWindow()) {
+    return pending();
+  }
+  return completeTerminal();
 }
 
 void PlaybackPresentationController::captureWindowPlacement(
-    PlaybackOutputController& output,
+    PlaybackPresentationBackend& output,
     PlaybackSessionContinuationState& state) {
   const PlaybackPresentationState& applied = this->state();
-  if (applied.requiresNativeWindow() && output.windowOpen()) {
+  if (applied.requiresNativeWindow() &&
+      output.windowLifecycle() == PlaybackWindowLifecycle::Open) {
     output.captureWindowPlacement(windowPlacement_);
   }
   state.presentation = applied;

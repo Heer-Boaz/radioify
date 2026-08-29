@@ -22,7 +22,8 @@ struct OpenFailure {
   Problem problem;
 };
 
-using OpenOutcome = std::variant<OpenReady, OpenCancelled, OpenQuitApplication,
-                                 OpenAudioFallback, OpenFailure>;
+using OpenOutcome = std::variant<OpenReady, OpenCancelled,
+                                 OpenQuitApplication, OpenAudioFallback,
+                                 OpenFailure>;
 
 } // namespace playback_session

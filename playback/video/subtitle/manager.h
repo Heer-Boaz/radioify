@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -121,7 +122,10 @@ struct SubtitleTrack {
 
 class SubtitleManager {
  public:
-  void loadForVideo(const std::filesystem::path& videoPath);
+  using CancellationCheck = std::function<bool()>;
+
+  void loadForVideo(const std::filesystem::path& videoPath,
+                    const CancellationCheck& cancellation = {});
 
   size_t trackCount() const;
   size_t selectableTrackCount() const;

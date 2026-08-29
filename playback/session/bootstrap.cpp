@@ -1,19 +1,15 @@
 #include "bootstrap.h"
 
-#include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 
-#include "consoleinput.h"
-#include "consolescreen.h"
 #include "playback/session/bootstrap_input.h"
-#include "playback/video/player.h"
-#include "runtime_helpers.h"
-#include "ui_helpers.h"
 
 namespace {
 
@@ -27,124 +23,43 @@ double pulseProgress(std::chrono::steady_clock::time_point initStart,
              : ((kPrepPulseSeconds - phase) / (kPrepPulseSeconds * 0.5));
 }
 
-void renderPreparingScreen(
-    ConsoleScreen& screen, const std::filesystem::path& file,
-    const Style& baseStyle, const Style& accentStyle, const Style& dimStyle,
-    const Style& progressEmptyStyle, const Style& progressFrameStyle,
-    const Color& progressStart, const Color& progressEnd, double progress) {
-  screen.updateSize();
-  int width = std::max(20, screen.width());
-  int height = std::max(10, screen.height());
-  screen.clear(baseStyle);
-  std::string title = "Video: " + toUtf8String(file.filename());
-  screen.writeText(0, 0, fitLine(title, width), accentStyle);
-  std::string message = "Preparing video playback...";
-  int msgLine = std::clamp(height / 2, 1, std::max(1, height - 2));
-  int msgWidth = utf8DisplayWidth(message);
-  if (msgWidth >= width) {
-    screen.writeText(0, msgLine, fitLine(message, width), dimStyle);
-  } else {
-    int msgX = (width - msgWidth) / 2;
-    screen.writeText(msgX, msgLine, message, dimStyle);
-  }
-  int barWidth = std::min(32, width - 6);
-  int barLine = msgLine + 1;
-  if (barWidth >= 5 && barLine < height) {
-    int barX = std::max(0, (width - (barWidth + 2)) / 2);
-    screen.writeChar(barX, barLine, L'|', progressFrameStyle);
-    auto barCells = renderProgressBarCells(progress, barWidth,
-                                           progressEmptyStyle, progressStart,
-                                           progressEnd);
-    for (int i = 0; i < barWidth; ++i) {
-      const auto& cell = barCells[static_cast<size_t>(i)];
-      screen.writeChar(barX + 1 + i, barLine, cell.ch, cell.style);
-    }
-    screen.writeChar(barX + 1 + barWidth, barLine, L'|',
-                     progressFrameStyle);
-  }
-  screen.draw();
-}
-
 }  // namespace
 
 struct PlaybackSessionBootstrap::Impl {
+  enum class Phase : std::uint8_t {
+    Created,
+    Opening,
+    Closing,
+    Resolved,
+  };
+
+  enum class RequestedDisposition : std::uint8_t {
+    Cancel,
+    QuitApplication,
+  };
+
   explicit Impl(Args args)
       : file(args.file),
-        input(args.input),
-        screen(args.screen),
-        baseStyle(args.baseStyle),
-        accentStyle(args.accentStyle),
-        dimStyle(args.dimStyle),
-        progressEmptyStyle(args.progressEmptyStyle),
-        progressFrameStyle(args.progressFrameStyle),
-        progressStart(args.progressStart),
-        progressEnd(args.progressEnd),
         enableAudio(args.enableAudio),
         enableAscii(args.enableAscii),
-        player(args.player) {}
+        backend(args.backend),
+        nowFunction(args.now) {}
 
-  void requestQuit() { quitApplicationRequested = true; }
+  wake_schedule::TimePoint now() const {
+    return nowFunction ? nowFunction() : wake_schedule::Clock::now();
+  }
 
   std::optional<playback_session::Problem> openPlayer() {
-    auto playerConfig = PlayerConfig{};
-    playerConfig.file = file;
-    playerConfig.enableAudio = enableAudio;
-    playerConfig.allowDecoderScale = enableAscii;
-
-    if (player.open(playerConfig, nullptr)) {
-      return std::nullopt;
-    }
-
-    return playback_session::Problem{"Failed to open video.", {}};
+    return backend.start(
+        playback_session::OpeningConfiguration{file, enableAudio, enableAscii});
   }
 
-  void drawPreparingFrame(std::chrono::steady_clock::time_point initStart,
-                          std::chrono::steady_clock::time_point now) {
-    renderPreparingScreen(screen, file, baseStyle, accentStyle, dimStyle,
-                          progressEmptyStyle, progressFrameStyle, progressStart,
-                          progressEnd, pulseProgress(initStart, now));
+  void advancePresentation(wake_schedule::TimePoint now) {
+    nextDraw = now + kPrepRedrawInterval;
   }
 
-  bool handleMouseCancel(const MouseEvent& mouse) const {
-    return mouse.kind == MouseEventKind::Press &&
-           (mouse.button == MouseButton::Right ||
-            mouse.button == MouseButton::Middle);
-  }
-
-  bool waitForInitialization() {
-    constexpr auto kPrepRedrawInterval = std::chrono::milliseconds(120);
-    auto initStart = std::chrono::steady_clock::now();
-    auto lastInitDraw = std::chrono::steady_clock::time_point::min();
-    while (!player.initDone()) {
-      const auto now = std::chrono::steady_clock::now();
-      if (now - lastInitDraw >= kPrepRedrawInterval) {
-        drawPreparingFrame(initStart, now);
-        lastInitDraw = now;
-      }
-
-      InputEvent ev{};
-      while (input.poll(ev)) {
-        if (const auto action = playback_session_bootstrap_input::resolve(ev)) {
-          using BootstrapAction = playback_session_bootstrap_input::Action;
-          if (*action == BootstrapAction::QuitApplication) {
-            requestQuit();
-          }
-          return false;
-        }
-        if (ev.type == InputEvent::Type::Mouse && handleMouseCancel(ev.mouse)) {
-          return false;
-        }
-        if (ev.type == InputEvent::Type::Resize) {
-          lastInitDraw = std::chrono::steady_clock::time_point::min();
-        }
-      }
-    }
-    return true;
-  }
-
-  playback_session::OpenOutcome handleInitFailure() {
-    player.close();
-    std::string initError = player.initError();
+  playback_session::OpenOutcome initFailureOutcome() {
+    std::string initError = backend.initializationError();
     if (initError.rfind("No video stream found", 0) == 0) {
       if (!enableAudio) {
         return playback_session::OpenFailure{{
@@ -160,38 +75,131 @@ struct PlaybackSessionBootstrap::Impl {
     return playback_session::OpenFailure{{std::move(initError), {}}};
   }
 
-  playback_session::OpenOutcome run() {
-    if (std::optional<playback_session::Problem> failure = openPlayer()) {
-      return playback_session::OpenFailure{std::move(*failure)};
+  playback_session::OpenOutcome requestedOutcome() const {
+    assert(requestedDisposition);
+    return *requestedDisposition == RequestedDisposition::QuitApplication
+               ? playback_session::OpenOutcome(
+                     playback_session::OpenQuitApplication{})
+               : playback_session::OpenOutcome(
+                     playback_session::OpenCancelled{});
+  }
+
+  void beginClosing(playback_session::OpenOutcome outcome) {
+    if (phase == Phase::Closing || phase == Phase::Resolved) return;
+    completionAfterClose.emplace(std::move(outcome));
+    phase = Phase::Closing;
+    backend.requestClose();
+    nextDraw = now();
+  }
+
+  std::optional<playback_session::OpenOutcome> finishClosing() {
+    if (phase != Phase::Closing || !backend.closeReady()) return std::nullopt;
+    if (!backend.finishClose()) return std::nullopt;
+    assert(completionAfterClose);
+    phase = Phase::Resolved;
+    playback_session::OpenOutcome outcome =
+        requestedDisposition ? requestedOutcome()
+                             : std::move(*completionAfterClose);
+    requestedDisposition.reset();
+    completionAfterClose.reset();
+    return outcome;
+  }
+
+  std::optional<playback_session::OpenOutcome> resolveInitialization() {
+    if (!backend.initializationSucceeded()) {
+      beginClosing(initFailureOutcome());
+      return finishClosing();
     }
-    if (!waitForInitialization()) {
-      player.close();
-      return quitApplicationRequested
-                 ? playback_session::OpenOutcome(
-                       playback_session::OpenQuitApplication{})
-                 : playback_session::OpenOutcome(
-                       playback_session::OpenCancelled{});
-    }
-    if (!player.initOk()) {
-      return handleInitFailure();
-    }
+    if (!backend.finishInitialization()) return std::nullopt;
+    phase = Phase::Resolved;
     return playback_session::OpenReady{};
   }
 
+  std::optional<playback_session::OpenOutcome> start() {
+    assert(phase == Phase::Created);
+    if (phase != Phase::Created) return std::nullopt;
+    phase = Phase::Opening;
+    initStart = now();
+    nextDraw = initStart;
+    if (std::optional<playback_session::Problem> failure = openPlayer()) {
+      phase = Phase::Resolved;
+      return playback_session::OpenFailure{std::move(*failure)};
+    }
+    if (backend.initializationDone()) return resolveInitialization();
+    advancePresentation(initStart);
+    return std::nullopt;
+  }
+
+  std::optional<playback_session::OpenOutcome> pump() {
+    if (phase == Phase::Created || phase == Phase::Resolved) {
+      return std::nullopt;
+    }
+    if (phase == Phase::Opening && requestedDisposition) {
+      beginClosing(requestedOutcome());
+    }
+    if (phase == Phase::Opening && backend.initializationDone()) {
+      return resolveInitialization();
+    }
+    if (phase == Phase::Closing) {
+      if (std::optional<playback_session::OpenOutcome> outcome =
+              finishClosing()) {
+        return outcome;
+      }
+    }
+
+    const wake_schedule::TimePoint currentTime = now();
+    if (currentTime >= nextDraw) {
+      advancePresentation(currentTime);
+    }
+    return std::nullopt;
+  }
+
+  void request(RequestedDisposition outcome) {
+    if (phase == Phase::Created || phase == Phase::Resolved) return;
+    if (phase == Phase::Closing) {
+      if (outcome == RequestedDisposition::QuitApplication) {
+        requestedDisposition = outcome;
+      }
+      nextDraw = now();
+      return;
+    }
+    if (!requestedDisposition ||
+        outcome == RequestedDisposition::QuitApplication) {
+      requestedDisposition = outcome;
+    }
+    beginClosing(requestedOutcome());
+    nextDraw = now();
+  }
+
+  bool handleInputEvent(const InputEvent& event) {
+    if (phase == Phase::Created || phase == Phase::Resolved) return false;
+    if (const auto action = playback_session_bootstrap_input::resolve(event)) {
+      using BootstrapAction = playback_session_bootstrap_input::Action;
+      request(*action == BootstrapAction::QuitApplication
+                  ? RequestedDisposition::QuitApplication
+                  : RequestedDisposition::Cancel);
+      return true;
+    }
+    if (event.type == InputEvent::Type::Resize) {
+      nextDraw = now();
+      return true;
+    }
+    return false;
+  }
+
+  static constexpr auto kPrepRedrawInterval =
+      std::chrono::milliseconds(120);
+
   const std::filesystem::path& file;
-  ConsoleInput& input;
-  ConsoleScreen& screen;
-  const Style& baseStyle;
-  const Style& accentStyle;
-  const Style& dimStyle;
-  const Style& progressEmptyStyle;
-  const Style& progressFrameStyle;
-  const Color& progressStart;
-  const Color& progressEnd;
   const bool enableAudio;
   const bool enableAscii;
-  Player& player;
-  bool quitApplicationRequested = false;
+  playback_session::OpeningBackend& backend;
+  const PlaybackSessionBootstrap::Now nowFunction;
+  wake_schedule::TimePoint initStart;
+  wake_schedule::TimePoint nextDraw;
+  std::optional<RequestedDisposition> requestedDisposition;
+  std::optional<playback_session::OpenOutcome> completionAfterClose;
+  Phase phase = Phase::Created;
 };
 
 PlaybackSessionBootstrap::PlaybackSessionBootstrap(Args args)
@@ -205,6 +213,52 @@ PlaybackSessionBootstrap::PlaybackSessionBootstrap(
 PlaybackSessionBootstrap& PlaybackSessionBootstrap::operator=(
     PlaybackSessionBootstrap&&) noexcept = default;
 
-playback_session::OpenOutcome PlaybackSessionBootstrap::run() {
-  return impl_->run();
+std::optional<playback_session::OpenOutcome>
+PlaybackSessionBootstrap::start() {
+  return impl_->start();
+}
+
+std::optional<playback_session::OpenOutcome>
+PlaybackSessionBootstrap::pump() {
+  return impl_->pump();
+}
+
+bool PlaybackSessionBootstrap::handleInputEvent(const InputEvent& event) {
+  return impl_->handleInputEvent(event);
+}
+
+playback_session::TransitionSnapshot PlaybackSessionBootstrap::snapshot()
+    const {
+  playback_session::TransitionStage stage =
+      playback_session::TransitionStage::Opening;
+  if (impl_->phase == Impl::Phase::Closing) {
+    stage = impl_->requestedDisposition == Impl::RequestedDisposition::Cancel
+                ? playback_session::TransitionStage::Cancelling
+                : playback_session::TransitionStage::Closing;
+  }
+  return playback_session::TransitionSnapshot{
+      impl_->file, stage,
+      pulseProgress(impl_->initStart, impl_->now())};
+}
+
+std::vector<NativeWaitHandle> PlaybackSessionBootstrap::waitHandles() const {
+  return impl_->phase != Impl::Phase::Created &&
+                 impl_->phase != Impl::Phase::Resolved
+             ? impl_->backend.waitHandles()
+             : std::vector<NativeWaitHandle>{};
+}
+
+wake_schedule::Deadline PlaybackSessionBootstrap::nextWakeDeadline() const {
+  return impl_->phase != Impl::Phase::Created &&
+                 impl_->phase != Impl::Phase::Resolved
+             ? wake_schedule::Deadline(impl_->nextDraw)
+             : std::nullopt;
+}
+
+void PlaybackSessionBootstrap::requestCancel() {
+  impl_->request(Impl::RequestedDisposition::Cancel);
+}
+
+void PlaybackSessionBootstrap::requestQuit() {
+  impl_->request(Impl::RequestedDisposition::QuitApplication);
 }

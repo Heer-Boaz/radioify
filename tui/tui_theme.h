@@ -9,6 +9,7 @@
 #include "tui/ui/melody_visualization_renderer.h"
 #include "tui/ui/popup_menu_renderer.h"
 #include "tui/ui/ui_helpers.h"
+#include "tui/ui/video_transition_view.h"
 
 struct TuiTheme {
   Style normal;
@@ -40,6 +41,7 @@ struct TuiTheme {
   browser_action_strip::Styles browserActionStripStyles() const;
   ProgressFooterStyles progressFooterStyles() const;
   MediaTaskCardStyles mediaTaskCardStyles() const;
+  tui_video_transition_view::Styles videoTransitionStyles() const;
 };
 
 TuiTheme radioifyTuiTheme();

@@ -2,31 +2,27 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
+#include <vector>
 
+#include "core/native_wait_handle.h"
+#include "core/wake_deadline.h"
 #include "playback/session/open_outcome.h"
+#include "playback/session/opening_backend.h"
+#include "playback/session/transition_state.h"
 
-class ConsoleInput;
-class ConsoleScreen;
-class Player;
-struct Color;
-struct Style;
+struct InputEvent;
 
 class PlaybackSessionBootstrap {
  public:
+  using Now = wake_schedule::TimePoint (*)();
+
   struct Args {
     const std::filesystem::path& file;
-    ConsoleInput& input;
-    ConsoleScreen& screen;
-    const Style& baseStyle;
-    const Style& accentStyle;
-    const Style& dimStyle;
-    const Style& progressEmptyStyle;
-    const Style& progressFrameStyle;
-    const Color& progressStart;
-    const Color& progressEnd;
     bool enableAudio;
     bool enableAscii;
-    Player& player;
+    playback_session::OpeningBackend& backend;
+    Now now = nullptr;
   };
 
   explicit PlaybackSessionBootstrap(Args args);
@@ -38,7 +34,18 @@ class PlaybackSessionBootstrap {
   PlaybackSessionBootstrap(PlaybackSessionBootstrap&&) noexcept;
   PlaybackSessionBootstrap& operator=(PlaybackSessionBootstrap&&) noexcept;
 
-  playback_session::OpenOutcome run();
+  // Starts decoder initialization without taking over the application event
+  // loop. An empty result means initialization remains in progress; the owner
+  // must then include waitHandles()/nextWakeDeadline(), route input through
+  // handleInputEvent(), and call pump() until it produces a terminal outcome.
+  std::optional<playback_session::OpenOutcome> start();
+  std::optional<playback_session::OpenOutcome> pump();
+  bool handleInputEvent(const InputEvent& event);
+  playback_session::TransitionSnapshot snapshot() const;
+  std::vector<NativeWaitHandle> waitHandles() const;
+  wake_schedule::Deadline nextWakeDeadline() const;
+  void requestCancel();
+  void requestQuit();
 
  private:
   struct Impl;

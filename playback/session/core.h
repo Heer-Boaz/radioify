@@ -67,8 +67,11 @@ class PlaybackSessionCore final {
   void markPendingResize();
   void handlePendingResize(ConsoleScreen& screen,
                            PlaybackVisualMode visualMode, bool& redraw);
+  void requestPlayerShutdown();
+  bool playerShutdownReady() const;
+  bool finishPlayerShutdown();
   void shutdownPlayer();
-  void shutdownAudio();
+  void finishAudioShutdown();
   void shutdown();
 
   Player& player();

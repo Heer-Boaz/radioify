@@ -83,12 +83,16 @@ class Exporter {
 
   bool start(ExportRequest request);
   bool cancel();
+  void requestStop();
+  bool stopReady() const;
+  bool finishStop();
   void stop();
 
   ExportSnapshot snapshot() const;
   std::optional<ExportSnapshot> takeCompletion();
   bool consumeChanged();
   NativeWaitHandle nativeWaitHandle() const;
+  NativeWaitHandle workerWaitHandle() const;
 
  private:
   struct Impl;

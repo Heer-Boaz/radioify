@@ -1,6 +1,7 @@
 #include "app/application_runtime.h"
 
 #include "app/playback_route.h"
+#include "playback/session/subtitle_loader.h"
 #include "playback/target_resolver.h"
 
 AudioPlaybackConfig audioPlaybackConfigFor(const Options& options) {
@@ -29,6 +30,7 @@ ApplicationRuntime::ApplicationRuntime(const Options& options)
              return playback_route::resolveTarget(target);
            }}),
       mediaProcessing_(audioPlayback_),
-      mediaActions_(mediaProcessing_) {}
+      mediaActions_(mediaProcessing_),
+      subtitleLoader_(playback_session::createDefaultSubtitleLoadService()) {}
 
 ApplicationRuntime::~ApplicationRuntime() = default;

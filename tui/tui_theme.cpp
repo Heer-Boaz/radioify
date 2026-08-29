@@ -116,6 +116,11 @@ MediaTaskCardStyles TuiTheme::mediaTaskCardStyles() const {
   return result;
 }
 
+tui_video_transition_view::Styles TuiTheme::videoTransitionStyles() const {
+  return {normal, accent, dim, progressEmpty, progressFrame, progressStart,
+          progressEnd};
+}
+
 TuiTheme radioifyTuiTheme() {
   const Color background = rgb(12, 15, 20);
   TuiTheme theme;

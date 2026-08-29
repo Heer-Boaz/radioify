@@ -56,7 +56,7 @@ class TuiMediaCoordinator {
     image_viewer_sequence::Sequence sequence;
   };
   struct QuitRequested {};
-  struct PresentationFinished {};
+  struct PlaybackStateChanged {};
   struct ActivateBrowserSurface {};
   struct OpenBrowserDirectory {
     std::filesystem::path path;
@@ -65,7 +65,7 @@ class TuiMediaCoordinator {
   using Event = std::variant<ApplyAudioPictureInPicture, CommandErrorChanged,
                              AudioPlaybackFailed, VideoPlaybackFailed,
                              tui_media_activation::AudioFallbackRequest,
-                             ShowImages, QuitRequested, PresentationFinished,
+                             ShowImages, QuitRequested, PlaybackStateChanged,
                              ActivateBrowserSurface, OpenBrowserDirectory,
                              playback_session::MediaTaskCancellationRequested>;
 
@@ -101,10 +101,12 @@ class TuiMediaCoordinator {
   void handleMediaTaskCompletion(
       const media_processing::TaskCompletion& completion);
 
-  bool videoActive() const;
+  bool videoReady() const;
   PlaybackControlSessionId controlSessionId() const;
   PlaybackShellTerminalRole terminalRole() const;
   std::optional<VideoSnapshot> videoSnapshot() const;
+  std::optional<playback_session::TransitionSnapshot>
+  videoTransitionSnapshot() const;
   std::vector<NativeWaitHandle> waitHandles() const;
   wake_schedule::Deadline nextWakeDeadline() const;
   bool capturesBrowserInput() const;
@@ -112,6 +114,8 @@ class TuiMediaCoordinator {
   void setExternalInputModal(bool modal);
 
   bool handleVideoInputEvent(const InputEvent& event);
+  bool pollVideoWindowInput(InputEvent& event);
+  bool handleVideoWindowInputEvent(const InputEvent& event);
   bool handleControlCommand(PlaybackControlCommand command);
   bool handleSystemControlCommand(
       const PlaybackControlCommandEvent& event);
