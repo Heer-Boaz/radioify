@@ -16,11 +16,14 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <numbers>
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <utility>
+#include <variant>
 #include <vector>
 
 #include <onnxruntime_session_options_config_keys.h>
@@ -311,16 +314,54 @@ bool testGpuOnlyInferenceContract(const std::filesystem::path& directory) {
     return false;
   }
 
-  bool rejectedCpuFallback = false;
-  try {
-    const std::unique_ptr<Ort::Session> unexpected =
-        factory->loadModel(modelPath);
-  } catch (const Ort::Exception&) {
-    rejectedCpuFallback = true;
-  }
+  const separation::InferenceSessionLoadResult unsupported =
+      factory->loadModel(modelPath);
+  const auto* unsupportedFailure =
+      std::get_if<separation::OperationFailure>(&unsupported);
+  const bool rejectedCpuFallback =
+      unsupportedFailure && !unsupportedFailure->detail.empty();
   ok &= expect(rejectedCpuFallback,
                "an unsupported NVIDIA graph must fail instead of falling "
                "back to CPU execution");
+
+  std::atomic<bool> cancellationRequested{false};
+  const separation::ExecutionControl preempted(
+      &cancellationRequested, {},
+      [](separation::ExecutionControl::Interrupt interrupt) {
+        interrupt();
+        return std::function<void()>{};
+      });
+  const separation::InferenceSessionLoadResult interruptedLoad =
+      factory->loadModel(modelPath, &preempted);
+  const separation::ControlledOperationResult interruptedCompilation =
+      factory->compileModel(modelPath, directory / "interrupted-model.onnx",
+                            preempted);
+  ok &= expect(
+      std::holds_alternative<separation::OperationInterrupted>(
+          interruptedLoad) &&
+          std::holds_alternative<separation::OperationInterrupted>(
+              interruptedCompilation) &&
+          !cancellationRequested.load(std::memory_order_relaxed),
+      "scheduler pre-emption must remain distinct from cancellation and "
+      "backend failure during model load and compilation");
+
+  const separation::ExecutionControl preemptedAtDeregistration(
+      &cancellationRequested, {},
+      [](separation::ExecutionControl::Interrupt interrupt) {
+        return [interrupt = std::move(interrupt)]() mutable { interrupt(); };
+      });
+  const separation::InferenceSessionLoadResult boundaryLoad =
+      factory->loadModel(modelPath, &preemptedAtDeregistration);
+  const separation::ControlledOperationResult boundaryCompilation =
+      factory->compileModel(modelPath,
+                            directory / "boundary-interrupted-model.onnx",
+                            preemptedAtDeregistration);
+  ok &= expect(
+      std::holds_alternative<separation::OperationInterrupted>(boundaryLoad) &&
+          std::holds_alternative<separation::OperationInterrupted>(
+              boundaryCompilation),
+      "an interruption racing with callback deregistration must win outcome "
+      "classification");
   return ok;
 }
 

@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cassert>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <onnxruntime_cxx_api.h>
@@ -12,6 +14,27 @@
 #include "audio/separation/inference_backend.h"
 
 namespace audio_separation {
+
+class InferenceSessionFactory;
+
+class LoadedInferenceSession {
+ public:
+  std::unique_ptr<Ort::Session> take() && {
+    return std::move(session_);
+  }
+
+ private:
+  friend class InferenceSessionFactory;
+  explicit LoadedInferenceSession(std::unique_ptr<Ort::Session> session)
+      : session_(std::move(session)) {
+    assert(session_);
+  }
+
+  std::unique_ptr<Ort::Session> session_;
+};
+
+using InferenceSessionLoadResult =
+    ControlledValueResult<LoadedInferenceSession>;
 
 // Applies the execution contract shared by model compilation and inference.
 // Audio separation is a GPU feature: an unsupported graph must fail instead
@@ -33,13 +56,13 @@ class InferenceSessionFactory {
   InferenceSessionFactory(const InferenceSessionFactory&) = delete;
   InferenceSessionFactory& operator=(const InferenceSessionFactory&) = delete;
 
-  std::unique_ptr<Ort::Session> loadModel(
+  InferenceSessionLoadResult loadModel(
       const std::filesystem::path& modelPath,
       const ExecutionControl* control = nullptr);
-  bool compileModel(const std::filesystem::path& sourceModelPath,
-                    const std::filesystem::path& compiledModelPath,
-                    const ExecutionControl& control,
-                    std::string* error);
+  ControlledOperationResult compileModel(
+      const std::filesystem::path& sourceModelPath,
+      const std::filesystem::path& compiledModelPath,
+      const ExecutionControl& control);
 
   const InferenceBackend& backend() const { return backend_; }
   const DiagnosticReporter& diagnostics() const { return diagnostics_; }

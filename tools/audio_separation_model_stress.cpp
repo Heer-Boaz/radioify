@@ -16,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -152,17 +153,23 @@ int wmain(int argc, wchar_t** argv) {
   } else {
     backend = audio_separation::directMlInferenceBackend();
   }
-  std::string error;
   const auto initializationStarted = std::chrono::steady_clock::now();
-  if (!model.initialize(
+  const audio_separation::ControlledOperationResult initialization =
+      model.initialize(
           commandLine.modelPath, backend,
           [](DiagnosticLevel level, std::string_view component,
              std::string_view message) {
             std::cerr << '[' << levelName(level) << ':' << component << "] "
                       << message << '\n';
-          },
-          &error)) {
-    std::cerr << "Model initialization failed: " << error << '\n';
+          });
+  if (!std::holds_alternative<audio_separation::OperationSucceeded>(
+          initialization)) {
+    const auto* failure =
+        std::get_if<audio_separation::OperationFailure>(&initialization);
+    std::cerr << "Model initialization failed: "
+              << (failure ? failure->detail
+                          : "initialization was interrupted")
+              << '\n';
     return EXIT_FAILURE;
   }
   const double initializationSeconds =
@@ -183,12 +190,19 @@ int wmain(int argc, wchar_t** argv) {
   std::span<const float> output;
   const auto started = std::chrono::steady_clock::now();
   for (int iteration = 0; iteration < commandLine.iterations; ++iteration) {
-    if (model.run(input, &output, control, &error) !=
-        audio_separation::MaskInferenceResult::Succeeded) {
-      std::cerr << "Inference " << (iteration + 1) << " failed: " << error
+    const audio_separation::MaskInferenceResult inference =
+        model.run(input, control);
+    const auto* inferenceOutput =
+        std::get_if<audio_separation::MaskInferenceOutput>(&inference);
+    if (!inferenceOutput) {
+      const auto* failure =
+          std::get_if<audio_separation::OperationFailure>(&inference);
+      std::cerr << "Inference " << (iteration + 1) << " failed: "
+                << (failure ? failure->detail : "inference was interrupted")
                 << '\n';
       return EXIT_FAILURE;
     }
+    output = inferenceOutput->masksRealImag;
     const std::size_t expected =
         audio_separation::BanditMaskModel::kBatchSize *
         audio_separation::kStemCount *

@@ -2,9 +2,29 @@
 
 #include <atomic>
 #include <functional>
+#include <string>
 #include <utility>
+#include <variant>
 
 namespace audio_separation {
+
+// Tagged outcomes for work that may be pre-empted by the scheduler.
+// Interruption is not a backend failure: the owner must reach a checkpoint and
+// may retry after the higher-priority lease has been released. Keeping failure
+// detail inside the result prevents status, value, and error output parameters
+// from describing contradictory states.
+struct OperationSucceeded {};
+struct OperationInterrupted {};
+struct OperationFailure {
+  std::string detail;
+};
+
+using ControlledOperationResult =
+    std::variant<OperationSucceeded, OperationInterrupted, OperationFailure>;
+
+template <typename Value>
+using ControlledValueResult =
+    std::variant<Value, OperationInterrupted, OperationFailure>;
 
 // Cooperative scheduling control passed through the complete separation
 // pipeline. A checkpoint may wait while foreground playback owns the GPU.

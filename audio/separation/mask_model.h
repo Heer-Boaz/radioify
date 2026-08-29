@@ -12,11 +12,11 @@
 
 namespace audio_separation {
 
-enum class MaskInferenceResult {
-  Succeeded,
-  Interrupted,
-  Failed,
+struct MaskInferenceOutput {
+  std::span<const float> masksRealImag;
 };
+
+using MaskInferenceResult = ControlledValueResult<MaskInferenceOutput>;
 
 class BanditMaskModel {
  public:
@@ -30,15 +30,13 @@ class BanditMaskModel {
   BanditMaskModel(const BanditMaskModel&) = delete;
   BanditMaskModel& operator=(const BanditMaskModel&) = delete;
 
-  bool initialize(const std::filesystem::path& modelPath,
-                  const InferenceBackend& backend,
-                  DiagnosticReporter diagnostics,
-                  std::string* error,
-                  const ExecutionControl* control = nullptr);
-  MaskInferenceResult run(std::span<const float> spectrogramRealImag,
-                          std::span<const float>* masksRealImag,
-                          const ExecutionControl& control,
-                          std::string* error);
+  ControlledOperationResult initialize(
+      const std::filesystem::path& modelPath,
+      const InferenceBackend& backend, DiagnosticReporter diagnostics,
+      const ExecutionControl* control = nullptr);
+  MaskInferenceResult run(
+      std::span<const float> spectrogramRealImag,
+      const ExecutionControl& control);
 
  private:
   struct Impl;

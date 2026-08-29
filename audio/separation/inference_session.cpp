@@ -1,5 +1,6 @@
 #include "audio/separation/inference_session.h"
 
+#include <atomic>
 #include <cstdint>
 #include <sstream>
 #include <utility>
@@ -153,36 +154,85 @@ Ort::SessionOptions InferenceSessionFactory::makeSessionOptions() {
   return options;
 }
 
-std::unique_ptr<Ort::Session> InferenceSessionFactory::loadModel(
+InferenceSessionLoadResult InferenceSessionFactory::loadModel(
     const std::filesystem::path& modelPath,
     const ExecutionControl* control) {
-  Ort::SessionOptions options = makeSessionOptions();
-  ExecutionControl::InterruptionRegistration interruption;
-  if (control) {
-    if (control->cancellationRequested()) {
-      options.SetLoadCancellationFlag(true);
-    }
-    interruption = control->registerInterruption(
-        [&options]() { options.SetLoadCancellationFlag(true); });
+  if (control && control->cancellationRequested()) {
+    return OperationInterrupted{};
   }
-  return std::make_unique<Ort::Session>(environment_, modelPath.c_str(),
-                                        options);
+
+  std::atomic<bool> interrupted{false};
+  Ort::SessionOptions options{nullptr};
+  ExecutionControl::InterruptionRegistration interruption;
+  try {
+    options = makeSessionOptions();
+    if (control) {
+      interruption = control->registerInterruption([&]() {
+        interrupted.store(true, std::memory_order_release);
+        try {
+          options.SetLoadCancellationFlag(true);
+        } catch (...) {
+          // The local flag still prevents an interrupted session from
+          // escaping.
+        }
+      });
+    }
+    auto loaded = std::make_unique<Ort::Session>(
+        environment_, modelPath.c_str(), options);
+    // Deregistration synchronizes with an in-flight interruption callback.
+    // Classify only after no later callback can change this operation's
+    // outcome.
+    interruption.reset();
+    if (interrupted.load(std::memory_order_acquire) ||
+        (control && control->cancellationRequested())) {
+      return OperationInterrupted{};
+    }
+    return LoadedInferenceSession{std::move(loaded)};
+  } catch (const Ort::Exception& exception) {
+    interruption.reset();
+    if (interrupted.load(std::memory_order_acquire) ||
+        (control && control->cancellationRequested())) {
+      return OperationInterrupted{};
+    }
+    return OperationFailure{exception.what()};
+  } catch (const std::exception& exception) {
+    interruption.reset();
+    if (interrupted.load(std::memory_order_acquire) ||
+        (control && control->cancellationRequested())) {
+      return OperationInterrupted{};
+    }
+    return OperationFailure{exception.what()};
+  } catch (...) {
+    interruption.reset();
+    if (interrupted.load(std::memory_order_acquire) ||
+        (control && control->cancellationRequested())) {
+      return OperationInterrupted{};
+    }
+    return OperationFailure{
+        "ONNX Runtime failed while loading the separation model."};
+  }
 }
 
-bool InferenceSessionFactory::compileModel(
+ControlledOperationResult InferenceSessionFactory::compileModel(
     const std::filesystem::path& sourceModelPath,
     const std::filesystem::path& compiledModelPath,
-    const ExecutionControl& control, std::string* error) {
-  if (error) error->clear();
+    const ExecutionControl& control) {
+  if (control.cancellationRequested()) {
+    return OperationInterrupted{};
+  }
+  std::atomic<bool> interrupted{false};
+  Ort::SessionOptions sessionOptions{nullptr};
+  ExecutionControl::InterruptionRegistration interruption;
   try {
-    Ort::SessionOptions sessionOptions = makeSessionOptions();
-    if (control.cancellationRequested()) {
-      sessionOptions.SetLoadCancellationFlag(true);
-    }
-    auto interruption = control.registerInterruption(
-        [&sessionOptions]() {
-          sessionOptions.SetLoadCancellationFlag(true);
-        });
+    sessionOptions = makeSessionOptions();
+    interruption = control.registerInterruption([&]() {
+      interrupted.store(true, std::memory_order_release);
+      try {
+        sessionOptions.SetLoadCancellationFlag(true);
+      } catch (...) {
+        // The local flag still classifies the compilation as interrupted.
+      }
+    });
     Ort::ModelCompilationOptions compilationOptions(environment_,
                                                     sessionOptions);
     compilationOptions.SetInputModelPath(sourceModelPath.c_str());
@@ -192,17 +242,37 @@ bool InferenceSessionFactory::compileModel(
         GraphOptimizationLevel::ORT_ENABLE_ALL);
     const Ort::Status status = Ort::CompileModel(environment_,
                                                  compilationOptions);
-    if (!status.IsOK()) {
-      setError(error, status.GetErrorMessage());
-      return false;
+    interruption.reset();
+    if (interrupted.load(std::memory_order_acquire) ||
+        control.cancellationRequested()) {
+      return OperationInterrupted{};
     }
-    return true;
+    if (!status.IsOK()) {
+      return OperationFailure{status.GetErrorMessage()};
+    }
+    return OperationSucceeded{};
   } catch (const Ort::Exception& exception) {
-    setError(error, exception.what());
-    return false;
+    interruption.reset();
+    if (interrupted.load(std::memory_order_acquire) ||
+        control.cancellationRequested()) {
+      return OperationInterrupted{};
+    }
+    return OperationFailure{exception.what()};
   } catch (const std::exception& exception) {
-    setError(error, exception.what());
-    return false;
+    interruption.reset();
+    if (interrupted.load(std::memory_order_acquire) ||
+        control.cancellationRequested()) {
+      return OperationInterrupted{};
+    }
+    return OperationFailure{exception.what()};
+  } catch (...) {
+    interruption.reset();
+    if (interrupted.load(std::memory_order_acquire) ||
+        control.cancellationRequested()) {
+      return OperationInterrupted{};
+    }
+    return OperationFailure{
+        "ONNX Runtime failed while compiling the separation model."};
   }
 }
 

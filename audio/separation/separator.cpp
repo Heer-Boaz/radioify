@@ -11,6 +11,7 @@
 #include <numbers>
 #include <span>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "audio/ffmpegaudio.h"
@@ -386,27 +387,43 @@ class ScheduledMaskModel {
                const ExecutionControl& control, std::string* error) {
     if (model_) return true;
 
-    report(onProgress, progress, initializedOnce_
-                                     ? "Restoring " + backend_.displayName +
-                                           " separation model"
-                                     : "Loading " + backend_.displayName +
-                                           " separation model");
-    if (initializedOnce_) {
-      reportDiagnostic(diagnostics_, DiagnosticLevel::Info, "scheduler",
-                       "Reacquiring " + backend_.displayName +
-                           " resources after foreground playback yielded.");
-    }
+    for (;;) {
+      const bool restoring = loadAttempted_;
+      report(onProgress, progress,
+             restoring ? "Restoring " + backend_.displayName +
+                             " separation model"
+                       : "Loading " + backend_.displayName +
+                             " separation model");
+      if (restoring) {
+        reportDiagnostic(
+            diagnostics_, DiagnosticLevel::Info, "scheduler",
+            "Reacquiring " + backend_.displayName +
+                " resources after foreground playback yielded.");
+      }
+      loadAttempted_ = true;
 
-    auto model = std::make_unique<BanditMaskModel>();
-    std::string modelError;
-    if (!model->initialize(modelPath_, backend_, diagnostics_, &modelError,
-                           &control)) {
-      setError(error, modelError + " Model: " + toUtf8String(modelPath_));
-      return false;
+      auto model = std::make_unique<BanditMaskModel>();
+      const ControlledOperationResult initialized = model->initialize(
+          modelPath_, backend_, diagnostics_, &control);
+      if (std::holds_alternative<OperationSucceeded>(initialized)) {
+        model_ = std::move(model);
+        return true;
+      }
+      if (const auto* failure =
+              std::get_if<OperationFailure>(&initialized)) {
+        setError(error, failure->detail +
+                            " Model: " + toUtf8String(modelPath_));
+        return false;
+      }
+      if (control.cancellationRequested()) {
+        setError(error, "Audio separation cancelled.");
+        return false;
+      }
+      reportDiagnostic(diagnostics_, DiagnosticLevel::Info, "scheduler",
+                       "Model loading was interrupted for foreground "
+                       "playback.");
+      if (!checkpoint(control, error)) return false;
     }
-    model_ = std::move(model);
-    initializedOnce_ = true;
-    return true;
   }
 
   void yieldForForegroundPlayback() {
@@ -417,15 +434,14 @@ class ScheduledMaskModel {
                          " resources for foreground playback.");
   }
 
-  MaskInferenceResult run(std::span<const float> spectrogramRealImag,
-                          std::span<const float>* masksRealImag,
-                          const ExecutionControl& control,
-                          std::string* error) {
+  MaskInferenceResult run(
+      std::span<const float> spectrogramRealImag,
+      const ExecutionControl& control) {
     if (!model_) {
-      setError(error, "The scheduled inference model is not acquired.");
-      return MaskInferenceResult::Failed;
+      return OperationFailure{
+          "The scheduled inference model is not acquired."};
     }
-    return model_->run(spectrogramRealImag, masksRealImag, control, error);
+    return model_->run(spectrogramRealImag, control);
   }
 
   void releaseResources() { model_.reset(); }
@@ -435,7 +451,7 @@ class ScheduledMaskModel {
   InferenceBackend backend_;
   DiagnosticReporter diagnostics_;
   std::unique_ptr<BanditMaskModel> model_;
-  bool initializedOnce_ = false;
+  bool loadAttempted_ = false;
 };
 
 std::vector<float> chunkWindow() {
@@ -536,6 +552,9 @@ bool separateMediaAudioUsingModel(
   };
   if (!checkpoint(control, yieldGpuResources, error)) return false;
   if (!scheduledModel->acquire(onProgress, 0.02f, control, error)) {
+    if (control.cancellationRequested()) {
+      return false;
+    }
     if (!prepareBundledModelCache || !prepared.compiled ||
         !prepared.cacheHit) {
       return false;
@@ -647,9 +666,17 @@ bool separateMediaAudioUsingModel(
       }
       for (;;) {
         const MaskInferenceResult inference =
-            scheduledModel->run(spectrogram, &masks, control, error);
-        if (inference == MaskInferenceResult::Succeeded) break;
-        if (inference == MaskInferenceResult::Failed) return false;
+            scheduledModel->run(spectrogram, control);
+        if (const auto* output =
+                std::get_if<MaskInferenceOutput>(&inference)) {
+          masks = output->masksRealImag;
+          break;
+        }
+        if (const auto* failure =
+                std::get_if<OperationFailure>(&inference)) {
+          setError(error, failure->detail);
+          return false;
+        }
         if (!checkpoint(control, yieldGpuResources, error)) return false;
         if (!scheduledModel->acquire(onProgress, inferenceProgress, control,
                                      error)) {

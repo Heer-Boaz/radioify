@@ -17,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include "audio/separation/inference_session.h"
 #include "core/file_output.h"
@@ -169,83 +170,134 @@ bool prepareBundledModel(
 
   const std::filesystem::path compiledModelPath =
       cacheDirectory / "bandit-v2-tensorrt-rtx.ep.onnx";
-  if (mode == ModelPreparationMode::ReuseOrCreate &&
-      usableCompiledModel(compiledModelPath)) {
+  bool resumingCompilation = false;
+  for (;;) {
+    if (!control.checkpoint()) {
+      setError(error, "Audio separation cancelled.");
+      return false;
+    }
+    if (mode == ModelPreparationMode::ReuseOrCreate &&
+        usableCompiledModel(compiledModelPath)) {
+      reportDiagnostic(diagnostics, DiagnosticLevel::Info, "model-cache",
+                       "Using compiled NVIDIA model: " +
+                           toUtf8String(compiledModelPath));
+      prepared->modelPath = compiledModelPath;
+      prepared->backend = std::move(backend);
+      prepared->compiled = true;
+      prepared->cacheHit = true;
+      return true;
+    }
+
+    if (reportPreparation) {
+      reportPreparation(resumingCompilation
+                            ? "Waiting to resume NVIDIA model preparation"
+                            : "Waiting to prepare the NVIDIA separation "
+                              "model");
+    }
+
+    std::unique_ptr<CompilationMutex> lock = CompilationMutex::acquire(
+        mutexName(backend.providerVersion), control, error);
+    if (!lock) return false;
+    if (mode == ModelPreparationMode::ReuseOrCreate &&
+        usableCompiledModel(compiledModelPath)) {
+      reportDiagnostic(diagnostics, DiagnosticLevel::Info, "model-cache",
+                       "Using compiled NVIDIA model created by another "
+                       "Radioify process.");
+      prepared->modelPath = compiledModelPath;
+      prepared->backend = std::move(backend);
+      prepared->compiled = true;
+      prepared->cacheHit = true;
+      return true;
+    }
+
+    bool lockYielded = false;
+    if (!control.checkpoint([&]() {
+          lock.reset();
+          lockYielded = true;
+        })) {
+      setError(error, "Audio separation cancelled.");
+      return false;
+    }
+    if (lockYielded) {
+      resumingCompilation = true;
+      continue;
+    }
+
     reportDiagnostic(diagnostics, DiagnosticLevel::Info, "model-cache",
-                     "Using compiled NVIDIA model: " +
+                     mode == ModelPreparationMode::Rebuild
+                         ? "Rebuilding the compiled NVIDIA separation model."
+                         : "Compiling the NVIDIA separation model for first "
+                           "use.");
+    if (reportPreparation) {
+      std::string phase;
+      if (mode == ModelPreparationMode::Rebuild) {
+        phase = "Repairing the NVIDIA separation model cache";
+      } else if (resumingCompilation) {
+        phase = "Resuming NVIDIA model optimization (first use)";
+      } else {
+        phase = "Optimizing the NVIDIA separation model (first use)";
+      }
+      reportPreparation(std::move(phase));
+    }
+    std::optional<file_output::Transaction> transaction =
+        file_output::Transaction::begin(
+            compiledModelPath, file_output::PublishMode::ReplaceExisting,
+            error);
+    if (!transaction) return false;
+
+    std::unique_ptr<InferenceSessionFactory> compiler =
+        InferenceSessionFactory::create(backend, diagnostics, error);
+    if (!compiler) return false;
+    const ControlledOperationResult compilation = compiler->compileModel(
+        sourceModelPath, transaction->temporaryPath(), control);
+    if (std::holds_alternative<OperationInterrupted>(compilation)) {
+      if (control.cancellationRequested()) {
+        setError(error, "Audio separation cancelled.");
+        return false;
+      }
+      reportDiagnostic(diagnostics, DiagnosticLevel::Info, "scheduler",
+                       "NVIDIA model compilation was interrupted for "
+                       "foreground playback.");
+      compiler.reset();
+      transaction.reset();
+      lock.reset();
+      if (!control.checkpoint()) {
+        setError(error, "Audio separation cancelled.");
+        return false;
+      }
+      resumingCompilation = true;
+      continue;
+    }
+    if (const auto* failure =
+            std::get_if<OperationFailure>(&compilation)) {
+      setError(error, "Could not compile the NVIDIA separation model: " +
+                          failure->detail);
+      return false;
+    }
+    compiler.reset();
+    bool publicationLockYielded = false;
+    if (!control.checkpoint([&]() {
+          transaction.reset();
+          lock.reset();
+          publicationLockYielded = true;
+        })) {
+      setError(error, "Audio separation cancelled.");
+      return false;
+    }
+    if (publicationLockYielded) {
+      resumingCompilation = true;
+      continue;
+    }
+    if (!transaction->publish(error)) return false;
+    reportDiagnostic(diagnostics, DiagnosticLevel::Info, "model-cache",
+                     "Published compiled NVIDIA model: " +
                          toUtf8String(compiledModelPath));
     prepared->modelPath = compiledModelPath;
     prepared->backend = std::move(backend);
     prepared->compiled = true;
-    prepared->cacheHit = true;
+    prepared->cacheHit = false;
     return true;
   }
-
-  if (reportPreparation) {
-    reportPreparation("Waiting to prepare the NVIDIA separation model");
-  }
-
-  std::unique_ptr<CompilationMutex> lock = CompilationMutex::acquire(
-      mutexName(backend.providerVersion), control, error);
-  if (!lock) return false;
-  if (mode == ModelPreparationMode::ReuseOrCreate &&
-      usableCompiledModel(compiledModelPath)) {
-    reportDiagnostic(diagnostics, DiagnosticLevel::Info, "model-cache",
-                     "Using compiled NVIDIA model created by another "
-                     "Radioify process.");
-    prepared->modelPath = compiledModelPath;
-    prepared->backend = std::move(backend);
-    prepared->compiled = true;
-    prepared->cacheHit = true;
-    return true;
-  }
-  if (!control.checkpoint()) {
-    setError(error, "Audio separation cancelled.");
-    return false;
-  }
-
-  reportDiagnostic(diagnostics, DiagnosticLevel::Info, "model-cache",
-                   mode == ModelPreparationMode::Rebuild
-                       ? "Rebuilding the compiled NVIDIA separation model."
-                       : "Compiling the NVIDIA separation model for first "
-                         "use.");
-  if (reportPreparation) {
-    reportPreparation(mode == ModelPreparationMode::Rebuild
-                          ? "Repairing the NVIDIA separation model cache"
-                          : "Optimizing the NVIDIA separation model "
-                            "(first use)");
-  }
-  std::optional<file_output::Transaction> transaction =
-      file_output::Transaction::begin(
-          compiledModelPath, file_output::PublishMode::ReplaceExisting,
-          error);
-  if (!transaction) return false;
-
-  std::unique_ptr<InferenceSessionFactory> compiler =
-      InferenceSessionFactory::create(backend, diagnostics, error);
-  if (!compiler) return false;
-  std::string compilationError;
-  if (!compiler->compileModel(sourceModelPath, transaction->temporaryPath(),
-                              control, &compilationError)) {
-    setError(error, control.cancellationRequested()
-                        ? "Audio separation cancelled."
-                        : "Could not compile the NVIDIA separation model: " +
-                              compilationError);
-    return false;
-  }
-  if (!control.checkpoint()) {
-    setError(error, "Audio separation cancelled.");
-    return false;
-  }
-  if (!transaction->publish(error)) return false;
-  reportDiagnostic(diagnostics, DiagnosticLevel::Info, "model-cache",
-                   "Published compiled NVIDIA model: " +
-                       toUtf8String(compiledModelPath));
-  prepared->modelPath = compiledModelPath;
-  prepared->backend = std::move(backend);
-  prepared->compiled = true;
-  prepared->cacheHit = false;
-  return true;
 }
 
 }  // namespace audio_separation
