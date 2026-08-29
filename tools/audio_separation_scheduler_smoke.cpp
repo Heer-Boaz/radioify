@@ -46,10 +46,20 @@ int main(int argc, char** argv) {
   }
 
   const std::filesystem::path media = pathFromUtf8String(argv[1]);
-  const audio_separation::Job::Operation operation =
-      argc == 3
-          ? audio_separation::makeModelOperation(pathFromUtf8String(argv[2]))
-          : audio_separation::makeProductionOperation();
+  audio_separation::Job::Operation operation;
+  if (argc == 3) {
+    operation =
+        audio_separation::makeModelOperation(pathFromUtf8String(argv[2]));
+  } else {
+    const audio_separation::OperationBinding production =
+        audio_separation::resolveProductionOperation();
+    if (!production.ready()) {
+      std::cerr << "Audio separation scheduler smoke failed: "
+                << production.detail() << '\n';
+      return EXIT_FAILURE;
+    }
+    operation = production.operation();
+  }
   if (!operation) {
     std::cerr << "Audio separation scheduler smoke failed: backend is not "
                  "configured.\n";

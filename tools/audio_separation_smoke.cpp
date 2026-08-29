@@ -24,9 +24,20 @@ int main(int argc, char** argv) {
   int lastPercent = -1;
   const auto started = std::chrono::steady_clock::now();
   std::string error;
-  const audio_separation::Job::Operation operation = argc == 3
-      ? audio_separation::makeModelOperation(pathFromUtf8String(argv[2]))
-      : audio_separation::makeProductionOperation();
+  audio_separation::Job::Operation operation;
+  if (argc == 3) {
+    operation =
+        audio_separation::makeModelOperation(pathFromUtf8String(argv[2]));
+  } else {
+    const audio_separation::OperationBinding production =
+        audio_separation::resolveProductionOperation();
+    if (!production.ready()) {
+      std::cerr << "Audio separation failed: " << production.detail()
+                << '\n';
+      return EXIT_FAILURE;
+    }
+    operation = production.operation();
+  }
   if (!operation) {
     std::cerr << "Audio separation failed: operation is not configured\n";
     return EXIT_FAILURE;

@@ -205,6 +205,42 @@ bool testInferenceBackendContracts() {
     ok &= expect(!nvidia.detail.empty(),
                  "an unusable Windows ML backend must explain its status");
   }
+
+  const separation::Job::Operation testOperation =
+      [](const std::filesystem::path&,
+         const separation::ArtifactPaths&,
+         const separation::Job::ProgressReporter&,
+         const separation::Job::DiagnosticReporter&,
+         const separation::ExecutionControl&,
+         const separation::Job::CommitStarted&, std::string*) {
+        return false;
+      };
+  const separation::OperationBinding ready =
+      separation::OperationBinding::ready(testOperation, "Test GPU");
+  const separation::OperationBinding setupRequired =
+      separation::OperationBinding::unavailable(
+          separation::OperationAvailability::SetupRequired,
+          "Install the certified provider.");
+  ok &= expect(ready.ready() && ready.operation() &&
+                   ready.backendName() == "Test GPU" &&
+                   ready.detail().empty() && !setupRequired.ready() &&
+                   !setupRequired.operation() &&
+                   setupRequired.availability() ==
+                       separation::OperationAvailability::SetupRequired &&
+                   setupRequired.detail() ==
+                       "Install the certified provider.",
+               "backend bindings must make executable work and unavailable "
+               "diagnostics mutually exclusive");
+
+  const separation::OperationBinding production =
+      separation::resolveProductionOperation();
+  ok &= expect(production.ready()
+                   ? !production.backendName().empty() &&
+                         static_cast<bool>(production.operation())
+                   : !production.detail().empty() &&
+                         !static_cast<bool>(production.operation()),
+               "production discovery must return either one usable native "
+               "backend or one actionable unavailability reason");
   return ok;
 }
 
@@ -285,10 +321,8 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
         return beginCommit();
       });
   bool ok = true;
-  ok &= expect(!unconfigured.configured() && job.configured() &&
-                   static_cast<bool>(separation::makeProductionOperation()),
-               "job availability must derive from an actual operation and "
-               "the production adapter must be constructible");
+  ok &= expect(!unconfigured.configured() && job.configured(),
+               "job availability must derive from an actual operation");
   ok &= expect(job.tryStart("clip.mp4"),
                "a valid media path must start a separation job");
   std::optional<separation::JobSnapshot> completion;

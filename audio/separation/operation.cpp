@@ -7,6 +7,56 @@
 
 namespace audio_separation {
 
+namespace {
+
+OperationAvailability availabilityFor(WindowsMlBackendStatus status) {
+  switch (status) {
+    case WindowsMlBackendStatus::Ready:
+    case WindowsMlBackendStatus::Installed:
+      return OperationAvailability::Ready;
+    case WindowsMlBackendStatus::InstallationRequired:
+      return OperationAvailability::SetupRequired;
+    case WindowsMlBackendStatus::Unavailable:
+      return OperationAvailability::Unavailable;
+    case WindowsMlBackendStatus::Failed:
+      return OperationAvailability::Failed;
+  }
+  return OperationAvailability::Failed;
+}
+
+Job::Operation makeNativeNvidiaOperation() {
+  return [](const std::filesystem::path& mediaPath,
+            const ArtifactPaths& outputPaths,
+            const Job::ProgressReporter& reportProgress,
+            const Job::DiagnosticReporter& reportDiagnostic,
+            const ExecutionControl& control,
+            const Job::CommitStarted& outputCommitStarted,
+            std::string* error) {
+    reportProgress(0.0f, "Starting native NVIDIA audio separation");
+    WindowsMlBackendResolution resolution = resolveNvidiaWindowsMlBackend(
+        ProviderProvisioningPolicy::ActivateInstalled);
+    if (!resolution.ready()) {
+      const std::string detail =
+          resolution.detail.empty()
+              ? "Windows ML did not provide diagnostic detail."
+              : std::move(resolution.detail);
+      const std::string message =
+          "Native NVIDIA audio separation is unavailable. " + detail;
+      audio_separation::reportDiagnostic(
+          reportDiagnostic, DiagnosticLevel::Error, "nvidia-tensorrt-rtx",
+          message);
+      if (error) *error = message;
+      return false;
+    }
+    const Job::Operation operation =
+        makeBundledModelOperation(std::move(resolution.backend));
+    return operation(mediaPath, outputPaths, reportProgress, reportDiagnostic,
+                     control, outputCommitStarted, error);
+  };
+}
+
+}  // namespace
+
 Job::Operation makeModelOperation(std::filesystem::path modelPath,
                                   InferenceBackend backend) {
   return [modelPath = std::move(modelPath), backend = std::move(backend)](
@@ -32,7 +82,7 @@ Job::Operation makeModelOperation(std::filesystem::path modelPath) {
                             directMlInferenceBackend());
 }
 
-Job::Operation makeProductionOperation(InferenceBackend backend) {
+Job::Operation makeBundledModelOperation(InferenceBackend backend) {
   return [backend = std::move(backend)](
             const std::filesystem::path& mediaPath,
             const ArtifactPaths& outputPaths,
@@ -51,30 +101,16 @@ Job::Operation makeProductionOperation(InferenceBackend backend) {
   };
 }
 
-Job::Operation makeProductionOperation() {
-  WindowsMlBackendResolution resolution = resolveNvidiaWindowsMlBackend(
-      ProviderProvisioningPolicy::ActivateInstalled);
-  if (resolution.ready()) {
-    return makeProductionOperation(std::move(resolution.backend));
+OperationBinding resolveProductionOperation() {
+  const WindowsMlBackendResolution observed = resolveNvidiaWindowsMlBackend(
+      ProviderProvisioningPolicy::ObserveOnly);
+  const OperationAvailability availability =
+      availabilityFor(observed.status);
+  if (availability == OperationAvailability::Ready) {
+    return OperationBinding::ready(makeNativeNvidiaOperation(),
+                                   "NVIDIA TensorRT-RTX (native Windows)");
   }
-
-  std::string detail = resolution.detail.empty()
-                           ? "Windows ML did not provide diagnostic detail."
-                           : std::move(resolution.detail);
-  return [detail = std::move(detail)](
-             const std::filesystem::path&, const ArtifactPaths&,
-             const Job::ProgressReporter&,
-             const Job::DiagnosticReporter& reportDiagnostic,
-             const ExecutionControl&, const Job::CommitStarted&,
-             std::string* error) {
-    const std::string message =
-        "Native NVIDIA audio separation is unavailable. " + detail;
-    audio_separation::reportDiagnostic(
-        reportDiagnostic, DiagnosticLevel::Error, "nvidia-tensorrt-rtx",
-        message);
-    if (error) *error = message;
-    return false;
-  };
+  return OperationBinding::unavailable(availability, observed.detail);
 }
 
 }  // namespace audio_separation

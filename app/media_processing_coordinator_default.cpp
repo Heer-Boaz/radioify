@@ -68,7 +68,7 @@ Coordinator::Coordinator(AudioPlaybackRuntime& audioPlayback)
             playback_video_transcript::GenerationJob::productionOperation();
 #if RADIOIFY_HAS_AUDIO_SEPARATION
         operations.separateAudio =
-            audio_separation::makeProductionOperation();
+            audio_separation::resolveProductionOperation();
 #endif
         return operations;
       }()) {}

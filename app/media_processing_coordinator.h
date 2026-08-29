@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "audio/loopsplit/loopsplit.h"
-#include "audio/separation/job.h"
+#include "audio/separation/operation_binding.h"
 #include "app/media_processing_task_id.h"
 #include "core/native_wait_handle.h"
 #include "playback/media_processing_service.h"
@@ -125,7 +125,7 @@ class Coordinator final : public playback_media_processing::Service {
     MelodyOperation analyzeMelody;
     LoopSplitOperation splitLoop;
     playback_video_transcript::GenerationJob::Operation generateSubtitles;
-    audio_separation::Job::Operation separateAudio;
+    std::optional<audio_separation::OperationBinding> separateAudio;
     FileExportOperation exportAudio;
     FileExportOperation exportTranscriptText;
   };
@@ -204,7 +204,7 @@ class Coordinator final : public playback_media_processing::Service {
     MelodyOperation analyzeMelody;
     LoopSplitOperation splitLoop;
     playback_video_transcript::GenerationJob::Operation generateSubtitles;
-    audio_separation::Job::Operation separateAudio;
+    std::optional<audio_separation::OperationBinding> separateAudio;
     FileExportOperation exportAudio;
     FileExportOperation exportTranscriptText;
   };

@@ -1,5 +1,6 @@
 #include "playback/media_processing_actions.h"
 
+#include <string_view>
 #include <utility>
 
 #include "core/runtime_helpers.h"
@@ -49,6 +50,16 @@ ActionText actionText(playback_media_actions::Action action) {
 std::string displayName(const std::filesystem::path& sourceFile) {
   const std::filesystem::path filename = sourceFile.filename();
   return toUtf8String(filename.empty() ? sourceFile : filename);
+}
+
+bool endsSentence(std::string_view text) {
+  if (text.empty()) return false;
+  const char last = text.back();
+  return last == '.' || last == '!' || last == '?';
+}
+
+void finishSentence(std::string& text) {
+  if (!endsSentence(text)) text += '.';
 }
 
 std::string rejectionReason(const RequestError& error) {
@@ -113,9 +124,10 @@ ActionResult makeActionResult(playback_media_actions::Action action,
   }
   const std::string source = displayName(sourceFile);
   if (!source.empty()) {
-    result.feedback += ". Source: \"" + source + "\"";
+    finishSentence(result.feedback);
+    result.feedback += " Source: \"" + source + "\"";
   }
-  result.feedback += ".";
+  finishSentence(result.feedback);
   return result;
 }
 

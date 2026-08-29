@@ -340,8 +340,12 @@ struct Coordinator::Impl {
         subtitles(
             std::make_unique<playback_video_transcript::GenerationJob>(
                 std::move(backends.generateSubtitles), wakeEvent.notifier())),
+        audioSeparationBinding(std::move(backends.separateAudio)),
         audioSeparation(std::make_unique<audio_separation::Job>(
-            std::move(backends.separateAudio), wakeEvent.notifier())),
+            audioSeparationBinding
+                ? audioSeparationBinding->operation()
+                : audio_separation::Job::Operation{},
+            wakeEvent.notifier())),
         interactivePlayback(std::make_shared<InteractivePlaybackState>()) {
     interactivePlayback->audioSeparation = audioSeparation.get();
   }
@@ -353,6 +357,8 @@ struct Coordinator::Impl {
   FileExportOperation exportAudio;
   FileExportOperation exportTranscriptText;
   std::unique_ptr<playback_video_transcript::GenerationJob> subtitles;
+  std::optional<audio_separation::OperationBinding>
+      audioSeparationBinding;
   std::unique_ptr<audio_separation::Job> audioSeparation;
   std::shared_ptr<InteractivePlaybackState> interactivePlayback;
   std::optional<TaskId> subtitleTask;
@@ -771,11 +777,18 @@ RequestResult Coordinator::requestSubtitles(
 
 RequestResult Coordinator::requestAudioSeparation(
     const std::filesystem::path& sourceFile) {
-  if (!impl_ || !impl_->audioSeparation ||
-      !impl_->audioSeparation->configured()) {
+  if (!impl_) {
     return rejected(RequestFailure::BackendUnavailable,
                     "the native NVIDIA audio-separation backend is not "
                     "configured");
+  }
+  if (!impl_->audioSeparationBinding ||
+      !impl_->audioSeparationBinding->ready()) {
+    return rejected(
+        RequestFailure::BackendUnavailable,
+        impl_->audioSeparationBinding
+            ? impl_->audioSeparationBinding->detail()
+            : "the native NVIDIA audio-separation backend is not configured");
   }
   if (sourceFile.empty()) return rejected(RequestFailure::InvalidSource);
   if (!isSupportedVideoExt(sourceFile) &&
@@ -855,8 +868,8 @@ bool Coordinator::subtitleGenerationRunningFor(
 
 bool Coordinator::audioSeparationAvailableFor(
     const std::filesystem::path& sourceFile) const {
-  return impl_ && impl_->audioSeparation &&
-         impl_->audioSeparation->configured() &&
+  return impl_ && impl_->audioSeparationBinding &&
+         impl_->audioSeparationBinding->ready() &&
          (isSupportedVideoExt(sourceFile) ||
           isSupportedAudioExt(sourceFile)) &&
          !audio_separation::isManagedArtifactPath(sourceFile);

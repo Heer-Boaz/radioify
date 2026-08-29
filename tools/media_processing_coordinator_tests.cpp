@@ -162,7 +162,7 @@ int main() {
         }
         return beginCommit();
       };
-  operations.separateAudio =
+  operations.separateAudio = audio_separation::OperationBinding::ready(
       [&](const std::filesystem::path&,
           const audio_separation::ArtifactPaths&,
           const audio_separation::Job::ProgressReporter& progress,
@@ -182,7 +182,8 @@ int main() {
         }
         if (error) *error = "Controlled cancellation.";
         return false;
-      };
+      },
+      "Test GPU backend");
   operations.exportAudio =
       [&](const std::filesystem::path&,
           const std::filesystem::path& outputFile,
@@ -257,8 +258,13 @@ int main() {
   ok &= expect(!unsupportedAction,
                "surface-specific actions must remain outside processing");
 
+  processing::Coordinator::Operations unavailableOperations;
+  unavailableOperations.separateAudio =
+      audio_separation::OperationBinding::unavailable(
+          audio_separation::OperationAvailability::SetupRequired,
+          "Install the certified native NVIDIA provider.");
   processing::Coordinator unavailableCoordinator(
-      processing::Coordinator::Operations{});
+      std::move(unavailableOperations));
   playback_media_processing::Actions unavailableActions(
       unavailableCoordinator);
   const auto unavailableContext =
@@ -272,8 +278,8 @@ int main() {
           unavailableSeparation->error->failure ==
               playback_media_processing::RequestFailure::BackendUnavailable &&
           unavailableSeparation->feedback ==
-              "Audio separation could not start: the native NVIDIA "
-              "audio-separation backend is not configured. Source: "
+              "Audio separation could not start: Install the certified "
+              "native NVIDIA provider. Source: "
               "\"movie.mp4\".",
       "availability and start diagnostics must derive from the same injected "
       "backend");
