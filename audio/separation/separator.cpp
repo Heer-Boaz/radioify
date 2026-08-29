@@ -369,31 +369,36 @@ class RawAudioReader {
   std::vector<float> scratch_;
 };
 
-// Owns only the re-creatable DirectML state. CPU preparation and already
+// Owns only the re-creatable inference state. CPU preparation and already
 // published progress remain with the operation while this lease is yielded to
 // foreground playback.
 class ScheduledMaskModel {
  public:
   ScheduledMaskModel(const std::filesystem::path& modelPath,
+                     InferenceBackend backend,
                      const DiagnosticReporter& diagnostics)
-      : modelPath_(modelPath), diagnostics_(diagnostics) {}
+      : modelPath_(modelPath),
+        backend_(std::move(backend)),
+        diagnostics_(diagnostics) {}
 
   bool acquire(const ProgressCallback& onProgress, float progress,
                std::string* error) {
     if (model_) return true;
 
-    report(onProgress, progress,
-           initializedOnce_ ? "Restoring DirectML separation model"
-                            : "Loading DirectML separation model");
+    report(onProgress, progress, initializedOnce_
+                                     ? "Restoring " + backend_.displayName +
+                                           " separation model"
+                                     : "Loading " + backend_.displayName +
+                                           " separation model");
     if (initializedOnce_) {
       reportDiagnostic(diagnostics_, DiagnosticLevel::Info, "scheduler",
-                       "Reacquiring DirectML resources after foreground "
-                       "playback yielded.");
+                       "Reacquiring " + backend_.displayName +
+                           " resources after foreground playback yielded.");
     }
 
     auto model = std::make_unique<BanditMaskModel>();
     std::string modelError;
-    if (!model->initialize(modelPath_, diagnostics_, &modelError)) {
+    if (!model->initialize(modelPath_, backend_, diagnostics_, &modelError)) {
       setError(error, modelError + " Model: " + toUtf8String(modelPath_));
       return false;
     }
@@ -406,7 +411,8 @@ class ScheduledMaskModel {
     if (!model_) return;
     model_.reset();
     reportDiagnostic(diagnostics_, DiagnosticLevel::Info, "scheduler",
-                     "Released DirectML resources for foreground playback.");
+                     "Released " + backend_.displayName +
+                         " resources for foreground playback.");
   }
 
   MaskInferenceResult run(std::span<const float> spectrogramRealImag,
@@ -414,7 +420,7 @@ class ScheduledMaskModel {
                           const ExecutionControl& control,
                           std::string* error) {
     if (!model_) {
-      setError(error, "The scheduled DirectML model is not acquired.");
+      setError(error, "The scheduled inference model is not acquired.");
       return MaskInferenceResult::Failed;
     }
     return model_->run(spectrogramRealImag, masksRealImag, control, error);
@@ -424,6 +430,7 @@ class ScheduledMaskModel {
 
  private:
   std::filesystem::path modelPath_;
+  InferenceBackend backend_;
   DiagnosticReporter diagnostics_;
   std::unique_ptr<BanditMaskModel> model_;
   bool initializedOnce_ = false;
@@ -491,6 +498,7 @@ namespace {
 bool separateMediaAudioUsingModel(
     const std::filesystem::path& mediaPath,
     const std::filesystem::path& modelPath,
+    const InferenceBackend& backend,
     const ArtifactPaths& outputPaths,
     const ProgressCallback& onProgress,
     const DiagnosticReporter& diagnostics,
@@ -502,14 +510,14 @@ bool separateMediaAudioUsingModel(
   reportDiagnostic(diagnostics, DiagnosticLevel::Info, "model",
                    "Loading model: " + toUtf8String(modelPath));
 
-  ScheduledMaskModel model(modelPath, diagnostics);
+  ScheduledMaskModel model(modelPath, backend, diagnostics);
   const auto yieldGpuResources = [&model]() {
     model.yieldForForegroundPlayback();
   };
   if (!checkpoint(control, yieldGpuResources, error)) return false;
   if (!model.acquire(onProgress, 0.02f, error)) return false;
   if (!checkpoint(control, yieldGpuResources, error)) return false;
-  report(onProgress, 0.03f, "DirectML GPU ready");
+  report(onProgress, 0.03f, backend.displayName + " GPU ready");
 
   const std::filesystem::path rawPath = temporaryRawAudioPathFor(mediaPath);
   ScopedTemporaryFile rawTemporary(rawPath);
@@ -642,6 +650,7 @@ bool separateMediaAudioUsingModel(
 bool separateMediaAudioWithModel(
     const std::filesystem::path& mediaPath,
     const std::filesystem::path& modelPath,
+    const InferenceBackend& backend,
     const ArtifactPaths& outputPaths,
     const ProgressCallback& onProgress,
     const DiagnosticReporter& diagnostics,
@@ -653,12 +662,17 @@ bool separateMediaAudioWithModel(
       !validateModelPath(modelPath, error)) {
     return false;
   }
-  return separateMediaAudioUsingModel(mediaPath, modelPath, outputPaths,
+  if (!backend.valid()) {
+    setError(error, "The audio-separation inference backend is invalid.");
+    return false;
+  }
+  return separateMediaAudioUsingModel(mediaPath, modelPath, backend, outputPaths,
                                       onProgress, diagnostics,
                                       control, error, outputCommitStarted);
 }
 
 bool separateMediaAudio(const std::filesystem::path& mediaPath,
+                        const InferenceBackend& backend,
                         const ArtifactPaths& outputPaths,
                         const ProgressCallback& onProgress,
                         const DiagnosticReporter& diagnostics,
@@ -667,10 +681,14 @@ bool separateMediaAudio(const std::filesystem::path& mediaPath,
                         const OutputCommitStarted& outputCommitStarted) {
   if (error) error->clear();
   if (!validateRequest(mediaPath, control, error)) return false;
+  if (!backend.valid()) {
+    setError(error, "The audio-separation inference backend is invalid.");
+    return false;
+  }
 
   std::filesystem::path modelPath;
   if (!resolveBundledModelPath(&modelPath, error)) return false;
-  return separateMediaAudioUsingModel(mediaPath, modelPath, outputPaths,
+  return separateMediaAudioUsingModel(mediaPath, modelPath, backend, outputPaths,
                                       onProgress, diagnostics,
                                       control, error, outputCommitStarted);
 }

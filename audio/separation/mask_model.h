@@ -8,6 +8,7 @@
 
 #include "audio/separation/diagnostics.h"
 #include "audio/separation/execution_control.h"
+#include "audio/separation/inference_backend.h"
 
 namespace audio_separation {
 
@@ -30,6 +31,7 @@ class BanditMaskModel {
   BanditMaskModel& operator=(const BanditMaskModel&) = delete;
 
   bool initialize(const std::filesystem::path& modelPath,
+                  const InferenceBackend& backend,
                   DiagnosticReporter diagnostics,
                   std::string* error);
   MaskInferenceResult run(std::span<const float> spectrogramRealImag,

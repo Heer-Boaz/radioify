@@ -252,7 +252,11 @@ function Initialize-RadioifyMsixPackageLayout {
         -Destination (Join-Path $modelLayoutDir "ggml-base-q5_1.bin") `
         -Force
 
-    foreach ($runtimeName in @("onnxruntime.dll", "DirectML.dll")) {
+    foreach ($runtimeName in @(
+        "onnxruntime.dll",
+        "DirectML.dll",
+        "Microsoft.Windows.AI.MachineLearning.dll"
+    )) {
         $runtimeSource = Join-Path $distRoot $runtimeName
         if (-not (Test-Path -LiteralPath $runtimeSource)) {
             throw "Audio-separation runtime not found at '$runtimeSource'."

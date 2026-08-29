@@ -41,6 +41,11 @@ void setError(std::string* error, std::string message) {
   if (error) *error = std::move(message);
 }
 
+std::string pathDescription(const std::filesystem::path& path) {
+  const auto utf8 = path.u8string();
+  return {utf8.begin(), utf8.end()};
+}
+
 template <std::size_t Size>
 bool matchesShape(const std::vector<std::int64_t>& actual,
                   const std::array<std::int64_t, Size>& expected) {
@@ -176,11 +181,13 @@ bool matchesModelContract(Ort::Session& session,
 }  // namespace
 
 struct BanditMaskModel::Impl {
-  explicit Impl(DiagnosticReporter reporter)
-      : diagnostics(std::move(reporter)),
+  Impl(InferenceBackend selectedBackend, DiagnosticReporter reporter)
+      : backend(std::move(selectedBackend)),
+        diagnostics(std::move(reporter)),
         environment(ORT_LOGGING_LEVEL_WARNING, "radioify-separation",
                     onnxRuntimeLog, &diagnostics) {}
 
+  InferenceBackend backend;
   DiagnosticReporter diagnostics;
   Ort::Env environment;
   std::unique_ptr<Ort::Session> session;
@@ -207,6 +214,7 @@ BanditMaskModel::BanditMaskModel() = default;
 BanditMaskModel::~BanditMaskModel() = default;
 
 bool BanditMaskModel::initialize(const std::filesystem::path& modelPath,
+                                 const InferenceBackend& backend,
                                  DiagnosticReporter diagnostics,
                                  std::string* error) {
   if (error) error->clear();
@@ -214,33 +222,48 @@ bool BanditMaskModel::initialize(const std::filesystem::path& modelPath,
     setError(error, "The audio-separation model path is empty.");
     return false;
   }
+  if (!backend.valid()) {
+    setError(error, "The audio-separation inference backend is invalid.");
+    return false;
+  }
   try {
-    auto implementation =
-        std::make_unique<Impl>(std::move(diagnostics));
+    auto implementation = std::make_unique<Impl>(backend,
+                                                  std::move(diagnostics));
     reportDiagnostic(implementation->diagnostics, DiagnosticLevel::Info,
                      "onnxruntime", "Version: " + Ort::GetVersionString());
-    std::vector<Ort::ConstEpDevice> directMlDevices;
+    if (!backend.providerLibrary.empty()) {
+      implementation->environment.RegisterExecutionProviderLibrary(
+          backend.providerName.c_str(), backend.providerLibrary.native());
+      reportDiagnostic(implementation->diagnostics, DiagnosticLevel::Info,
+                       backend.diagnosticComponent,
+                       "Registered provider library: " +
+                           pathDescription(backend.providerLibrary));
+    }
+
+    std::vector<Ort::ConstEpDevice> backendDevices;
     for (const Ort::ConstEpDevice& device :
          implementation->environment.GetEpDevices()) {
-      if (std::string(device.EpName()) == "DmlExecutionProvider" &&
+      if (std::string(device.EpName()) == backend.providerName &&
           device.Device().Type() == OrtHardwareDeviceType_GPU) {
-        directMlDevices.push_back(device);
+        backendDevices.push_back(device);
       }
     }
-    if (directMlDevices.empty()) {
-      setError(error,
-               "No DirectML GPU is available; CPU audio separation is disabled.");
+    if (backendDevices.empty()) {
+      setError(error, "No " + backend.displayName +
+                          " GPU is available; CPU audio separation is "
+                          "disabled.");
       return false;
     }
 
-    const Ort::ConstHardwareDevice hardware = directMlDevices.front().Device();
+    const Ort::ConstHardwareDevice hardware = backendDevices.front().Device();
     std::ostringstream deviceDescription;
-    deviceDescription << "Selected DirectML GPU; vendor="
+    deviceDescription << "Selected " << backend.displayName
+                      << " GPU; vendor="
                       << (hardware.Vendor() ? hardware.Vendor() : "unknown")
                       << ", vendor_id=0x" << std::hex << hardware.VendorId()
                       << ", device_id=0x" << hardware.DeviceId();
     reportDiagnostic(implementation->diagnostics, DiagnosticLevel::Info,
-                     "directml", deviceDescription.str());
+                     backend.diagnosticComponent, deviceDescription.str());
 
     Ort::SessionOptions options;
     options.DisableMemPattern();
@@ -249,12 +272,11 @@ bool BanditMaskModel::initialize(const std::filesystem::path& modelPath,
     options.AddFreeDimensionOverrideByName("batch", kInputShape[0]);
     options.AddFreeDimensionOverrideByName("time", kInputShape[3]);
     Ort::KeyValuePairs providerOptions;
-    // Fixed dimensions and stable reusable tensor addresses satisfy the DML
-    // capture contract and avoid rebuilding this recurrent command graph for
-    // every eight-second inference window.
-    providerOptions.Add("enable_graph_capture", "true");
+    for (const InferenceProviderOption& option : backend.providerOptions) {
+      providerOptions.Add(option.key.c_str(), option.value.c_str());
+    }
     options.AppendExecutionProvider_V2(implementation->environment,
-                                       directMlDevices, providerOptions);
+                                       backendDevices, providerOptions);
     implementation->session = std::make_unique<Ort::Session>(
         implementation->environment, modelPath.c_str(), options);
     if (!matchesModelContract(*implementation->session,
@@ -263,13 +285,13 @@ bool BanditMaskModel::initialize(const std::filesystem::path& modelPath,
     }
     implementation->allocateIoBuffers();
     reportDiagnostic(implementation->diagnostics, DiagnosticLevel::Info,
-                     "directml",
+                     backend.diagnosticComponent,
                      "Model session and reusable I/O buffers initialized.");
     impl_ = std::move(implementation);
     return true;
   } catch (const Ort::Exception& exception) {
-    setError(error, std::string("Could not initialize DirectML separation: ") +
-                        exception.what());
+    setError(error, "Could not initialize " + backend.displayName +
+                        " separation: " + exception.what());
     return false;
   } catch (const std::exception& exception) {
     setError(error, std::string("Could not initialize audio separation: ") +
@@ -284,7 +306,7 @@ MaskInferenceResult BanditMaskModel::run(
     const ExecutionControl& control, std::string* error) {
   if (error) error->clear();
   if (!impl_ || !impl_->session) {
-    setError(error, "The DirectML separation session is not ready.");
+    setError(error, "The audio-separation inference session is not ready.");
     return MaskInferenceResult::Failed;
   }
   if (!masksRealImag) {
@@ -292,7 +314,7 @@ MaskInferenceResult BanditMaskModel::run(
     return MaskInferenceResult::Failed;
   }
   if (spectrogramRealImag.size() != kInputValues) {
-    setError(error, "The DirectML separation session expected " +
+    setError(error, "The audio-separation session expected " +
                         std::to_string(kInputValues) +
                         " input values but received " +
                         std::to_string(spectrogramRealImag.size()) + ".");
@@ -331,8 +353,8 @@ MaskInferenceResult BanditMaskModel::run(
     if (interrupted.load(std::memory_order_relaxed)) {
       return MaskInferenceResult::Interrupted;
     }
-    setError(error, std::string("DirectML audio separation failed: ") +
-                        exception.what());
+    setError(error, impl_->backend.displayName +
+                        " audio separation failed: " + exception.what());
     return MaskInferenceResult::Failed;
   } catch (const std::exception& exception) {
     if (interrupted.load(std::memory_order_relaxed)) {

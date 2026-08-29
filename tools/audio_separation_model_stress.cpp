@@ -1,6 +1,7 @@
 #include "audio/separation/artifact.h"
 #include "audio/separation/mask_model.h"
 #include "audio/separation/spectral_transform.h"
+#include "audio/separation/windows_ml_backend.h"
 
 #include <algorithm>
 #include <atomic>
@@ -14,6 +15,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -24,6 +26,65 @@ int parseIterations(const wchar_t* value) {
   const long parsed = std::wcstol(value, &end, 10);
   if (!end || *end != L'\0' || parsed <= 0 || parsed > 100000) return 0;
   return static_cast<int>(parsed);
+}
+
+struct CommandLine {
+  std::filesystem::path modelPath;
+  int iterations = 256;
+  bool useNvidiaWindowsMl = false;
+};
+
+bool parseCommandLine(int argc, wchar_t** argv, CommandLine* options) {
+  if (!options || argc < 2) return false;
+  options->modelPath = argv[1];
+  bool acceptedLegacyIterations = false;
+  for (int index = 2; index < argc; ++index) {
+    const std::wstring_view argument(argv[index]);
+    if (argument == L"--backend" && index + 1 < argc) {
+      const std::wstring_view backend(argv[++index]);
+      if (backend == L"directml") {
+        options->useNvidiaWindowsMl = false;
+      } else if (backend == L"windows-ml-nvidia") {
+        options->useNvidiaWindowsMl = true;
+      } else {
+        return false;
+      }
+      continue;
+    }
+    if (argument == L"--iterations" && index + 1 < argc) {
+      options->iterations = parseIterations(argv[++index]);
+      if (options->iterations <= 0) return false;
+      continue;
+    }
+    if (!acceptedLegacyIterations) {
+      const int iterations = parseIterations(argv[index]);
+      if (iterations > 0) {
+        options->iterations = iterations;
+        acceptedLegacyIterations = true;
+        continue;
+      }
+    }
+    return false;
+  }
+  return !options->modelPath.empty();
+}
+
+const char* backendStatusName(
+    audio_separation::WindowsMlBackendStatus status) {
+  using Status = audio_separation::WindowsMlBackendStatus;
+  switch (status) {
+    case Status::Ready:
+      return "ready";
+    case Status::Installed:
+      return "installed";
+    case Status::InstallationRequired:
+      return "installation-required";
+    case Status::Unavailable:
+      return "unavailable";
+    case Status::Failed:
+      return "failed";
+  }
+  return "unknown";
 }
 
 const char* levelName(DiagnosticLevel level) {
@@ -41,21 +102,38 @@ const char* levelName(DiagnosticLevel level) {
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
-  if (argc < 2 || argc > 3) {
+  CommandLine commandLine;
+  if (!parseCommandLine(argc, argv, &commandLine)) {
     std::cerr << "Usage: audio_separation_model_stress <model-file> "
-                 "[iterations]\n";
-    return 2;
-  }
-  const int iterations = argc == 3 ? parseIterations(argv[2]) : 256;
-  if (iterations <= 0) {
-    std::cerr << "Iterations must be between 1 and 100000.\n";
+                 "[iterations] [--iterations N] "
+                 "[--backend directml|windows-ml-nvidia]\n";
     return 2;
   }
 
   audio_separation::BanditMaskModel model;
+  audio_separation::InferenceBackend backend;
+  if (commandLine.useNvidiaWindowsMl) {
+    audio_separation::WindowsMlBackendResolution resolution =
+        audio_separation::resolveNvidiaWindowsMlBackend(
+            audio_separation::InstalledProviderPolicy::Activate);
+    if (!resolution.ready()) {
+      std::cerr << "NVIDIA Windows ML backend is "
+                << backendStatusName(resolution.status) << ": "
+                << resolution.detail << '\n';
+      return EXIT_FAILURE;
+    }
+    std::cerr << "Using " << resolution.backend.displayName;
+    if (!resolution.version.empty()) {
+      std::cerr << " " << resolution.version;
+    }
+    std::cerr << ".\n";
+    backend = std::move(resolution.backend);
+  } else {
+    backend = audio_separation::directMlInferenceBackend();
+  }
   std::string error;
   if (!model.initialize(
-          std::filesystem::path(argv[1]),
+          commandLine.modelPath, backend,
           [](DiagnosticLevel level, std::string_view component,
              std::string_view message) {
             std::cerr << '[' << levelName(level) << ':' << component << "] "
@@ -77,7 +155,7 @@ int wmain(int argc, wchar_t** argv) {
   const audio_separation::ExecutionControl control(&cancelRequested);
   std::span<const float> output;
   const auto started = std::chrono::steady_clock::now();
-  for (int iteration = 0; iteration < iterations; ++iteration) {
+  for (int iteration = 0; iteration < commandLine.iterations; ++iteration) {
     if (model.run(input, &output, control, &error) !=
         audio_separation::MaskInferenceResult::Succeeded) {
       std::cerr << "Inference " << (iteration + 1) << " failed: " << error
@@ -95,12 +173,13 @@ int wmain(int argc, wchar_t** argv) {
                 << " returned an invalid mask tensor.\n";
       return EXIT_FAILURE;
     }
-    if ((iteration + 1) % 16 == 0 || iteration + 1 == iterations) {
+    if ((iteration + 1) % 16 == 0 ||
+        iteration + 1 == commandLine.iterations) {
       const double elapsed = std::chrono::duration<double>(
                                  std::chrono::steady_clock::now() - started)
                                  .count();
-      std::cout << (iteration + 1) << '/' << iterations << " in " << elapsed
-                << " s\n";
+      std::cout << (iteration + 1) << '/' << commandLine.iterations << " in "
+                << elapsed << " s\n";
     }
   }
   long double sum = 0.0;

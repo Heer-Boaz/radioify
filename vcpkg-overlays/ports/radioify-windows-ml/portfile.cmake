@@ -17,12 +17,19 @@ vcpkg_extract_source_archive(SOURCE_PATH ARCHIVE "${ARCHIVE}"
 
 file(INSTALL "${SOURCE_PATH}/include/winml"
      DESTINATION "${CURRENT_PACKAGES_DIR}/include")
+file(INSTALL
+     "${SOURCE_PATH}/include/WinMLAsync.h"
+     "${SOURCE_PATH}/include/WinMLEpCatalog.h"
+     DESTINATION "${CURRENT_PACKAGES_DIR}/include")
 foreach(CONFIG_ROOT IN ITEMS "" "debug/")
-  file(INSTALL "${SOURCE_PATH}/lib/native/x64/onnxruntime.lib"
+  file(INSTALL
+       "${SOURCE_PATH}/lib/native/x64/onnxruntime.lib"
+       "${SOURCE_PATH}/lib/native/x64/Microsoft.Windows.AI.MachineLearning.lib"
        DESTINATION "${CURRENT_PACKAGES_DIR}/${CONFIG_ROOT}lib")
   file(INSTALL
        "${SOURCE_PATH}/runtimes/win-x64/native/onnxruntime.dll"
        "${SOURCE_PATH}/runtimes/win-x64/native/DirectML.dll"
+       "${SOURCE_PATH}/runtimes/win-x64/native/Microsoft.Windows.AI.MachineLearning.dll"
        DESTINATION "${CURRENT_PACKAGES_DIR}/${CONFIG_ROOT}bin")
 endforeach()
 

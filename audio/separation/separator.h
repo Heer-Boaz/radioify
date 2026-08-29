@@ -7,6 +7,7 @@
 #include "audio/separation/artifact.h"
 #include "audio/separation/diagnostics.h"
 #include "audio/separation/execution_control.h"
+#include "audio/separation/inference_backend.h"
 
 namespace audio_separation {
 
@@ -19,6 +20,7 @@ using ProgressCallback = std::function<void(const Progress&)>;
 using OutputCommitStarted = std::function<bool()>;
 
 bool separateMediaAudio(const std::filesystem::path& mediaPath,
+                        const InferenceBackend& backend,
                         const ArtifactPaths& outputPaths,
                         const ProgressCallback& onProgress,
                         const DiagnosticReporter& diagnostics,
@@ -31,6 +33,7 @@ bool separateMediaAudio(const std::filesystem::path& mediaPath,
 bool separateMediaAudioWithModel(
     const std::filesystem::path& mediaPath,
     const std::filesystem::path& modelPath,
+    const InferenceBackend& backend,
     const ArtifactPaths& outputPaths,
     const ProgressCallback& onProgress,
     const DiagnosticReporter& diagnostics,

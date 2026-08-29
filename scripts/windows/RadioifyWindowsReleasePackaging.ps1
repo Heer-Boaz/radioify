@@ -177,7 +177,11 @@ function New-RadioifyWindowsDistributionBundle {
         -Destination (Join-Path $modelStageDir "ggml-base-q5_1.bin") `
         -Force
 
-    foreach ($runtimeName in @("onnxruntime.dll", "DirectML.dll")) {
+    foreach ($runtimeName in @(
+        "onnxruntime.dll",
+        "DirectML.dll",
+        "Microsoft.Windows.AI.MachineLearning.dll"
+    )) {
         $runtimeSource = Join-Path $resolvedRepoRoot "dist\$runtimeName"
         if (-not (Test-Path -LiteralPath $runtimeSource)) {
             throw "Audio-separation runtime not found at '$runtimeSource'. Run .\build.ps1 -Static first."

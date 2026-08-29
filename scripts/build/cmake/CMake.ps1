@@ -391,7 +391,11 @@ function Publish-BuildArtifacts {
   $audioSeparationEnabled = $audioSeparationSetting -match "^(1|ON|TRUE|YES)$"
   if ($audioSeparationEnabled) {
     $runtimeSourceDir = Split-Path -Parent $builtExe
-    foreach ($runtimeName in @("onnxruntime.dll", "DirectML.dll")) {
+    foreach ($runtimeName in @(
+        "onnxruntime.dll",
+        "DirectML.dll",
+        "Microsoft.Windows.AI.MachineLearning.dll"
+      )) {
       $runtimeSource = Join-Path $runtimeSourceDir $runtimeName
       if (-not (Test-Path -LiteralPath $runtimeSource)) {
         Fail-Build "Build completed without the required Windows ML runtime at $runtimeSource."

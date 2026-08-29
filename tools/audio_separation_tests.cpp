@@ -1,8 +1,10 @@
 #include "audio/separation/artifact.h"
 #include "audio/flac_writer.h"
 #include "audio/separation/job.h"
+#include "audio/separation/inference_backend.h"
 #include "audio/separation/operation.h"
 #include "audio/separation/spectral_transform.h"
+#include "audio/separation/windows_ml_backend.h"
 #include "core/file_output.h"
 #include "audio/ffmpegaudio.h"
 
@@ -163,6 +165,35 @@ bool testSpectralContract() {
   }
   ok &= expect(maximumError < 2.0e-4f,
                "STFT and ISTFT must round-trip an identity mask");
+  return ok;
+}
+
+bool testInferenceBackendContracts() {
+  namespace separation = audio_separation;
+  bool ok = true;
+  const separation::InferenceBackend directMl =
+      separation::directMlInferenceBackend();
+  ok &= expect(directMl.valid() &&
+                   directMl.kind == separation::InferenceBackendKind::DirectMl &&
+                   directMl.providerName == "DmlExecutionProvider" &&
+                   directMl.providerLibrary.empty(),
+               "the built-in DirectML adapter must be an explicit provider "
+               "description");
+
+  const separation::WindowsMlBackendResolution nvidia =
+      separation::resolveNvidiaWindowsMlBackend(
+          separation::InstalledProviderPolicy::ObserveOnly);
+  if (nvidia.ready()) {
+    ok &= expect(
+        nvidia.backend.valid() &&
+            nvidia.backend.kind ==
+                separation::InferenceBackendKind::WindowsMlNvidiaTensorRtRtx &&
+            !nvidia.backend.providerLibrary.empty(),
+        "a ready Windows ML backend must own a complete provider descriptor");
+  } else {
+    ok &= expect(!nvidia.detail.empty(),
+                 "an unusable Windows ML backend must explain its status");
+  }
   return ok;
 }
 
@@ -609,6 +640,7 @@ int main() {
   bool ok = true;
   ok &= testArtifactContract(directory);
   ok &= testSpectralContract();
+  ok &= testInferenceBackendContracts();
   ok &= testFlacWriter(directory);
   ok &= testJobLifecycle(directory);
 

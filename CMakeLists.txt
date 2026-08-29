@@ -353,7 +353,7 @@ add_subdirectory(tui)
 if (RADIOIFY_HAS_AUDIO_SEPARATION)
   find_package(radioify-windows-ml CONFIG REQUIRED)
   target_link_libraries(radioify_audio_separation PRIVATE
-    WindowsML::OnnxRuntime)
+    WindowsML::Runtime)
 
   if (NOT EXISTS "${RADIOIFY_AUDIO_SEPARATION_MODEL_PATH}")
     message(FATAL_ERROR
@@ -385,6 +385,9 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
               "${WINML_DIRECTML_DLL}"
               "$<TARGET_FILE_DIR:${target_name}>/DirectML.dll"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "$<TARGET_FILE:WindowsML::ExecutionProviderCatalog>"
+              "$<TARGET_FILE_DIR:${target_name}>/Microsoft.Windows.AI.MachineLearning.dll"
       COMMENT "Publishing self-contained Windows ML runtime for ${target_name}"
       VERBATIM
     )
@@ -434,7 +437,7 @@ if (MSVC)
 endif()
 radioify_link_repo_target(radioify)
 if (RADIOIFY_HAS_AUDIO_SEPARATION)
-  target_link_libraries(radioify PRIVATE WindowsML::OnnxRuntime)
+  target_link_libraries(radioify PRIVATE WindowsML::Runtime)
   radioify_deploy_windows_ml(radioify)
 endif()
 
@@ -1438,7 +1441,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   )
   radioify_link_repo_target(audio_separation_tests)
   target_link_libraries(audio_separation_tests PRIVATE
-    WindowsML::OnnxRuntime)
+    WindowsML::Runtime)
   radioify_deploy_windows_ml(audio_separation_tests)
   add_test(NAME audio_separation_tests
            COMMAND $<TARGET_FILE:audio_separation_tests>)
@@ -1457,7 +1460,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   )
   radioify_link_repo_target(audio_separation_smoke)
   target_link_libraries(audio_separation_smoke PRIVATE
-    WindowsML::OnnxRuntime)
+    WindowsML::Runtime)
   radioify_deploy_windows_ml(audio_separation_smoke)
 
   add_executable(audio_separation_scheduler_smoke)
@@ -1474,13 +1477,15 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   )
   radioify_link_repo_target(audio_separation_scheduler_smoke)
   target_link_libraries(audio_separation_scheduler_smoke PRIVATE
-    WindowsML::OnnxRuntime)
+    WindowsML::Runtime)
   radioify_deploy_windows_ml(audio_separation_scheduler_smoke)
 
   add_executable(audio_separation_model_stress)
   target_sources(audio_separation_model_stress PRIVATE
     $<TARGET_OBJECTS:radioify_tool_audio_separation_model_stress>
+    ${CMAKE_SOURCE_DIR}/audio/separation/inference_backend.cpp
     ${CMAKE_SOURCE_DIR}/audio/separation/mask_model.cpp
+    ${CMAKE_SOURCE_DIR}/audio/separation/windows_ml_backend.cpp
   )
   set_target_properties(audio_separation_model_stress PROPERTIES
     CXX_STANDARD 20
@@ -1488,7 +1493,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   )
   radioify_link_repo_target(audio_separation_model_stress)
   target_link_libraries(audio_separation_model_stress PRIVATE
-    WindowsML::OnnxRuntime)
+    WindowsML::Runtime)
   radioify_deploy_windows_ml(audio_separation_model_stress)
 
   add_executable(audio_separation_spectral_stress)

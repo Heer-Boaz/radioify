@@ -1,6 +1,6 @@
 {
   "name": "radioify-windows-ml",
   "version-string": "2.2.12",
-  "description": "Self-contained Microsoft Windows ML ONNX Runtime and DirectML runtime for Radioify",
+  "description": "Self-contained Microsoft Windows ML runtime and execution-provider catalog for Radioify",
   "homepage": "https://learn.microsoft.com/windows/ai/new-windows-ml/"
 }
