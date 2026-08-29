@@ -129,7 +129,7 @@ if (WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
   set(_radioify_audio_separation_default ON)
 endif()
 option(RADIOIFY_ENABLE_AUDIO_SEPARATION
-       "Enable DirectML dialogue/music/effects separation"
+       "Enable native Windows NVIDIA dialogue/music/effects separation"
        ${_radioify_audio_separation_default})
 set(RADIOIFY_HAS_AUDIO_SEPARATION OFF)
 if (RADIOIFY_ENABLE_AUDIO_SEPARATION)
@@ -380,19 +380,27 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   endif()
 
   function(radioify_deploy_windows_ml target_name)
+    set(options WITH_DIRECTML)
+    cmake_parse_arguments(RADIOIFY_WINML "${options}" "" "" ${ARGN})
     add_custom_command(TARGET ${target_name} POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
               "$<TARGET_FILE:WindowsML::OnnxRuntime>"
               "$<TARGET_FILE_DIR:${target_name}>/onnxruntime.dll"
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              "${WINML_DIRECTML_DLL}"
-              "$<TARGET_FILE_DIR:${target_name}>/DirectML.dll"
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
               "$<TARGET_FILE:WindowsML::ExecutionProviderCatalog>"
               "$<TARGET_FILE_DIR:${target_name}>/Microsoft.Windows.AI.MachineLearning.dll"
       COMMENT "Publishing self-contained Windows ML runtime for ${target_name}"
       VERBATIM
     )
+    if (RADIOIFY_WINML_WITH_DIRECTML)
+      add_custom_command(TARGET ${target_name} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${WINML_DIRECTML_DLL}"
+                "$<TARGET_FILE_DIR:${target_name}>/DirectML.dll"
+        COMMENT "Publishing DirectML diagnostic runtime for ${target_name}"
+        VERBATIM
+      )
+    endif()
   endfunction()
 endif()
 
@@ -1446,7 +1454,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   radioify_link_repo_target(audio_separation_tests)
   target_link_libraries(audio_separation_tests PRIVATE
     WindowsML::Runtime)
-  radioify_deploy_windows_ml(audio_separation_tests)
+  radioify_deploy_windows_ml(audio_separation_tests WITH_DIRECTML)
   add_test(NAME audio_separation_tests
            COMMAND $<TARGET_FILE:audio_separation_tests>)
 
@@ -1465,7 +1473,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   radioify_link_repo_target(audio_separation_smoke)
   target_link_libraries(audio_separation_smoke PRIVATE
     WindowsML::Runtime)
-  radioify_deploy_windows_ml(audio_separation_smoke)
+  radioify_deploy_windows_ml(audio_separation_smoke WITH_DIRECTML)
 
   add_executable(audio_separation_scheduler_smoke)
   target_sources(audio_separation_scheduler_smoke PRIVATE
@@ -1482,7 +1490,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   radioify_link_repo_target(audio_separation_scheduler_smoke)
   target_link_libraries(audio_separation_scheduler_smoke PRIVATE
     WindowsML::Runtime)
-  radioify_deploy_windows_ml(audio_separation_scheduler_smoke)
+  radioify_deploy_windows_ml(audio_separation_scheduler_smoke WITH_DIRECTML)
 
   add_executable(audio_separation_model_stress)
   target_sources(audio_separation_model_stress PRIVATE
@@ -1499,7 +1507,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   radioify_link_repo_target(audio_separation_model_stress)
   target_link_libraries(audio_separation_model_stress PRIVATE
     WindowsML::Runtime)
-  radioify_deploy_windows_ml(audio_separation_model_stress)
+  radioify_deploy_windows_ml(audio_separation_model_stress WITH_DIRECTML)
 
   add_executable(audio_separation_spectral_stress)
   target_sources(audio_separation_spectral_stress PRIVATE

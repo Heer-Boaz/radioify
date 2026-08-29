@@ -393,7 +393,6 @@ function Publish-BuildArtifacts {
     $runtimeSourceDir = Split-Path -Parent $builtExe
     foreach ($runtimeName in @(
         "onnxruntime.dll",
-        "DirectML.dll",
         "Microsoft.Windows.AI.MachineLearning.dll"
       )) {
       $runtimeSource = Join-Path $runtimeSourceDir $runtimeName
@@ -403,6 +402,15 @@ function Publish-BuildArtifacts {
       $runtimeDestination = Join-Path $Context.Paths.DistDir $runtimeName
       Copy-Item -LiteralPath $runtimeSource -Destination $runtimeDestination -Force
       Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $runtimeDestination
+    }
+
+    # DirectML remains available to explicit diagnostic executables, but the
+    # production application uses only the certified native NVIDIA provider.
+    # Reconcile an incremental dist directory so an older build cannot make
+    # the production package appear to contain a fallback it will never use.
+    $obsoleteDirectMlDestination = Join-Path $Context.Paths.DistDir "DirectML.dll"
+    if (Test-Path -LiteralPath $obsoleteDirectMlDestination) {
+      Remove-Item -LiteralPath $obsoleteDirectMlDestination -Force
     }
 
     $separationModelSource = Get-CMakeCacheValue `
