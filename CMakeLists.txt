@@ -1490,6 +1490,17 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   target_link_libraries(audio_separation_model_stress PRIVATE
     WindowsML::OnnxRuntime)
   radioify_deploy_windows_ml(audio_separation_model_stress)
+
+  add_executable(audio_separation_spectral_stress)
+  target_sources(audio_separation_spectral_stress PRIVATE
+    $<TARGET_OBJECTS:radioify_tool_audio_separation_spectral_stress>
+    ${CMAKE_SOURCE_DIR}/audio/separation/spectral_transform.cpp
+  )
+  set_target_properties(audio_separation_spectral_stress PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+  )
+  radioify_link_repo_target(audio_separation_spectral_stress)
 endif()
 
 add_executable(windows_console_window_tests)
@@ -2147,6 +2158,8 @@ if (FFMPEG_LIBRARY_DIRS)
                             ${FFMPEG_LIBRARY_DIRS})
     target_link_directories(audio_separation_scheduler_smoke PRIVATE
                             ${FFMPEG_LIBRARY_DIRS})
+    target_link_directories(audio_separation_spectral_stress PRIVATE
+                            ${FFMPEG_LIBRARY_DIRS})
   endif()
 endif()
 
@@ -2165,6 +2178,8 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   target_link_libraries(audio_separation_tests PRIVATE ${FFMPEG_LIBRARIES})
   target_link_libraries(audio_separation_smoke PRIVATE ${FFMPEG_LIBRARIES})
   target_link_libraries(audio_separation_scheduler_smoke PRIVATE
+                        ${FFMPEG_LIBRARIES})
+  target_link_libraries(audio_separation_spectral_stress PRIVATE
                         ${FFMPEG_LIBRARIES})
 endif()
 

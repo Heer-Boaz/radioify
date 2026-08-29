@@ -362,6 +362,16 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED ON
   )
+
+  radioify_add_module_object_library(
+    radioify_tool_audio_separation_spectral_stress
+    ${CMAKE_CURRENT_SOURCE_DIR}/audio_separation_spectral_stress.cpp
+  )
+  set_target_properties(
+    radioify_tool_audio_separation_spectral_stress PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+  )
 endif()
 
 radioify_add_module_object_library(radioify_tool_windows_console_window_tests
