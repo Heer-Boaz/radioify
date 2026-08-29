@@ -19,6 +19,7 @@ struct MediaTaskCardModel {
   std::string title;
   std::string operationName;
   std::string sourceName;
+  std::string engineName;
   std::string detail;
   std::optional<float> progress;
   bool cancellable = false;

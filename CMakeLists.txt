@@ -354,6 +354,8 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   find_package(radioify-windows-ml CONFIG REQUIRED)
   target_link_libraries(radioify_audio_separation PRIVATE
     WindowsML::Runtime)
+  target_link_libraries(radioify_tool_audio_separation_tests PRIVATE
+    WindowsML::Runtime)
   target_compile_definitions(radioify_audio_separation PRIVATE
     RADIOIFY_AUDIO_SEPARATION_MODEL_SHA256="${RADIOIFY_AUDIO_SEPARATION_MODEL_SHA256}")
 

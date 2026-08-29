@@ -29,7 +29,7 @@
 namespace audio_separation {
 namespace {
 
-constexpr unsigned int kCacheSchemaVersion = 1;
+constexpr unsigned int kCacheSchemaVersion = 2;
 constexpr std::uintmax_t kMinimumCompiledModelBytes = 1024 * 1024;
 
 void setError(std::string* error, std::string message) {

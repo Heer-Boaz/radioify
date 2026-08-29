@@ -1,5 +1,6 @@
 #include "audio/separation/artifact.h"
 #include "audio/flac_writer.h"
+#include "audio/separation/inference_session.h"
 #include "audio/separation/job.h"
 #include "audio/separation/inference_backend.h"
 #include "audio/separation/operation.h"
@@ -9,6 +10,7 @@
 #include "audio/ffmpegaudio.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -20,6 +22,8 @@
 #include <thread>
 #include <type_traits>
 #include <vector>
+
+#include <onnxruntime_session_options_config_keys.h>
 
 namespace {
 
@@ -39,6 +43,15 @@ std::filesystem::path uniqueTestDirectory() {
 bool writeText(const std::filesystem::path& path, const char* text) {
   std::ofstream stream(path, std::ios::binary | std::ios::trunc);
   stream << text;
+  return static_cast<bool>(stream);
+}
+
+template <std::size_t Size>
+bool writeBytes(const std::filesystem::path& path,
+                const std::array<unsigned char, Size>& bytes) {
+  std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+  stream.write(reinterpret_cast<const char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
   return static_cast<bool>(stream);
 }
 
@@ -241,6 +254,73 @@ bool testInferenceBackendContracts() {
                          !static_cast<bool>(production.operation()),
                "production discovery must return either one usable native "
                "backend or one actionable unavailability reason");
+  return ok;
+}
+
+bool testGpuOnlyInferenceContract(const std::filesystem::path& directory) {
+  namespace separation = audio_separation;
+  bool ok = true;
+
+  Ort::SessionOptions policyOptions;
+  separation::enforceGpuOnlyExecution(policyOptions);
+  ok &= expect(
+      policyOptions.HasConfigEntry(kOrtSessionOptionsDisableCPUEPFallback) &&
+          policyOptions.GetConfigEntry(
+              kOrtSessionOptionsDisableCPUEPFallback) == "1",
+      "the shared inference policy must disable CPU EP fallback");
+
+  // A valid string Identity graph is deliberately outside the NVIDIA
+  // TensorRT-RTX contract. CPU ONNX Runtime accepts it; a GPU-only session
+  // must reject it instead of silently assigning the node to the CPU EP.
+  constexpr std::array<unsigned char, 60> kCpuOnlyIdentityModel = {
+      0x08, 0x08, 0x3a, 0x34, 0x0a, 0x10, 0x0a, 0x01, 0x58, 0x12,
+      0x01, 0x59, 0x22, 0x08, 0x49, 0x64, 0x65, 0x6e, 0x74, 0x69,
+      0x74, 0x79, 0x5a, 0x0f, 0x0a, 0x01, 0x58, 0x12, 0x0a, 0x0a,
+      0x08, 0x08, 0x08, 0x12, 0x04, 0x0a, 0x02, 0x08, 0x01, 0x62,
+      0x0f, 0x0a, 0x01, 0x59, 0x12, 0x0a, 0x0a, 0x08, 0x08, 0x08,
+      0x12, 0x04, 0x0a, 0x02, 0x08, 0x01, 0x42, 0x02, 0x10, 0x0d};
+  const std::filesystem::path modelPath =
+      directory / "cpu-only-string-identity.onnx";
+  ok &= expect(writeBytes(modelPath, kCpuOnlyIdentityModel),
+               "the CPU-only ONNX fixture must be writable");
+  if (!ok) return false;
+
+  try {
+    Ort::Env cpuEnvironment(ORT_LOGGING_LEVEL_ERROR,
+                            "radioify-separation-policy-test");
+    Ort::SessionOptions cpuOptions;
+    Ort::Session cpuSession(cpuEnvironment, modelPath.c_str(), cpuOptions);
+  } catch (const Ort::Exception& exception) {
+    std::cerr << "CPU validation of the ONNX fixture failed: "
+              << exception.what() << '\n';
+    ok = false;
+  }
+
+  const separation::WindowsMlBackendResolution nvidia =
+      separation::resolveNvidiaWindowsMlBackend(
+          separation::ProviderProvisioningPolicy::ActivateInstalled);
+  if (!nvidia.ready()) return ok;
+
+  std::string error;
+  std::unique_ptr<separation::InferenceSessionFactory> factory =
+      separation::InferenceSessionFactory::create(nvidia.backend, {}, &error);
+  ok &= expect(factory != nullptr,
+               "a discovered NVIDIA backend must create a session factory");
+  if (!factory) {
+    std::cerr << error << '\n';
+    return false;
+  }
+
+  bool rejectedCpuFallback = false;
+  try {
+    const std::unique_ptr<Ort::Session> unexpected =
+        factory->loadModel(modelPath);
+  } catch (const Ort::Exception&) {
+    rejectedCpuFallback = true;
+  }
+  ok &= expect(rejectedCpuFallback,
+               "an unsupported NVIDIA graph must fail instead of falling "
+               "back to CPU execution");
   return ok;
 }
 
@@ -686,6 +766,7 @@ int main() {
   ok &= testArtifactContract(directory);
   ok &= testSpectralContract();
   ok &= testInferenceBackendContracts();
+  ok &= testGpuOnlyInferenceContract(directory);
   ok &= testFlacWriter(directory);
   ok &= testJobLifecycle(directory);
 

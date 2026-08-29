@@ -4,6 +4,8 @@
 #include <sstream>
 #include <utility>
 
+#include <onnxruntime_session_options_config_keys.h>
+
 #include "audio/separation/mask_model.h"
 #include "audio/separation/spectral_transform.h"
 
@@ -56,6 +58,10 @@ void ORT_API_CALL onnxRuntimeLog(void* parameter, OrtLoggingLevel severity,
 }
 
 }  // namespace
+
+void enforceGpuOnlyExecution(Ort::SessionOptions& options) {
+  options.AddConfigEntry(kOrtSessionOptionsDisableCPUEPFallback, "1");
+}
 
 InferenceSessionFactory::InferenceSessionFactory(
     InferenceBackend backend, DiagnosticReporter diagnostics)
@@ -133,6 +139,7 @@ Ort::SessionOptions InferenceSessionFactory::makeSessionOptions() {
   options.DisableMemPattern();
   options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
   options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+  enforceGpuOnlyExecution(options);
   options.AddFreeDimensionOverrideByName(
       "batch", static_cast<std::int64_t>(BanditMaskModel::kBatchSize));
   options.AddFreeDimensionOverrideByName(

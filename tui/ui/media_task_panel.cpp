@@ -377,6 +377,10 @@ Layout layout(const Bounds& bounds, const MediaTaskCardModel& task) {
   int contentWidth =
       std::max({utf8DisplayWidth(task.title), utf8DisplayWidth(task.sourceName),
                 utf8DisplayWidth(task.detail)});
+  if (!task.engineName.empty()) {
+    contentWidth = std::max(
+        contentWidth, utf8DisplayWidth("Engine: " + task.engineName));
+  }
   for (const tui_button_row::Button& action : actions) {
     contentWidth = std::max(contentWidth, utf8DisplayWidth(action.label) + 4);
   }
@@ -386,6 +390,9 @@ Layout layout(const Bounds& bounds, const MediaTaskCardModel& task) {
   result.x = std::max(0, bounds.width - result.width - 1);
 
   int preferredContentRows = 3;
+  if (!task.engineName.empty()) {
+    ++preferredContentRows;
+  }
   if (!task.detail.empty()) {
     ++preferredContentRows;
   }

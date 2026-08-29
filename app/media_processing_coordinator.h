@@ -37,6 +37,9 @@ struct TaskActivity {
   TaskId id;
   TaskKind kind = TaskKind::MelodyAnalysis;
   std::filesystem::path sourceFile;
+  // Stable implementation identity for task details. Progress phases describe
+  // current work and must not double as the only backend indicator.
+  std::string processingEngine;
   // Empty means that the backend cannot measure completion yet. UI surfaces
   // must render an indeterminate state instead of inventing a percentage.
   std::optional<float> progress;

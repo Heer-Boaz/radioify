@@ -428,6 +428,10 @@ std::optional<TaskActivity> Coordinator::activity() const {
       activity.id = impl_->audioSeparationTask.value_or(TaskId{});
       activity.kind = TaskKind::AudioSeparation;
       activity.sourceFile = snapshot.sourceFile;
+      if (impl_->audioSeparationBinding) {
+        activity.processingEngine =
+            impl_->audioSeparationBinding->backendName();
+      }
       activity.progress = std::clamp(snapshot.progress, 0.0f, 1.0f);
       activity.phase = snapshot.phase;
       activity.cancelling = snapshot.cancelling();

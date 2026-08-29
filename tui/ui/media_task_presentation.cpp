@@ -199,6 +199,7 @@ MediaTaskCardModel mediaTaskCardModel(
   model.sourceName = activity.sourceFile.empty()
                          ? std::string("(unknown)")
                          : toUtf8String(activity.sourceFile.filename());
+  model.engineName = activity.processingEngine;
   model.detail = activity.phase;
   if (activity.progress) {
     model.progress = std::clamp(*activity.progress, 0.0f, 1.0f);

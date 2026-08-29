@@ -13,6 +13,11 @@
 
 namespace audio_separation {
 
+// Applies the execution contract shared by model compilation and inference.
+// Audio separation is a GPU feature: an unsupported graph must fail instead
+// of silently moving nodes to the CPU.
+void enforceGpuOnlyExecution(Ort::SessionOptions& options);
+
 // Owns one ONNX Runtime environment and its selected GPU device. Model loading
 // and ahead-of-time compilation use the same session contract so provider
 // registration, device selection, dimensions, and provider options cannot

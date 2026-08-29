@@ -47,6 +47,7 @@ int main() {
   task.title = "Separating audio";
   task.operationName = "audio separation";
   task.sourceName = "NTE.mp4";
+  task.engineName = "NVIDIA TensorRT-RTX (native Windows)";
   task.detail = "Separating dialogue, music and effects on GPU";
   task.progress = 0.10f;
   task.cancellable = true;
@@ -55,7 +56,8 @@ int main() {
   const IndicatorLayout noIndicator;
   const Layout card = layout(bounds, task);
   ok &=
-      expect(card.valid && card.width >= 46 && card.buttons.buttons.size() == 2,
+      expect(card.valid && card.width >= 46 && card.contentRows == 5 &&
+                 card.buttons.buttons.size() == 2,
              "an active task must expose direct Cancel and Hide buttons");
 
   State state;

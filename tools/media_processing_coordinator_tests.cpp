@@ -520,6 +520,8 @@ int main() {
                    pausedSeparationCard &&
                    pausedSeparationCard->title ==
                        "Audio separation paused" &&
+                   pausedSeparationCard->engineName ==
+                       "Test GPU backend" &&
                    separationStartedAfterRelease,
                "resource priority must surface as a typed paused state and "
                "enter the backend only after playback yields");

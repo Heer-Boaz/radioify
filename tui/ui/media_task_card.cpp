@@ -41,6 +41,10 @@ void drawMediaTaskCard(ConsoleScreen& screen, int screenWidth, int screenHeight,
   if (layout.contentRows >= 2) {
     lines.push_back({model.sourceName, styles.secondary});
   }
+  const int engineRowsRequired = model.detail.empty() ? 4 : 5;
+  if (layout.contentRows >= engineRowsRequired && !model.engineName.empty()) {
+    lines.push_back({"Engine: " + model.engineName, styles.secondary});
+  }
   if (layout.contentRows >= 4 && !model.detail.empty()) {
     lines.push_back({model.detail, styles.secondary});
   }
