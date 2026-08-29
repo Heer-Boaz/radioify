@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cwchar>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <span>
 #include <string>
@@ -79,8 +80,8 @@ int wmain(int argc, wchar_t** argv) {
   for (int iteration = 0; iteration < iterations; ++iteration) {
     if (model.run(input, &output, control, &error) !=
         audio_separation::MaskInferenceResult::Succeeded) {
-      std::cerr << "Inference " << (iteration + 1)
-                << " failed: " << error << '\n';
+      std::cerr << "Inference " << (iteration + 1) << " failed: " << error
+                << '\n';
       return EXIT_FAILURE;
     }
     const std::size_t expected =
@@ -98,9 +99,28 @@ int wmain(int argc, wchar_t** argv) {
       const double elapsed = std::chrono::duration<double>(
                                  std::chrono::steady_clock::now() - started)
                                  .count();
-      std::cout << (iteration + 1) << '/' << iterations << " in "
-                << elapsed << " s\n";
+      std::cout << (iteration + 1) << '/' << iterations << " in " << elapsed
+                << " s\n";
     }
   }
+  long double sum = 0.0;
+  long double sumOfSquares = 0.0;
+  long double weightedSum = 0.0;
+  const auto [minimum, maximum] =
+      std::minmax_element(output.begin(), output.end());
+  for (std::size_t index = 0; index < output.size(); ++index) {
+    const long double value = output[index];
+    sum += value;
+    sumOfSquares += value * value;
+    weightedSum += value * static_cast<long double>((index % 1021) + 1);
+  }
+  const long double count = static_cast<long double>(output.size());
+  std::cout << std::setprecision(17) << "Output min: " << *minimum << '\n'
+            << "Output max: " << *maximum << '\n'
+            << "Output mean: " << static_cast<double>(sum / count) << '\n'
+            << "Output RMS: "
+            << static_cast<double>(std::sqrt(sumOfSquares / count)) << '\n'
+            << "Output weighted sum: " << static_cast<double>(weightedSum)
+            << '\n';
   return EXIT_SUCCESS;
 }
