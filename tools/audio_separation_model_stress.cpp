@@ -32,6 +32,7 @@ struct CommandLine {
   std::filesystem::path modelPath;
   int iterations = 256;
   bool useNvidiaWindowsMl = false;
+  bool installBackend = false;
 };
 
 bool parseCommandLine(int argc, wchar_t** argv, CommandLine* options) {
@@ -56,6 +57,10 @@ bool parseCommandLine(int argc, wchar_t** argv, CommandLine* options) {
       if (options->iterations <= 0) return false;
       continue;
     }
+    if (argument == L"--install-backend") {
+      options->installBackend = true;
+      continue;
+    }
     if (!acceptedLegacyIterations) {
       const int iterations = parseIterations(argv[index]);
       if (iterations > 0) {
@@ -66,7 +71,8 @@ bool parseCommandLine(int argc, wchar_t** argv, CommandLine* options) {
     }
     return false;
   }
-  return !options->modelPath.empty();
+  return !options->modelPath.empty() &&
+         (!options->installBackend || options->useNvidiaWindowsMl);
 }
 
 const char* backendStatusName(
@@ -106,16 +112,31 @@ int wmain(int argc, wchar_t** argv) {
   if (!parseCommandLine(argc, argv, &commandLine)) {
     std::cerr << "Usage: audio_separation_model_stress <model-file> "
                  "[iterations] [--iterations N] "
-                 "[--backend directml|windows-ml-nvidia]\n";
+                 "[--backend directml|windows-ml-nvidia] "
+                 "[--install-backend]\n";
     return 2;
   }
 
   audio_separation::BanditMaskModel model;
   audio_separation::InferenceBackend backend;
   if (commandLine.useNvidiaWindowsMl) {
+    if (commandLine.installBackend) {
+      std::cerr << "Ensuring the certified Windows ML NVIDIA provider is "
+                   "installed.\n";
+    }
+    const auto provisioningPolicy =
+        commandLine.installBackend
+            ? audio_separation::ProviderProvisioningPolicy::InstallIfMissing
+            : audio_separation::
+                  ProviderProvisioningPolicy::ActivateInstalled;
+    const auto resolutionStarted = std::chrono::steady_clock::now();
     audio_separation::WindowsMlBackendResolution resolution =
-        audio_separation::resolveNvidiaWindowsMlBackend(
-            audio_separation::InstalledProviderPolicy::Activate);
+        audio_separation::resolveNvidiaWindowsMlBackend(provisioningPolicy);
+    const double resolutionSeconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                     resolutionStarted)
+            .count();
+    std::cerr << "Provider resolution: " << resolutionSeconds << " s\n";
     if (!resolution.ready()) {
       std::cerr << "NVIDIA Windows ML backend is "
                 << backendStatusName(resolution.status) << ": "
@@ -132,6 +153,7 @@ int wmain(int argc, wchar_t** argv) {
     backend = audio_separation::directMlInferenceBackend();
   }
   std::string error;
+  const auto initializationStarted = std::chrono::steady_clock::now();
   if (!model.initialize(
           commandLine.modelPath, backend,
           [](DiagnosticLevel level, std::string_view component,
@@ -143,6 +165,11 @@ int wmain(int argc, wchar_t** argv) {
     std::cerr << "Model initialization failed: " << error << '\n';
     return EXIT_FAILURE;
   }
+  const double initializationSeconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                   initializationStarted)
+          .count();
+  std::cerr << "Model initialization: " << initializationSeconds << " s\n";
 
   std::vector<float> input(
       audio_separation::BanditMaskModel::kBatchSize *

@@ -155,6 +155,22 @@ bool readLibraryPath(WinMLEpHandle provider,
   return true;
 }
 
+std::string readProviderVersion(WinMLEpHandle provider) {
+  size_t required = 0;
+  if (FAILED(WinMLEpGetVersionSize(provider, &required)) || required == 0) {
+    return {};
+  }
+  std::string version(required, '\0');
+  size_t used = 0;
+  if (FAILED(WinMLEpGetVersion(provider, version.size(), version.data(),
+                               &used))) {
+    return {};
+  }
+  if (used > 0 && used <= version.size()) version.resize(used);
+  while (!version.empty() && version.back() == '\0') version.pop_back();
+  return version;
+}
+
 WindowsMlBackendResolution failedResolution(std::string detail) {
   WindowsMlBackendResolution resolution;
   resolution.status = WindowsMlBackendStatus::Failed;
@@ -165,7 +181,7 @@ WindowsMlBackendResolution failedResolution(std::string detail) {
 }  // namespace
 
 WindowsMlBackendResolution resolveNvidiaWindowsMlBackend(
-    InstalledProviderPolicy policy) {
+    ProviderProvisioningPolicy policy) {
   CatalogOwner catalog;
   const HRESULT createResult = WinMLEpCatalogCreate(&catalog.handle);
   if (FAILED(createResult) || !catalog.handle) {
@@ -202,21 +218,24 @@ WindowsMlBackendResolution resolveNvidiaWindowsMlBackend(
     return resolution;
   }
   if (match.readyState == WinMLEpReadyState_NotPresent) {
-    resolution.status = WindowsMlBackendStatus::InstallationRequired;
-    resolution.detail =
-        "The certified NVIDIA TensorRT-RTX provider is compatible but not "
-        "installed.";
-    return resolution;
+    if (policy != ProviderProvisioningPolicy::InstallIfMissing) {
+      resolution.status = WindowsMlBackendStatus::InstallationRequired;
+      resolution.detail =
+          "The certified NVIDIA TensorRT-RTX provider is compatible but not "
+          "installed.";
+      return resolution;
+    }
   }
   if (match.readyState == WinMLEpReadyState_NotReady &&
-      policy == InstalledProviderPolicy::ObserveOnly) {
+      policy == ProviderProvisioningPolicy::ObserveOnly) {
     resolution.status = WindowsMlBackendStatus::Installed;
     resolution.detail =
         "The NVIDIA TensorRT-RTX provider is installed but is not active in "
         "this process.";
     return resolution;
   }
-  if (match.readyState == WinMLEpReadyState_NotReady) {
+  if (match.readyState == WinMLEpReadyState_NotReady ||
+      match.readyState == WinMLEpReadyState_NotPresent) {
     const HRESULT readyResult = WinMLEpEnsureReady(match.handle);
     if (FAILED(readyResult)) {
       return failedResolution(
@@ -237,6 +256,10 @@ WindowsMlBackendResolution resolveNvidiaWindowsMlBackend(
   if (!readLibraryPath(match.handle, &libraryPath, &resolution.detail)) {
     resolution.status = WindowsMlBackendStatus::Failed;
     return resolution;
+  }
+  if (const std::string activeVersion = readProviderVersion(match.handle);
+      !activeVersion.empty()) {
+    resolution.version = activeVersion;
   }
   InferenceBackend backend;
   backend.kind = InferenceBackendKind::WindowsMlNvidiaTensorRtRtx;

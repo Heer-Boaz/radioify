@@ -182,7 +182,7 @@ bool testInferenceBackendContracts() {
 
   const separation::WindowsMlBackendResolution nvidia =
       separation::resolveNvidiaWindowsMlBackend(
-          separation::InstalledProviderPolicy::ObserveOnly);
+          separation::ProviderProvisioningPolicy::ObserveOnly);
   if (nvidia.ready()) {
     ok &= expect(
         nvidia.backend.valid() &&

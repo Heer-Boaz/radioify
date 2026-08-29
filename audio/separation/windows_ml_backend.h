@@ -14,9 +14,10 @@ enum class WindowsMlBackendStatus {
   Failed,
 };
 
-enum class InstalledProviderPolicy {
+enum class ProviderProvisioningPolicy {
   ObserveOnly,
-  Activate,
+  ActivateInstalled,
+  InstallIfMissing,
 };
 
 struct WindowsMlBackendResolution {
@@ -29,10 +30,11 @@ struct WindowsMlBackendResolution {
 };
 
 // Resolves the certified NVIDIA provider through Windows ML's catalog. The
-// function never downloads a missing provider. Activate may add an already
-// installed package to this process' dependency graph; ObserveOnly is a
-// side-effect-free capability query.
+// ActivateInstalled may add an already installed package to this process'
+// dependency graph but never downloads it. InstallIfMissing is reserved for an
+// explicit user-approved provisioning workflow. ObserveOnly is a side-effect-
+// free capability query.
 WindowsMlBackendResolution resolveNvidiaWindowsMlBackend(
-    InstalledProviderPolicy policy);
+    ProviderProvisioningPolicy policy);
 
 }  // namespace audio_separation
