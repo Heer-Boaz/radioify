@@ -24,10 +24,12 @@ struct InferenceBackend {
   std::string providerName;
   std::string displayName;
   std::string diagnosticComponent;
+  std::string providerVersion;
   std::filesystem::path providerLibrary;
   std::vector<InferenceProviderOption> providerOptions;
 
   bool valid() const;
+  void setProviderOption(std::string key, std::string value);
 };
 
 InferenceBackend directMlInferenceBackend();

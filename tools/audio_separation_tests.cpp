@@ -171,7 +171,7 @@ bool testSpectralContract() {
 bool testInferenceBackendContracts() {
   namespace separation = audio_separation;
   bool ok = true;
-  const separation::InferenceBackend directMl =
+  separation::InferenceBackend directMl =
       separation::directMlInferenceBackend();
   ok &= expect(directMl.valid() &&
                    directMl.kind == separation::InferenceBackendKind::DirectMl &&
@@ -179,6 +179,16 @@ bool testInferenceBackendContracts() {
                    directMl.providerLibrary.empty(),
                "the built-in DirectML adapter must be an explicit provider "
                "description");
+  directMl.setProviderOption("test-option", "first");
+  directMl.setProviderOption("test-option", "replacement");
+  const auto testOptions = std::count_if(
+      directMl.providerOptions.begin(), directMl.providerOptions.end(),
+      [](const separation::InferenceProviderOption& option) {
+        return option.key == "test-option" && option.value == "replacement";
+      });
+  ok &= expect(testOptions == 1,
+               "provider options must replace an existing key instead of "
+               "silently creating conflicting duplicates");
 
   const separation::WindowsMlBackendResolution nvidia =
       separation::resolveNvidiaWindowsMlBackend(
@@ -188,7 +198,8 @@ bool testInferenceBackendContracts() {
         nvidia.backend.valid() &&
             nvidia.backend.kind ==
                 separation::InferenceBackendKind::WindowsMlNvidiaTensorRtRtx &&
-            !nvidia.backend.providerLibrary.empty(),
+            !nvidia.backend.providerLibrary.empty() &&
+            !nvidia.backend.providerVersion.empty(),
         "a ready Windows ML backend must own a complete provider descriptor");
   } else {
     ok &= expect(!nvidia.detail.empty(),

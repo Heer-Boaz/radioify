@@ -15,6 +15,7 @@
 
 #include "audio/ffmpegaudio.h"
 #include "audio/flac_writer.h"
+#include "audio/separation/compiled_model_cache.h"
 #include "audio/separation/mask_model.h"
 #include "audio/separation/spectral_transform.h"
 #include "core/file_output.h"
@@ -382,7 +383,7 @@ class ScheduledMaskModel {
         diagnostics_(diagnostics) {}
 
   bool acquire(const ProgressCallback& onProgress, float progress,
-               std::string* error) {
+               const ExecutionControl& control, std::string* error) {
     if (model_) return true;
 
     report(onProgress, progress, initializedOnce_
@@ -398,7 +399,8 @@ class ScheduledMaskModel {
 
     auto model = std::make_unique<BanditMaskModel>();
     std::string modelError;
-    if (!model->initialize(modelPath_, backend_, diagnostics_, &modelError)) {
+    if (!model->initialize(modelPath_, backend_, diagnostics_, &modelError,
+                           &control)) {
       setError(error, modelError + " Model: " + toUtf8String(modelPath_));
       return false;
     }
@@ -504,20 +506,65 @@ bool separateMediaAudioUsingModel(
     const DiagnosticReporter& diagnostics,
     const ExecutionControl& control,
     std::string* error,
-    const OutputCommitStarted& outputCommitStarted) {
+    const OutputCommitStarted& outputCommitStarted,
+    bool prepareBundledModelCache) {
   if (!checkpoint(control, error)) return false;
   report(onProgress, 0.01f, "Preparing audio separation");
   reportDiagnostic(diagnostics, DiagnosticLevel::Info, "model",
                    "Loading model: " + toUtf8String(modelPath));
 
-  ScheduledMaskModel model(modelPath, backend, diagnostics);
-  const auto yieldGpuResources = [&model]() {
-    model.yieldForForegroundPlayback();
+  PreparedModel prepared;
+  if (prepareBundledModelCache) {
+    if (!prepareBundledModel(
+            modelPath, backend, diagnostics, control,
+            ModelPreparationMode::ReuseOrCreate,
+            [&](std::string phase) {
+              report(onProgress, 0.02f, std::move(phase));
+            },
+            &prepared, error)) {
+      return false;
+    }
+  } else {
+    prepared.modelPath = modelPath;
+    prepared.backend = backend;
+  }
+
+  auto scheduledModel = std::make_unique<ScheduledMaskModel>(
+      prepared.modelPath, prepared.backend, diagnostics);
+  const auto yieldGpuResources = [&scheduledModel]() {
+    scheduledModel->yieldForForegroundPlayback();
   };
   if (!checkpoint(control, yieldGpuResources, error)) return false;
-  if (!model.acquire(onProgress, 0.02f, error)) return false;
+  if (!scheduledModel->acquire(onProgress, 0.02f, control, error)) {
+    if (!prepareBundledModelCache || !prepared.compiled ||
+        !prepared.cacheHit) {
+      return false;
+    }
+    reportDiagnostic(diagnostics, DiagnosticLevel::Warning, "model-cache",
+                     "The cached NVIDIA model could not be loaded; rebuilding "
+                     "it once. Initial error: " +
+                         (error && !error->empty()
+                              ? *error
+                              : std::string("no diagnostic detail")));
+    PreparedModel rebuilt;
+    if (!prepareBundledModel(
+            modelPath, backend, diagnostics, control,
+            ModelPreparationMode::Rebuild,
+            [&](std::string phase) {
+              report(onProgress, 0.02f, std::move(phase));
+            },
+            &rebuilt, error)) {
+      return false;
+    }
+    prepared = std::move(rebuilt);
+    scheduledModel = std::make_unique<ScheduledMaskModel>(
+        prepared.modelPath, prepared.backend, diagnostics);
+    if (!scheduledModel->acquire(onProgress, 0.02f, control, error)) {
+      return false;
+    }
+  }
   if (!checkpoint(control, yieldGpuResources, error)) return false;
-  report(onProgress, 0.03f, backend.displayName + " GPU ready");
+  report(onProgress, 0.03f, prepared.backend.displayName + " GPU ready");
 
   const std::filesystem::path rawPath = temporaryRawAudioPathFor(mediaPath);
   ScopedTemporaryFile rawTemporary(rawPath);
@@ -530,8 +577,10 @@ bool separateMediaAudioUsingModel(
   BanditSpectralTransform spectral;
   if (!spectral.initialize(error)) return false;
   if (!checkpoint(control, yieldGpuResources, error)) return false;
-  if (!model.acquire(onProgress, 0.07f, error)) return false;
-  report(onProgress, 0.07f, "DirectML GPU ready");
+  if (!scheduledModel->acquire(onProgress, 0.07f, control, error)) {
+    return false;
+  }
+  report(onProgress, 0.07f, prepared.backend.displayName + " GPU ready");
 
   RawAudioReader reader;
   if (!reader.open(rawPath, error)) return false;
@@ -584,7 +633,10 @@ bool separateMediaAudioUsingModel(
           static_cast<double>(std::max<std::uint64_t>(plan.chunkCount, 1));
       const float inferenceProgress =
           static_cast<float>(0.07 + 0.89 * started);
-      if (!model.acquire(onProgress, inferenceProgress, error)) return false;
+      if (!scheduledModel->acquire(onProgress, inferenceProgress, control,
+                                   error)) {
+        return false;
+      }
       for (std::size_t frame = 0; frame < monoChunk.size(); ++frame) {
         monoChunk[frame] =
             interleavedChunk[frame * kChannels + channel];
@@ -595,11 +647,14 @@ bool separateMediaAudioUsingModel(
       }
       for (;;) {
         const MaskInferenceResult inference =
-            model.run(spectrogram, &masks, control, error);
+            scheduledModel->run(spectrogram, &masks, control, error);
         if (inference == MaskInferenceResult::Succeeded) break;
         if (inference == MaskInferenceResult::Failed) return false;
         if (!checkpoint(control, yieldGpuResources, error)) return false;
-        if (!model.acquire(onProgress, inferenceProgress, error)) return false;
+        if (!scheduledModel->acquire(onProgress, inferenceProgress, control,
+                                     error)) {
+          return false;
+        }
       }
       for (std::size_t stem = 0; stem < kStemCount; ++stem) {
         const float* mask =
@@ -630,7 +685,7 @@ bool separateMediaAudioUsingModel(
     setError(error, "Audio separation produced an incomplete timeline.");
     return false;
   }
-  model.releaseResources();
+  scheduledModel->releaseResources();
   if (!checkpoint(control, error)) return false;
   report(onProgress, 0.97f, "Finalizing lossless audio stems");
   for (audio_file::FlacWriter& writer : writers) {
@@ -668,7 +723,8 @@ bool separateMediaAudioWithModel(
   }
   return separateMediaAudioUsingModel(mediaPath, modelPath, backend, outputPaths,
                                       onProgress, diagnostics,
-                                      control, error, outputCommitStarted);
+                                      control, error, outputCommitStarted,
+                                      false);
 }
 
 bool separateMediaAudio(const std::filesystem::path& mediaPath,
@@ -690,7 +746,8 @@ bool separateMediaAudio(const std::filesystem::path& mediaPath,
   if (!resolveBundledModelPath(&modelPath, error)) return false;
   return separateMediaAudioUsingModel(mediaPath, modelPath, backend, outputPaths,
                                       onProgress, diagnostics,
-                                      control, error, outputCommitStarted);
+                                      control, error, outputCommitStarted,
+                                      true);
 }
 
 }  // namespace audio_separation

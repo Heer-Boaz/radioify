@@ -774,7 +774,7 @@ RequestResult Coordinator::requestAudioSeparation(
   if (!impl_ || !impl_->audioSeparation ||
       !impl_->audioSeparation->configured()) {
     return rejected(RequestFailure::BackendUnavailable,
-                    "the DirectML audio-separation backend is not "
+                    "the native NVIDIA audio-separation backend is not "
                     "configured");
   }
   if (sourceFile.empty()) return rejected(RequestFailure::InvalidSource);

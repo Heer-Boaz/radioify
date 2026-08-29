@@ -33,7 +33,8 @@ class BanditMaskModel {
   bool initialize(const std::filesystem::path& modelPath,
                   const InferenceBackend& backend,
                   DiagnosticReporter diagnostics,
-                  std::string* error);
+                  std::string* error,
+                  const ExecutionControl* control = nullptr);
   MaskInferenceResult run(std::span<const float> spectrogramRealImag,
                           std::span<const float>* masksRealImag,
                           const ExecutionControl& control,

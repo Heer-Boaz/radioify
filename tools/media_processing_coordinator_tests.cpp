@@ -272,7 +272,7 @@ int main() {
           unavailableSeparation->error->failure ==
               playback_media_processing::RequestFailure::BackendUnavailable &&
           unavailableSeparation->feedback ==
-              "Audio separation could not start: the DirectML "
+              "Audio separation could not start: the native NVIDIA "
               "audio-separation backend is not configured. Source: "
               "\"movie.mp4\".",
       "availability and start diagnostics must derive from the same injected "

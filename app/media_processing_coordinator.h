@@ -131,7 +131,7 @@ class Coordinator final : public playback_media_processing::Service {
   };
 
   // Uses Radioify's production melody, loop-split, Vulkan transcript, and
-  // DirectML separation backends.
+  // native Windows NVIDIA separation backends.
   explicit Coordinator(AudioPlaybackRuntime& audioPlayback);
   // The operation boundary keeps lifecycle and presentation tests independent
   // from heavyweight media/GPU backends.

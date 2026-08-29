@@ -6,6 +6,8 @@ set(_radioify_audio_separation_sources
 )
 if (RADIOIFY_HAS_AUDIO_SEPARATION)
   list(APPEND _radioify_audio_separation_sources
+    ${CMAKE_CURRENT_SOURCE_DIR}/compiled_model_cache.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/inference_session.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mask_model.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/separator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/spectral_transform.cpp

@@ -1,6 +1,7 @@
 #include "audio/separation/windows_ml_backend.h"
 
 #include <windows.h>
+#include <appmodel.h>
 
 #include <WinMLEpCatalog.h>
 
@@ -16,6 +17,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace audio_separation {
 namespace {
@@ -155,20 +157,72 @@ bool readLibraryPath(WinMLEpHandle provider,
   return true;
 }
 
-std::string readProviderVersion(WinMLEpHandle provider) {
+template <typename SizeReader, typename ValueReader>
+std::string readProviderText(WinMLEpHandle provider, SizeReader readSize,
+                             ValueReader readValue) {
   size_t required = 0;
-  if (FAILED(WinMLEpGetVersionSize(provider, &required)) || required == 0) {
+  if (FAILED(readSize(provider, &required)) || required == 0) {
     return {};
   }
-  std::string version(required, '\0');
+  std::string value(required, '\0');
   size_t used = 0;
-  if (FAILED(WinMLEpGetVersion(provider, version.size(), version.data(),
-                               &used))) {
+  if (FAILED(readValue(provider, value.size(), value.data(), &used))) {
     return {};
   }
-  if (used > 0 && used <= version.size()) version.resize(used);
-  while (!version.empty() && version.back() == '\0') version.pop_back();
-  return version;
+  if (used > 0 && used <= value.size()) value.resize(used);
+  while (!value.empty() && value.back() == '\0') value.pop_back();
+  return value;
+}
+
+std::string packageVersionFromFullName(
+    const std::wstring& packageFullName) {
+  if (packageFullName.empty()) return {};
+
+  UINT32 bufferLength = 0;
+  const LONG sizeResult =
+      PackageIdFromFullName(packageFullName.c_str(), 0, &bufferLength,
+                            nullptr);
+  if (sizeResult != ERROR_INSUFFICIENT_BUFFER || bufferLength == 0) return {};
+  std::vector<BYTE> buffer(bufferLength);
+  const LONG readResult = PackageIdFromFullName(
+      packageFullName.c_str(), 0, &bufferLength, buffer.data());
+  if (readResult != ERROR_SUCCESS) return {};
+  const auto* identity = reinterpret_cast<const PACKAGE_ID*>(buffer.data());
+  std::ostringstream version;
+  version << identity->version.Major << '.' << identity->version.Minor << '.'
+          << identity->version.Build << '.' << identity->version.Revision;
+  return version.str();
+}
+
+std::string packageVersionFromRoot(std::string_view utf8Root) {
+  if (utf8Root.empty()) return {};
+  const std::u8string nativeUtf8(
+      reinterpret_cast<const char8_t*>(utf8Root.data()), utf8Root.size());
+  return packageVersionFromFullName(
+      std::filesystem::path(nativeUtf8).filename().wstring());
+}
+
+std::string packageVersionFromInstalledPath(
+    std::filesystem::path installedPath) {
+  installedPath = installedPath.parent_path();
+  while (!installedPath.empty()) {
+    std::string version =
+        packageVersionFromFullName(installedPath.filename().wstring());
+    if (!version.empty()) return version;
+    const std::filesystem::path parent = installedPath.parent_path();
+    if (parent == installedPath) break;
+    installedPath = parent;
+  }
+  return {};
+}
+
+std::string readProviderVersion(WinMLEpHandle provider) {
+  std::string version = readProviderText(
+      provider, WinMLEpGetVersionSize, WinMLEpGetVersion);
+  if (!version.empty()) return version;
+  const std::string packageRoot = readProviderText(
+      provider, WinMLEpGetPackageRootPathSize, WinMLEpGetPackageRootPath);
+  return packageVersionFromRoot(packageRoot);
 }
 
 WindowsMlBackendResolution failedResolution(std::string detail) {
@@ -261,11 +315,15 @@ WindowsMlBackendResolution resolveNvidiaWindowsMlBackend(
       !activeVersion.empty()) {
     resolution.version = activeVersion;
   }
+  if (resolution.version.empty()) {
+    resolution.version = packageVersionFromInstalledPath(libraryPath);
+  }
   InferenceBackend backend;
   backend.kind = InferenceBackendKind::WindowsMlNvidiaTensorRtRtx;
   backend.providerName = match.name;
   backend.displayName = "NVIDIA TensorRT-RTX";
   backend.diagnosticComponent = "nvidia-tensorrt-rtx";
+  backend.providerVersion = resolution.version;
   backend.providerLibrary = std::move(libraryPath);
   resolution.status = WindowsMlBackendStatus::Ready;
   resolution.backend = std::move(backend);

@@ -7,9 +7,12 @@
 
 namespace audio_separation {
 
-// Production composition owns the provider decision. The separator receives a
-// fully resolved backend and never probes or changes machine configuration.
+// Production uses only the certified native Windows NVIDIA provider. Missing
+// dependencies produce an actionable failure operation; this path never
+// installs software and never falls back silently to DirectML or WSL.
 Job::Operation makeProductionOperation();
+// Explicit injection keeps tests and composition experiments independent from
+// machine discovery. The separator itself never probes or installs software.
 Job::Operation makeProductionOperation(InferenceBackend backend);
 
 // Alternate models are an explicit diagnostic dependency and never ambient

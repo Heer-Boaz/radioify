@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "audio/separation/separator.h"
+#include "audio/separation/windows_ml_backend.h"
 
 namespace audio_separation {
 
@@ -51,7 +52,29 @@ Job::Operation makeProductionOperation(InferenceBackend backend) {
 }
 
 Job::Operation makeProductionOperation() {
-  return makeProductionOperation(directMlInferenceBackend());
+  WindowsMlBackendResolution resolution = resolveNvidiaWindowsMlBackend(
+      ProviderProvisioningPolicy::ActivateInstalled);
+  if (resolution.ready()) {
+    return makeProductionOperation(std::move(resolution.backend));
+  }
+
+  std::string detail = resolution.detail.empty()
+                           ? "Windows ML did not provide diagnostic detail."
+                           : std::move(resolution.detail);
+  return [detail = std::move(detail)](
+             const std::filesystem::path&, const ArtifactPaths&,
+             const Job::ProgressReporter&,
+             const Job::DiagnosticReporter& reportDiagnostic,
+             const ExecutionControl&, const Job::CommitStarted&,
+             std::string* error) {
+    const std::string message =
+        "Native NVIDIA audio separation is unavailable. " + detail;
+    audio_separation::reportDiagnostic(
+        reportDiagnostic, DiagnosticLevel::Error, "nvidia-tensorrt-rtx",
+        message);
+    if (error) *error = message;
+    return false;
+  };
 }
 
 }  // namespace audio_separation

@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "audio/separation/artifact.h"
+#include "audio/separation/inference_session.h"
 #include "audio/separation/spectral_transform.h"
 
 namespace audio_separation {
@@ -41,11 +42,6 @@ void setError(std::string* error, std::string message) {
   if (error) *error = std::move(message);
 }
 
-std::string pathDescription(const std::filesystem::path& path) {
-  const auto utf8 = path.u8string();
-  return {utf8.begin(), utf8.end()};
-}
-
 template <std::size_t Size>
 bool matchesShape(const std::vector<std::int64_t>& actual,
                   const std::array<std::int64_t, Size>& expected) {
@@ -75,42 +71,6 @@ std::string symbolicShapeDescription(
   }
   description << ']';
   return description.str();
-}
-
-DiagnosticLevel diagnosticLevel(OrtLoggingLevel level) {
-  switch (level) {
-    case ORT_LOGGING_LEVEL_WARNING:
-      return DiagnosticLevel::Warning;
-    case ORT_LOGGING_LEVEL_ERROR:
-    case ORT_LOGGING_LEVEL_FATAL:
-      return DiagnosticLevel::Error;
-    case ORT_LOGGING_LEVEL_VERBOSE:
-    case ORT_LOGGING_LEVEL_INFO:
-      return DiagnosticLevel::Info;
-  }
-  return DiagnosticLevel::Info;
-}
-
-void ORT_API_CALL onnxRuntimeLog(void* parameter, OrtLoggingLevel severity,
-                                 const char* category, const char*,
-                                 const char* codeLocation,
-                                 const char* message) {
-  const auto* reporter =
-      static_cast<const DiagnosticReporter*>(parameter);
-  if (!reporter || !*reporter) return;
-  try {
-    std::string detail = message ? message : "(empty ONNX Runtime message)";
-    if (codeLocation && codeLocation[0] != '\0') {
-      detail += " [";
-      detail += codeLocation;
-      detail += "]";
-    }
-    (*reporter)(diagnosticLevel(severity),
-                category && category[0] != '\0' ? category : "onnxruntime",
-                detail);
-  } catch (...) {
-    // A diagnostics sink must never cross the C callback boundary.
-  }
 }
 
 std::string elementTypeName(ONNXTensorElementDataType type) {
@@ -181,15 +141,10 @@ bool matchesModelContract(Ort::Session& session,
 }  // namespace
 
 struct BanditMaskModel::Impl {
-  Impl(InferenceBackend selectedBackend, DiagnosticReporter reporter)
-      : backend(std::move(selectedBackend)),
-        diagnostics(std::move(reporter)),
-        environment(ORT_LOGGING_LEVEL_WARNING, "radioify-separation",
-                    onnxRuntimeLog, &diagnostics) {}
+  explicit Impl(std::unique_ptr<InferenceSessionFactory> selectedFactory)
+      : factory(std::move(selectedFactory)) {}
 
-  InferenceBackend backend;
-  DiagnosticReporter diagnostics;
-  Ort::Env environment;
+  std::unique_ptr<InferenceSessionFactory> factory;
   std::unique_ptr<Ort::Session> session;
   Ort::MemoryInfo cpuMemory =
       Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
@@ -216,7 +171,8 @@ BanditMaskModel::~BanditMaskModel() = default;
 bool BanditMaskModel::initialize(const std::filesystem::path& modelPath,
                                  const InferenceBackend& backend,
                                  DiagnosticReporter diagnostics,
-                                 std::string* error) {
+                                 std::string* error,
+                                 const ExecutionControl* control) {
   if (error) error->clear();
   if (modelPath.empty()) {
     setError(error, "The audio-separation model path is empty.");
@@ -227,75 +183,35 @@ bool BanditMaskModel::initialize(const std::filesystem::path& modelPath,
     return false;
   }
   try {
-    auto implementation = std::make_unique<Impl>(backend,
-                                                  std::move(diagnostics));
-    reportDiagnostic(implementation->diagnostics, DiagnosticLevel::Info,
-                     "onnxruntime", "Version: " + Ort::GetVersionString());
-    if (!backend.providerLibrary.empty()) {
-      implementation->environment.RegisterExecutionProviderLibrary(
-          backend.providerName.c_str(), backend.providerLibrary.native());
-      reportDiagnostic(implementation->diagnostics, DiagnosticLevel::Info,
-                       backend.diagnosticComponent,
-                       "Registered provider library: " +
-                           pathDescription(backend.providerLibrary));
-    }
-
-    std::vector<Ort::ConstEpDevice> backendDevices;
-    for (const Ort::ConstEpDevice& device :
-         implementation->environment.GetEpDevices()) {
-      if (std::string(device.EpName()) == backend.providerName &&
-          device.Device().Type() == OrtHardwareDeviceType_GPU) {
-        backendDevices.push_back(device);
-      }
-    }
-    if (backendDevices.empty()) {
-      setError(error, "No " + backend.displayName +
-                          " GPU is available; CPU audio separation is "
-                          "disabled.");
-      return false;
-    }
-
-    const Ort::ConstHardwareDevice hardware = backendDevices.front().Device();
-    std::ostringstream deviceDescription;
-    deviceDescription << "Selected " << backend.displayName
-                      << " GPU; vendor="
-                      << (hardware.Vendor() ? hardware.Vendor() : "unknown")
-                      << ", vendor_id=0x" << std::hex << hardware.VendorId()
-                      << ", device_id=0x" << hardware.DeviceId();
-    reportDiagnostic(implementation->diagnostics, DiagnosticLevel::Info,
-                     backend.diagnosticComponent, deviceDescription.str());
-
-    Ort::SessionOptions options;
-    options.DisableMemPattern();
-    options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
-    options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-    options.AddFreeDimensionOverrideByName("batch", kInputShape[0]);
-    options.AddFreeDimensionOverrideByName("time", kInputShape[3]);
-    Ort::KeyValuePairs providerOptions;
-    for (const InferenceProviderOption& option : backend.providerOptions) {
-      providerOptions.Add(option.key.c_str(), option.value.c_str());
-    }
-    options.AppendExecutionProvider_V2(implementation->environment,
-                                       backendDevices, providerOptions);
-    implementation->session = std::make_unique<Ort::Session>(
-        implementation->environment, modelPath.c_str(), options);
+    std::unique_ptr<InferenceSessionFactory> factory =
+        InferenceSessionFactory::create(backend, std::move(diagnostics),
+                                        error);
+    if (!factory) return false;
+    auto implementation = std::make_unique<Impl>(std::move(factory));
+    implementation->session =
+        implementation->factory->loadModel(modelPath, control);
     if (!matchesModelContract(*implementation->session,
-                              implementation->diagnostics, error)) {
+                              implementation->factory->diagnostics(), error)) {
       return false;
     }
     implementation->allocateIoBuffers();
-    reportDiagnostic(implementation->diagnostics, DiagnosticLevel::Info,
+    reportDiagnostic(implementation->factory->diagnostics(),
+                     DiagnosticLevel::Info,
                      backend.diagnosticComponent,
                      "Model session and reusable I/O buffers initialized.");
     impl_ = std::move(implementation);
     return true;
   } catch (const Ort::Exception& exception) {
-    setError(error, "Could not initialize " + backend.displayName +
-                        " separation: " + exception.what());
+    setError(error, control && control->cancellationRequested()
+                        ? "Audio separation cancelled."
+                        : "Could not initialize " + backend.displayName +
+                              " separation: " + exception.what());
     return false;
   } catch (const std::exception& exception) {
-    setError(error, std::string("Could not initialize audio separation: ") +
-                        exception.what());
+    setError(error, control && control->cancellationRequested()
+                        ? "Audio separation cancelled."
+                        : std::string("Could not initialize audio separation: ") +
+                              exception.what());
     return false;
   }
 }
@@ -353,7 +269,7 @@ MaskInferenceResult BanditMaskModel::run(
     if (interrupted.load(std::memory_order_relaxed)) {
       return MaskInferenceResult::Interrupted;
     }
-    setError(error, impl_->backend.displayName +
+    setError(error, impl_->factory->backend().displayName +
                         " audio separation failed: " + exception.what());
     return MaskInferenceResult::Failed;
   } catch (const std::exception& exception) {

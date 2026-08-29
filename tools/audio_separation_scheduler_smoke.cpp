@@ -7,6 +7,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 
 #include "runtime_helpers.h"
@@ -15,12 +16,24 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
+bool startsWith(std::string_view value, std::string_view prefix) {
+  return value.size() >= prefix.size() &&
+         value.substr(0, prefix.size()) == prefix;
+}
+
+bool endsWith(std::string_view value, std::string_view suffix) {
+  return value.size() >= suffix.size() &&
+         value.substr(value.size() - suffix.size()) == suffix;
+}
+
 bool gpuReady(const audio_separation::JobSnapshot& snapshot) {
-  return snapshot.phase == "DirectML GPU ready";
+  return endsWith(snapshot.phase, " GPU ready");
 }
 
 bool modelRestoreStarted(const audio_separation::JobSnapshot& snapshot) {
-  return snapshot.phase == "Restoring DirectML separation model";
+  const std::string_view phase(snapshot.phase);
+  return startsWith(phase, "Restoring ") &&
+         endsWith(phase, " separation model");
 }
 
 }  // namespace
@@ -68,7 +81,7 @@ int main(int argc, char** argv) {
         break;
       }
       suspensionRequestedAt = Clock::now();
-      std::cout << "Suspension requested during DirectML processing.\n";
+      std::cout << "Suspension requested during GPU processing.\n";
     }
 
     if (suspensionRequestedAt && !suspended &&
@@ -78,7 +91,7 @@ int main(int argc, char** argv) {
       const double seconds = std::chrono::duration<double>(
                                  Clock::now() - *suspensionRequestedAt)
                                  .count();
-      std::cout << "DirectML resources suspended in " << seconds << " s.\n";
+      std::cout << "GPU resources suspended in " << seconds << " s.\n";
       if (!job.setPaused(false)) {
         std::cerr << "Scheduler smoke failed: resume was rejected.\n";
         break;
@@ -88,7 +101,7 @@ int main(int argc, char** argv) {
 
     if (resumeRequestedAt && !restoreStarted && modelRestoreStarted(snapshot)) {
       restoreStarted = true;
-      std::cout << "DirectML resource restoration started.\n";
+      std::cout << "GPU resource restoration started.\n";
       cancellationRequested = job.requestCancel();
     }
 

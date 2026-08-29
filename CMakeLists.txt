@@ -354,6 +354,8 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   find_package(radioify-windows-ml CONFIG REQUIRED)
   target_link_libraries(radioify_audio_separation PRIVATE
     WindowsML::Runtime)
+  target_compile_definitions(radioify_audio_separation PRIVATE
+    RADIOIFY_AUDIO_SEPARATION_MODEL_SHA256="${RADIOIFY_AUDIO_SEPARATION_MODEL_SHA256}")
 
   if (NOT EXISTS "${RADIOIFY_AUDIO_SEPARATION_MODEL_PATH}")
     message(FATAL_ERROR
@@ -1484,6 +1486,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   target_sources(audio_separation_model_stress PRIVATE
     $<TARGET_OBJECTS:radioify_tool_audio_separation_model_stress>
     ${CMAKE_SOURCE_DIR}/audio/separation/inference_backend.cpp
+    ${CMAKE_SOURCE_DIR}/audio/separation/inference_session.cpp
     ${CMAKE_SOURCE_DIR}/audio/separation/mask_model.cpp
     ${CMAKE_SOURCE_DIR}/audio/separation/windows_ml_backend.cpp
   )
