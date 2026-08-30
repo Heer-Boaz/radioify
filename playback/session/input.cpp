@@ -5,9 +5,9 @@
 #include <limits>
 #include <string>
 
-#include "playback/overlay/overlay.h"
+#include "playback/input/match.h"
 #include "playback/input/shortcuts.h"
-#include "ui_inputlogic.h"
+#include "playback/overlay/overlay.h"
 
 namespace playback_session_input {
 
@@ -295,7 +295,12 @@ void setPlaybackPaused(SessionPort& session,
 
 namespace {
 
-void dispatchPlaybackInputCommand(
+enum class InputPresentationFeedback : std::uint8_t {
+  RefreshOverlay,
+  PreserveOverlay,
+};
+
+InputPresentationFeedback dispatchPlaybackInputCommand(
     SessionPort& session, PlaybackSeekGestureState& seekState,
     playback_input::Command command) {
   const auto* action = std::get_if<PlaybackAction>(&command);
@@ -303,124 +308,127 @@ void dispatchPlaybackInputCommand(
     if (const auto* seek =
             std::get_if<playback_input::SeekToRatio>(&command)) {
       queuePlaybackSeekToRatio(session, seekState, seek->ratio);
-      return;
+      return InputPresentationFeedback::RefreshOverlay;
     }
     if (const auto* seek =
             std::get_if<playback_input::SeekBySteps>(&command)) {
       sendRelativeSeekRequest(
           session, seekState,
           5000000LL * static_cast<std::int64_t>(seek->steps));
-      return;
+      return InputPresentationFeedback::RefreshOverlay;
     }
     if (const auto* volume =
             std::get_if<playback_input::AdjustVolume>(&command)) {
       session.dispatch(AdjustVolume{volume->delta});
     }
-    return;
+    return InputPresentationFeedback::RefreshOverlay;
   }
   if (const auto editCommand = videoEditCommandForShortcut(*action)) {
     session.dispatch(VideoEditRequest{*editCommand});
-    return;
+    return InputPresentationFeedback::RefreshOverlay;
   }
   switch (*action) {
     case PlaybackAction::Quit:
       requestPlaybackExit(session, true);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::Play:
       setPlaybackPaused(session, seekState, false);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::Pause:
       setPlaybackPaused(session, seekState, true);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::TogglePause:
       setPlaybackPaused(session, seekState, pauseRequestedByToggle(session));
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::Stop:
       requestPlaybackExit(session, false);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::Previous:
       requestTransport(session, PlaybackTransportCommand::Previous);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::Next:
       requestTransport(session, PlaybackTransportCommand::Next);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::ToggleWindow:
       toggleRequestedLayout(session);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::TogglePictureInPicture:
+      togglePictureInPicture(session);
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::DismissPictureInPicture:
       togglePictureInPicture(session);
-      break;
+      return InputPresentationFeedback::PreserveOverlay;
     case PlaybackAction::ToggleFullscreen:
       session.dispatch(CommandAction::ToggleFullscreen);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::ToggleRadio:
       cycleRadioFilter(session);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::Toggle50Hz:
       toggle50Hz(session);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::ToggleSubtitles:
       toggleSubtitles(session);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::ToggleAudioTrack:
       toggleAudioTrack(session);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::SeekBackward:
       sendRelativeSeekRequest(session, seekState, -5000000);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::SeekForward:
       sendRelativeSeekRequest(session, seekState, 5000000);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::PreviousFrame:
       requestFrameStep(session, seekState,
                        playback_video_frame_step::Direction::Previous);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::NextFrame:
       requestFrameStep(session, seekState,
                        playback_video_frame_step::Direction::Next);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::CopyVideoFrame:
       session.dispatch(CommandAction::CopyCurrentVideoFrame);
-      break;
+      return InputPresentationFeedback::PreserveOverlay;
     case PlaybackAction::VolumeUp:
       session.dispatch(AdjustVolume{0.10f});
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::VolumeDown:
       session.dispatch(AdjustVolume{-0.10f});
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::NavigateBackInVideoEditor:
       session.dispatch(CommandAction::NavigateBack);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::ExitPlaybackSession:
       requestPlaybackExit(session, false);
-      break;
+      return InputPresentationFeedback::PreserveOverlay;
     case PlaybackAction::DiscardVideoEditsAndExit:
       session.dispatch(CommandAction::ConfirmPendingExit);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::CancelVideoEditPrompt:
       session.dispatch(CommandAction::NavigateBack);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::SelectPreviousMediaActionConfirmation:
       session.dispatch(
           CommandAction::SelectPreviousMediaActionConfirmation);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::SelectNextMediaActionConfirmation:
       session.dispatch(
           CommandAction::SelectNextMediaActionConfirmation);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::ActivateMediaActionConfirmation:
       session.dispatch(
           CommandAction::ActivateSelectedMediaActionConfirmation);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::DismissMediaActionConfirmation:
       session.dispatch(CommandAction::DismissMediaAction);
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
+    case PlaybackAction::CloseViewer:
+      return InputPresentationFeedback::PreserveOverlay;
     case PlaybackAction::ToggleOptions:
     case PlaybackAction::TogglePitchMonitor:
-    case PlaybackAction::CloseViewer:
     default:
-      break;
+      return InputPresentationFeedback::RefreshOverlay;
   }
 }
 
@@ -485,21 +493,17 @@ void handlePlaybackInputEvent(SessionPort& session,
       shortcutContexts |= kPlaybackShortcutContextPictureInPicture;
     }
   }
-  std::optional<PlaybackInputMatch> match =
-      matchPlaybackInput(ev, shortcutContexts);
-  if (!match) return;
-  const PlaybackInputResult playbackResult = match->result;
-  dispatchPlaybackInputCommand(session, seekState,
-                               std::move(match->command));
-  if (playbackResult == PlaybackInputResult::Handled) {
+  std::optional<playback_input::Command> command =
+      playback_input::matchShortcut(ev, shortcutContexts);
+  if (!command) return;
+  const InputPresentationFeedback feedback = dispatchPlaybackInputCommand(
+      session, seekState, std::move(*command));
+  if (feedback == InputPresentationFeedback::RefreshOverlay) {
     if (session.snapshot().stopRequested) {
       return;
     }
     triggerOverlay(session);
     session.dispatch(CommandAction::RequestRedraw);
-    return;
-  }
-  if (playbackResult == PlaybackInputResult::HandledWithoutOverlayRefresh) {
     return;
   }
 }

@@ -8,10 +8,8 @@
 
 #include "browser_action_strip.h"
 #include "browser_model.h"
-#include "browser_search.h"
 #include "input_event.h"
 #include "playback/input/command.h"
-#include "playback/input/shortcuts.h"
 
 namespace browser_input {
 
@@ -58,40 +56,6 @@ using Command = std::variant<PlaybackCommand, Resize, ActivateEntry,
 }  // namespace tui_input
 
 class BrowserNavigator;
-
-enum class PlaybackInputResult : uint8_t {
-  Ignored,
-  Handled,
-  HandledWithoutOverlayRefresh,
-};
-
-struct PlaybackInputMatch {
-  playback_input::Command command;
-  PlaybackInputResult result = PlaybackInputResult::Ignored;
-};
-
-inline std::optional<PlaybackInputMatch> matchPlaybackInput(
-    const InputEvent& ev,
-    uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
-                                kPlaybackShortcutContextShared) {
-  const std::optional<PlaybackActionMatch> match =
-      resolvePlaybackActionMatch(ev, shortcutContexts);
-  if (!match) return std::nullopt;
-
-  PlaybackInputResult result = PlaybackInputResult::Handled;
-  switch (match->action) {
-    case PlaybackAction::CopyVideoFrame:
-    case PlaybackAction::ExitPlaybackSession:
-    case PlaybackAction::DismissPictureInPicture:
-    case PlaybackAction::CloseViewer:
-      result = PlaybackInputResult::HandledWithoutOverlayRefresh;
-      break;
-    default:
-      break;
-  }
-  return PlaybackInputMatch{playback_input::commandForShortcut(*match),
-                            result};
-}
 
 class BrowserPointerState {
  public:

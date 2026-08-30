@@ -7,11 +7,13 @@
 
 #include "browser_navigation.h"
 #include "browser_grid_index.h"
+#include "browser_keyboard_input.h"
 #include "browser_keymap.h"
 #include "browser_search.h"
 #include "browser_selection_navigation.h"
 #include "consolescreen.h"
 #include "optionsbrowser.h"
+#include "playback/input/match.h"
 #include "playback/input/shortcuts.h"
 #include "playback/overlay/interaction.h"
 #include "runtime_helpers.h"
@@ -220,63 +222,38 @@ class BrowserInputController {
 
     // If browser interaction isn't active (or action wasn't handled by the
     // browser), fall back to handling playback shortcuts as before.
-    if (const std::optional<PlaybackInputMatch> match =
+    if (const std::optional<playback_input::Command> command =
             (capabilities.playMode || capabilities.decoderReady)
-                ? matchPlaybackInput(ev, kPlaybackShortcutContextShared)
+                ? playback_input::matchShortcut(
+                      ev, kPlaybackShortcutContextShared)
                 : std::nullopt) {
-      publishPlaybackCommand(result.commands, match->command);
+      publishPlaybackCommand(result.commands, *command);
       result.dirty = true;
       return;
     }
   }
 
   void handleKey(const InputEvent& ev) {
-    const KeyEvent& key = ev.key;
-    if (capabilities.interactionEnabled && browserSearchFocused(browser)) {
-      handleFocusedSearchKey(key);
+    browser_keyboard_input::Result routed = browser_keyboard_input::handle(
+        browser, ev,
+        browser_keyboard_input::Capabilities{
+            capabilities.interactionEnabled,
+            capabilities.playMode || capabilities.decoderReady});
+    if (const auto* search =
+            std::get_if<browser_keyboard_input::SearchUpdate>(&routed)) {
+      applySearchUpdate(search->update);
       return;
     }
-
-    if (capabilities.interactionEnabled) {
-      const auto searchAction = browser_input::resolveKeyAction(
-          key, browser_input::shortcutContext(
-                   browser_input::ShortcutContext::SearchActivation));
-      if (searchAction) {
-        executeKeyAction(*searchAction, keyPressCount(key));
-        return;
-      }
-    }
-
-    if (const std::optional<PlaybackInputMatch> match =
-            (capabilities.playMode || capabilities.decoderReady)
-                ? matchPlaybackInput(ev, kPlaybackShortcutContextShared)
-                : std::nullopt) {
-      publishPlaybackCommand(result.commands, match->command);
+    if (auto* playback =
+            std::get_if<browser_keyboard_input::PlaybackCommand>(&routed)) {
+      publishPlaybackCommand(result.commands, std::move(playback->command));
       result.dirty = true;
       return;
     }
-
-    const auto applicationAction = browser_input::resolveKeyAction(
-        key, browser_input::shortcutContext(
-                 browser_input::ShortcutContext::Application));
-    if (applicationAction) {
-      executeKeyAction(*applicationAction, keyPressCount(key));
-      return;
+    if (const auto* browserAction =
+            std::get_if<browser_keyboard_input::BrowserAction>(&routed)) {
+      executeKeyAction(browserAction->action, browserAction->repetitions);
     }
-    if (!capabilities.interactionEnabled) {
-      return;
-    }
-
-    const auto navigationAction = browser_input::resolveKeyAction(
-        key, browser_input::shortcutContext(
-                 browser_input::ShortcutContext::Navigation));
-    if (navigationAction) {
-      executeKeyAction(*navigationAction, keyPressCount(key));
-    }
-  }
-
-  void handleFocusedSearchKey(const KeyEvent& key) {
-    applySearchUpdate(handleBrowserSearchKey(browser, key));
   }
 
   void executeKeyAction(browser_input::KeyAction action,

@@ -1,7 +1,9 @@
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <vector>
 
+#include "tui/ui/shell_keyboard_input.h"
 #include "tui/ui/shell_overlay_stack.h"
 
 namespace {
@@ -83,10 +85,52 @@ int main() {
                    !overlays.inputModal() &&
                    overlays.activeLayer() == Layer::CommandPalette,
                "the command palette must become the sole active layer");
+  std::optional<shell_keyboard_input::Command> shellCommand =
+      shell_keyboard_input::resolve(
+          keyEvent('Q', LEFT_CTRL_PRESSED),
+          {overlays.inputModal(), true});
+  const auto* routedPlayback =
+      shellCommand
+          ? std::get_if<shell_keyboard_input::PlaybackCommand>(&*shellCommand)
+          : nullptr;
+  const auto* routedAction =
+      routedPlayback
+          ? std::get_if<PlaybackAction>(&routedPlayback->command)
+          : nullptr;
+  ok &= expect(routedAction && *routedAction == PlaybackAction::Quit &&
+                   overlays.activeLayer() == Layer::CommandPalette,
+               "application-global commands must route ahead of a non-modal "
+               "command palette without mutating its model");
+  shellCommand = shell_keyboard_input::resolve(
+      keyEvent(VK_F1), {overlays.inputModal(), true});
+  ok &= expect(
+      shellCommand &&
+          std::holds_alternative<
+              shell_keyboard_input::ToggleCommandPalette>(*shellCommand),
+      "the shell palette accelerator must resolve as a typed shell command");
   ok &=
       expect(overlays.openMediaMenu(mediaEntry("video.mp4"), mediaActions()) &&
                  overlays.activeLayer() == Layer::MediaMenu,
              "opening a media menu must replace the command palette");
+  shellCommand = shell_keyboard_input::resolve(
+      keyEvent(VK_MEDIA_PLAY_PAUSE), {overlays.inputModal(), true});
+  routedPlayback =
+      shellCommand
+          ? std::get_if<shell_keyboard_input::PlaybackCommand>(&*shellCommand)
+          : nullptr;
+  routedAction = routedPlayback
+                     ? std::get_if<PlaybackAction>(&routedPlayback->command)
+                     : nullptr;
+  ok &= expect(routedAction &&
+                   *routedAction == PlaybackAction::TogglePause &&
+                   overlays.activeLayer() == Layer::MediaMenu,
+               "system-media commands must route ahead of a non-modal media "
+               "menu without activating its selection");
+  ok &= expect(
+      !shell_keyboard_input::resolve(keyEvent(VK_MEDIA_PLAY_PAUSE),
+                                     {overlays.inputModal(), false}),
+      "system-media input must not publish transport without an active "
+      "playback target");
 
   shell_overlay_stack::Interaction interaction =
       overlays.handle(keyEvent(VK_DOWN), bounds, catalog);
@@ -137,6 +181,22 @@ int main() {
                "a dialog must replace every less important transient layer");
   ok &= expect(overlays.inputModal(),
                "only a dialog must identify itself as input-modal");
+  ok &= expect(
+      !shell_keyboard_input::resolve(
+          keyEvent('Q', LEFT_CTRL_PRESSED),
+          {overlays.inputModal(), true}) &&
+          !shell_keyboard_input::resolve(
+              keyEvent(VK_MEDIA_PLAY_PAUSE),
+              {overlays.inputModal(), true}) &&
+          !shell_keyboard_input::resolve(
+              keyEvent(VK_F1), {overlays.inputModal(), true}),
+      "a modal dialog must suspend shell, global and system-media command "
+      "routing");
+  interaction = overlays.handle(
+      keyEvent('Q', LEFT_CTRL_PRESSED), bounds, catalog);
+  ok &= expect(interaction.consumed && overlays.inputModal(),
+               "a suspended application command must remain inside the "
+               "active dialog interaction workflow");
   interaction = overlays.handle(keyEvent(VK_F1), bounds, catalog);
   ok &= expect(
       interaction.consumed && overlays.activeLayer() == Layer::Dialog &&

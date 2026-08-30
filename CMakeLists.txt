@@ -594,6 +594,19 @@ endif()
 add_test(NAME shortcut_match_tests
          COMMAND $<TARGET_FILE:shortcut_match_tests>)
 
+add_executable(playback_session_input_tests)
+target_sources(playback_session_input_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_playback_session_input_tests>
+  ${CMAKE_SOURCE_DIR}/playback/session/input.cpp
+  ${CMAKE_SOURCE_DIR}/playback/session/overlay_control_pointer.cpp
+  ${CMAKE_SOURCE_DIR}/playback/overlay/controls.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/scene_suggestions.cpp
+  ${CMAKE_SOURCE_DIR}/core/unicode_display_width.cpp
+)
+radioify_link_repo_target(playback_session_input_tests)
+add_test(NAME playback_session_input_tests
+         COMMAND $<TARGET_FILE:playback_session_input_tests>)
+
 add_executable(terminal_input_sequence_tests)
 target_sources(terminal_input_sequence_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_terminal_input_sequence_tests>
@@ -921,6 +934,7 @@ add_test(NAME browser_navigation_tests
 add_executable(browser_key_input_tests)
 target_sources(browser_key_input_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_browser_key_input_tests>
+  ${CMAKE_SOURCE_DIR}/tui/ui/browser_keyboard_input.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/browser_search.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/single_line_text_input.cpp
 )
@@ -1007,6 +1021,7 @@ target_sources(shell_overlay_stack_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/tui/ui/browser_media_menu.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/popup_menu.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/shell_command_catalog.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/shell_keyboard_input.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/command_palette.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/single_line_text_input.cpp
   ${CMAKE_SOURCE_DIR}/core/path_identity.cpp

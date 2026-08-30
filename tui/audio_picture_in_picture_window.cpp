@@ -8,10 +8,10 @@
 #include "core/windows_app_resources.h"
 #include "playback/framebuffer/mini_player_tui.h"
 #include "playback/framebuffer/window_presentation.h"
-#include "playback/media/artwork_catalog.h"
+#include "playback/input/match.h"
 #include "playback/input/shortcuts.h"
+#include "playback/media/artwork_catalog.h"
 #include "ui_helpers.h"
-#include "ui_inputlogic.h"
 
 namespace {
 
@@ -355,9 +355,9 @@ void AudioPictureInPictureWindow::handleInput(const InputEvent& ev) {
     const uint32_t shortcutContexts = kPlaybackShortcutContextShared |
                                       kPlaybackShortcutContextGlobal |
                                       kPlaybackShortcutContextPictureInPicture;
-    if (std::optional<PlaybackInputMatch> match =
-            matchPlaybackInput(ev, shortcutContexts)) {
-      playback_input::Command command = std::move(match->command);
+    if (std::optional<playback_input::Command> matchedCommand =
+            playback_input::matchShortcut(ev, shortcutContexts)) {
+      playback_input::Command command = std::move(*matchedCommand);
       if (const auto* action = std::get_if<PlaybackAction>(&command)) {
         if (*action == PlaybackAction::ToggleWindow ||
             *action == PlaybackAction::TogglePictureInPicture ||

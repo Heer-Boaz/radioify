@@ -15,6 +15,15 @@
 #include "playback/video/edit/command.h"
 #include "shortcut_match.h"
 
+enum class PlaybackShortcutScope : std::uint8_t {
+  // Subject to the focused UI mode selected by the caller's context mask.
+  Contextual,
+  // Process transport emitted by hardware or the operating system; callers
+  // may route this scope above focused text without promoting keyboard
+  // shortcuts such as Space or Ctrl+Left.
+  SystemMedia,
+};
+
 struct PlaybackShortcutBinding {
   constexpr PlaybackShortcutBinding() = default;
 
@@ -24,7 +33,9 @@ struct PlaybackShortcutBinding {
       DWORD forbiddenModifiers, uint32_t shortcutContexts,
       std::string_view label = {},
       ShortcutRepeatPolicy repeat =
-          ShortcutRepeatPolicy::InitialPressOnly)
+          ShortcutRepeatPolicy::InitialPressOnly,
+      PlaybackShortcutScope shortcutScope =
+          PlaybackShortcutScope::Contextual)
       : action(actionValue),
         vk(virtualKey),
         lower(lowerCharacter),
@@ -33,7 +44,8 @@ struct PlaybackShortcutBinding {
         forbiddenModifierMask(forbiddenModifiers),
         contexts(shortcutContexts),
         displayLabel(label),
-        repeatPolicy(repeat) {}
+        repeatPolicy(repeat),
+        scope(shortcutScope) {}
 
   PlaybackAction action = PlaybackAction::TogglePause;
   WORD vk = 0;
@@ -45,6 +57,7 @@ struct PlaybackShortcutBinding {
   std::string_view displayLabel;
   ShortcutRepeatPolicy repeatPolicy =
       ShortcutRepeatPolicy::InitialPressOnly;
+  PlaybackShortcutScope scope = PlaybackShortcutScope::Contextual;
 };
 
 inline constexpr DWORD kPlaybackShortcutCtrlMask = kShortcutCtrlMask;
@@ -232,20 +245,32 @@ inline constexpr std::array<PlaybackShortcutBinding, 63>
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextImageViewer},
         {PlaybackAction::Play, kPlaybackVkMediaPlay, 0, 0, 0, 0,
-         kPlaybackShortcutContextShared},
+         kPlaybackShortcutContextShared, {},
+         ShortcutRepeatPolicy::InitialPressOnly,
+         PlaybackShortcutScope::SystemMedia},
         {PlaybackAction::Pause, kPlaybackVkMediaPause, 0, 0, 0, 0,
-         kPlaybackShortcutContextShared},
+         kPlaybackShortcutContextShared, {},
+         ShortcutRepeatPolicy::InitialPressOnly,
+         PlaybackShortcutScope::SystemMedia},
         {PlaybackAction::TogglePause, VK_SPACE, ' ', ' ',
          0, kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextShared, "Space"},
         {PlaybackAction::TogglePause, VK_MEDIA_PLAY_PAUSE, 0, 0, 0, 0,
-         kPlaybackShortcutContextShared},
+         kPlaybackShortcutContextShared, {},
+         ShortcutRepeatPolicy::InitialPressOnly,
+         PlaybackShortcutScope::SystemMedia},
         {PlaybackAction::Stop, VK_MEDIA_STOP, 0, 0, 0, 0,
-         kPlaybackShortcutContextShared},
+         kPlaybackShortcutContextShared, {},
+         ShortcutRepeatPolicy::InitialPressOnly,
+         PlaybackShortcutScope::SystemMedia},
         {PlaybackAction::Previous, VK_MEDIA_PREV_TRACK, 0, 0, 0,
-         0, kPlaybackShortcutContextShared},
+         0, kPlaybackShortcutContextShared, {},
+         ShortcutRepeatPolicy::InitialPressOnly,
+         PlaybackShortcutScope::SystemMedia},
         {PlaybackAction::Next, VK_MEDIA_NEXT_TRACK, 0, 0, 0, 0,
-         kPlaybackShortcutContextShared},
+         kPlaybackShortcutContextShared, {},
+         ShortcutRepeatPolicy::InitialPressOnly,
+         PlaybackShortcutScope::SystemMedia},
         // Shared navigation layer:
         //   - Left/Right arrows seek within the current item.
         //   - Ctrl+Left/Right move to the previous/next item in the playlist.
@@ -334,9 +359,13 @@ struct PlaybackActionMatch {
 inline const PlaybackShortcutBinding* resolvePlaybackShortcutBinding(
     const KeyEvent& key,
     uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
-                                kPlaybackShortcutContextShared) {
+                                kPlaybackShortcutContextShared,
+    std::optional<PlaybackShortcutScope> requiredScope = std::nullopt) {
   for (const PlaybackShortcutBinding& binding : kPlaybackShortcutBindings) {
     if ((binding.contexts & shortcutContexts) == 0) {
+      continue;
+    }
+    if (requiredScope && binding.scope != *requiredScope) {
       continue;
     }
     if (matchesShortcut(key, binding.vk, binding.lower, binding.upper,
@@ -413,8 +442,13 @@ inline std::optional<PlaybackAction> resolvePlaybackAction(
 inline std::optional<PlaybackActionMatch> resolvePlaybackActionMatch(
     const InputEvent& event,
     uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
-                                kPlaybackShortcutContextShared) {
+                                kPlaybackShortcutContextShared,
+    std::optional<PlaybackShortcutScope> requiredScope = std::nullopt) {
   if (event.type == InputEvent::Type::Action) {
+    if (requiredScope &&
+        *requiredScope != PlaybackShortcutScope::Contextual) {
+      return std::nullopt;
+    }
     const std::optional<PlaybackAction> action =
         resolvePlaybackAction(event.action, shortcutContexts);
     return action ? std::optional<PlaybackActionMatch>(
@@ -425,7 +459,8 @@ inline std::optional<PlaybackActionMatch> resolvePlaybackActionMatch(
     return std::nullopt;
   }
   const PlaybackShortcutBinding* binding =
-      resolvePlaybackShortcutBinding(event.key, shortcutContexts);
+      resolvePlaybackShortcutBinding(event.key, shortcutContexts,
+                                     requiredScope);
   if (!binding) return std::nullopt;
   const std::uint32_t repetitions =
       binding->repeatPolicy == ShortcutRepeatPolicy::AllowAutoRepeat

@@ -1,4 +1,5 @@
 #include "tui/ui/browser_keymap.h"
+#include "tui/ui/browser_keyboard_input.h"
 #include "tui/ui/browser_search.h"
 #include "tui/ui/single_line_text_input.h"
 
@@ -23,6 +24,15 @@ KeyEvent key(WORD vk, char character = 0, DWORD control = 0,
              KeyPressKind pressKind = KeyPressKind::Initial,
              std::uint32_t repeatCount = 1) {
   return KeyEvent{vk, character, control, pressKind, repeatCount};
+}
+
+InputEvent keyInput(WORD vk, char character = 0, DWORD control = 0,
+                    KeyPressKind pressKind = KeyPressKind::Initial,
+                    std::uint32_t repeatCount = 1) {
+  InputEvent event{};
+  event.type = InputEvent::Type::Key;
+  event.key = key(vk, character, control, pressKind, repeatCount);
+  return event;
 }
 
 std::optional<browser_input::KeyAction> resolve(
@@ -82,6 +92,61 @@ int main() {
                        KeyAction::MoveDown,
                "browser toggles must be edge-triggered while navigation "
                "remains repeatable");
+
+  BrowserState routedSearch;
+  beginBrowserFilter(routedSearch);
+  const browser_keyboard_input::Capabilities routedCapabilities{true, true};
+  browser_keyboard_input::Result routed = browser_keyboard_input::handle(
+      routedSearch, keyInput('X', 'x'), routedCapabilities);
+  const auto* routedText =
+      std::get_if<browser_keyboard_input::SearchUpdate>(&routed);
+  ok &= expect(routedText && routedText->update.changed &&
+                   routedSearch.filter == "x",
+               "focused search must own printable input through the keyboard "
+               "mode workflow");
+
+  routed = browser_keyboard_input::handle(
+      routedSearch, keyInput(VK_SPACE, ' '), routedCapabilities);
+  routedText = std::get_if<browser_keyboard_input::SearchUpdate>(&routed);
+  ok &= expect(routedText && routedText->update.handled &&
+                   routedText->update.changed &&
+                   routedSearch.filter == "x ",
+               "focused search must receive Space instead of toggling "
+               "playback");
+
+  routed = browser_keyboard_input::handle(
+      routedSearch, keyInput(VK_LEFT, 0, LEFT_CTRL_PRESSED),
+      routedCapabilities);
+  routedText = std::get_if<browser_keyboard_input::SearchUpdate>(&routed);
+  ok &= expect(routedText && routedText->update.handled &&
+                   !routedText->update.changed &&
+                   routedSearch.filter == "x ",
+               "focused search must consume Ctrl+Left without publishing a "
+               "playlist transport command");
+
+  routed = browser_keyboard_input::handle(
+      routedSearch, keyInput('G', 'g', LEFT_CTRL_PRESSED),
+      routedCapabilities);
+  const auto* searchActivation =
+      std::get_if<browser_keyboard_input::BrowserAction>(&routed);
+  ok &= expect(searchActivation &&
+                   searchActivation->action == KeyAction::BeginPathSearch &&
+                   routedSearch.filter == "x ",
+               "browser search activation must route as a typed mode change "
+               "before focused text consumes the chord");
+
+  BrowserState routedPlayback;
+  routed = browser_keyboard_input::handle(
+      routedPlayback, keyInput(VK_SPACE, ' '), routedCapabilities);
+  const auto* routedSpace =
+      std::get_if<browser_keyboard_input::PlaybackCommand>(&routed);
+  const auto* routedSpaceAction =
+      routedSpace ? std::get_if<PlaybackAction>(&routedSpace->command)
+                  : nullptr;
+  ok &= expect(routedSpaceAction &&
+                   *routedSpaceAction == PlaybackAction::TogglePause,
+               "the same Space key must become playback only when no text "
+               "field owns it");
 
   std::string text = "ab";
   auto edit = single_line_text_input::edit(text, key('C', 'c'));

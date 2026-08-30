@@ -10,6 +10,7 @@ radioify_add_module_object_library(radioify_ui
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_content_service.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_content_view.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_directory_listing.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/browser_keyboard_input.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_input_state.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_search.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_selection_navigation.cpp
@@ -37,6 +38,7 @@ radioify_add_module_object_library(radioify_ui
   ${CMAKE_CURRENT_SOURCE_DIR}/popup_menu.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/popup_menu_renderer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/shell_command_catalog.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/shell_keyboard_input.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/shell_overlay_stack.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/shell_overlay_stack_renderer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/single_line_text_input.cpp

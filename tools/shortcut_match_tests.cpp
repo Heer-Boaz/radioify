@@ -3,6 +3,7 @@
 #include "playback/ascii/frame_output.h"
 #include "playback/ascii/screen_renderer.h"
 #include "playback/input/shortcuts.h"
+#include "playback/input/match.h"
 #include "playback/overlay/overlay.h"
 #include "playback/video/audio/clock_reacquire.h"
 #include "playback/video/control/events.h"
@@ -166,10 +167,8 @@ int main() {
           !tui_shell_shortcuts::resolve(
               makeKeyEvent(VK_F8),
               tui_shell_shortcuts::context(
-                  tui_shell_shortcuts::Context::Browser)) &&
-          tui_shell_shortcuts::label(
-              tui_shell_shortcuts::Action::ToggleCommandPalette) == "F1",
-      "shell shortcut matching and displayed labels must share one catalog");
+                  tui_shell_shortcuts::Context::Browser)),
+      "the command palette must use one edge-triggered functional shortcut");
   ok &= expect(
       playback_session_bootstrap_input::resolve(
           makeKeyEvent('Q', 'q', LEFT_CTRL_PRESSED)) ==
@@ -184,17 +183,52 @@ int main() {
               makeActionEvent(InputAction::Back)) ==
               playback_session_bootstrap_input::Action::Cancel,
       "playback initialization must publish typed cancel and quit intents");
-  const std::optional<PlaybackInputMatch> globalQuit = matchPlaybackInput(
-      makeKeyEvent('Q', 'q', LEFT_CTRL_PRESSED),
-      kPlaybackShortcutContextGlobal);
+  const std::optional<playback_input::Command> globalQuit =
+      playback_input::matchShortcut(
+          makeKeyEvent('Q', 'q', LEFT_CTRL_PRESSED),
+          kPlaybackShortcutContextGlobal);
   ok &= expect(
       globalQuit &&
-          std::get<PlaybackAction>(globalQuit->command) ==
-              PlaybackAction::Quit &&
-          !matchPlaybackInput(makeKeyEvent('Q', 'q', LEFT_CTRL_PRESSED),
-                              kPlaybackShortcutContextShared),
+          std::get<PlaybackAction>(*globalQuit) == PlaybackAction::Quit &&
+          !playback_input::matchShortcut(
+              makeKeyEvent('Q', 'q', LEFT_CTRL_PRESSED),
+              kPlaybackShortcutContextShared),
       "Ctrl+Q must remain an application-global accelerator instead of a "
       "focused child-control shortcut");
+  struct SystemMediaCase {
+    WORD key;
+    PlaybackAction action;
+  };
+  constexpr SystemMediaCase systemMediaCases[] = {
+      {kPlaybackVkMediaPlay, PlaybackAction::Play},
+      {kPlaybackVkMediaPause, PlaybackAction::Pause},
+      {VK_MEDIA_PLAY_PAUSE, PlaybackAction::TogglePause},
+      {VK_MEDIA_STOP, PlaybackAction::Stop},
+      {VK_MEDIA_PREV_TRACK, PlaybackAction::Previous},
+      {VK_MEDIA_NEXT_TRACK, PlaybackAction::Next},
+  };
+  for (const SystemMediaCase& mediaCase : systemMediaCases) {
+    const std::optional<playback_input::Command> mediaCommand =
+        playback_input::matchShortcut(
+            makeKeyEvent(mediaCase.key), kPlaybackShortcutContextShared,
+            PlaybackShortcutScope::SystemMedia);
+    const auto* mediaAction =
+        mediaCommand ? std::get_if<PlaybackAction>(&*mediaCommand) : nullptr;
+    ok &= expect(mediaAction && *mediaAction == mediaCase.action,
+                 "every system-media binding must publish its typed transport "
+                 "command through the dedicated scope");
+  }
+  ok &= expect(
+      !playback_input::matchShortcut(
+          makeKeyEvent(VK_SPACE, ' '), kPlaybackShortcutContextShared,
+          PlaybackShortcutScope::SystemMedia) &&
+          !playback_input::matchShortcut(
+              makeKeyEvent(VK_MEDIA_PLAY_PAUSE, 0, 0,
+                           KeyPressKind::AutoRepeat),
+              kPlaybackShortcutContextShared,
+              PlaybackShortcutScope::SystemMedia),
+      "the system-media scope must reject contextual Space and held media "
+      "button repeats");
   ok &= expect(resolvePlaybackAction(
                    makeKey(VK_ESCAPE), kPlaybackShortcutContextPlaybackSession)
                    .value() == PlaybackAction::ExitPlaybackSession,
@@ -249,17 +283,15 @@ int main() {
                    makeKey('P'), kPlaybackShortcutContextPictureInPicture)
                    .value() == PlaybackAction::DismissPictureInPicture,
                "Bare P must still dismiss the PiP window");
-  const std::optional<PlaybackInputMatch> pictureInPictureMatch =
-      matchPlaybackInput(makeKeyEvent('P', 'p'),
-                         kPlaybackShortcutContextPictureInPicture);
+  const std::optional<playback_input::Command> pictureInPictureMatch =
+      playback_input::matchShortcut(
+          makeKeyEvent('P', 'p'),
+          kPlaybackShortcutContextPictureInPicture);
   ok &= expect(
       pictureInPictureMatch &&
-          std::get<PlaybackAction>(pictureInPictureMatch->command) ==
-              PlaybackAction::DismissPictureInPicture &&
-      pictureInPictureMatch->result ==
-              PlaybackInputResult::HandledWithoutOverlayRefresh,
-      "shortcut matching must return typed intent before a surface "
-      "dispatches it");
+          std::get<PlaybackAction>(*pictureInPictureMatch) ==
+              PlaybackAction::DismissPictureInPicture,
+      "shortcut matching must return typed intent without surface policy");
   ok &= expect(resolvePlaybackAction(
                    makeKey(VK_LEFT), kPlaybackShortcutContextShared)
                    .value() == PlaybackAction::SeekBackward,
@@ -269,32 +301,33 @@ int main() {
                    kPlaybackShortcutContextShared) ==
                    PlaybackAction::SeekBackward,
                "held timeline arrows must continue seeking");
-  const std::optional<PlaybackInputMatch> countedSeek = matchPlaybackInput(
-      makeKeyEvent(VK_LEFT, 0, 0, KeyPressKind::AutoRepeat, 8),
-      kPlaybackShortcutContextShared);
+  const std::optional<playback_input::Command> countedSeek =
+      playback_input::matchShortcut(
+          makeKeyEvent(VK_LEFT, 0, 0, KeyPressKind::AutoRepeat, 8),
+          kPlaybackShortcutContextShared);
   const auto* countedSeekCommand =
-      countedSeek
-          ? std::get_if<playback_input::SeekBySteps>(&countedSeek->command)
-          : nullptr;
+      countedSeek ? std::get_if<playback_input::SeekBySteps>(&*countedSeek)
+                  : nullptr;
   ok &= expect(countedSeekCommand && countedSeekCommand->steps == -8,
                "a batched seek key must become one semantic command carrying "
                "all repeat ticks");
-  const std::optional<PlaybackInputMatch> batchedToggle = matchPlaybackInput(
-      makeKeyEvent(VK_SPACE, ' ', 0, KeyPressKind::Initial, 5),
-      kPlaybackShortcutContextShared);
+  const std::optional<playback_input::Command> batchedToggle =
+      playback_input::matchShortcut(
+          makeKeyEvent(VK_SPACE, ' ', 0, KeyPressKind::Initial, 5),
+          kPlaybackShortcutContextShared);
   ok &= expect(batchedToggle &&
-                   std::get_if<PlaybackAction>(&batchedToggle->command) &&
-                   std::get<PlaybackAction>(batchedToggle->command) ==
+                   std::get_if<PlaybackAction>(&*batchedToggle) &&
+                   std::get<PlaybackAction>(*batchedToggle) ==
                        PlaybackAction::TogglePause,
                "a batched initial toggle must remain one edge-triggered "
                "semantic command");
-  const std::optional<PlaybackInputMatch> countedVolume = matchPlaybackInput(
-      makeKeyEvent(VK_UP, 0, SHIFT_PRESSED, KeyPressKind::AutoRepeat, 7),
-      kPlaybackShortcutContextShared);
+  const std::optional<playback_input::Command> countedVolume =
+      playback_input::matchShortcut(
+          makeKeyEvent(VK_UP, 0, SHIFT_PRESSED, KeyPressKind::AutoRepeat, 7),
+          kPlaybackShortcutContextShared);
   const auto* countedVolumeCommand =
       countedVolume
-          ? std::get_if<playback_input::AdjustVolume>(
-                &countedVolume->command)
+          ? std::get_if<playback_input::AdjustVolume>(&*countedVolume)
           : nullptr;
   ok &= expect(countedVolumeCommand && countedVolumeCommand->delta > 0.69f &&
                    countedVolumeCommand->delta < 0.71f,

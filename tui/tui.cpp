@@ -46,6 +46,7 @@
 #include "browser_media_menu.h"
 #include "browser_playback_reveal.h"
 #include "browser_playback_source.h"
+#include "browser_search.h"
 #include "browser_thumbnail_cache.h"
 #include "browser_content_service.h"
 #include "browser_navigation.h"
@@ -102,9 +103,9 @@
 #include "media_formats.h"
 #include "runtime_helpers.h"
 #include "shell_command_catalog.h"
+#include "shell_keyboard_input.h"
 #include "shell_overlay_stack.h"
 #include "shell_overlay_stack_renderer.h"
-#include "shell_shortcuts.h"
 
 #include "tui.h"
 #include "timing_log.h"
@@ -1738,16 +1739,24 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           isWindowMouseEvent(ev.mouse)) {
         mapWindowPointerToGrid(ev, tuiWindow, screen);
       }
-      const auto browserShellAction = tui_shell_shortcuts::resolve(
-          ev, tui_shell_shortcuts::context(
-                  tui_shell_shortcuts::Context::Browser));
-      if (browserShellAction ==
-              tui_shell_shortcuts::Action::ToggleCommandPalette &&
-          shellOverlays.activeLayer() != shell_overlay_stack::Layer::Dialog) {
-        shellOverlays.toggleCommandPalette();
-        dirty =
-            setBrowserSearchFocus(browser, BrowserSearchFocus::None) || dirty;
-        markDirty();
+      const PlaybackPresentationModel playbackPresentation =
+          playbackPresenter.model();
+      if (std::optional<shell_keyboard_input::Command> shellCommand =
+              shell_keyboard_input::resolve(
+                  ev, shell_keyboard_input::Context{
+                          shellOverlays.inputModal(),
+                          playbackPresentation.currentTarget.has_value()})) {
+        if (std::holds_alternative<
+                shell_keyboard_input::ToggleCommandPalette>(*shellCommand)) {
+          shellOverlays.toggleCommandPalette();
+          dirty = setBrowserSearchFocus(browser, BrowserSearchFocus::None) ||
+                  dirty;
+          markDirty();
+        } else {
+          dispatchPlaybackCommand(std::move(
+              std::get<shell_keyboard_input::PlaybackCommand>(*shellCommand)
+                  .command));
+        }
         return;
       }
       if (shellOverlays.active()) {
@@ -1835,14 +1844,6 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         }
       }
       if (ev.type == InputEvent::Type::Resize) {
-        return;
-      }
-      // Application-global accelerators belong to the shell, above focused
-      // non-modal widgets but below input-modal overlays. Child controls may
-      // therefore consume unrelated keys without trapping Ctrl+Q.
-      if (const std::optional<PlaybackInputMatch> global =
-              matchPlaybackInput(ev, kPlaybackShortcutContextGlobal)) {
-        dispatchPlaybackCommand(global->command);
         return;
       }
       if (const std::optional<MediaTaskCardModel>& task =
