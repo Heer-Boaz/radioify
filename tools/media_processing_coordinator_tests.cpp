@@ -9,9 +9,7 @@
 #include "app/media_processing_actions.h"
 #include "app/media_processing_coordinator.h"
 #include "playback/media_processing_actions.h"
-#include "playback/session/media_task_feedback.h"
 #include "tui/ui/media_task_controller.h"
-#include "tui/ui/media_task_presentation.h"
 
 #include <algorithm>
 #include <atomic>
@@ -222,7 +220,6 @@ int main() {
   processing::Actions applicationActions(coordinator);
   playback_media_processing::Actions playbackActions =
       applicationActions.playbackActions();
-  MediaTaskPresenter presenter(coordinator);
   const std::optional<playback_media_processing::ActionResult>
       unsupportedAction =
       playbackActions.execute(playback_media_actions::Action::EditVideo,
@@ -230,31 +227,8 @@ int main() {
 
   ok &= expect(static_cast<bool>(coordinator.waitHandle()),
                "all worker families must fan in through one owner wake event");
-  ok &= expect(!presenter.activeCard() && !presenter.latestStatus() &&
-                   !presenter.latestFailure(),
-               "the presenter must not invent inactive task state");
-  processing::TaskCompletion failedSeparation;
-  failedSeparation.kind = processing::TaskKind::AudioSeparation;
-  failedSeparation.outcome = processing::TaskOutcome::Failed;
-  failedSeparation.sourceFile = "C:/Media/movie.mp4";
-  failedSeparation.diagnosticLog = "C:/Logs/separation.log";
-  failedSeparation.detail = "DirectML device was removed";
-  const auto failureDialog =
-      mediaTaskFailureDialogModel(failedSeparation);
-  ok &= expect(
-      failureDialog &&
-          failureDialog->content.title == "Audio separation failed" &&
-          failureDialog->content.text.size() == 4 &&
-          failureDialog->content.text[1].text ==
-              "Reason: DirectML device was removed" &&
-          failureDialog->content.buttons.size() == 2 &&
-          failureDialog->retryAction ==
-              playback_media_actions::Action::SeparateAudio &&
-          mediaTaskStatusModel(failedSeparation).text ==
-              "Audio separation failed. F1: Details" &&
-          mediaTaskStatusModel(failedSeparation).tone ==
-              MediaTaskStatusTone::Error,
-      "failed work must retain actionable details in a reopenable dialog");
+  ok &= expect(!coordinator.activity() && !coordinator.latestCompletion(),
+               "an idle coordinator must not invent task lifecycle state");
   ok &= expect(!unsupportedAction,
                "surface-specific actions must remain outside processing");
 
@@ -500,8 +474,6 @@ int main() {
                "melody analysis must start through the coordinator");
   const std::optional<processing::TaskActivity> melody =
       coordinator.activity();
-  const std::optional<MediaTaskCardModel> melodyCard =
-      presenter.activeCard();
   const auto busyLoop = coordinator.tryStartLoopSplit(
       "other.flac", "other_stinger.wav", "other_loop.wav", {});
   const auto busySeparation = playbackActions.execute(
@@ -510,9 +482,6 @@ int main() {
                    melody->kind == processing::TaskKind::MelodyAnalysis &&
                    melody->progress && *melody->progress == 0.4f &&
                    melody->cancellable &&
-                   melodyCard && melodyCard->title == "Analyzing melody" &&
-                   melodyCard->taskId == melody->id &&
-                   melodyCard->cancellable &&
                    !busyLoop.wasAccepted() && busyLoop.error() &&
                    busyLoop.error()->failure ==
                        playback_media_processing::RequestFailure::Busy &&
@@ -520,21 +489,18 @@ int main() {
                        playback_media_processing::Operation::MelodyAnalysis &&
                    busyLoop.error()->blockingSourceFile == "clip.flac" &&
                    busySeparation && !busySeparation->accepted &&
-                   busySeparation->feedback ==
-                       "Audio separation could not start: melody analysis is "
-                       "already running for \"clip.flac\". Source: "
-                       "\"other.mp4\".",
+                   busySeparation->error &&
+                   busySeparation->error->failure ==
+                       playback_media_processing::RequestFailure::Busy &&
+                   busySeparation->error->blockingOperation ==
+                       playback_media_processing::Operation::MelodyAnalysis &&
+                   busySeparation->error->blockingSourceFile == "clip.flac",
                "one generic activity must explain which task enforces mutual "
                "exclusion");
   releaseMelody.store(true, std::memory_order_release);
   const auto melodyCompletion = waitForCompletion(coordinator);
-  const std::optional<MediaTaskStatusModel> melodyStatus =
-      presenter.latestStatus();
   ok &= expect(melodyCompletion && melodyCompletion->succeeded() &&
                    melodyCompletion->id == melody->id &&
-                   melodyStatus && melodyStatus->text ==
-                       "Analyze: Saved clip.melody and clip.mid" &&
-                   melodyStatus->tone == MediaTaskStatusTone::Success &&
                    !processing::completionForPlayback(*melodyCompletion),
                "melody completion must use the shared result contract");
 
@@ -546,26 +512,22 @@ int main() {
                      return loopStarted.load(std::memory_order_acquire);
                    }),
                "starting new work must retire the previous footer result");
-  const std::optional<MediaTaskCardModel> loopCard = presenter.activeCard();
   const std::optional<processing::TaskActivity> loopActivity =
       coordinator.activity();
-  ok &= expect(loopCard && loopActivity && !loopCard->progress &&
-                   loopCard->taskId == loopActivity->id &&
-                   loopCard->cancellable &&
-                   loopCard->title == "Splitting loop",
+  ok &= expect(loopActivity && !loopActivity->progress &&
+                   loopActivity->cancellable,
                "tasks without measurable progress must stay indeterminate");
   ok &= expect(
       !coordinator.cancelActive(melody->id) &&
           coordinator.cancelActive(loopActivity->id) &&
           !coordinator.cancelActive(loopActivity->id),
                "generic background work must accept cancellation once");
-  const std::optional<MediaTaskCardModel> cancellingLoopCard =
-      presenter.activeCard();
-  ok &= expect(cancellingLoopCard &&
-                   !cancellingLoopCard->cancellable &&
-                   cancellingLoopCard->cancelling &&
-                   cancellingLoopCard->title == "Cancelling loop split",
-               "generic cancellation must reach the shared task card");
+  const std::optional<processing::TaskActivity> cancellingLoop =
+      coordinator.activity();
+  ok &= expect(cancellingLoop && cancellingLoop->id == loopActivity->id &&
+                   !cancellingLoop->cancellable &&
+                   cancellingLoop->cancelling,
+               "generic cancellation must remain explicit task state");
   const auto cancelledLoopCompletion = waitForCompletion(coordinator);
   ok &= expect(cancelledLoopCompletion &&
                    cancelledLoopCompletion->id == loopActivity->id &&
@@ -583,17 +545,13 @@ int main() {
                    }),
                "a completed cancellation must not poison the next task");
   const auto loopCompletion = waitForCompletion(coordinator);
-  ok &= expect(loopCompletion && loopCompletion->succeeded() &&
-                   mediaTaskStatusModel(*loopCompletion).text ==
-                       "Loop split: Saved loop_stinger.wav and loop_loop.wav",
-               "loop splitting must project through the same completion model");
+  ok &= expect(loopCompletion && loopCompletion->succeeded(),
+               "loop splitting must publish a successful completion");
 
   const std::optional<playback_media_processing::ActionResult> subtitleStart =
       playbackActions.execute(
           playback_media_actions::Action::GenerateSubtitles, "movie.mp4");
   ok &= expect(subtitleStart && subtitleStart->accepted &&
-                   subtitleStart->feedback ==
-                       "Generating subtitles" &&
                    wakeIsSignaled(coordinator) &&
                    waitUntil([&]() {
                      return subtitlesStarted.load(std::memory_order_acquire);
@@ -605,16 +563,13 @@ int main() {
   const playback_media_processing::SourceState subtitleSourceState =
       coordinator.sourceStateFor("movie.mp4");
   ok &= expect(subtitles && subtitles->cancellable && subtitles->progress &&
+                   subtitles->kind ==
+                       processing::TaskKind::SubtitleGeneration &&
+                   subtitles->sourceFile == "movie.mp4" &&
                    subtitleSourceState.backgroundTaskRunning &&
                    subtitleSourceState.subtitleGenerationRunning &&
-                   !subtitleSourceState.audioSeparationRunning &&
-                   mediaTaskCardModel(*subtitles).title ==
-                       "Generating subtitles" &&
-                   mediaTaskCardModel(*subtitles).detail ==
-                       "Transcribing audio" &&
-                   mediaTaskCardModel(*subtitles).taskId == subtitles->id &&
-                   mediaTaskCardModel(*subtitles).cancellable,
-               "backend phases must reach the generic task card");
+                   !subtitleSourceState.audioSeparationRunning,
+               "subtitle work must expose typed source and progress state");
   releaseSubtitles.store(true, std::memory_order_release);
   const auto subtitleCompletion = waitForCompletion(coordinator);
   const auto playbackSubtitleCompletion =
@@ -630,11 +585,8 @@ int main() {
                        playback_media_processing::Operation::
                            SubtitleGeneration &&
                    playbackSubtitleCompletion->succeeded() &&
-                   playback_session::mediaTaskFeedback(
-                       *playbackSubtitleCompletion) ==
-                       "Subtitles ready: movie.transcript.srt" &&
-                   mediaTaskStatusModel(*subtitleCompletion).text ==
-                       "Subtitles ready: movie.transcript.srt",
+                   playbackSubtitleCompletion->outputFile ==
+                       subtitleCompletion->outputFile,
                "subtitle completion must retain its canonical sidecar");
 
   auto playbackPriority = coordinator.acquireInteractivePlayback();
@@ -646,8 +598,6 @@ int main() {
       playbackActions.execute(playback_media_actions::Action::SeparateAudio,
                               "movie.mp4");
   ok &= expect(separationStart && separationStart->accepted &&
-                   separationStart->feedback ==
-                       "Separating audio" &&
                    wakeIsSignaled(coordinator) &&
                    !separationStarted.load(std::memory_order_acquire) &&
                    coordinator.audioSeparationRunningFor("movie.mp4"),
@@ -655,8 +605,6 @@ int main() {
                "without entering its GPU backend");
   const std::optional<processing::TaskActivity> pausedSeparation =
       coordinator.activity();
-  const std::optional<MediaTaskCardModel> pausedSeparationCard =
-      presenter.activeCard();
   playbackPriority.reset();
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
   const bool retainedBySecondLease =
@@ -670,13 +618,7 @@ int main() {
                    pausedSeparation &&
                    pausedSeparation->scheduling ==
                        processing::TaskSchedulingState::Suspended &&
-                   pausedSeparation->phase ==
-                       "Video playback has priority" &&
-                   pausedSeparationCard &&
-                   pausedSeparationCard->title ==
-                       "Audio separation paused" &&
-                   pausedSeparationCard->engineName ==
-                       "Test GPU backend" &&
+                   !pausedSeparation->processingEngine.empty() &&
                    separationStartedAfterRelease,
                "resource priority must surface as a typed paused state and "
                "enter the backend only after playback yields");
@@ -712,11 +654,7 @@ int main() {
                    !cancelling->cancellable &&
                    separationSourceState.backgroundTaskRunning &&
                    !separationSourceState.subtitleGenerationRunning &&
-                   separationSourceState.audioSeparationRunning &&
-                   mediaTaskCardModel(*cancelling).title ==
-                       "Cancelling audio separation" &&
-                   !mediaTaskCardModel(*cancelling).cancellable &&
-                   mediaTaskCardModel(*cancelling).cancelling,
+                   separationSourceState.audioSeparationRunning,
                "cancellation must remain an explicit generic activity state");
   releaseSeparation.store(true, std::memory_order_release);
   const auto separationCompletion = waitForCompletion(coordinator);
@@ -733,13 +671,8 @@ int main() {
                        playback_media_processing::Operation::AudioSeparation &&
                    playbackSeparationCompletion->outcome ==
                        playback_media_processing::Outcome::Cancelled &&
-                   playback_session::mediaTaskFeedback(
-                       *playbackSeparationCompletion) ==
-                       "Audio separation cancelled." &&
-                   mediaTaskStatusModel(*separationCompletion).text ==
-                       "Audio separation cancelled." &&
-                   mediaTaskStatusModel(*separationCompletion).tone ==
-                       MediaTaskStatusTone::Neutral,
+                   separationCompletion->detail.empty() &&
+                   playbackSeparationCompletion->detail.empty(),
                "cancelled separation must not leak backend error text");
 
   const auto exportStamp =
@@ -771,11 +704,9 @@ int main() {
           : std::nullopt;
   ok &= expect(
       audioExportStart && audioExportStart->accepted &&
-          audioExportStart->feedback == "Exporting audio" &&
           audioExportRunning && audioExportActivity &&
           audioExportActivity->kind == processing::TaskKind::AudioExport &&
-          mediaTaskCardModel(*audioExportActivity).title ==
-              "Exporting audio" &&
+          audioExportActivity->progress &&
           audioExportSourceState.audioExportRunning &&
           audioExportSourceState.transcriptTextExportAvailable &&
           observedAudioExportOutput.filename() == "movie - audio.flac" &&
@@ -783,12 +714,9 @@ int main() {
           playbackAudioExportCompletion &&
           playbackAudioExportCompletion->operation ==
               playback_media_processing::Operation::AudioExport &&
-          playback_session::mediaTaskFeedback(
-              *playbackAudioExportCompletion) ==
-              "Audio export ready: movie - audio.flac" &&
-          mediaTaskStatusModel(*audioExportCompletion).text ==
-              "Audio export ready: movie - audio.flac",
-      "audio export must share naming, progress and playback feedback");
+          playbackAudioExportCompletion->outputFile ==
+              audioExportCompletion->outputFile,
+      "audio export must share naming, progress and completion identity");
 
   const auto transcriptExportStart = playbackActions.execute(
       playback_media_actions::Action::ExportTranscriptText, exportVideo);
@@ -810,17 +738,14 @@ int main() {
           transcriptExportRunning && transcriptExportActivity &&
           transcriptExportActivity->kind ==
               processing::TaskKind::TranscriptTextExport &&
-          mediaTaskCardModel(*transcriptExportActivity).title ==
-              "Exporting transcript" &&
+          transcriptExportActivity->progress &&
           transcriptExportSourceState.transcriptTextExportRunning &&
           observedTranscriptExportOutput.filename() ==
               "movie - transcript.txt" &&
           cancelTranscriptExport && cancelTranscriptExport->accepted &&
           transcriptCancellationReachedWorker && transcriptExportCompletion &&
           transcriptExportCompletion->outcome ==
-              processing::TaskOutcome::Cancelled &&
-          mediaTaskStatusModel(*transcriptExportCompletion).text ==
-              "Transcript export cancelled.",
+              processing::TaskOutcome::Cancelled,
       "text export cancellation must use the shared asynchronous task owner");
 
   std::error_code exportCleanupError;
@@ -1142,7 +1067,11 @@ int main() {
   const auto retryCompletion = waitForCompletion(retryController);
   ok &= expect(firstAttempt && firstAttempt->accepted && firstFailure &&
                    firstFailure->outcome == processing::TaskOutcome::Failed &&
-                   failureSnapshot && !staleRetry && acceptedRetry &&
+                   failureSnapshot &&
+                   failureSnapshot->sourceFile == retryRequest.sourceFile &&
+                   failureSnapshot->retryAction ==
+                       playback_media_actions::Action::ExportAudio &&
+                   !staleRetry && acceptedRetry &&
                    acceptedRetry->accepted && retryStarted && retryCancelled &&
                    retryCompletion &&
                    retryCompletion->outcome ==

@@ -10,10 +10,9 @@
 #include "playback/media_processing_service.h"
 
 namespace media_processing {
-class Coordinator;
 struct TaskActivity;
 struct TaskCompletion;
-}
+}  // namespace media_processing
 
 struct MediaTaskCardModel {
   media_processing::TaskId taskId;
@@ -56,19 +55,3 @@ MediaTaskStatusModel mediaTaskStatusModel(
     const media_processing::TaskCompletion& completion);
 std::optional<MediaTaskFailureDialogModel> mediaTaskFailureDialogModel(
     const media_processing::TaskCompletion& completion);
-
-// Read-only adapter from application task state to TUI view models. It owns no
-// task lifecycle and keeps application services out of rendering code.
-class MediaTaskPresenter {
- public:
-  explicit MediaTaskPresenter(
-      const media_processing::Coordinator& coordinator)
-      : coordinator_(coordinator) {}
-
-  std::optional<MediaTaskCardModel> activeCard() const;
-  std::optional<MediaTaskStatusModel> latestStatus() const;
-  std::optional<MediaTaskFailureDialogModel> latestFailure() const;
-
- private:
-  const media_processing::Coordinator& coordinator_;
-};
