@@ -198,6 +198,10 @@ radioify_add_module_object_library(radioify_tool_shell_overlay_stack_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/shell_overlay_stack_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_shell_dialog_host_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/shell_dialog_host_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_browser_action_strip_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_action_strip_tests.cpp
 )

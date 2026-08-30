@@ -1067,6 +1067,33 @@ radioify_link_repo_target(shell_overlay_stack_tests)
 add_test(NAME shell_overlay_stack_tests
          COMMAND $<TARGET_FILE:shell_overlay_stack_tests>)
 
+add_executable(shell_dialog_host_tests)
+target_sources(shell_dialog_host_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_shell_dialog_host_tests>
+  ${CMAKE_SOURCE_DIR}/tui/ui/shell_dialog_host.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/application_exit.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/media_task_panel.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/playback_dialogs.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/shell_overlay_stack.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/dialog.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/button_row.cpp
+  $<TARGET_OBJECTS:radioify_text_grid_ui>
+  ${CMAKE_SOURCE_DIR}/tui/ui/browser_media_menu.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/popup_menu.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/shell_command_catalog.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/shell_keyboard_input.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/command_palette.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/single_line_text_input.cpp
+  ${CMAKE_SOURCE_DIR}/playback/media_action_confirmation_content.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+  ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
+  ${CMAKE_SOURCE_DIR}/core/unicode_display_width.cpp
+)
+radioify_link_repo_target(shell_dialog_host_tests)
+add_test(NAME shell_dialog_host_tests
+         COMMAND $<TARGET_FILE:shell_dialog_host_tests>)
+
 add_executable(browser_action_strip_tests)
 target_sources(browser_action_strip_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_browser_action_strip_tests>

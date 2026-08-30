@@ -103,6 +103,7 @@
 #include "media_formats.h"
 #include "runtime_helpers.h"
 #include "shell_command_catalog.h"
+#include "shell_dialog_host.h"
 #include "shell_keyboard_input.h"
 #include "shell_overlay_stack.h"
 #include "shell_overlay_stack_renderer.h"
@@ -584,81 +585,36 @@ int runTui(Options o, ApplicationRuntime& runtime) {
        audioPlayback, std::move(createVideoSession), videoConfig});
 
   shell_overlay_stack::Model shellOverlays;
-  const shell_overlay_stack::DialogOwner informationDialogOwner =
-      shellOverlays.createDialogOwner();
-  const shell_overlay_stack::DialogOwner applicationExitDialogOwner =
-      shellOverlays.createDialogOwner();
-  const shell_overlay_stack::DialogOwner mediaTaskDialogOwner =
-      shellOverlays.createDialogOwner();
-  const shell_overlay_stack::DialogOwner audioFallbackDialogOwner =
-      shellOverlays.createDialogOwner();
-  tui_application_exit::Controller applicationExit;
+  tui_shell_dialogs::Host shellDialogs(shellOverlays);
   tui_media_task_panel::State mediaTaskPanel;
-  tui_media_task_panel::DialogSession mediaTaskDialogs;
   tui_media_task_panel::DeferredFailureState deferredMediaTaskFailure;
-  tui_playback_dialogs::AudioFallbackSession audioFallbackDialog;
   const shell_overlay_stack::Styles shellOverlayStyles{
       theme.popupMenuStyles(), theme.commandPaletteStyles(),
       theme.dialogStyles()};
 
-  const auto resolveAudioFallback =
-      [&](const tui_playback_dialogs::AudioFallbackResolution& resolution) {
-        if (mediaCoordinator.resolveAudioFallback(resolution.decision,
-                                                  resolution.playAudio)) {
-          markDirty(UiDirtyFlags::Async);
-        }
-      };
-
-  const auto retireShellDialog =
-      [&](const shell_overlay_stack::DialogLease& lease) {
-        if (lease.owner == applicationExitDialogOwner) {
-          applicationExit.dismissed(lease.dialog);
-        } else if (lease.owner == mediaTaskDialogOwner) {
-          mediaTaskDialogs.dismissed(lease.dialog);
-        } else if (lease.owner == audioFallbackDialogOwner) {
-          if (std::optional<tui_playback_dialogs::AudioFallbackResolution>
-                  resolution = audioFallbackDialog.dismissed(lease.dialog)) {
-            resolveAudioFallback(*resolution);
-          }
-        }
-      };
-
-  const auto openShellDialog =
-      [&](shell_overlay_stack::DialogOwner owner,
-          tui_dialog::Content content) {
-        shell_overlay_stack::DialogOpening opening =
-            shellOverlays.openDialog(owner, std::move(content));
-        if (opening.replaced) retireShellDialog(*opening.replaced);
-        return opening.lease.dialog;
-      };
-
   const auto showPlaybackErrorDialog =
       [&](const std::filesystem::path& file) {
-        openShellDialog(informationDialogOwner,
-                        tui_playback_dialogs::audioPlaybackFailure(
-                            file, audioPlayback.warning()));
+        shellDialogs.showInformation(
+            tui_playback_dialogs::audioPlaybackFailure(
+                file, audioPlayback.warning()));
       };
 
   const auto showVideoPlaybackErrorDialog =
       [&](const std::filesystem::path& file,
           const playback_session::Problem& problem) {
-        openShellDialog(
-            informationDialogOwner,
+        shellDialogs.showInformation(
             tui_playback_dialogs::videoPlaybackFailure(file, problem));
       };
 
   const auto showAudioPictureInPictureOpenError = [&]() {
-    openShellDialog(informationDialogOwner,
-                    tui_playback_dialogs::pictureInPictureFailure(
-                        audioPictureInPicture.lastError()));
+    shellDialogs.showInformation(
+        tui_playback_dialogs::pictureInPictureFailure(
+            audioPictureInPicture.lastError()));
   };
 
   const auto showAudioFallbackDialog =
       [&](const application_playback::AudioFallbackRequest& request) {
-        const tui_dialog::DialogId dialog = openShellDialog(
-            audioFallbackDialogOwner,
-            tui_playback_dialogs::audioFallback(request));
-        audioFallbackDialog.opened(dialog, request.id);
+        shellDialogs.showAudioFallback(request);
       };
 
   TuiPlaybackPresenter playbackPresenter(mediaCoordinator, audioPlayback);
@@ -695,13 +651,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           } else if constexpr (
               std::is_same_v<
                   Event, application_playback::AudioFallbackRevoked>) {
-            if (std::optional<tui_dialog::DialogId> dialog =
-                    audioFallbackDialog.revoke(value.id)) {
-              if (std::optional<shell_overlay_stack::DialogLease> dismissed =
-                      shellOverlays.dismissDialog(*dialog)) {
-                retireShellDialog(*dismissed);
-              }
-            }
+            shellDialogs.revokeAudioFallback(value.id);
             markDirty();
           } else if constexpr (
               std::is_same_v<Event, TuiMediaCoordinator::ShowImages>) {
@@ -985,8 +935,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       browserInteraction.breadcrumbHover = -1;
       browserInteraction.actionHover = -1;
     }
-    const shell_overlay_stack::Dismissal dismissal = shellOverlays.dismiss();
-    if (dismissal.dialog) retireShellDialog(*dismissal.dialog);
+    shellDialogs.dismissOverlays();
     markLayoutDirty();
   };
   auto toggleOptions = [&]() {
@@ -1290,16 +1239,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     return shell_command_catalog::build(context);
   };
 
-  auto openApplicationExitDialog = [&](tui_dialog::Content content) {
-    const tui_dialog::DialogId dialog =
-        openShellDialog(applicationExitDialogOwner, std::move(content));
-    applicationExit.opened(dialog);
-  };
-
   auto openMediaTaskDialog = [&](tui_media_task_panel::DialogRequest request) {
-    const tui_dialog::DialogId dialog =
-        openShellDialog(mediaTaskDialogOwner, std::move(request.content));
-    mediaTaskDialogs.opened(dialog, std::move(request.context));
+    shellDialogs.showMediaTask(std::move(request));
   };
 
   auto presentAudioSeparationSetup =
@@ -1337,36 +1278,71 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         return result.accepted;
       };
 
-  auto applyApplicationExitTransition =
-      [&](tui_application_exit::Transition transition) {
-        for (;;) {
-          if (transition.dismissDialog) {
-            if (const std::optional<shell_overlay_stack::DialogLease> dismissed =
-                    shellOverlays.dismissDialog(*transition.dismissDialog)) {
-              retireShellDialog(*dismissed);
-              markDirty();
-            }
-          }
-          if (transition.openDialog) {
-            openApplicationExitDialog(std::move(*transition.openDialog));
-            markDirty();
-          }
-          if (!transition.intent) return;
+  auto dispatchShellDialogEvents = [&]() {
+    for (;;) {
+      std::vector<tui_shell_dialogs::Event> events =
+          shellDialogs.drainEvents();
+      if (events.empty()) return;
 
-          if (std::holds_alternative<tui_application_exit::QuitNow>(
-                  *transition.intent)) {
-            running = false;
-            return;
-          }
-
-          const auto& cancel =
-              std::get<tui_application_exit::CancelTask>(*transition.intent);
-          const bool accepted = mediaTasks.cancelActive(cancel.taskId);
-          transition = applicationExit.resolveCancellation(
-              cancel.taskId, accepted, mediaTasks.snapshot().activeCard);
-          markDirty(UiDirtyFlags::Async);
-        }
-      };
+      for (tui_shell_dialogs::Event& event : events) {
+        std::visit(
+            [&](auto&& value) {
+              using Event = std::decay_t<decltype(value)>;
+              if constexpr (
+                  std::is_same_v<Event, tui_application_exit::QuitNow>) {
+                running = false;
+              } else if constexpr (std::is_same_v<
+                                       Event,
+                                       tui_application_exit::CancelTask>) {
+                const bool accepted = mediaTasks.cancelActive(value.taskId);
+                shellDialogs.resolveApplicationExitCancellation(
+                    value.taskId, accepted,
+                    mediaTasks.snapshot().activeCard);
+                markDirty(UiDirtyFlags::Async);
+              } else if constexpr (
+                  std::is_same_v<Event,
+                                 tui_media_task_panel::RetryTask>) {
+                if (value.action ==
+                    playback_media_actions::Action::SetUpAudioSeparation) {
+                  presentAudioSeparationSetup(value.sourceFile);
+                  return;
+                }
+                const media_processing::ActionRequest request =
+                    media_processing::captureActionRequest(
+                        value.action, value.sourceFile, std::nullopt,
+                        o.output, audioPlayback);
+                const auto retry = mediaTasks.retry(value.taskId, request);
+                if (retry) {
+                  mediaCommandError =
+                      retry->accepted ? std::string() : retry->feedback;
+                  markLayoutDirty();
+                }
+              } else if constexpr (
+                  std::is_same_v<Event,
+                                 tui_media_task_panel::CancelTask>) {
+                if (mediaTasks.cancelActive(value.taskId)) {
+                  markDirty(UiDirtyFlags::Async);
+                }
+              } else if constexpr (
+                  std::is_same_v<
+                      Event,
+                      tui_media_task_panel::SetUpAudioSeparation>) {
+                confirmAudioSeparationSetup(value.request);
+              } else if constexpr (
+                  std::is_same_v<
+                      Event,
+                      tui_playback_dialogs::AudioFallbackResolution>) {
+                if (mediaCoordinator.resolveAudioFallback(value.decision,
+                                                          value.playAudio)) {
+                  markDirty(UiDirtyFlags::Async);
+                }
+              }
+            },
+            std::move(event));
+        if (!running) return;
+      }
+    }
+  };
 
   auto requestMediaTaskCancellation = [&]() {
     const std::optional<MediaTaskCardModel>& task =
@@ -1522,14 +1498,9 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     tui_media_tasks::Update taskUpdate = mediaTasks.poll();
     const tui_media_tasks::Snapshot& taskSnapshot = mediaTasks.snapshot();
     mediaTaskPanel.synchronize(taskSnapshot.activeCard);
-    if (const std::optional<tui_dialog::DialogId> obsoleteDialog =
-            mediaTaskDialogs.synchronize(taskSnapshot.activeCard,
+    if (shellDialogs.synchronizeMediaTask(taskSnapshot.activeCard,
                                          taskSnapshot.latestFailure)) {
-      if (const std::optional<shell_overlay_stack::DialogLease> dismissed =
-              shellOverlays.dismissDialog(*obsoleteDialog)) {
-        retireShellDialog(*dismissed);
-        markDirty();
-      }
+      markDirty();
     }
     for (const media_processing::TaskCompletion& completion :
          taskUpdate.completions) {
@@ -1548,13 +1519,14 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
     if (applicationQuitRequested) {
       applicationQuitRequested = false;
-      applyApplicationExitTransition(
-          applicationExit.request(taskSnapshot.activeCard));
+      if (shellDialogs.requestApplicationExit(taskSnapshot.activeCard)) {
+        markDirty();
+      }
     }
-    if (running) {
-      applyApplicationExitTransition(
-          applicationExit.synchronize(taskSnapshot.activeCard));
+    if (shellDialogs.synchronizeApplicationExit(taskSnapshot.activeCard)) {
+      markDirty();
     }
+    dispatchShellDialogEvents();
     if (!running) break;
     syncShellControls();
     const PlaybackShellTerminalRole terminalRole =
@@ -1778,80 +1750,14 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       }
       if (shellOverlays.active()) {
         const shell_command_catalog::Catalog catalog = buildCommands();
-        const shell_overlay_stack::Interaction interaction =
-            shellOverlays.handle(
-                ev, shell_overlay_stack::Bounds{width, height, listTop},
-                catalog);
+        const tui_shell_dialogs::Interaction interaction = shellDialogs.handle(
+            ev, shell_overlay_stack::Bounds{width, height, listTop}, catalog,
+            mediaTasks.snapshot().activeCard);
         if (interaction.mediaCommand) {
           runFileContextAction(std::move(*interaction.mediaCommand));
         }
         if (interaction.paletteIntent) {
           dispatchPaletteIntent(*interaction.paletteIntent);
-        }
-        std::optional<tui_media_task_panel::DialogIntent> taskDialogIntent;
-        std::optional<tui_playback_dialogs::AudioFallbackResolution>
-            audioFallbackResolution;
-        if (interaction.dialogResolution) {
-          const shell_overlay_stack::DialogResolution& resolution =
-              *interaction.dialogResolution;
-          if (resolution.activatedButton) {
-            const tui_dialog::ButtonActivation activation{
-                resolution.lease.dialog, *resolution.activatedButton};
-            if (resolution.lease.owner == applicationExitDialogOwner) {
-              tui_application_exit::Transition exitTransition =
-                  applicationExit.handle(
-                      activation, mediaTasks.snapshot().activeCard);
-              if (exitTransition.handled) {
-                applyApplicationExitTransition(std::move(exitTransition));
-              }
-            } else if (resolution.lease.owner == mediaTaskDialogOwner) {
-              taskDialogIntent = mediaTaskDialogs.handle(activation);
-            } else if (resolution.lease.owner ==
-                       audioFallbackDialogOwner) {
-              audioFallbackResolution =
-                  audioFallbackDialog.handle(activation);
-            }
-          }
-          retireShellDialog(resolution.lease);
-        }
-        if (audioFallbackResolution) {
-          resolveAudioFallback(*audioFallbackResolution);
-        }
-        if (taskDialogIntent) {
-          std::visit(
-              [&](const auto& value) {
-                using Intent = std::decay_t<decltype(value)>;
-                if constexpr (std::is_same_v<Intent,
-                                             tui_media_task_panel::RetryTask>) {
-                  if (value.action ==
-                      playback_media_actions::Action::SetUpAudioSeparation) {
-                    presentAudioSeparationSetup(value.sourceFile);
-                    return;
-                  }
-                  const media_processing::ActionRequest request =
-                      media_processing::captureActionRequest(
-                          value.action, value.sourceFile, std::nullopt,
-                          o.output, audioPlayback);
-                  const auto retry = mediaTasks.retry(value.taskId, request);
-                  if (retry) {
-                    mediaCommandError =
-                        retry->accepted ? std::string() : retry->feedback;
-                    markLayoutDirty();
-                  }
-                } else if constexpr (std::is_same_v<
-                                         Intent,
-                                         tui_media_task_panel::CancelTask>) {
-                  if (mediaTasks.cancelActive(value.taskId)) {
-                      markDirty(UiDirtyFlags::Async);
-                    }
-                } else if constexpr (std::is_same_v<
-                                         Intent,
-                                         tui_media_task_panel::
-                                             SetUpAudioSeparation>) {
-                  confirmAudioSeparationSetup(value.request);
-                }
-              },
-              *taskDialogIntent);
         }
         if (interaction.changed) {
           dirty = true;
@@ -1962,6 +1868,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       processShellPlaybackCommands();
       if (!running) return true;
       processInputEvent(event, inputSurface);
+      dispatchShellDialogEvents();
       if (didRender) {
         finalizeRenderedExit();
         return false;
