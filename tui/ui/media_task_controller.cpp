@@ -26,8 +26,10 @@ std::optional<playback_media_processing::ActionResult> Controller::retry(
     media_processing::TaskId expectedFailure,
     const media_processing::ActionRequest& request) {
   refreshSnapshot();
-  if (snapshot_.activeActivity || !snapshot_.latestFailure ||
-      snapshot_.latestFailure->taskId != expectedFailure) {
+  if (snapshot_.activeActivity || !snapshot_.latestCompletion ||
+      snapshot_.latestCompletion->id != expectedFailure ||
+      snapshot_.latestCompletion->outcome !=
+          media_processing::TaskOutcome::Failed) {
     return std::nullopt;
   }
   return execute(request);
@@ -111,13 +113,16 @@ void Controller::refreshSnapshot() {
           ? std::optional<MediaTaskCardModel>(mediaTaskCardModel(*activity))
           : std::nullopt;
 
-  const std::optional<media_processing::TaskCompletion> completion =
-      coordinator_.latestCompletion();
-  snapshot_.latestStatus = completion ? std::optional<MediaTaskStatusModel>(
-                                            mediaTaskStatusModel(*completion))
-                                      : std::nullopt;
+  snapshot_.latestCompletion = coordinator_.latestCompletion();
+  snapshot_.latestStatus =
+      snapshot_.latestCompletion
+          ? std::optional<MediaTaskStatusModel>(
+                mediaTaskStatusModel(*snapshot_.latestCompletion))
+          : std::nullopt;
   snapshot_.latestFailure =
-      completion ? mediaTaskFailureDialogModel(*completion) : std::nullopt;
+      snapshot_.latestCompletion
+          ? mediaTaskFailureDialogModel(*snapshot_.latestCompletion)
+          : std::nullopt;
 }
 
 bool Controller::statusVisible(const Snapshot& snapshot) {

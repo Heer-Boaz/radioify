@@ -777,6 +777,11 @@ int main() {
   const auto trackedMelodyCard = taskController.snapshot().activeCard;
   releaseMelody.store(true, std::memory_order_release);
   const auto trackedMelodyCompletion = waitForCompletion(taskController);
+  const auto retrySuccessfulMelody =
+      trackedMelodyCompletion
+          ? taskController.retry(trackedMelodyCompletion->id,
+                                 trackedMelodyRequest)
+          : std::nullopt;
   ok &= expect(
       trackedMelodyStart && trackedMelodyStart->accepted &&
           trackedMelodyRunning && trackedMelodyActivity &&
@@ -787,6 +792,7 @@ int main() {
           trackedMelodyCard &&
           trackedMelodyCard->taskId == trackedMelodyActivity->taskId &&
           trackedMelodyCompletion && trackedMelodyCompletion->succeeded() &&
+          !retrySuccessfulMelody &&
           observedMelodyTrackIndex == 7 &&
           observedMelodyOutput ==
               std::filesystem::path("album.flac.track007.melody"),
@@ -1050,13 +1056,15 @@ int main() {
   retryRequest.sourceFile = "retry.mp4";
   const auto firstAttempt = retryController.execute(retryRequest);
   const auto firstFailure = waitForCompletion(retryController);
+  const auto failureCompletion =
+      retryController.snapshot().latestCompletion;
   const auto failureSnapshot = retryController.snapshot().latestFailure;
   const processing::TaskId staleFailure{
-      failureSnapshot ? failureSnapshot->taskId.value + 1 : 1};
+      failureCompletion ? failureCompletion->id.value + 1 : 1};
   const auto staleRetry = retryController.retry(staleFailure, retryRequest);
-  const auto acceptedRetry = failureSnapshot
+  const auto acceptedRetry = failureCompletion
                                  ? retryController.retry(
-                                       failureSnapshot->taskId, retryRequest)
+                                       failureCompletion->id, retryRequest)
                                  : std::nullopt;
   const bool retryStarted = waitUntil([&]() {
     return retryRuns.load(std::memory_order_acquire) == 2;
@@ -1067,6 +1075,11 @@ int main() {
   const auto retryCompletion = waitForCompletion(retryController);
   ok &= expect(firstAttempt && firstAttempt->accepted && firstFailure &&
                    firstFailure->outcome == processing::TaskOutcome::Failed &&
+                   failureCompletion &&
+                   failureCompletion->id == firstFailure->id &&
+                   failureCompletion->outcome ==
+                       processing::TaskOutcome::Failed &&
+                   failureCompletion->sourceFile == retryRequest.sourceFile &&
                    failureSnapshot &&
                    failureSnapshot->sourceFile == retryRequest.sourceFile &&
                    failureSnapshot->retryAction ==
