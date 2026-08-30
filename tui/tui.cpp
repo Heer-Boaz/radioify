@@ -617,7 +617,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         shellDialogs.showAudioFallback(request);
       };
 
-  TuiPlaybackPresenter playbackPresenter(mediaCoordinator, audioPlayback);
+  TuiPlaybackPresenter playbackPresenter(mediaCoordinator);
   bool applicationQuitRequested = false;
   auto handleMediaCoordinatorEvent =
       [&](TuiMediaCoordinator::Event event) {

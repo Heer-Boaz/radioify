@@ -1621,12 +1621,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     return computeWakeDeadline(state);
   }
 
-  PlaybackControlState controlState() const {
-    return buildVideoControlState();
-  }
-
-  PlaybackPresentationState presentationState() const {
-    return presentationController.state();
+  playback_session::ViewSnapshot viewSnapshot() const {
+    return {buildVideoControlState(), presentationController.state()};
   }
 
   bool capturesBrowserInput() const {
@@ -1823,12 +1819,8 @@ wake_schedule::Deadline PlaybackLoopRunner::nextWakeDeadline() const {
   return impl_->nextWakeDeadline();
 }
 
-PlaybackControlState PlaybackLoopRunner::controlState() const {
-  return impl_->controlState();
-}
-
-PlaybackPresentationState PlaybackLoopRunner::presentationState() const {
-  return impl_->presentationState();
+playback_session::ViewSnapshot PlaybackLoopRunner::viewSnapshot() const {
+  return impl_->viewSnapshot();
 }
 
 bool PlaybackLoopRunner::capturesBrowserInput() const {

@@ -20,13 +20,9 @@ PlaybackControlSessionId PlaybackControlRouter::sessionId() const noexcept {
 }
 
 std::optional<PlaybackControlState>
-PlaybackControlRouter::videoControlState(
-    ConstVideoSessionRef videoSession) const {
-  if (!sessionId_.valid() || !videoSession ||
-      !videoSession->get().ready()) {
-    return std::nullopt;
-  }
-  PlaybackControlState control = videoSession->get().controlState();
+PlaybackControlRouter::bindVideoControlState(
+    PlaybackControlState control) const {
+  if (!sessionId_.valid()) return std::nullopt;
   control.session = sessionId_;
   return control;
 }

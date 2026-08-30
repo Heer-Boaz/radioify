@@ -3,19 +3,16 @@
 #include "tui/ui/playback_presentation.h"
 
 class TuiMediaCoordinator;
-class AudioPlaybackRuntime;
 
-// Read-only application adapter. It samples each runtime once, then delegates
-// all precedence and view-model policy to the pure presentation projection.
+// Read-only application adapter. It projects one coordinator-owned playback
+// snapshot so presentation never assembles state through independent getters.
 class TuiPlaybackPresenter {
  public:
-  TuiPlaybackPresenter(const TuiMediaCoordinator& coordinator,
-                       const AudioPlaybackRuntime& audioPlayback)
-      : coordinator_(coordinator), audioPlayback_(audioPlayback) {}
+  explicit TuiPlaybackPresenter(const TuiMediaCoordinator& coordinator)
+      : coordinator_(coordinator) {}
 
   PlaybackPresentationModel model() const;
 
  private:
   const TuiMediaCoordinator& coordinator_;
-  const AudioPlaybackRuntime& audioPlayback_;
 };

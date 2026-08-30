@@ -15,6 +15,7 @@
 #include "playback/ascii/frame_output.h"
 #include "playback/session/event.h"
 #include "playback/session/state.h"
+#include "playback/session/view_snapshot.h"
 #include "log.h"
 #include "playback/video/playback.h"
 
@@ -70,8 +71,7 @@ class PlaybackLoopRunner {
   PlaybackShellTerminalRole terminalRole() const;
   std::vector<NativeWaitHandle> activityWaitHandles() const;
   wake_schedule::Deadline nextWakeDeadline() const;
-  PlaybackControlState controlState() const;
-  PlaybackPresentationState presentationState() const;
+  playback_session::ViewSnapshot viewSnapshot() const;
   bool capturesBrowserInput() const;
   void setExternalInputModal(bool modal);
   bool handleInputEvent(const InputEvent& event);

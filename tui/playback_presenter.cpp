@@ -2,21 +2,18 @@
 
 #include <utility>
 
-#include "audio/audioplayback.h"
 #include "tui/media_coordinator.h"
 
 PlaybackPresentationModel TuiPlaybackPresenter::model() const {
-  AudioPlaybackSnapshot audio = audioPlayback_.snapshot();
-  std::optional<TuiMediaCoordinator::VideoSnapshot> video =
-      coordinator_.videoSnapshot();
-  if (!video) {
-    return playbackPresentationModel(std::move(audio),
-                                     coordinator_.controlSessionId(),
-                                     std::nullopt,
-                                     std::nullopt);
+  TuiMediaCoordinator::PlaybackSnapshot playback =
+      coordinator_.playbackSnapshot();
+  std::optional<PlaybackControlState> videoControl;
+  std::optional<PlaybackPresentationState> videoPresentation;
+  if (playback.video) {
+    videoControl = std::move(playback.video->control);
+    videoPresentation = std::move(playback.video->presentation);
   }
-  return playbackPresentationModel(std::move(audio),
-                                   coordinator_.controlSessionId(),
-                                   std::move(video->control),
-                                   std::move(video->presentation));
+  return playbackPresentationModel(
+      std::move(playback.audio), playback.controlSession,
+      std::move(videoControl), std::move(videoPresentation));
 }

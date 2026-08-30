@@ -134,11 +134,11 @@ std::optional<PlaybackShellTerminalRole> VideoSessionHost::terminalRole()
   return current->get().terminalRole();
 }
 
-std::optional<PlaybackPresentationState>
-VideoSessionHost::presentationState() const {
-  ConstSessionRef current = session();
-  if (!current || !ready()) return std::nullopt;
-  return current->get().presentationState();
+std::optional<playback_session::ViewSnapshot>
+VideoSessionHost::viewSnapshot() const {
+  const auto* activeState = std::get_if<Impl::Active>(&impl_->state);
+  return activeState ? activeState->session->viewSnapshot()
+                     : std::nullopt;
 }
 
 std::optional<playback_session::TransitionSnapshot>

@@ -476,14 +476,10 @@ wake_schedule::Deadline PlaybackSession::nextWakeDeadline() const {
   return impl_->loop->nextWakeDeadline();
 }
 
-PlaybackControlState PlaybackSession::controlState() const {
-  assert(impl_->canControl());
-  return impl_->loop->controlState();
-}
-
-PlaybackPresentationState PlaybackSession::presentationState() const {
-  assert(impl_->canControl());
-  return impl_->loop->presentationState();
+std::optional<playback_session::ViewSnapshot>
+PlaybackSession::viewSnapshot() const {
+  if (!impl_->canControl()) return std::nullopt;
+  return impl_->loop->viewSnapshot();
 }
 
 bool PlaybackSession::capturesBrowserInput() const {

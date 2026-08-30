@@ -58,8 +58,8 @@ class PlaybackSession final : public playback_session::VideoSession {
   PlaybackShellTerminalRole terminalRole() const override;
   std::vector<NativeWaitHandle> activityWaitHandles() const override;
   wake_schedule::Deadline nextWakeDeadline() const override;
-  PlaybackControlState controlState() const override;
-  PlaybackPresentationState presentationState() const override;
+  std::optional<playback_session::ViewSnapshot> viewSnapshot()
+      const override;
   bool capturesBrowserInput() const override;
   void setExternalInputModal(bool modal) override;
   bool handleInputEvent(const InputEvent& event) override;

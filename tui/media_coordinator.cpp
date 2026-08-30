@@ -186,17 +186,25 @@ struct TuiMediaCoordinator::Impl {
     return videoSessions_.session();
   }
 
-  application_playback::ConstVideoSessionRef videoSessionRef() const {
-    return videoSessions_.session();
-  }
+  PlaybackSnapshot playbackSnapshot() const {
+    PlaybackSnapshot result;
+    result.audio = services_.audioPlayback.snapshot();
 
-  std::optional<VideoSnapshot> videoSnapshot() const {
+    std::optional<playback_session::ViewSnapshot> video =
+        videoSessions_.viewSnapshot();
+    if (!video) {
+      result.controlSession = playbackControl_.sessionId();
+      return result;
+    }
+
     std::optional<PlaybackControlState> control =
-        playbackControl_.videoControlState(videoSessionRef());
-    std::optional<PlaybackPresentationState> presentation =
-        videoSessions_.presentationState();
-    if (!control || !presentation) return std::nullopt;
-    return VideoSnapshot{std::move(*control), std::move(*presentation)};
+        playbackControl_.bindVideoControlState(std::move(video->control));
+    if (!control) return result;
+
+    result.controlSession = control->session;
+    result.video =
+        VideoSnapshot{std::move(*control), std::move(video->presentation)};
+    return result;
   }
 
   std::optional<playback_session::TransitionSnapshot>
@@ -982,9 +990,9 @@ PlaybackShellTerminalRole TuiMediaCoordinator::terminalRole() const {
   return impl_->terminalRole();
 }
 
-std::optional<TuiMediaCoordinator::VideoSnapshot>
-TuiMediaCoordinator::videoSnapshot() const {
-  return impl_->videoSnapshot();
+TuiMediaCoordinator::PlaybackSnapshot
+TuiMediaCoordinator::playbackSnapshot() const {
+  return impl_->playbackSnapshot();
 }
 
 std::optional<playback_session::TransitionSnapshot>

@@ -87,6 +87,7 @@ struct VideoSessionRecord {
   VideoOpenPlan openPlan = VideoOpenPlan::ReadyNow;
   bool opening = false;
   bool ready = false;
+  int viewSnapshotCalls = 0;
   int windowToggleRequests = 0;
   std::vector<PlaybackControlCommand> controlCommands;
   std::vector<std::pair<playback_session_exit::RequestId, bool>>
@@ -154,13 +155,13 @@ class RecordingVideoSession final : public playback_session::VideoSession {
   wake_schedule::Deadline nextWakeDeadline() const override {
     return std::nullopt;
   }
-  PlaybackControlState controlState() const override {
+  std::optional<playback_session::ViewSnapshot> viewSnapshot()
+      const override {
+    if (!record_->ready) return std::nullopt;
+    ++record_->viewSnapshotCalls;
     PlaybackControlState state(playbackFileTarget(record_->file), true);
     state.status = PlaybackControlStatus::Playing;
-    return state;
-  }
-  PlaybackPresentationState presentationState() const override {
-    return presentation_;
+    return playback_session::ViewSnapshot{std::move(state), presentation_};
   }
   bool capturesBrowserInput() const override { return false; }
   void setExternalInputModal(bool) override {}
@@ -420,8 +421,21 @@ int main() {
 
   const PlaybackControlSessionId firstControlSession =
       coordinator.controlSessionId();
-  ok &= expect(firstControlSession.valid(),
-               "accepted playback must own a control-session identity");
+  const TuiMediaCoordinator::PlaybackSnapshot firstPlaybackSnapshot =
+      coordinator.playbackSnapshot();
+  ok &= expect(
+      firstControlSession.valid() &&
+          firstPlaybackSnapshot.controlSession == firstControlSession &&
+          firstPlaybackSnapshot.video &&
+          firstPlaybackSnapshot.video->control.session ==
+              firstControlSession &&
+          playbackTargetFile(firstPlaybackSnapshot.video->control.target) ==
+              first &&
+          firstPlaybackSnapshot.video->presentation ==
+              PlaybackPresentationState::terminalAscii() &&
+          sessions.front()->viewSnapshotCalls == 1,
+      "accepted video playback must publish one identity-bound view "
+      "snapshot from one session read");
 
   ok &= expect(coordinator.toggleWindowPresentation() &&
                    sessions.front()->windowToggleRequests == 1 &&
@@ -429,6 +443,18 @@ int main() {
                    audio.pauseRequests == 0 && audio.toggleRequests == 0,
                "switching presentation must not synthesize audio or video "
                "transport commands");
+
+  const TuiMediaCoordinator::PlaybackSnapshot windowedPlaybackSnapshot =
+      coordinator.playbackSnapshot();
+  ok &= expect(
+      windowedPlaybackSnapshot.controlSession == firstControlSession &&
+          windowedPlaybackSnapshot.video &&
+          windowedPlaybackSnapshot.video->control.session ==
+              firstControlSession &&
+          windowedPlaybackSnapshot.video->presentation.requiresNativeWindow() &&
+          sessions.front()->viewSnapshotCalls == 2,
+      "changing window presentation must update the next coherent session "
+      "snapshot without rotating transport ownership");
 
   const PlaybackControlCommandEvent stalePause{
       PlaybackControlSessionId{firstControlSession.value + 1},
@@ -482,14 +508,22 @@ int main() {
   const TuiMediaCoordinator::PollResult audioHandoff = coordinator.poll();
   const PlaybackControlSessionId firstAudioControlSession =
       coordinator.controlSessionId();
+  const TuiMediaCoordinator::PlaybackSnapshot audioPlaybackSnapshot =
+      coordinator.playbackSnapshot();
   ok &= expect(audioHandoff.playbackChanged && !coordinator.videoReady() &&
                    audio.startedFiles ==
                        std::vector<std::filesystem::path>{firstAudio} &&
                    audio.startedTrackIndices == std::vector<int>{7} &&
                    firstAudioControlSession.valid() &&
-                   firstAudioControlSession != secondVideoControlSession,
+                   firstAudioControlSession != secondVideoControlSession &&
+                   audioPlaybackSnapshot.controlSession ==
+                       firstAudioControlSession &&
+                   !audioPlaybackSnapshot.video &&
+                   audioPlaybackSnapshot.audio.source &&
+                   audioPlaybackSnapshot.audio.source->file == firstAudio &&
+                   audioPlaybackSnapshot.audio.source->trackIndex == 7,
                "completing the handoff must activate audio and rotate "
-               "control ownership");
+               "control ownership in the same playback snapshot");
 
   ok &= expect(
       !coordinator.handleSystemControlCommand(

@@ -65,7 +65,7 @@ class VideoSessionHost final : public playback_session::HandoffEndpoint {
 
   [[nodiscard]] std::optional<PlaybackShellTerminalRole> terminalRole()
       const;
-  [[nodiscard]] std::optional<PlaybackPresentationState> presentationState()
+  [[nodiscard]] std::optional<playback_session::ViewSnapshot> viewSnapshot()
       const;
   [[nodiscard]] std::optional<playback_session::TransitionSnapshot>
   transitionSnapshot() const;

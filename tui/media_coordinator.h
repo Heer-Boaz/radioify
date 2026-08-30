@@ -37,6 +37,12 @@ class TuiMediaCoordinator {
     PlaybackPresentationState presentation;
   };
 
+  struct PlaybackSnapshot {
+    AudioPlaybackSnapshot audio;
+    PlaybackControlSessionId controlSession;
+    std::optional<VideoSnapshot> video;
+  };
+
   struct ApplyAudioPictureInPicture {
     playback_route::AudioPictureInPicturePlan plan =
         playback_route::AudioPictureInPicturePlan::Keep;
@@ -106,7 +112,7 @@ class TuiMediaCoordinator {
   bool videoReady() const;
   PlaybackControlSessionId controlSessionId() const;
   PlaybackShellTerminalRole terminalRole() const;
-  std::optional<VideoSnapshot> videoSnapshot() const;
+  PlaybackSnapshot playbackSnapshot() const;
   std::optional<playback_session::TransitionSnapshot>
   videoTransitionSnapshot() const;
   std::vector<NativeWaitHandle> waitHandles() const;

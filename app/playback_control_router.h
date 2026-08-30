@@ -15,8 +15,6 @@ namespace application_playback {
 
 using VideoSessionRef =
     std::optional<std::reference_wrapper<playback_session::VideoSession>>;
-using ConstVideoSessionRef = std::optional<
-    std::reference_wrapper<const playback_session::VideoSession>>;
 
 struct ControlUnhandled {};
 struct ControlApplied {};
@@ -43,8 +41,8 @@ class PlaybackControlRouter {
   void endSession();
   [[nodiscard]] PlaybackControlSessionId sessionId() const noexcept;
 
-  [[nodiscard]] std::optional<PlaybackControlState> videoControlState(
-      ConstVideoSessionRef videoSession) const;
+  [[nodiscard]] std::optional<PlaybackControlState> bindVideoControlState(
+      PlaybackControlState control) const;
   [[nodiscard]] ControlDispatch dispatch(
       PlaybackControlCommand command, VideoSessionRef videoSession);
   [[nodiscard]] ControlDispatch dispatch(

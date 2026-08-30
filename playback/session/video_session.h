@@ -18,6 +18,7 @@
 #include "playback/session/presentation_policy.h"
 #include "playback/session/state.h"
 #include "playback/session/transition_state.h"
+#include "playback/session/view_snapshot.h"
 #include "playback/video/playback.h"
 
 struct InputEvent;
@@ -64,8 +65,7 @@ class VideoSession : public HandoffEndpoint {
   virtual PlaybackShellTerminalRole terminalRole() const = 0;
   virtual std::vector<NativeWaitHandle> activityWaitHandles() const = 0;
   virtual wake_schedule::Deadline nextWakeDeadline() const = 0;
-  virtual PlaybackControlState controlState() const = 0;
-  virtual PlaybackPresentationState presentationState() const = 0;
+  virtual std::optional<ViewSnapshot> viewSnapshot() const = 0;
   virtual bool capturesBrowserInput() const = 0;
   bool handoffRequestDeferred() const final override {
     return capturesBrowserInput();
