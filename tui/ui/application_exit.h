@@ -3,7 +3,8 @@
 #include <optional>
 #include <variant>
 
-#include "tui/ui/media_task_presentation.h"
+#include "dialog.h"
+#include "playback/media_processing_service.h"
 
 namespace tui_application_exit {
 
@@ -13,7 +14,7 @@ inline constexpr tui_dialog::ButtonId kKeepRadioifyOpenButton = 2;
 struct QuitNow {};
 
 struct CancelTask {
-  media_processing::TaskId taskId;
+  playback_media_processing::TaskId taskId;
 };
 
 using Intent = std::variant<QuitNow, CancelTask>;
@@ -35,15 +36,15 @@ struct Transition {
 class Controller {
  public:
   Transition request(
-      const std::optional<MediaTaskCardModel>& activeTask);
+      const std::optional<playback_media_processing::Activity>& activeTask);
   Transition synchronize(
-      const std::optional<MediaTaskCardModel>& activeTask);
+      const std::optional<playback_media_processing::Activity>& activeTask);
   Transition handle(
       const tui_dialog::ButtonActivation& activation,
-      const std::optional<MediaTaskCardModel>& activeTask);
+      const std::optional<playback_media_processing::Activity>& activeTask);
   Transition resolveCancellation(
-      media_processing::TaskId taskId, bool accepted,
-      const std::optional<MediaTaskCardModel>& activeTask);
+      playback_media_processing::TaskId taskId, bool accepted,
+      const std::optional<playback_media_processing::Activity>& activeTask);
 
   void opened(tui_dialog::DialogId dialog);
   void dismissed(tui_dialog::DialogId dialog);
@@ -58,13 +59,13 @@ class Controller {
   };
 
   Transition beginFor(
-      const std::optional<MediaTaskCardModel>& activeTask);
+      const std::optional<playback_media_processing::Activity>& activeTask);
   Transition replaceFor(
-      const std::optional<MediaTaskCardModel>& activeTask);
+      const std::optional<playback_media_processing::Activity>& activeTask);
   void reset();
 
   Phase phase_ = Phase::Idle;
-  std::optional<MediaTaskCardModel> task_;
+  std::optional<playback_media_processing::Activity> task_;
   std::optional<tui_dialog::DialogId> dialog_;
 };
 

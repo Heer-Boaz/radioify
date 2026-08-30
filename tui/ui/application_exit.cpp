@@ -3,24 +3,35 @@
 #include <string>
 #include <utility>
 
+#include "core/runtime_helpers.h"
+#include "playback/media_processing_actions.h"
+
 namespace tui_application_exit {
 namespace {
 
+std::string sourceName(const playback_media_processing::Activity& task) {
+  if (task.sourceFile.empty()) return "(unknown)";
+  const std::filesystem::path filename = task.sourceFile.filename();
+  return toUtf8String(filename.empty() ? task.sourceFile : filename);
+}
+
 tui_dialog::Content cancellationConfirmation(
-    const MediaTaskCardModel& task, bool cancellationWasRejected = false) {
+    const playback_media_processing::Activity& task,
+    bool cancellationWasRejected = false) {
+  const std::string taskSourceName = sourceName(task);
+  const std::string operationName =
+      playback_media_processing::operationDisplayName(task.operation);
   tui_dialog::Content content;
   content.title = "Quit Radioify?";
   if (cancellationWasRejected) {
     content.text.push_back(
-        {"The task could not be cancelled yet.",
-         tui_dialog::TextTone::Error});
+        {"The task could not be cancelled yet.", tui_dialog::TextTone::Error});
   }
   content.text.push_back(
-      {"Background work is still running for " + task.sourceName + ".",
+      {"Background work is still running for " + taskSourceName + ".",
        tui_dialog::TextTone::Normal});
   content.text.push_back(
-      {"Quitting will cancel " + task.operationName +
-           " and discard its progress.",
+      {"Quitting will cancel " + operationName + " and discard its progress.",
        tui_dialog::TextTone::Normal});
   content.buttons.push_back(
       {kQuitAndCancelTaskButton, "Quit and cancel task", "Quit + cancel"});
@@ -30,28 +41,28 @@ tui_dialog::Content cancellationConfirmation(
   return content;
 }
 
-tui_dialog::Content waitingForTask(const MediaTaskCardModel& task) {
+tui_dialog::Content waitingForTask(
+    const playback_media_processing::Activity& task) {
+  const std::string taskSourceName = sourceName(task);
+  const std::string operationName =
+      playback_media_processing::operationDisplayName(task.operation);
   tui_dialog::Content content;
   if (task.cancelling) {
     content.title = "Cancelling before quit";
-    content.text.push_back(
-        {"Radioify is cancelling " + task.operationName + " for " +
-             task.sourceName + ".",
-         tui_dialog::TextTone::Normal});
-    content.text.push_back(
-        {"Radioify will close when the task has stopped.",
-         tui_dialog::TextTone::Secondary});
+    content.text.push_back({"Radioify is cancelling " + operationName +
+                                " for " + taskSourceName + ".",
+                            tui_dialog::TextTone::Normal});
+    content.text.push_back({"Radioify will close when the task has stopped.",
+                            tui_dialog::TextTone::Secondary});
   } else {
     content.title = "Finishing before quit";
     content.text.push_back(
-        {"Radioify is publishing the output for " + task.sourceName + ".",
+        {"Radioify is publishing the output for " + taskSourceName + ".",
          tui_dialog::TextTone::Normal});
-    content.text.push_back(
-        {"This final step can no longer be cancelled.",
-         tui_dialog::TextTone::Secondary});
-    content.text.push_back(
-        {"Radioify will close when the output is safe.",
-         tui_dialog::TextTone::Secondary});
+    content.text.push_back({"This final step can no longer be cancelled.",
+                            tui_dialog::TextTone::Secondary});
+    content.text.push_back({"Radioify will close when the output is safe.",
+                            tui_dialog::TextTone::Secondary});
   }
   content.buttons.push_back(
       {kKeepRadioifyOpenButton, "Keep Radioify open", "Keep open"});
@@ -69,13 +80,13 @@ Transition quitNow(std::optional<tui_dialog::DialogId> dismiss = {}) {
 }  // namespace
 
 Transition Controller::request(
-    const std::optional<MediaTaskCardModel>& activeTask) {
+    const std::optional<playback_media_processing::Activity>& activeTask) {
   if (phase_ != Phase::Idle) return {};
   return beginFor(activeTask);
 }
 
 Transition Controller::beginFor(
-    const std::optional<MediaTaskCardModel>& activeTask) {
+    const std::optional<playback_media_processing::Activity>& activeTask) {
   if (!activeTask) {
     reset();
     return quitNow();
@@ -94,7 +105,7 @@ Transition Controller::beginFor(
 }
 
 Transition Controller::replaceFor(
-    const std::optional<MediaTaskCardModel>& activeTask) {
+    const std::optional<playback_media_processing::Activity>& activeTask) {
   const std::optional<tui_dialog::DialogId> obsolete = dialog_;
   reset();
   Transition transition = beginFor(activeTask);
@@ -103,7 +114,7 @@ Transition Controller::replaceFor(
 }
 
 Transition Controller::synchronize(
-    const std::optional<MediaTaskCardModel>& activeTask) {
+    const std::optional<playback_media_processing::Activity>& activeTask) {
   switch (phase_) {
     case Phase::Idle:
       return {};
@@ -130,7 +141,7 @@ Transition Controller::synchronize(
 
 Transition Controller::handle(
     const tui_dialog::ButtonActivation& activation,
-    const std::optional<MediaTaskCardModel>& activeTask) {
+    const std::optional<playback_media_processing::Activity>& activeTask) {
   Transition transition;
   if (!dialog_ || activation.dialog != *dialog_) return transition;
   transition.handled = true;
@@ -170,8 +181,8 @@ Transition Controller::handle(
 }
 
 Transition Controller::resolveCancellation(
-    media_processing::TaskId taskId, bool accepted,
-    const std::optional<MediaTaskCardModel>& activeTask) {
+    playback_media_processing::TaskId taskId, bool accepted,
+    const std::optional<playback_media_processing::Activity>& activeTask) {
   if (phase_ != Phase::AwaitingCancellationResult || !task_ ||
       task_->taskId != taskId) {
     return {};

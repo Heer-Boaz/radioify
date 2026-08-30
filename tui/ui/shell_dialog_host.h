@@ -45,12 +45,12 @@ class Host {
       const application_playback::AudioFallbackRequest& request);
 
   bool requestApplicationExit(
-      const std::optional<MediaTaskCardModel>& activeTask);
+      const std::optional<playback_media_processing::Activity>& activeTask);
   bool synchronizeApplicationExit(
-      const std::optional<MediaTaskCardModel>& activeTask);
+      const std::optional<playback_media_processing::Activity>& activeTask);
   bool resolveApplicationExitCancellation(
-      media_processing::TaskId taskId, bool accepted,
-      const std::optional<MediaTaskCardModel>& activeTask);
+      playback_media_processing::TaskId taskId, bool accepted,
+      const std::optional<playback_media_processing::Activity>& activeTask);
 
   bool synchronizeMediaTask(
       const std::optional<MediaTaskCardModel>& activeTask,
@@ -59,10 +59,10 @@ class Host {
       application_playback::AudioFallbackDecisionId decision);
   bool dismissOverlays();
 
-  Interaction handle(const InputEvent& event,
-                     const shell_overlay_stack::Bounds& bounds,
-                     const shell_command_catalog::Catalog& catalog,
-                     const std::optional<MediaTaskCardModel>& activeTask);
+  Interaction handle(
+      const InputEvent& event, const shell_overlay_stack::Bounds& bounds,
+      const shell_command_catalog::Catalog& catalog,
+      const std::optional<playback_media_processing::Activity>& activeTask);
 
   std::vector<Event> drainEvents();
 
@@ -71,8 +71,9 @@ class Host {
                             tui_dialog::Content content);
   bool dismissDialog(tui_dialog::DialogId dialog);
   void retire(const shell_overlay_stack::DialogLease& lease);
-  void route(const shell_overlay_stack::DialogResolution& resolution,
-             const std::optional<MediaTaskCardModel>& activeTask);
+  void route(
+      const shell_overlay_stack::DialogResolution& resolution,
+      const std::optional<playback_media_processing::Activity>& activeTask);
   bool apply(tui_application_exit::Transition transition);
   void publish(tui_application_exit::Intent intent);
   void publish(tui_media_task_panel::DialogIntent intent);

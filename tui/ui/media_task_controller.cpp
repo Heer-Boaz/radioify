@@ -8,9 +8,7 @@ namespace tui_media_tasks {
 
 Controller::Controller(media_processing::Coordinator& coordinator,
                        media_processing::Actions& actions)
-    : coordinator_(coordinator),
-      actions_(actions),
-      presenter_(coordinator) {
+    : coordinator_(coordinator), actions_(actions) {
   refreshSnapshot();
 }
 
@@ -28,7 +26,7 @@ std::optional<playback_media_processing::ActionResult> Controller::retry(
     media_processing::TaskId expectedFailure,
     const media_processing::ActionRequest& request) {
   refreshSnapshot();
-  if (snapshot_.activeCard || !snapshot_.latestFailure ||
+  if (snapshot_.activeActivity || !snapshot_.latestFailure ||
       snapshot_.latestFailure->taskId != expectedFailure) {
     return std::nullopt;
   }
@@ -37,29 +35,28 @@ std::optional<playback_media_processing::ActionResult> Controller::retry(
 
 std::optional<MediaTaskCardModel> Controller::cancellationTarget(
     const playback_media_processing::CancellationRequest& request) {
-  const std::optional<media_processing::TaskActivity> activity =
-      coordinator_.activity();
-  if (!request.taskId || !activity || activity->id != request.taskId ||
+  refreshSnapshot();
+  const std::optional<playback_media_processing::Activity>& activity =
+      snapshot_.activeActivity;
+  if (!request.taskId || !activity || activity->taskId != request.taskId ||
       !activity->cancellable ||
       !samePath(activity->sourceFile, request.sourceFile)) {
     return std::nullopt;
   }
 
-  if (request.operation != activity->kind) {
+  if (request.operation != activity->operation) {
     return std::nullopt;
   }
 
-  refreshSnapshot();
   return snapshot_.activeCard &&
-                 snapshot_.activeCard->taskId == activity->id
+                 snapshot_.activeCard->taskId == activity->taskId
              ? snapshot_.activeCard
              : std::nullopt;
 }
 
 bool Controller::confirmCancellation(
     const playback_media_processing::CancellationRequest& request) {
-  const std::optional<MediaTaskCardModel> target =
-      cancellationTarget(request);
+  const std::optional<MediaTaskCardModel> target = cancellationTarget(request);
   if (!target || target->taskId != request.taskId) return false;
   const playback_media_processing::ActionResult result =
       actions_.playbackActions().confirmCancellation(request);
@@ -67,8 +64,7 @@ bool Controller::confirmCancellation(
   return result.accepted;
 }
 
-playback_media_processing::ActionResult
-Controller::confirmAudioSeparationSetup(
+playback_media_processing::ActionResult Controller::confirmAudioSeparationSetup(
     const playback_media_processing::AudioSeparationSetupRequest& request) {
   playback_media_processing::ActionResult result =
       actions_.playbackActions().confirmAudioSeparationSetup(request);
@@ -88,8 +84,7 @@ Update Controller::poll() {
 
   Update update;
   update.changed = processingUpdate.changed;
-  update.layoutChanged =
-      statusWasVisible != statusVisible(snapshot_);
+  update.layoutChanged = statusWasVisible != statusVisible(snapshot_);
   update.completions = std::move(processingUpdate.completions);
   return update;
 }
@@ -108,9 +103,21 @@ NativeWaitHandle Controller::waitHandle() const {
 }
 
 void Controller::refreshSnapshot() {
-  snapshot_.activeCard = presenter_.activeCard();
-  snapshot_.latestStatus = presenter_.latestStatus();
-  snapshot_.latestFailure = presenter_.latestFailure();
+  const std::optional<media_processing::TaskActivity> activity =
+      coordinator_.activity();
+  snapshot_.activeActivity = media_processing::activityForPlayback(activity);
+  snapshot_.activeCard =
+      activity
+          ? std::optional<MediaTaskCardModel>(mediaTaskCardModel(*activity))
+          : std::nullopt;
+
+  const std::optional<media_processing::TaskCompletion> completion =
+      coordinator_.latestCompletion();
+  snapshot_.latestStatus = completion ? std::optional<MediaTaskStatusModel>(
+                                            mediaTaskStatusModel(*completion))
+                                      : std::nullopt;
+  snapshot_.latestFailure =
+      completion ? mediaTaskFailureDialogModel(*completion) : std::nullopt;
 }
 
 bool Controller::statusVisible(const Snapshot& snapshot) {

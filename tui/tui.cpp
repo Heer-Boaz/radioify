@@ -1217,6 +1217,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   auto buildCommands = [&]() {
     const PlaybackPresentationModel presentation = playbackPresenter.model();
     const AudioPlaybackSnapshot& audio = presentation.audio;
+    const tui_media_tasks::Snapshot& taskSnapshot = mediaTasks.snapshot();
     shell_command_catalog::Context context;
     context.videoActive =
         presentation.control && presentation.control->isVideo;
@@ -1230,12 +1231,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     context.currentTargetAvailable =
         presentation.currentTarget.has_value();
     context.activeMediaTaskCancellable =
-        mediaTasks.snapshot().activeCard &&
-        mediaTasks.snapshot().activeCard->cancellable;
+        taskSnapshot.activeActivity &&
+        taskSnapshot.activeActivity->cancellable;
     context.mediaTaskPanelHidden = mediaTaskPanel.indicatorVisible(
-        mediaTasks.snapshot().activeCard);
+        taskSnapshot.activeCard);
     context.mediaTaskFailureAvailable =
-        mediaTasks.snapshot().latestFailure.has_value();
+        taskSnapshot.latestFailure.has_value();
     return shell_command_catalog::build(context);
   };
 
@@ -1297,7 +1298,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
                 const bool accepted = mediaTasks.cancelActive(value.taskId);
                 shellDialogs.resolveApplicationExitCancellation(
                     value.taskId, accepted,
-                    mediaTasks.snapshot().activeCard);
+                    mediaTasks.snapshot().activeActivity);
                 markDirty(UiDirtyFlags::Async);
               } else if constexpr (
                   std::is_same_v<Event,
@@ -1345,12 +1346,14 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   };
 
   auto requestMediaTaskCancellation = [&]() {
-    const std::optional<MediaTaskCardModel>& task =
-        mediaTasks.snapshot().activeCard;
-    if (!task || !task->cancellable) {
+    const tui_media_tasks::Snapshot& snapshot = mediaTasks.snapshot();
+    if (!snapshot.activeActivity || !snapshot.activeCard ||
+        !snapshot.activeActivity->cancellable ||
+        snapshot.activeActivity->taskId != snapshot.activeCard->taskId) {
       return false;
     }
-    openMediaTaskDialog(tui_media_task_panel::cancellationDialogRequest(*task));
+    openMediaTaskDialog(
+        tui_media_task_panel::cancellationDialogRequest(*snapshot.activeCard));
     return true;
   };
 
@@ -1519,11 +1522,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
     if (applicationQuitRequested) {
       applicationQuitRequested = false;
-      if (shellDialogs.requestApplicationExit(taskSnapshot.activeCard)) {
+      if (shellDialogs.requestApplicationExit(taskSnapshot.activeActivity)) {
         markDirty();
       }
     }
-    if (shellDialogs.synchronizeApplicationExit(taskSnapshot.activeCard)) {
+    if (shellDialogs.synchronizeApplicationExit(
+            taskSnapshot.activeActivity)) {
       markDirty();
     }
     dispatchShellDialogEvents();
@@ -1752,7 +1756,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         const shell_command_catalog::Catalog catalog = buildCommands();
         const tui_shell_dialogs::Interaction interaction = shellDialogs.handle(
             ev, shell_overlay_stack::Bounds{width, height, listTop}, catalog,
-            mediaTasks.snapshot().activeCard);
+            mediaTasks.snapshot().activeActivity);
         if (interaction.mediaCommand) {
           runFileContextAction(std::move(*interaction.mediaCommand));
         }

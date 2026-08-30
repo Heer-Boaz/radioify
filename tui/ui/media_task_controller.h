@@ -12,6 +12,7 @@
 namespace tui_media_tasks {
 
 struct Snapshot {
+  std::optional<playback_media_processing::Activity> activeActivity;
   std::optional<MediaTaskCardModel> activeCard;
   std::optional<MediaTaskStatusModel> latestStatus;
   std::optional<MediaTaskFailureDialogModel> latestFailure;
@@ -25,8 +26,8 @@ struct Update {
 
 // Shell-facing owner of background-task interaction and presentation. The
 // application coordinator still owns the workers; this controller is the one
-// place where the TUI polls them, handles cancellation and freezes their state
-// into a renderable snapshot.
+// place where the TUI polls them, handles cancellation and captures one typed
+// activity observation with its matching renderable projection.
 class Controller {
  public:
   Controller(media_processing::Coordinator& coordinator,
@@ -58,7 +59,6 @@ class Controller {
 
   media_processing::Coordinator& coordinator_;
   media_processing::Actions& actions_;
-  MediaTaskPresenter presenter_;
   Snapshot snapshot_;
 };
 

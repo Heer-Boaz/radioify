@@ -21,13 +21,25 @@ InputEvent keyEvent(WORD key) {
   return event;
 }
 
-MediaTaskCardModel activeTask(media_processing::TaskId id,
+MediaTaskCardModel activeCard(media_processing::TaskId id,
                               bool cancellable = true,
                               bool cancelling = false) {
   MediaTaskCardModel task;
   task.taskId = id;
   task.operation = playback_media_processing::Operation::AudioSeparation;
   task.sourceName = "source.mp4";
+  task.cancellable = cancellable;
+  task.cancelling = cancelling;
+  return task;
+}
+
+playback_media_processing::Activity activeActivity(
+    playback_media_processing::TaskId id, bool cancellable = true,
+    bool cancelling = false) {
+  playback_media_processing::Activity task;
+  task.taskId = id;
+  task.operation = playback_media_processing::Operation::AudioSeparation;
+  task.sourceFile = "source.mp4";
   task.cancellable = cancellable;
   task.cancelling = cancelling;
   return task;
@@ -92,8 +104,7 @@ int main() {
     ok &= expect(host.drainEvents().empty(),
                  "a resolved fallback decision must publish exactly once");
 
-    const auto acceptedId =
-        application_playback::AudioFallbackDecisionId{43};
+    const auto acceptedId = application_playback::AudioFallbackDecisionId{43};
     host.showAudioFallback(fallbackRequest(acceptedId));
     host.handle(keyEvent(VK_LEFT), kBounds, catalog, std::nullopt);
     host.handle(keyEvent(VK_RETURN), kBounds, catalog, std::nullopt);
@@ -145,12 +156,12 @@ int main() {
     shell_overlay_stack::Model overlays;
     Host host(overlays);
     const MediaTaskCardModel running =
-        activeTask(media_processing::TaskId{200});
+        activeCard(media_processing::TaskId{200});
     host.showMediaTask(
         tui_media_task_panel::cancellationDialogRequest(running));
-    host.handle(keyEvent(VK_LEFT), kBounds, catalog, running);
+    host.handle(keyEvent(VK_LEFT), kBounds, catalog, std::nullopt);
     const Interaction activation =
-        host.handle(keyEvent(VK_RETURN), kBounds, catalog, running);
+        host.handle(keyEvent(VK_RETURN), kBounds, catalog, std::nullopt);
     const std::vector<Event> events = host.drainEvents();
     const auto* cancellation =
         events.size() == 1
@@ -165,7 +176,7 @@ int main() {
     host.showMediaTask(
         tui_media_task_panel::cancellationDialogRequest(running));
     const MediaTaskCardModel replacement =
-        activeTask(media_processing::TaskId{201});
+        activeCard(media_processing::TaskId{201});
     ok &= expect(host.synchronizeMediaTask(replacement, std::nullopt) &&
                      !overlays.active() && host.drainEvents().empty(),
                  "a task replacement must invalidate its predecessor's "
@@ -175,8 +186,8 @@ int main() {
   {
     shell_overlay_stack::Model overlays;
     Host host(overlays);
-    const MediaTaskCardModel running =
-        activeTask(media_processing::TaskId{300});
+    const playback_media_processing::Activity running =
+        activeActivity(playback_media_processing::TaskId{300});
     host.requestApplicationExit(running);
     host.handle(keyEvent(VK_LEFT), kBounds, catalog, running);
     host.handle(keyEvent(VK_RETURN), kBounds, catalog, running);
@@ -190,8 +201,8 @@ int main() {
                "quit confirmation must hand cancellation to the exact "
                "active task owner before quitting");
 
-    const MediaTaskCardModel cancelling =
-        activeTask(running.taskId, false, true);
+    const playback_media_processing::Activity cancelling =
+        activeActivity(running.taskId, false, true);
     host.resolveApplicationExitCancellation(running.taskId, true, cancelling);
     ok &= expect(overlays.inputModal() && host.drainEvents().empty(),
                  "accepted cancellation must keep the asynchronous exit "
@@ -212,8 +223,8 @@ int main() {
   {
     shell_overlay_stack::Model overlays;
     Host host(overlays);
-    const MediaTaskCardModel running =
-        activeTask(media_processing::TaskId{400});
+    const playback_media_processing::Activity running =
+        activeActivity(playback_media_processing::TaskId{400});
     host.requestApplicationExit(running);
     host.showInformation(informationDialog());
     ok &= expect(overlays.inputModal() && host.drainEvents().empty(),
@@ -238,21 +249,19 @@ int main() {
   {
     shell_overlay_stack::Model overlays;
     Host host(overlays);
-    const MediaTaskCardModel first =
-        activeTask(media_processing::TaskId{500});
-    const MediaTaskCardModel replacement =
-        activeTask(media_processing::TaskId{501});
+    const playback_media_processing::Activity first =
+        activeActivity(playback_media_processing::TaskId{500});
+    const playback_media_processing::Activity replacement =
+        activeActivity(playback_media_processing::TaskId{501});
     host.requestApplicationExit(first);
     host.handle(keyEvent(VK_LEFT), kBounds, catalog, first);
     host.handle(keyEvent(VK_RETURN), kBounds, catalog, first);
     const std::vector<Event> firstEvents = host.drainEvents();
     const auto* firstCancellation =
-        firstEvents.size() == 1
-            ? std::get_if<tui_application_exit::CancelTask>(
-                  &firstEvents.front())
-            : nullptr;
-    ok &= expect(firstCancellation &&
-                     firstCancellation->taskId == first.taskId,
+        firstEvents.size() == 1 ? std::get_if<tui_application_exit::CancelTask>(
+                                      &firstEvents.front())
+                                : nullptr;
+    ok &= expect(firstCancellation && firstCancellation->taskId == first.taskId,
                  "the initial exit decision must remain correlated with its "
                  "original task until the owner resolves cancellation");
 

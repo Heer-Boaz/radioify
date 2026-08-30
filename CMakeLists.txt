@@ -1268,6 +1268,8 @@ add_executable(application_exit_tests)
 target_sources(application_exit_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_application_exit_tests>
   ${CMAKE_SOURCE_DIR}/tui/ui/application_exit.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
 radioify_link_repo_target(application_exit_tests)
 add_test(NAME application_exit_tests

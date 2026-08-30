@@ -30,18 +30,18 @@ void Host::showAudioFallback(
 }
 
 bool Host::requestApplicationExit(
-    const std::optional<MediaTaskCardModel>& activeTask) {
+    const std::optional<playback_media_processing::Activity>& activeTask) {
   return apply(applicationExit_.request(activeTask));
 }
 
 bool Host::synchronizeApplicationExit(
-    const std::optional<MediaTaskCardModel>& activeTask) {
+    const std::optional<playback_media_processing::Activity>& activeTask) {
   return apply(applicationExit_.synchronize(activeTask));
 }
 
 bool Host::resolveApplicationExitCancellation(
-    media_processing::TaskId taskId, bool accepted,
-    const std::optional<MediaTaskCardModel>& activeTask) {
+    playback_media_processing::TaskId taskId, bool accepted,
+    const std::optional<playback_media_processing::Activity>& activeTask) {
   return apply(
       applicationExit_.resolveCancellation(taskId, accepted, activeTask));
 }
@@ -69,10 +69,10 @@ bool Host::dismissOverlays() {
   return dismissal.changed;
 }
 
-Interaction Host::handle(const InputEvent& event,
-                         const shell_overlay_stack::Bounds& bounds,
-                         const shell_command_catalog::Catalog& catalog,
-                         const std::optional<MediaTaskCardModel>& activeTask) {
+Interaction Host::handle(
+    const InputEvent& event, const shell_overlay_stack::Bounds& bounds,
+    const shell_command_catalog::Catalog& catalog,
+    const std::optional<playback_media_processing::Activity>& activeTask) {
   shell_overlay_stack::Interaction interaction =
       overlays_.handle(event, bounds, catalog);
   if (interaction.dialogResolution) {
@@ -133,8 +133,9 @@ void Host::retire(const shell_overlay_stack::DialogLease& lease) {
          "all shell dialogs must be opened through the dialog host");
 }
 
-void Host::route(const shell_overlay_stack::DialogResolution& resolution,
-                 const std::optional<MediaTaskCardModel>& activeTask) {
+void Host::route(
+    const shell_overlay_stack::DialogResolution& resolution,
+    const std::optional<playback_media_processing::Activity>& activeTask) {
   if (resolution.activatedButton) {
     const tui_dialog::ButtonActivation activation{resolution.lease.dialog,
                                                   *resolution.activatedButton};

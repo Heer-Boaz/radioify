@@ -847,14 +847,20 @@ int main() {
   const bool trackedMelodyRunning = waitUntil([&]() {
     return melodyStarted.load(std::memory_order_acquire);
   });
+  const auto trackedMelodyActivity =
+      taskController.snapshot().activeActivity;
   const auto trackedMelodyCard = taskController.snapshot().activeCard;
   releaseMelody.store(true, std::memory_order_release);
   const auto trackedMelodyCompletion = waitForCompletion(taskController);
   ok &= expect(
       trackedMelodyStart && trackedMelodyStart->accepted &&
-          trackedMelodyStart->feedback == "Analyzing melody" &&
-          trackedMelodyRunning && trackedMelodyCard &&
-          trackedMelodyCard->title == "Analyzing melody" &&
+          trackedMelodyRunning && trackedMelodyActivity &&
+          trackedMelodyActivity->operation ==
+              playback_media_processing::Operation::MelodyAnalysis &&
+          trackedMelodyActivity->sourceFile ==
+              trackedMelodyRequest.sourceFile &&
+          trackedMelodyCard &&
+          trackedMelodyCard->taskId == trackedMelodyActivity->taskId &&
           trackedMelodyCompletion && trackedMelodyCompletion->succeeded() &&
           observedMelodyTrackIndex == 7 &&
           observedMelodyOutput ==
@@ -885,8 +891,7 @@ int main() {
   const auto splitCompletion = waitForCompletion(taskController);
   ok &= expect(
       splitStart && splitStart->accepted &&
-          splitStart->feedback == "Splitting loop" && splitRunning &&
-          splitCompletion &&
+          splitRunning && splitCompletion &&
           splitCompletion->succeeded() && observedLoopTrackIndex == 4 &&
           observedStingerOutput ==
               std::filesystem::path(R"(D:\exports\named_stinger.wav)") &&
@@ -906,6 +911,8 @@ int main() {
   const bool cancellableRunning = waitUntil([&]() {
     return separationStarted.load(std::memory_order_acquire);
   });
+  const auto cancellableActivity =
+      taskController.snapshot().activeActivity;
   const auto cancellableCard = taskController.snapshot().activeCard;
   const auto cancellationRequest =
       playback_media_processing::prepareCancellation(
@@ -945,26 +952,34 @@ int main() {
   const bool cancellationReachedWorker = waitUntil([&]() {
     return separationCancellationObserved.load(std::memory_order_acquire);
   });
+  const auto cancellingActivity =
+      taskController.snapshot().activeActivity;
   const auto cancellingCard = taskController.snapshot().activeCard;
   releaseSeparation.store(true, std::memory_order_release);
   const auto controllerCancellation = waitForCompletion(taskController);
   ok &= expect(
       cancellableStart && cancellableStart->accepted && cancellableRunning &&
-          cancellableCard && matchedCancellation &&
+          cancellableActivity && cancellableActivity->cancellable &&
+          cancellableCard &&
+          cancellableCard->taskId == cancellableActivity->taskId &&
+          matchedCancellation &&
           matchedCancellation->taskId == cancellableCard->taskId &&
           wrongSourceRejected && wrongOperationRejected && wrongTaskRejected &&
           cancellationAccepted && cancellationReachedWorker &&
-          cancellingCard &&
-          cancellingCard->title == "Cancelling audio separation" &&
+          cancellingActivity &&
+          cancellingActivity->taskId == cancellableActivity->taskId &&
+          !cancellingActivity->cancellable &&
+          cancellingActivity->cancelling && cancellingCard &&
+          cancellingCard->taskId == cancellingActivity->taskId &&
           !cancellingCard->cancellable && cancellingCard->cancelling &&
           controllerCancellation &&
           controllerCancellation->id == cancellableCard->taskId &&
           controllerCancellation->outcome ==
               processing::TaskOutcome::Cancelled &&
-          taskController.snapshot().latestStatus &&
-          taskController.snapshot().latestStatus->text ==
-              "Audio separation cancelled.",
-      "the TUI task controller must own cancellation and stable presentation");
+          !taskController.snapshot().activeActivity &&
+          !taskController.snapshot().activeCard,
+      "the TUI task controller must keep typed activity and its rendered "
+      "projection correlated throughout cancellation");
 
   std::atomic<bool> commitPreparationEntered{false};
   std::atomic<bool> allowCommitBarrier{false};
@@ -1000,6 +1015,8 @@ int main() {
     return commitPreparationEntered.load(std::memory_order_acquire);
   });
   commitBarrierTaskController.poll();
+  const auto staleCancellableActivity =
+      commitBarrierTaskController.snapshot().activeActivity;
   const auto staleCancellableCard =
       commitBarrierTaskController.snapshot().activeCard;
   allowCommitBarrier.store(true, std::memory_order_release);
@@ -1008,8 +1025,11 @@ int main() {
   });
   const auto committingActivity = commitBarrierCoordinator.activity();
   const bool lateCancellationRejected =
-      staleCancellableCard &&
-      !commitBarrierTaskController.cancelActive(staleCancellableCard->taskId);
+      staleCancellableActivity &&
+      !commitBarrierTaskController.cancelActive(
+          staleCancellableActivity->taskId);
+  const auto refreshedCommittingActivity =
+      commitBarrierTaskController.snapshot().activeActivity;
   const auto refreshedCommittingCard =
       commitBarrierTaskController.snapshot().activeCard;
   releaseCommitBarrier.store(true, std::memory_order_release);
@@ -1017,15 +1037,21 @@ int main() {
       waitForCompletion(commitBarrierTaskController);
   ok &= expect(
       commitBarrierStart.wasAccepted() && commitPreparationRunning &&
-          staleCancellableCard && staleCancellableCard->cancellable &&
+          staleCancellableActivity && staleCancellableActivity->cancellable &&
+          staleCancellableCard &&
+          staleCancellableCard->taskId == staleCancellableActivity->taskId &&
           commitBarrierRunning &&
           committingActivity && !committingActivity->cancellable &&
           !committingActivity->cancelling &&
-          committingActivity->phase == "Publishing output" &&
-          lateCancellationRejected && refreshedCommittingCard &&
+          lateCancellationRejected && refreshedCommittingActivity &&
+          refreshedCommittingActivity->taskId == committingActivity->id &&
+          !refreshedCommittingActivity->cancellable &&
+          !refreshedCommittingActivity->cancelling &&
+          refreshedCommittingCard &&
+          refreshedCommittingCard->taskId ==
+              refreshedCommittingActivity->taskId &&
           !refreshedCommittingCard->cancellable &&
           !refreshedCommittingCard->cancelling &&
-          refreshedCommittingCard->detail == "Publishing output" &&
           commitBarrierCompletion &&
           commitBarrierCompletion->succeeded(),
       "a stale Cancel must be rejected at the commit barrier and refresh the "
