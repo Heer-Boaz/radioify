@@ -112,11 +112,14 @@ Interaction Model::handle(const InputEvent& event,
 
   if (event.type == InputEvent::Type::Key) {
     result.consumed = true;
+    const int repetitions = static_cast<int>(std::min<std::size_t>(
+        keyPressCount(event.key),
+        std::max<std::size_t>(1, filteredCommandIndices_.size())));
     if (event.key.vk == VK_UP) {
-      moveSelection(-1, currentLayout.visibleRows);
+      moveSelection(-repetitions, currentLayout.visibleRows);
       result.changed = true;
     } else if (event.key.vk == VK_DOWN) {
-      moveSelection(1, currentLayout.visibleRows);
+      moveSelection(repetitions, currentLayout.visibleRows);
       result.changed = true;
     } else {
       const single_line_text_input::EditResult edit =

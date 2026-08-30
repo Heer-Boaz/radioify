@@ -45,12 +45,16 @@ DWORD currentModifierState() {
   return control;
 }
 
-InputEvent keyEvent(WORD key, char character = 0, DWORD control = 0) {
+InputEvent keyEvent(WORD key, char character = 0, DWORD control = 0,
+                    KeyPressKind pressKind = KeyPressKind::Initial,
+                    std::uint32_t repeatCount = 1) {
   InputEvent event{};
   event.type = InputEvent::Type::Key;
   event.key.vk = key;
   event.key.ch = character;
   event.key.control = control;
+  event.key.pressKind = pressKind;
+  event.key.repeatCount = repeatCount == 0 ? 1 : repeatCount;
   return event;
 }
 
@@ -65,23 +69,46 @@ bool isSuppressedSystemCharacter(UINT message, WPARAM key) {
   return message == WM_SYSCHAR && key == VK_RETURN;
 }
 
-KeyDownRoute routeKeyDown(WORD key, SystemMediaCommandOwner owner) {
-  if (!isSystemMediaVirtualKey(key)) {
-    return KeyDownRoute::Queue;
-  }
-  return localInputOwnsSystemMediaCommands(owner)
-             ? KeyDownRoute::DelegateToDefaultWindowProcedure
-             : KeyDownRoute::Consume;
+bool isRepeatedKeyDown(LPARAM lParam) {
+  constexpr std::uintptr_t kPreviousKeyState = std::uintptr_t{1} << 30;
+  return (static_cast<std::uintptr_t>(lParam) & kPreviousKeyState) != 0;
 }
 
-InputEvent keyFromVirtualKey(WORD key) {
+std::uint32_t keyDownRepeatCount(LPARAM lParam) {
+  constexpr std::uintptr_t kRepeatCountMask = 0xffff;
+  const std::uint32_t count = static_cast<std::uint32_t>(
+      static_cast<std::uintptr_t>(lParam) & kRepeatCountMask);
+  return count == 0 ? 1 : count;
+}
+
+KeyDownTranslation translateKeyDown(WORD key, LPARAM lParam,
+                                    SystemMediaCommandOwner owner) {
+  const bool repeated = isRepeatedKeyDown(lParam);
+  if (isSystemMediaVirtualKey(key)) {
+    if (!localInputOwnsSystemMediaCommands(owner) || repeated) {
+      return {KeyDownRoute::Consume, std::nullopt};
+    }
+    return {KeyDownRoute::DelegateToDefaultWindowProcedure, std::nullopt};
+  }
+  if (repeated && (key == VK_BROWSER_BACK || key == VK_BROWSER_FORWARD)) {
+    return {KeyDownRoute::Consume, std::nullopt};
+  }
+  return {KeyDownRoute::Queue,
+          keyFromVirtualKey(key, repeated ? KeyPressKind::AutoRepeat
+                                         : KeyPressKind::Initial,
+                            keyDownRepeatCount(lParam))};
+}
+
+InputEvent keyFromVirtualKey(WORD key, KeyPressKind pressKind,
+                             std::uint32_t repeatCount) {
   if (key == VK_BROWSER_BACK) {
     return inputActionEvent(InputAction::Back);
   }
   if (key == VK_BROWSER_FORWARD) {
     return inputActionEvent(InputAction::Forward);
   }
-  return keyEvent(key, characterForVirtualKey(key), currentModifierState());
+  return keyEvent(key, characterForVirtualKey(key), currentModifierState(),
+                  pressKind, repeatCount);
 }
 
 std::optional<InputEvent> inputEventFromXButton(WPARAM wParam) {

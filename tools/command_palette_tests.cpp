@@ -14,12 +14,16 @@ bool expect(bool condition, const char* message) {
   return false;
 }
 
-InputEvent keyEvent(WORD key, char character = 0, DWORD control = 0) {
+InputEvent keyEvent(WORD key, char character = 0, DWORD control = 0,
+                    KeyPressKind pressKind = KeyPressKind::Initial,
+                    std::uint32_t repeatCount = 1) {
   InputEvent event;
   event.type = InputEvent::Type::Key;
   event.key.vk = key;
   event.key.ch = character;
   event.key.control = control;
+  event.key.pressKind = pressKind;
+  event.key.repeatCount = repeatCount;
   return event;
 }
 
@@ -69,6 +73,13 @@ int main() {
                "fuzzy filtering must be case-insensitive and ordered");
 
   tui_command_palette::Interaction interaction = palette.handle(
+      keyEvent(VK_RETURN, 0, 0, KeyPressKind::AutoRepeat, 4),
+      availableCommands, bounds);
+  ok &= expect(interaction.consumed && !interaction.activatedCommand &&
+                   palette.active(),
+               "a repeated Enter must not activate a command or fall through "
+               "the active palette");
+  interaction = palette.handle(
       keyEvent(VK_RETURN), availableCommands, bounds);
   ok &= expect(interaction.activatedCommand == 0 && interaction.dismissed &&
                    !palette.active(),
@@ -84,9 +95,8 @@ int main() {
   ok &= expect(interaction.consumed && palette.query().empty(),
                "modified shortcut keys must not become search text");
 
-  palette.handle(keyEvent(VK_DOWN), availableCommands, bounds);
-  palette.handle(keyEvent(VK_DOWN), availableCommands, bounds);
-  palette.handle(keyEvent(VK_DOWN), availableCommands, bounds);
+  palette.handle(keyEvent(VK_DOWN, 0, 0, KeyPressKind::AutoRepeat, 3),
+                 availableCommands, bounds);
   ok &= expect(palette.selectedFilteredItem() == 2,
                "keyboard selection must clamp at the final result");
 

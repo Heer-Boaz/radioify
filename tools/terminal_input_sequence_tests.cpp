@@ -127,5 +127,32 @@ int main() {
                "clicks owned by different surfaces must never combine into "
                "a double-click");
 
+  InputEvent repeatedEscape{};
+  ok &= expect(parser.feed(L'\x1b', repeatedEscape,
+                           KeyPressKind::AutoRepeat, 4) ==
+                       TerminalInputSequenceParser::Result::Pending &&
+                   parser.flushPendingEscape(repeatedEscape) &&
+                   repeatedEscape.type == InputEvent::Type::Key &&
+                   repeatedEscape.key.vk == VK_ESCAPE &&
+                   isAutoRepeat(repeatedEscape.key) &&
+                   repeatedEscape.key.repeatCount == 4,
+               "a delayed terminal Escape must retain its original repeat "
+               "metadata");
+
+  InputEvent repeatedArrow{};
+  ok &= expect(parser.feed(L'\x1b', repeatedArrow,
+                           KeyPressKind::AutoRepeat, 6) ==
+                       TerminalInputSequenceParser::Result::Pending &&
+                   parser.feed(L'[', repeatedArrow) ==
+                       TerminalInputSequenceParser::Result::Pending &&
+                   parser.feed(L'D', repeatedArrow) ==
+                       TerminalInputSequenceParser::Result::Event &&
+                   repeatedArrow.type == InputEvent::Type::Key &&
+                   repeatedArrow.key.vk == VK_LEFT &&
+                   isAutoRepeat(repeatedArrow.key) &&
+                   repeatedArrow.key.repeatCount == 6,
+               "a multi-record terminal key sequence must retain the first "
+               "record's repeat lifecycle and multiplicity");
+
   return ok ? 0 : 1;
 }

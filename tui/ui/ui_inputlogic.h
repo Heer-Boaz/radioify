@@ -74,12 +74,12 @@ inline std::optional<PlaybackInputMatch> matchPlaybackInput(
     const InputEvent& ev,
     uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
                                 kPlaybackShortcutContextShared) {
-  const std::optional<PlaybackAction> action =
-      resolvePlaybackAction(ev, shortcutContexts);
-  if (!action) return std::nullopt;
+  const std::optional<PlaybackActionMatch> match =
+      resolvePlaybackActionMatch(ev, shortcutContexts);
+  if (!match) return std::nullopt;
 
   PlaybackInputResult result = PlaybackInputResult::Handled;
-  switch (*action) {
+  switch (match->action) {
     case PlaybackAction::CopyVideoFrame:
     case PlaybackAction::ExitPlaybackSession:
     case PlaybackAction::DismissPictureInPicture:
@@ -89,7 +89,8 @@ inline std::optional<PlaybackInputMatch> matchPlaybackInput(
     default:
       break;
   }
-  return PlaybackInputMatch{playback_input::Command{*action}, result};
+  return PlaybackInputMatch{playback_input::commandForShortcut(*match),
+                            result};
 }
 
 class BrowserPointerState {

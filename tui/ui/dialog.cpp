@@ -100,12 +100,14 @@ Interaction Model::handle(const InputEvent& event, const Bounds& bounds) {
         break;
       case tui_button_row::KeyboardAction::SelectPrevious:
       case tui_button_row::KeyboardAction::FocusPrevious:
-        selectAdjacentButton(-1);
+        selectAdjacentButton(-static_cast<int>(std::min<std::size_t>(
+            keyPressCount(event.key), content_.buttons.size())));
         result.changed = true;
         break;
       case tui_button_row::KeyboardAction::SelectNext:
       case tui_button_row::KeyboardAction::FocusNext:
-        selectAdjacentButton(1);
+        selectAdjacentButton(static_cast<int>(std::min<std::size_t>(
+            keyPressCount(event.key), content_.buttons.size())));
         result.changed = true;
         break;
       case tui_button_row::KeyboardAction::Activate:
@@ -113,23 +115,30 @@ Interaction Model::handle(const InputEvent& event, const Bounds& bounds) {
           return activateSelected();
         }
         break;
-      case tui_button_row::KeyboardAction::None:
+      case tui_button_row::KeyboardAction::SuppressRepeat:
+        break;
+      case tui_button_row::KeyboardAction::None: {
+        const int scrollRepetitions = static_cast<int>(std::min<std::size_t>(
+            keyPressCount(event.key),
+            std::max<std::size_t>(1, currentLayout.contentLines.size())));
         switch (event.key.vk) {
           case VK_UP:
-            scrollBy(-1, currentLayout);
+            scrollBy(-scrollRepetitions, currentLayout);
             result.changed = true;
             break;
           case VK_DOWN:
-            scrollBy(1, currentLayout);
+            scrollBy(scrollRepetitions, currentLayout);
             result.changed = true;
             break;
           case VK_PRIOR:
-            scrollBy(-std::max(1, currentLayout.visibleContentRows),
+            scrollBy(-scrollRepetitions *
+                         std::max(1, currentLayout.visibleContentRows),
                      currentLayout);
             result.changed = true;
             break;
           case VK_NEXT:
-            scrollBy(std::max(1, currentLayout.visibleContentRows),
+            scrollBy(scrollRepetitions *
+                         std::max(1, currentLayout.visibleContentRows),
                      currentLayout);
             result.changed = true;
             break;
@@ -137,6 +146,7 @@ Interaction Model::handle(const InputEvent& event, const Bounds& bounds) {
             break;
         }
         break;
+      }
     }
     return result;
   }

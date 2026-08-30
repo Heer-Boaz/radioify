@@ -19,8 +19,10 @@ bool expect(bool condition, const char* message) {
   return false;
 }
 
-KeyEvent key(WORD vk, char character = 0, DWORD control = 0) {
-  return KeyEvent{vk, character, control};
+KeyEvent key(WORD vk, char character = 0, DWORD control = 0,
+             KeyPressKind pressKind = KeyPressKind::Initial,
+             std::uint32_t repeatCount = 1) {
+  return KeyEvent{vk, character, control, pressKind, repeatCount};
 }
 
 std::optional<browser_input::KeyAction> resolve(
@@ -73,6 +75,13 @@ int main() {
   ok &= expect(resolve(key(VK_NEXT), ShortcutContext::Navigation) ==
                    KeyAction::PageDown,
                "the keymap must contain every browser navigation direction");
+  ok &= expect(!resolve(key('S', 's', 0, KeyPressKind::AutoRepeat),
+                        ShortcutContext::Navigation) &&
+                   resolve(key(VK_DOWN, 0, 0, KeyPressKind::AutoRepeat),
+                           ShortcutContext::Navigation) ==
+                       KeyAction::MoveDown,
+               "browser toggles must be edge-triggered while navigation "
+               "remains repeatable");
 
   std::string text = "ab";
   auto edit = single_line_text_input::edit(text, key('C', 'c'));
@@ -90,10 +99,32 @@ int main() {
   edit = single_line_text_input::edit(text, key(VK_BACK));
   ok &= expect(edit.handled && edit.changed && text == "abc",
                "Backspace must edit the shared single-line model");
+  edit = single_line_text_input::edit(
+      text, key('X', 'x', 0, KeyPressKind::AutoRepeat, 4));
+  ok &= expect(edit.handled && edit.changed && text == "abcxxxx",
+               "a batched printable repeat must produce every represented "
+               "character without queue expansion");
+  edit = single_line_text_input::edit(
+      text, key(VK_BACK, 0, 0, KeyPressKind::AutoRepeat, 3));
+  ok &= expect(edit.handled && edit.changed && text == "abcx",
+               "a batched Backspace repeat must remove its represented "
+               "characters in one edit operation");
+  edit = single_line_text_input::edit(
+      text, key(VK_RETURN, 0, 0, KeyPressKind::AutoRepeat, 5));
+  ok &= expect(edit.handled &&
+                   edit.intent == single_line_text_input::Intent::None,
+               "repeated Enter must be consumed without committing a text "
+               "workflow again");
   edit = single_line_text_input::edit(text, key(VK_RETURN));
   ok &= expect(edit.handled &&
                    edit.intent == single_line_text_input::Intent::Commit,
                "Enter must publish a commit intent");
+  edit = single_line_text_input::edit(
+      text, key(VK_ESCAPE, 0, 0, KeyPressKind::AutoRepeat, 2));
+  ok &= expect(edit.handled &&
+                   edit.intent == single_line_text_input::Intent::None,
+               "repeated Escape must be consumed without cancelling a new "
+               "workflow layer");
   edit = single_line_text_input::edit(text, key(VK_ESCAPE));
   ok &= expect(edit.handled &&
                    edit.intent == single_line_text_input::Intent::Cancel,

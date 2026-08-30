@@ -12,6 +12,7 @@
 #include <string>
 
 #include "core/native_wait_handle.h"
+#include "console_key_input.h"
 #include "input_event.h"
 #include "playback/input/media_keys.h"
 #include "terminal_input_sequence.h"
@@ -46,6 +47,7 @@ class ConsoleInput {
   bool focusActive_ = true;
   bool xButton1Down_ = false;
   bool xButton2Down_ = false;
+  tui_console_key_input::State keyPressState_;
   DWORD consoleMouseButtonState_ = 0;
   bool terminalMouseInput_ = false;
   SystemMediaCommandOwner systemMediaCommandOwner_ =

@@ -10,6 +10,10 @@ struct SeekToRatio {
   double ratio = 0.0;
 };
 
+struct SeekBySteps {
+  int steps = 0;
+};
+
 struct AdjustVolume {
   float delta = 0.0f;
 };
@@ -18,6 +22,6 @@ struct AdjustVolume {
 // controls, PiP, and command-palette actions therefore share dispatch policy
 // instead of copying callback wiring per surface.
 using Command =
-    std::variant<PlaybackAction, SeekToRatio, AdjustVolume>;
+    std::variant<PlaybackAction, SeekToRatio, SeekBySteps, AdjustVolume>;
 
 }  // namespace playback_input

@@ -13,11 +13,29 @@
 #include "core/file_drop_event.h"
 #include "playback/input/input_action.h"
 
+enum class KeyPressKind : std::uint8_t {
+  Initial,
+  AutoRepeat,
+};
+
 struct KeyEvent {
   WORD vk = 0;
   char ch = 0;
   DWORD control = 0;
+  KeyPressKind pressKind = KeyPressKind::Initial;
+  // One Windows input record/message may represent multiple physical repeat
+  // ticks. Keep that multiplicity attached to the gesture so consumers can
+  // apply it without expanding a stale FIFO backlog.
+  std::uint32_t repeatCount = 1;
 };
+
+inline constexpr bool isAutoRepeat(const KeyEvent& key) {
+  return key.pressKind == KeyPressKind::AutoRepeat;
+}
+
+inline constexpr std::uint32_t keyPressCount(const KeyEvent& key) {
+  return key.repeatCount == 0 ? 1 : key.repeatCount;
+}
 
 enum class MouseEventKind : uint8_t {
   Press,

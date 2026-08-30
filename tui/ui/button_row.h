@@ -28,6 +28,7 @@ struct PointerInteraction {
 
 enum class KeyboardAction {
   None,
+  SuppressRepeat,
   Activate,
   SelectPrevious,
   SelectNext,

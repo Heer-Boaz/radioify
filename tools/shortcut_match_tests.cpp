@@ -32,18 +32,24 @@
 
 namespace {
 
-KeyEvent makeKey(WORD vk, char ch = 0, DWORD control = 0) {
+KeyEvent makeKey(WORD vk, char ch = 0, DWORD control = 0,
+                 KeyPressKind pressKind = KeyPressKind::Initial,
+                 std::uint32_t repeatCount = 1) {
   KeyEvent key{};
   key.vk = vk;
   key.ch = ch;
   key.control = control;
+  key.pressKind = pressKind;
+  key.repeatCount = repeatCount;
   return key;
 }
 
-InputEvent makeKeyEvent(WORD vk, char ch = 0, DWORD control = 0) {
+InputEvent makeKeyEvent(WORD vk, char ch = 0, DWORD control = 0,
+                        KeyPressKind pressKind = KeyPressKind::Initial,
+                        std::uint32_t repeatCount = 1) {
   InputEvent event{};
   event.type = InputEvent::Type::Key;
-  event.key = makeKey(vk, ch, control);
+  event.key = makeKey(vk, ch, control, pressKind, repeatCount);
   return event;
 }
 
@@ -148,7 +154,11 @@ int main() {
           makeKeyEvent(VK_F1),
           tui_shell_shortcuts::context(
               tui_shell_shortcuts::Context::Browser)) ==
-              tui_shell_shortcuts::Action::ToggleCommandPalette &&
+          tui_shell_shortcuts::Action::ToggleCommandPalette &&
+          !tui_shell_shortcuts::resolve(
+              makeKeyEvent(VK_F1, 0, 0, KeyPressKind::AutoRepeat),
+              tui_shell_shortcuts::context(
+                  tui_shell_shortcuts::Context::Browser)) &&
           !tui_shell_shortcuts::resolve(
               makeKeyEvent(VK_F1, 0, LEFT_CTRL_PRESSED),
               tui_shell_shortcuts::context(
@@ -196,6 +206,9 @@ int main() {
   ok &= expect(resolveLiveBrowserVideoShortcut(makeKeyEvent(VK_SPACE, ' ')) ==
                    PlaybackAction::TogglePause,
                "Space must remain a playback shortcut in the live browser");
+  ok &= expect(!resolveLiveBrowserVideoShortcut(makeKeyEvent(
+                   VK_SPACE, ' ', 0, KeyPressKind::AutoRepeat)),
+               "holding Space must not repeatedly toggle live playback");
   ok &= expect(!resolveLiveBrowserVideoShortcut(makeKeyEvent(VK_RETURN)),
                "Plain Enter must remain browser-entry activation while video "
                "plays beside the live browser");
@@ -252,6 +265,50 @@ int main() {
                    .value() == PlaybackAction::SeekBackward,
                "VK_LEFT must seek backward");
   ok &= expect(resolvePlaybackAction(
+                   makeKey(VK_LEFT, 0, 0, KeyPressKind::AutoRepeat),
+                   kPlaybackShortcutContextShared) ==
+                   PlaybackAction::SeekBackward,
+               "held timeline arrows must continue seeking");
+  const std::optional<PlaybackInputMatch> countedSeek = matchPlaybackInput(
+      makeKeyEvent(VK_LEFT, 0, 0, KeyPressKind::AutoRepeat, 8),
+      kPlaybackShortcutContextShared);
+  const auto* countedSeekCommand =
+      countedSeek
+          ? std::get_if<playback_input::SeekBySteps>(&countedSeek->command)
+          : nullptr;
+  ok &= expect(countedSeekCommand && countedSeekCommand->steps == -8,
+               "a batched seek key must become one semantic command carrying "
+               "all repeat ticks");
+  const std::optional<PlaybackInputMatch> batchedToggle = matchPlaybackInput(
+      makeKeyEvent(VK_SPACE, ' ', 0, KeyPressKind::Initial, 5),
+      kPlaybackShortcutContextShared);
+  ok &= expect(batchedToggle &&
+                   std::get_if<PlaybackAction>(&batchedToggle->command) &&
+                   std::get<PlaybackAction>(batchedToggle->command) ==
+                       PlaybackAction::TogglePause,
+               "a batched initial toggle must remain one edge-triggered "
+               "semantic command");
+  const std::optional<PlaybackInputMatch> countedVolume = matchPlaybackInput(
+      makeKeyEvent(VK_UP, 0, SHIFT_PRESSED, KeyPressKind::AutoRepeat, 7),
+      kPlaybackShortcutContextShared);
+  const auto* countedVolumeCommand =
+      countedVolume
+          ? std::get_if<playback_input::AdjustVolume>(
+                &countedVolume->command)
+          : nullptr;
+  ok &= expect(countedVolumeCommand && countedVolumeCommand->delta > 0.69f &&
+                   countedVolumeCommand->delta < 0.71f,
+               "a batched volume key must become one bounded semantic delta");
+  ok &= expect(!resolvePlaybackAction(
+                   makeKey(VK_SPACE, ' ', 0, KeyPressKind::AutoRepeat),
+                   kPlaybackShortcutContextShared) &&
+                   !resolvePlaybackAction(
+                       makeKey('W', 'w', kPlaybackShortcutCtrlMask,
+                               KeyPressKind::AutoRepeat),
+                       kPlaybackShortcutContextShared),
+               "repeat events must not retrigger transport or presentation "
+               "toggles");
+  ok &= expect(resolvePlaybackAction(
                    makeKey(VK_RIGHT), kPlaybackShortcutContextShared)
                    .value() == PlaybackAction::SeekForward,
                "VK_RIGHT must seek forward");
@@ -302,6 +359,14 @@ int main() {
                        kPlaybackShortcutContextVideoPlayback)
                    .value() == PlaybackAction::PreviousFrame,
                "Comma must step to the previous video frame in video playback");
+  ok &= expect(!resolvePlaybackAction(
+                   makeKey(VK_OEM_COMMA, ',', 0,
+                           KeyPressKind::AutoRepeat),
+                   kPlaybackShortcutContextGlobal |
+                       kPlaybackShortcutContextShared |
+                       kPlaybackShortcutContextPlaybackSession |
+                       kPlaybackShortcutContextVideoPlayback),
+               "holding frame-step must not create a delayed step backlog");
   ok &= expect(resolvePlaybackAction(
                    makeKey(VK_OEM_PERIOD, '.'),
                    kPlaybackShortcutContextGlobal |

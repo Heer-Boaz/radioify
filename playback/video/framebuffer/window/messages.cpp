@@ -105,13 +105,14 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
 
     if (window_input_events::isKeyDownMessage(uMsg, wParam)) {
         const WORD key = static_cast<WORD>(wParam);
-        const auto route = window_input_events::routeKeyDown(
-            key, pThis->m_systemMediaCommandOwner);
-        if (route == window_input_events::KeyDownRoute::Queue) {
-            pThis->m_input.push(window_input_events::keyFromVirtualKey(key));
+        window_input_events::KeyDownTranslation translation =
+            window_input_events::translateKeyDown(
+                key, lParam, pThis->m_systemMediaCommandOwner);
+        if (translation.event) {
+            pThis->m_input.push(std::move(*translation.event));
             return 0;
         }
-        if (route ==
+        if (translation.route ==
             window_input_events::KeyDownRoute::DelegateToDefaultWindowProcedure) {
             // DefWindowProc turns media virtual keys into WM_APPCOMMAND. That
             // message is Radioify's sole local media-command ingress.

@@ -12,6 +12,7 @@ radioify_add_module_object_library(radioify_ui
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_directory_listing.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_input_state.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_search.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/browser_selection_navigation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/button_row.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_media_menu.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_media_menu_renderer.cpp

@@ -1107,6 +1107,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       if (mediaCoordinator.seekToRatio(seek->ratio)) markDirty();
       return;
     }
+    if (const auto* seek =
+            std::get_if<playback_input::SeekBySteps>(&command)) {
+      audioPlayback.seekBy(seek->steps);
+      markDirty();
+      return;
+    }
     const auto* volume = std::get_if<playback_input::AdjustVolume>(&command);
     if (volume) {
       audioPlayback.adjustVolume(volume->delta);

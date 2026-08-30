@@ -44,7 +44,9 @@ struct KeyBinding {
                        char lowerCharacter, char upperCharacter,
                        DWORD requiredModifiers, DWORD forbiddenModifiers,
                        std::uint8_t shortcutContexts,
-                       std::string_view label = {})
+                       std::string_view label = {},
+                       ShortcutRepeatPolicy repeat =
+                           ShortcutRepeatPolicy::InitialPressOnly)
       : action(actionValue),
         vk(virtualKey),
         lower(lowerCharacter),
@@ -52,7 +54,8 @@ struct KeyBinding {
         requiredModifierMask(requiredModifiers),
         forbiddenModifierMask(forbiddenModifiers),
         contexts(shortcutContexts),
-        displayLabel(label) {}
+        displayLabel(label),
+        repeatPolicy(repeat) {}
 
   KeyAction action;
   WORD vk = 0;
@@ -62,6 +65,8 @@ struct KeyBinding {
   DWORD forbiddenModifierMask = 0;
   std::uint8_t contexts = 0;
   std::string_view displayLabel;
+  ShortcutRepeatPolicy repeatPolicy =
+      ShortcutRepeatPolicy::InitialPressOnly;
 };
 
 inline constexpr std::array<KeyBinding, 17> kKeyBindings = {{
@@ -94,17 +99,23 @@ inline constexpr std::array<KeyBinding, 17> kKeyBindings = {{
     {KeyAction::CycleView, 'T', 't', 'T', 0, kShortcutTextForbiddenMask,
      shortcutContext(ShortcutContext::Navigation), "T"},
     {KeyAction::MoveLeft, VK_LEFT, 0, 0, 0, 0,
-     shortcutContext(ShortcutContext::Navigation)},
+     shortcutContext(ShortcutContext::Navigation), {},
+     ShortcutRepeatPolicy::AllowAutoRepeat},
     {KeyAction::MoveRight, VK_RIGHT, 0, 0, 0, 0,
-     shortcutContext(ShortcutContext::Navigation)},
+     shortcutContext(ShortcutContext::Navigation), {},
+     ShortcutRepeatPolicy::AllowAutoRepeat},
     {KeyAction::MoveUp, VK_UP, 0, 0, 0, 0,
-     shortcutContext(ShortcutContext::Navigation)},
+     shortcutContext(ShortcutContext::Navigation), {},
+     ShortcutRepeatPolicy::AllowAutoRepeat},
     {KeyAction::MoveDown, VK_DOWN, 0, 0, 0, 0,
-     shortcutContext(ShortcutContext::Navigation)},
+     shortcutContext(ShortcutContext::Navigation), {},
+     ShortcutRepeatPolicy::AllowAutoRepeat},
     {KeyAction::PageUp, VK_PRIOR, 0, 0, 0, 0,
-     shortcutContext(ShortcutContext::Navigation)},
+     shortcutContext(ShortcutContext::Navigation), {},
+     ShortcutRepeatPolicy::AllowAutoRepeat},
     {KeyAction::PageDown, VK_NEXT, 0, 0, 0, 0,
-     shortcutContext(ShortcutContext::Navigation)},
+     shortcutContext(ShortcutContext::Navigation), {},
+     ShortcutRepeatPolicy::AllowAutoRepeat},
 }};
 
 inline std::optional<KeyAction> resolveKeyAction(const KeyEvent& key,
@@ -115,7 +126,8 @@ inline std::optional<KeyAction> resolveKeyAction(const KeyEvent& key,
     }
     if (matchesShortcut(key, binding.vk, binding.lower, binding.upper,
                         binding.requiredModifierMask,
-                        binding.forbiddenModifierMask)) {
+                        binding.forbiddenModifierMask,
+                        binding.repeatPolicy)) {
       return binding.action;
     }
   }

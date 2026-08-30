@@ -4,6 +4,7 @@ radioify_add_module_object_library(radioify_tui
   ${CMAKE_CURRENT_SOURCE_DIR}/audio_picture_in_picture_window.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_grid_index.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/browser_thumbnail_cache.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/console_key_input.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/consoleinput.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/consolescreen.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/image_viewer.cpp

@@ -82,16 +82,20 @@ Interaction Model::handle(const InputEvent& event, const Bounds& bounds) {
 
   if (event.type == InputEvent::Type::Key) {
     result.consumed = true;
+    const int repetitions = static_cast<int>(std::min<std::size_t>(
+        keyPressCount(event.key), std::max<std::size_t>(1, labels_.size())));
     if (event.key.vk == VK_ESCAPE) {
-      result.changed = dismiss();
-      result.dismissed = true;
+      if (!isAutoRepeat(event.key)) {
+        result.changed = dismiss();
+        result.dismissed = true;
+      }
     } else if (event.key.vk == VK_UP) {
-      moveSelection(-1, bounds);
+      moveSelection(-repetitions, bounds);
       result.changed = true;
     } else if (event.key.vk == VK_DOWN) {
-      moveSelection(1, bounds);
+      moveSelection(repetitions, bounds);
       result.changed = true;
-    } else if (event.key.vk == VK_RETURN) {
+    } else if (event.key.vk == VK_RETURN && !isAutoRepeat(event.key)) {
       return activateSelected();
     }
     return result;

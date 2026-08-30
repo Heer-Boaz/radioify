@@ -9,6 +9,7 @@
 #include "browser_grid_index.h"
 #include "browser_keymap.h"
 #include "browser_search.h"
+#include "browser_selection_navigation.h"
 #include "consolescreen.h"
 #include "optionsbrowser.h"
 #include "playback/input/shortcuts.h"
@@ -24,137 +25,10 @@ void publishPlaybackCommand(std::vector<tui_input::Command>& commands,
   commands.emplace_back(tui_input::PlaybackCommand{std::move(command)});
 }
 
-bool isSelectableEntry(const BrowserEntry& entry) {
-  return entry.isSelectable();
-}
-
 bool isMouseInSearchBar(const MouseEvent& mouse, int searchBarY,
                        int searchBarWidth) {
   return searchBarY >= 0 && searchBarWidth > 0 && mouse.pos.Y == searchBarY &&
          mouse.pos.X >= 0 && mouse.pos.X < searchBarWidth;
-}
-
-int nearestSelectableEntry(const std::vector<BrowserEntry>& entries, int start,
-                           int direction) {
-  if (entries.empty()) return 0;
-  int n = static_cast<int>(entries.size());
-  int idx = std::clamp(start, 0, n - 1);
-  int step = direction >= 0 ? 1 : -1;
-  for (int i = 0; i < n; ++i) {
-    if (isSelectableEntry(entries[static_cast<size_t>(idx)])) return idx;
-    idx += step;
-    if (idx >= n) idx = 0;
-    if (idx < 0) idx = n - 1;
-  }
-  return start;
-}
-
-void getRowColFromIndex(int idx, const GridLayout& layout,
-                        BrowserState::ViewMode mode, int& row, int& col) {
-  if (mode == BrowserState::ViewMode::ListOnly) {
-    int stride = std::max(1, layout.rowsVisible);
-    if (stride <= 0) {
-      row = 0;
-      col = 0;
-    } else {
-      col = idx / stride;
-      row = idx % stride;
-    }
-  } else {
-    if (layout.cols <= 0) {
-      row = 0;
-      col = 0;
-    } else {
-      row = idx / layout.cols;
-      col = idx % layout.cols;
-    }
-  }
-}
-
-void moveSelection(BrowserState& browser, const GridLayout& layout,
-                   int deltaCol, int deltaRow, bool& dirty) {
-  int count = static_cast<int>(browser.entries.size());
-  if (count == 0 || layout.totalRows <= 0 || layout.cols <= 0) return;
-
-  if (browser.viewMode == BrowserState::ViewMode::ListOnly) {
-    int idx = browser.selected;
-    if (deltaCol != 0) {
-      idx += deltaCol * std::max(1, layout.rowsVisible);
-    } else if (deltaRow != 0) {
-      idx += deltaRow;
-    }
-    idx = std::clamp(idx, 0, count - 1);
-    int direction = (deltaCol > 0 || deltaRow > 0) ? 1 : -1;
-    idx = nearestSelectableEntry(browser.entries, idx, direction);
-    if (idx != browser.selected) {
-      browser.selected = idx;
-      ensureBrowserSelectionVisible(browser, layout);
-      dirty = true;
-    }
-    return;
-  }
-
-  int row = 0;
-  int col = 0;
-  getRowColFromIndex(browser.selected, layout, browser.viewMode, row, col);
-
-  int nextRow = std::clamp(row + deltaRow, 0, layout.totalRows - 1);
-  int nextCol = std::clamp(col + deltaCol, 0, layout.cols - 1);
-
-  int idx = browserGridEntryIndex(layout, browser.viewMode, nextRow, nextCol,
-                                  count);
-  if (idx < 0) {
-    if (deltaCol > 0 || deltaRow > 0)
-      idx = count - 1;
-    else
-      idx = 0;
-  }
-
-  int direction = (deltaCol > 0 || deltaRow > 0) ? 1 : -1;
-  idx = nearestSelectableEntry(browser.entries, idx, direction);
-
-  if (idx != browser.selected) {
-    browser.selected = idx;
-    ensureBrowserSelectionVisible(browser, layout);
-    dirty = true;
-  }
-}
-
-void pageSelection(BrowserState& browser, const GridLayout& layout,
-                   int direction, bool& dirty) {
-  int count = static_cast<int>(browser.entries.size());
-  if (count == 0 || layout.totalRows <= 0 || layout.cols <= 0) return;
-
-  if (browser.viewMode == BrowserState::ViewMode::ListOnly) {
-    int step = std::max(1, layout.rowsVisible);
-    int idx =
-        std::clamp(browser.selected + direction * step, 0, count - 1);
-    idx = nearestSelectableEntry(browser.entries, idx, direction);
-    if (idx != browser.selected) {
-      browser.selected = idx;
-      ensureBrowserSelectionVisible(browser, layout);
-      dirty = true;
-    }
-    return;
-  }
-
-  int row = 0;
-  int col = 0;
-  getRowColFromIndex(browser.selected, layout, browser.viewMode, row, col);
-
-  int step = std::max(1, layout.rowsVisible);
-  int nextRow = std::clamp(row + direction * step, 0, layout.totalRows - 1);
-
-  int idx =
-      browserGridEntryIndex(layout, browser.viewMode, nextRow, col, count);
-  if (idx < 0) idx = count - 1;
-  idx = nearestSelectableEntry(browser.entries, idx, direction);
-
-  if (idx != browser.selected) {
-    browser.selected = idx;
-    ensureBrowserSelectionVisible(browser, layout);
-    dirty = true;
-  }
 }
 
 BrowserState::ViewMode nextViewMode(BrowserState::ViewMode mode) {
@@ -368,7 +242,7 @@ class BrowserInputController {
           key, browser_input::shortcutContext(
                    browser_input::ShortcutContext::SearchActivation));
       if (searchAction) {
-        executeKeyAction(*searchAction);
+        executeKeyAction(*searchAction, keyPressCount(key));
         return;
       }
     }
@@ -386,7 +260,7 @@ class BrowserInputController {
         key, browser_input::shortcutContext(
                  browser_input::ShortcutContext::Application));
     if (applicationAction) {
-      executeKeyAction(*applicationAction);
+      executeKeyAction(*applicationAction, keyPressCount(key));
       return;
     }
     if (!capabilities.interactionEnabled) {
@@ -397,7 +271,7 @@ class BrowserInputController {
         key, browser_input::shortcutContext(
                  browser_input::ShortcutContext::Navigation));
     if (navigationAction) {
-      executeKeyAction(*navigationAction);
+      executeKeyAction(*navigationAction, keyPressCount(key));
     }
   }
 
@@ -405,7 +279,8 @@ class BrowserInputController {
     applySearchUpdate(handleBrowserSearchKey(browser, key));
   }
 
-  void executeKeyAction(browser_input::KeyAction action) {
+  void executeKeyAction(browser_input::KeyAction action,
+                        std::uint32_t repetitions) {
     using browser_input::KeyAction;
     switch (action) {
       case KeyAction::BeginPathSearch:
@@ -452,22 +327,14 @@ class BrowserInputController {
         result.dirty = true;
         return;
       case KeyAction::MoveLeft:
-        moveSelection(browser, inputLayout.entries, -1, 0, result.dirty);
-        return;
       case KeyAction::MoveRight:
-        moveSelection(browser, inputLayout.entries, 1, 0, result.dirty);
-        return;
       case KeyAction::MoveUp:
-        moveSelection(browser, inputLayout.entries, 0, -1, result.dirty);
-        return;
       case KeyAction::MoveDown:
-        moveSelection(browser, inputLayout.entries, 0, 1, result.dirty);
-        return;
       case KeyAction::PageUp:
-        pageSelection(browser, inputLayout.entries, -1, result.dirty);
-        return;
       case KeyAction::PageDown:
-        pageSelection(browser, inputLayout.entries, 1, result.dirty);
+        result.dirty = browser_selection_navigation::apply(
+                           browser, inputLayout.entries, action, repetitions) ||
+                       result.dirty;
         return;
     }
   }

@@ -9,6 +9,18 @@ namespace {
 
 constexpr wchar_t kEsc = L'\x1b';
 
+void assignTerminalKeyEvent(InputEvent& out, WORD virtualKey, char character,
+                            DWORD control,
+                            KeyPressKind pressKind = KeyPressKind::Initial,
+                            std::uint32_t repeatCount = 1) {
+  out.type = InputEvent::Type::Key;
+  out.key.vk = virtualKey;
+  out.key.ch = character;
+  out.key.control = control;
+  out.key.pressKind = pressKind;
+  out.key.repeatCount = repeatCount == 0 ? 1 : repeatCount;
+}
+
 bool parseNumber(const wchar_t* text, size_t length, size_t& offset,
                  int& out) {
   if (offset >= length || text[offset] < L'0' || text[offset] > L'9') {
@@ -103,6 +115,12 @@ DWORD csiModifierToControl(int modifier) {
 
 TerminalInputSequenceParser::Result TerminalInputSequenceParser::feed(
     wchar_t ch, InputEvent& out) {
+  return feed(ch, out, KeyPressKind::Initial, 1);
+}
+
+TerminalInputSequenceParser::Result TerminalInputSequenceParser::feed(
+    wchar_t ch, InputEvent& out, KeyPressKind pressKind,
+    std::uint32_t repeatCount) {
   if (length_ == 0 && ch != kEsc) {
     return Result::None;
   }
@@ -111,9 +129,17 @@ TerminalInputSequenceParser::Result TerminalInputSequenceParser::feed(
     return Result::Rejected;
   }
 
+  if (length_ == 0) {
+    pressKind_ = pressKind;
+    repeatCount_ = repeatCount == 0 ? 1 : repeatCount;
+  }
   buffer_[length_++] = ch;
   bool complete = false;
   if (parse(out, &complete)) {
+    if (out.type == InputEvent::Type::Key) {
+      out.key.pressKind = pressKind_;
+      out.key.repeatCount = repeatCount_;
+    }
     reset();
     return Result::Event;
   }
@@ -128,16 +154,15 @@ bool TerminalInputSequenceParser::flushPendingEscape(InputEvent& out) {
   if (length_ != 1 || buffer_[0] != kEsc) {
     return false;
   }
+  assignTerminalKeyEvent(out, VK_ESCAPE, 27, 0, pressKind_, repeatCount_);
   reset();
-  out.type = InputEvent::Type::Key;
-  out.key.vk = VK_ESCAPE;
-  out.key.ch = 27;
-  out.key.control = 0;
   return true;
 }
 
 void TerminalInputSequenceParser::reset() {
   length_ = 0;
+  pressKind_ = KeyPressKind::Initial;
+  repeatCount_ = 1;
 }
 
 bool TerminalInputSequenceParser::parse(InputEvent& out, bool* complete) {
@@ -188,10 +213,7 @@ bool TerminalInputSequenceParser::parse(InputEvent& out, bool* complete) {
         *complete = true;
         return false;
     }
-    out.type = InputEvent::Type::Key;
-    out.key.vk = vk;
-    out.key.ch = 0;
-    out.key.control = 0;
+    assignTerminalKeyEvent(out, vk, 0, 0);
     return true;
   }
 
@@ -278,10 +300,7 @@ bool TerminalInputSequenceParser::parseKey(InputEvent& out,
         return false;
       }
     }
-    out.type = InputEvent::Type::Key;
-    out.key.vk = vk;
-    out.key.ch = 0;
-    out.key.control = control;
+    assignTerminalKeyEvent(out, vk, 0, control);
     return true;
   }
 
@@ -364,10 +383,7 @@ bool TerminalInputSequenceParser::parseKey(InputEvent& out,
         *complete = true;
         return false;
     }
-    out.type = InputEvent::Type::Key;
-    out.key.vk = vk;
-    out.key.ch = 0;
-    out.key.control = control;
+    assignTerminalKeyEvent(out, vk, 0, control);
     return true;
   }
 

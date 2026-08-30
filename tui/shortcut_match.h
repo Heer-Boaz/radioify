@@ -2,6 +2,11 @@
 
 #include "input_event.h"
 
+enum class ShortcutRepeatPolicy : std::uint8_t {
+  InitialPressOnly,
+  AllowAutoRepeat,
+};
+
 inline constexpr DWORD kShortcutCtrlMask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
 inline constexpr DWORD kShortcutAltMask = LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED;
 inline constexpr DWORD kShortcutShiftMask = SHIFT_PRESSED;
@@ -29,7 +34,13 @@ inline bool matchesAsciiShortcut(const KeyEvent& key, WORD vk, char lower,
 // bit is present, and a forbidden mask rejects if any listed bit is present.
 inline bool matchesShortcut(const KeyEvent& key, WORD vk, char lower,
                             char upper, DWORD requiredModifierMask = 0,
-                            DWORD forbiddenModifierMask = 0) {
+                            DWORD forbiddenModifierMask = 0,
+                            ShortcutRepeatPolicy repeatPolicy =
+                                ShortcutRepeatPolicy::InitialPressOnly) {
+  if (isAutoRepeat(key) &&
+      repeatPolicy == ShortcutRepeatPolicy::InitialPressOnly) {
+    return false;
+  }
   if (requiredModifierMask != 0 && (key.control & requiredModifierMask) == 0) {
     return false;
   }

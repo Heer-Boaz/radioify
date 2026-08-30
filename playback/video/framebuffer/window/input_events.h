@@ -26,11 +26,21 @@ struct AppCommandTranslation {
   std::optional<InputEvent> event;
 };
 
+struct KeyDownTranslation {
+  KeyDownRoute route = KeyDownRoute::Consume;
+  std::optional<InputEvent> event;
+};
+
 bool isKeyDownMessage(UINT message, WPARAM key);
 bool isSuppressedSystemCharacter(UINT message, WPARAM key);
-KeyDownRoute routeKeyDown(WORD key, SystemMediaCommandOwner owner);
+bool isRepeatedKeyDown(LPARAM lParam);
+std::uint32_t keyDownRepeatCount(LPARAM lParam);
+KeyDownTranslation translateKeyDown(WORD key, LPARAM lParam,
+                                    SystemMediaCommandOwner owner);
 
-InputEvent keyFromVirtualKey(WORD key);
+InputEvent keyFromVirtualKey(
+    WORD key, KeyPressKind pressKind = KeyPressKind::Initial,
+    std::uint32_t repeatCount = 1);
 
 std::optional<InputEvent> inputEventFromXButton(WPARAM wParam);
 AppCommandTranslation translateAppCommand(

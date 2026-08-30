@@ -28,12 +28,16 @@ InputEvent pointerEvent(MouseEventKind kind, int x, int y,
   return event;
 }
 
-InputEvent keyEvent(WORD key, char ch = 0, DWORD control = 0) {
+InputEvent keyEvent(WORD key, char ch = 0, DWORD control = 0,
+                    KeyPressKind pressKind = KeyPressKind::Initial,
+                    std::uint32_t repeatCount = 1) {
   InputEvent event;
   event.type = InputEvent::Type::Key;
   event.key.vk = key;
   event.key.ch = ch;
   event.key.control = control;
+  event.key.pressKind = pressKind;
+  event.key.repeatCount = repeatCount;
   return event;
 }
 
@@ -163,6 +167,13 @@ int main() {
                    state.focused() && state.highlightedButton() == 0,
                "Tab must move focus from the browser into an actionable "
                "task panel");
+  interaction = state.handle(
+      keyEvent(VK_RETURN, 0, 0, KeyPressKind::AutoRepeat, 4), bounds,
+      noIndicator, task);
+  ok &= expect(interaction.consumed && !interaction.activatedAction &&
+                   state.focused(),
+               "a repeated Enter must not activate a task action or leave "
+               "the focused panel");
   interaction = state.handle(keyEvent(VK_SPACE, ' '), bounds, noIndicator,
                              task);
   ok &= expect(

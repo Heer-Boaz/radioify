@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "browser_navigation.h"
+#include "browser_selection_navigation.h"
 #include "core/latest_request_worker.h"
 #include "kssoptions.h"
 #include "optionsbrowser.h"
@@ -263,6 +264,35 @@ int main() {
   applyBrowserViewportRestore(browser, verticalLayout(30, 5));
   ok &= expect(browser.selected == 17 && browser.scrollRow == 13,
                "history must restore an unchanged selection and viewport");
+
+  BrowserState repeatedNavigationBrowser;
+  repeatedNavigationBrowser.location = browserDirectoryLocation("C:/Media");
+  repeatedNavigationBrowser.viewMode = BrowserState::ViewMode::ListOnly;
+  for (int index = 0; index < 10; ++index) {
+    repeatedNavigationBrowser.entries.push_back(fileEntry(
+        "Track " + std::to_string(index),
+        "C:/Media/Track " + std::to_string(index) + ".flac"));
+  }
+  const GridLayout repeatedNavigationGrid = verticalLayout(10, 5);
+  KeyEvent repeatedDown{};
+  repeatedDown.vk = VK_DOWN;
+  repeatedDown.pressKind = KeyPressKind::AutoRepeat;
+  repeatedDown.repeatCount = 4;
+  const std::optional<browser_input::KeyAction> repeatedNavigationAction =
+      browser_input::resolveKeyAction(
+          repeatedDown,
+          browser_input::shortcutContext(
+              browser_input::ShortcutContext::Navigation));
+  const bool repeatedNavigationChanged =
+      repeatedNavigationAction && browser_selection_navigation::apply(
+                                      repeatedNavigationBrowser,
+                                      repeatedNavigationGrid,
+                                      *repeatedNavigationAction,
+                                      keyPressCount(repeatedDown));
+  ok &= expect(repeatedNavigationChanged &&
+                   repeatedNavigationBrowser.selected == 4,
+               "a counted held-arrow event must advance browser selection "
+               "through the real input workflow without queued duplicates");
 
   const BrowserEntry moved = browser.entries[17];
   browser.entries.erase(browser.entries.begin() + 17);

@@ -27,7 +27,8 @@ inline std::optional<Action> resolve(const InputEvent& event) {
   }
   if (matchesShortcut(event.key, 'C', 'c', 'C', kShortcutCtrlMask,
                       kShortcutChordForbiddenMask) ||
-      event.key.vk == VK_ESCAPE || event.key.vk == VK_BACK) {
+      (!isAutoRepeat(event.key) &&
+       (event.key.vk == VK_ESCAPE || event.key.vk == VK_BACK))) {
     return Action::Cancel;
   }
   return std::nullopt;

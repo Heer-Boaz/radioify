@@ -46,7 +46,8 @@ inline std::optional<Action> resolve(const InputEvent& event,
     if ((binding.contexts & contexts) != 0 &&
         matchesShortcut(event.key, binding.vk, 0, 0,
                         binding.requiredModifierMask,
-                        binding.forbiddenModifierMask)) {
+                        binding.forbiddenModifierMask,
+                        ShortcutRepeatPolicy::InitialPressOnly)) {
       return binding.action;
     }
   }

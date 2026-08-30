@@ -11,17 +11,22 @@ KeyboardAction resolveKeyboardAction(const KeyEvent& key) {
   switch (key.vk) {
     case VK_RETURN:
     case VK_SPACE:
-      return KeyboardAction::Activate;
+      return isAutoRepeat(key) ? KeyboardAction::SuppressRepeat
+                               : KeyboardAction::Activate;
     case VK_LEFT:
       return KeyboardAction::SelectPrevious;
     case VK_RIGHT:
       return KeyboardAction::SelectNext;
     case VK_TAB:
+      if (isAutoRepeat(key)) {
+        return KeyboardAction::SuppressRepeat;
+      }
       return (key.control & SHIFT_PRESSED) != 0
                  ? KeyboardAction::FocusPrevious
                  : KeyboardAction::FocusNext;
     case VK_ESCAPE:
-      return KeyboardAction::Dismiss;
+      return isAutoRepeat(key) ? KeyboardAction::SuppressRepeat
+                               : KeyboardAction::Dismiss;
     default:
       return KeyboardAction::None;
   }

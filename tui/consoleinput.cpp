@@ -36,83 +36,8 @@ bool writeTerminalSequence(HANDLE output, const wchar_t* sequence) {
          written == length;
 }
 
-bool isPrintableAscii(wchar_t ch) {
-  return ch >= 0x20 && ch <= 0x7e;
-}
-
-void assignKeyEventFromCharacter(KeyEvent& out, WORD rawVk, DWORD rawControl,
-                                 wchar_t ch) {
-  out.vk = rawVk;
-  out.ch = 0;
-  out.control = rawControl;
-
-  if (ch == 0) return;
-
-  if (ch >= 1 && ch <= 26 && ch != L'\b' && ch != L'\t' && ch != L'\n' &&
-      ch != L'\r') {
-    out.vk = static_cast<WORD>('A' + ch - 1);
-    out.control |= LEFT_CTRL_PRESSED;
-    return;
-  }
-
-  switch (ch) {
-    case L'\x1b':
-      out.vk = VK_ESCAPE;
-      return;
-    case L'\b':
-    case L'\x7f':
-      out.vk = VK_BACK;
-      return;
-    case L'\t':
-      out.vk = VK_TAB;
-      return;
-    case L'\r':
-    case L'\n':
-      out.vk = VK_RETURN;
-      return;
-    case L' ':
-      out.vk = VK_SPACE;
-      out.ch = ' ';
-      return;
-    default:
-      break;
-  }
-
-  if (ch >= L'a' && ch <= L'z') {
-    out.vk = static_cast<WORD>('A' + ch - L'a');
-  } else if (ch >= L'A' && ch <= L'Z') {
-    out.vk = static_cast<WORD>(ch);
-  } else if (ch >= L'0' && ch <= L'9') {
-    out.vk = static_cast<WORD>(ch);
-  } else if (ch == L'[') {
-    out.vk = VK_OEM_4;
-  } else if (ch == L']') {
-    out.vk = VK_OEM_6;
-  } else if (ch == L',') {
-    out.vk = VK_OEM_COMMA;
-  } else if (ch == L'.') {
-    out.vk = VK_OEM_PERIOD;
-  } else if (ch == L'/') {
-    out.vk = VK_DIVIDE;
-  }
-
-  if (isPrintableAscii(ch)) {
-    out.ch = static_cast<char>(ch);
-  }
-}
-
-void assignKeyEventFromConsoleRecord(KeyEvent& out,
-                                     const KEY_EVENT_RECORD& key) {
-  wchar_t ch = key.uChar.UnicodeChar;
-  if (ch == 0) {
-    ch = static_cast<unsigned char>(key.uChar.AsciiChar);
-  }
-  assignKeyEventFromCharacter(out, key.wVirtualKeyCode, key.dwControlKeyState,
-                              ch);
-}
-
 void assignKeyEventFromTerminalCharacter(KeyEvent& out, wchar_t ch) {
-  assignKeyEventFromCharacter(out, 0, 0, ch);
+  out = tui_console_key_input::terminalCharacter(ch);
 }
 
 std::optional<InputAction> inputActionFromVirtualKey(WORD vk) {
@@ -186,6 +111,7 @@ int mouseWheelDelta(const MOUSE_EVENT_RECORD& event) {
 
 void ConsoleInput::init() {
   consoleMouseButtonState_ = 0;
+  keyPressState_.reset();
   handle_ = GetStdHandle(STD_INPUT_HANDLE);
   output_ = GetStdHandle(STD_OUTPUT_HANDLE);
   if (handle_ == INVALID_HANDLE_VALUE) return;
@@ -211,6 +137,7 @@ void ConsoleInput::init() {
 void ConsoleInput::restore() {
   disableTerminalMouseInput();
   consoleMouseButtonState_ = 0;
+  keyPressState_.reset();
   if (active_) {
     SetConsoleMode(handle_, originalMode_);
   }
@@ -319,22 +246,31 @@ bool ConsoleInput::poll(InputEvent& out) {
     if (rec.EventType == KEY_EVENT) {
       const auto& kev = rec.Event.KeyEvent;
       if (!kev.bKeyDown) {
+        keyPressState_.keyUp(kev.wVirtualKeyCode);
         count--;
         continue;
       }
+      const KeyEvent translatedKey = keyPressState_.keyDown(kev);
+      const bool repeated = isAutoRepeat(translatedKey);
       if (!shouldDispatchLocalVirtualKey(kev.wVirtualKeyCode,
                                          systemMediaCommandOwner_)) {
         count--;
         continue;
       }
       if (auto action = inputActionFromVirtualKey(kev.wVirtualKeyCode)) {
+        if (repeated) {
+          count--;
+          continue;
+        }
         out = inputActionEvent(*action);
         return true;
       }
       if (kev.uChar.UnicodeChar != 0) {
         InputEvent parsed{};
         TerminalInputSequenceParser::Result parsedResult =
-            terminalParser_.feed(kev.uChar.UnicodeChar, parsed);
+            terminalParser_.feed(kev.uChar.UnicodeChar, parsed,
+                                 translatedKey.pressKind,
+                                 translatedKey.repeatCount);
         if (parsedResult == TerminalInputSequenceParser::Result::Event) {
           out = std::move(parsed);
           return true;
@@ -364,7 +300,7 @@ bool ConsoleInput::poll(InputEvent& out) {
         }
       }
       out.type = InputEvent::Type::Key;
-      assignKeyEventFromConsoleRecord(out.key, kev);
+      out.key = translatedKey;
       return true;
     }
     if (rec.EventType == MOUSE_EVENT) {
@@ -433,6 +369,7 @@ bool ConsoleInput::poll(InputEvent& out) {
       if (!focusActive_) {
         xButton1Down_ = false;
         xButton2Down_ = false;
+        keyPressState_.reset();
         consoleMouseButtonState_ = 0;
       }
       count--;

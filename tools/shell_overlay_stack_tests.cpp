@@ -14,11 +14,15 @@ bool expect(bool condition, const char* message) {
   return false;
 }
 
-InputEvent keyEvent(WORD key, DWORD control = 0) {
+InputEvent keyEvent(WORD key, DWORD control = 0,
+                    KeyPressKind pressKind = KeyPressKind::Initial,
+                    std::uint32_t repeatCount = 1) {
   InputEvent event;
   event.type = InputEvent::Type::Key;
   event.key.vk = key;
   event.key.control = control;
+  event.key.pressKind = pressKind;
+  event.key.repeatCount = repeatCount;
   return event;
 }
 
@@ -140,6 +144,12 @@ int main() {
           !overlays.openMediaMenu(mediaEntry("blocked.mp4"), mediaActions()),
       "an input-modal dialog must consume unrelated shortcuts");
   interaction = overlays.handle(keyEvent(VK_TAB), bounds, catalog);
+  interaction = overlays.handle(
+      keyEvent(VK_RETURN, 0, KeyPressKind::AutoRepeat, 5), bounds, catalog);
+  ok &= expect(interaction.consumed && !interaction.dialogResolution &&
+                   overlays.activeDialog() == failureOpening.lease,
+               "a repeated activation key must stay inside the current "
+               "dialog without resolving or falling through");
   interaction = overlays.handle(keyEvent(VK_RETURN), bounds, catalog);
   ok &= expect(interaction.dialogResolution &&
                    interaction.dialogResolution->lease ==

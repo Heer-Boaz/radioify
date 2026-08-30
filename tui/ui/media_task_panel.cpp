@@ -277,7 +277,9 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
         result.consumed = true;
         if (!hidden_) {
           selectedButton_ = tui_button_row::selectAdjacent(
-              selectedButton_, visibleActionCount, -1);
+              selectedButton_, visibleActionCount,
+              -static_cast<int>(std::min<std::size_t>(
+                  keyPressCount(event.key), visibleActionCount)));
           result.changed = true;
         }
         break;
@@ -285,7 +287,9 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
         result.consumed = true;
         if (!hidden_) {
           selectedButton_ = tui_button_row::selectAdjacent(
-              selectedButton_, visibleActionCount, 1);
+              selectedButton_, visibleActionCount,
+              static_cast<int>(std::min<std::size_t>(
+                  keyPressCount(event.key), visibleActionCount)));
           result.changed = true;
         }
         break;
@@ -297,6 +301,9 @@ Interaction State::handle(const InputEvent& event, const Bounds& bounds,
                        actionAt(actions, selectedButton_)) {
           activate(*action, ActivationSource::Keyboard, result);
         }
+        break;
+      case tui_button_row::KeyboardAction::SuppressRepeat:
+        result.consumed = true;
         break;
       case tui_button_row::KeyboardAction::None:
         // This is a modeless panel. An unrelated key transfers focus back to

@@ -15,10 +15,14 @@ bool expect(bool condition, const char* message) {
   return false;
 }
 
-InputEvent keyEvent(WORD key) {
+InputEvent keyEvent(WORD key,
+                    KeyPressKind pressKind = KeyPressKind::Initial,
+                    std::uint32_t repeatCount = 1) {
   InputEvent event;
   event.type = InputEvent::Type::Key;
   event.key.vk = key;
+  event.key.pressKind = pressKind;
+  event.key.repeatCount = repeatCount;
   return event;
 }
 
@@ -56,18 +60,21 @@ int main() {
                    layout.width == 18 && layout.visibleRows == 3,
                "popup geometry must remain inside the available viewport");
 
-  for (int index = 0; index < 4; ++index) {
-    const tui_popup_menu::Interaction interaction =
-        menu.handle(keyEvent(VK_DOWN), bounds);
-    ok &= expect(interaction.consumed && interaction.changed,
-                 "arrow navigation must be consumed and invalidate the view");
-  }
+  tui_popup_menu::Interaction interaction = menu.handle(
+      keyEvent(VK_DOWN, KeyPressKind::AutoRepeat, 4), bounds);
+  ok &= expect(interaction.consumed && interaction.changed,
+               "a batched arrow repeat must navigate without FIFO expansion");
   layout = menu.layout(bounds);
   ok &= expect(menu.selected() == 4 && layout.firstItem == 2,
                "keyboard navigation must keep the selected item visible");
 
-  tui_popup_menu::Interaction interaction =
-      menu.handle(keyEvent(VK_RETURN), bounds);
+  interaction = menu.handle(
+      keyEvent(VK_RETURN, KeyPressKind::AutoRepeat, 3), bounds);
+  ok &= expect(interaction.consumed && !interaction.activatedItem &&
+                   menu.active(),
+               "a repeated Enter must not activate or escape the active "
+               "popup");
+  interaction = menu.handle(keyEvent(VK_RETURN), bounds);
   ok &= expect(interaction.activatedItem == 4 && interaction.dismissed &&
                    !menu.active(),
                "Enter must activate the selected item and close the popup");

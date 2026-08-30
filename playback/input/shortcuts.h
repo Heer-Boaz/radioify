@@ -1,12 +1,15 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string_view>
 
 #include "input_event.h"
+#include "playback/input/command.h"
 #include "playback/input/media_keys.h"
 #include "playback/input/shortcut_types.h"
 #include "playback/video/edit/command.h"
@@ -19,7 +22,9 @@ struct PlaybackShortcutBinding {
       PlaybackAction actionValue, WORD virtualKey, char lowerCharacter,
       char upperCharacter, DWORD requiredModifiers,
       DWORD forbiddenModifiers, uint32_t shortcutContexts,
-      std::string_view label = {})
+      std::string_view label = {},
+      ShortcutRepeatPolicy repeat =
+          ShortcutRepeatPolicy::InitialPressOnly)
       : action(actionValue),
         vk(virtualKey),
         lower(lowerCharacter),
@@ -27,7 +32,8 @@ struct PlaybackShortcutBinding {
         requiredModifierMask(requiredModifiers),
         forbiddenModifierMask(forbiddenModifiers),
         contexts(shortcutContexts),
-        displayLabel(label) {}
+        displayLabel(label),
+        repeatPolicy(repeat) {}
 
   PlaybackAction action = PlaybackAction::TogglePause;
   WORD vk = 0;
@@ -37,6 +43,8 @@ struct PlaybackShortcutBinding {
   DWORD forbiddenModifierMask = 0;
   uint32_t contexts = kPlaybackShortcutContextAll;
   std::string_view displayLabel;
+  ShortcutRepeatPolicy repeatPolicy =
+      ShortcutRepeatPolicy::InitialPressOnly;
 };
 
 inline constexpr DWORD kPlaybackShortcutCtrlMask = kShortcutCtrlMask;
@@ -270,16 +278,20 @@ inline constexpr std::array<PlaybackShortcutBinding, 63>
          kPlaybackShortcutContextShared, "O"},
         {PlaybackAction::SeekBackward, VK_OEM_4, '[', '[', 0,
          kPlaybackShortcutSeekForbiddenMask,
-         kPlaybackShortcutContextShared},
+         kPlaybackShortcutContextShared, {},
+         ShortcutRepeatPolicy::AllowAutoRepeat},
         {PlaybackAction::SeekForward, VK_OEM_6, ']', ']', 0,
          kPlaybackShortcutSeekForbiddenMask,
-         kPlaybackShortcutContextShared},
+         kPlaybackShortcutContextShared, {},
+         ShortcutRepeatPolicy::AllowAutoRepeat},
         {PlaybackAction::SeekBackward, VK_LEFT, 0, 0, 0,
          kPlaybackShortcutSeekForbiddenMask,
-         kPlaybackShortcutContextShared},
+         kPlaybackShortcutContextShared, {},
+         ShortcutRepeatPolicy::AllowAutoRepeat},
         {PlaybackAction::SeekForward, VK_RIGHT, 0, 0, 0,
          kPlaybackShortcutSeekForbiddenMask,
-         kPlaybackShortcutContextShared},
+         kPlaybackShortcutContextShared, {},
+         ShortcutRepeatPolicy::AllowAutoRepeat},
         {PlaybackAction::PreviousFrame, VK_OEM_COMMA, ',', ',', 0,
          kPlaybackShortcutFrameStepForbiddenMask,
          kPlaybackShortcutContextVideoPlayback},
@@ -294,11 +306,13 @@ inline constexpr std::array<PlaybackShortcutBinding, 63>
          kPlaybackShortcutContextVideoPlayback},
         {PlaybackAction::VolumeUp, VK_UP, 0, 0, kPlaybackShortcutShiftMask,
          kPlaybackShortcutCtrlMask | kPlaybackShortcutAltMask,
-         kPlaybackShortcutContextShared},
+         kPlaybackShortcutContextShared, {},
+         ShortcutRepeatPolicy::AllowAutoRepeat},
         {PlaybackAction::VolumeDown, VK_DOWN, 0, 0,
          kPlaybackShortcutShiftMask,
          kPlaybackShortcutCtrlMask | kPlaybackShortcutAltMask,
-         kPlaybackShortcutContextShared},
+         kPlaybackShortcutContextShared, {},
+         ShortcutRepeatPolicy::AllowAutoRepeat},
     }};
 
 inline constexpr std::string_view playbackActionDisplayLabel(
@@ -312,7 +326,12 @@ inline constexpr std::string_view playbackActionDisplayLabel(
   return {};
 }
 
-inline std::optional<PlaybackAction> resolvePlaybackAction(
+struct PlaybackActionMatch {
+  PlaybackAction action = PlaybackAction::TogglePause;
+  std::uint32_t repetitions = 1;
+};
+
+inline const PlaybackShortcutBinding* resolvePlaybackShortcutBinding(
     const KeyEvent& key,
     uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
                                 kPlaybackShortcutContextShared) {
@@ -322,11 +341,22 @@ inline std::optional<PlaybackAction> resolvePlaybackAction(
     }
     if (matchesShortcut(key, binding.vk, binding.lower, binding.upper,
                         binding.requiredModifierMask,
-                        binding.forbiddenModifierMask)) {
-      return binding.action;
+                        binding.forbiddenModifierMask,
+                        binding.repeatPolicy)) {
+      return &binding;
     }
   }
-  return std::nullopt;
+  return nullptr;
+}
+
+inline std::optional<PlaybackAction> resolvePlaybackAction(
+    const KeyEvent& key,
+    uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
+                                kPlaybackShortcutContextShared) {
+  const PlaybackShortcutBinding* binding =
+      resolvePlaybackShortcutBinding(key, shortcutContexts);
+  return binding ? std::optional<PlaybackAction>(binding->action)
+                 : std::nullopt;
 }
 
 inline std::optional<PlaybackAction> resolvePlaybackAction(
@@ -379,6 +409,57 @@ inline std::optional<PlaybackAction> resolvePlaybackAction(
   }
   return resolvePlaybackAction(ev.key, shortcutContexts);
 }
+
+inline std::optional<PlaybackActionMatch> resolvePlaybackActionMatch(
+    const InputEvent& event,
+    uint32_t shortcutContexts = kPlaybackShortcutContextGlobal |
+                                kPlaybackShortcutContextShared) {
+  if (event.type == InputEvent::Type::Action) {
+    const std::optional<PlaybackAction> action =
+        resolvePlaybackAction(event.action, shortcutContexts);
+    return action ? std::optional<PlaybackActionMatch>(
+                        PlaybackActionMatch{*action, 1})
+                  : std::nullopt;
+  }
+  if (event.type != InputEvent::Type::Key) {
+    return std::nullopt;
+  }
+  const PlaybackShortcutBinding* binding =
+      resolvePlaybackShortcutBinding(event.key, shortcutContexts);
+  if (!binding) return std::nullopt;
+  const std::uint32_t repetitions =
+      binding->repeatPolicy == ShortcutRepeatPolicy::AllowAutoRepeat
+          ? keyPressCount(event.key)
+          : 1;
+  return PlaybackActionMatch{binding->action, repetitions};
+}
+
+namespace playback_input {
+
+inline Command commandForShortcut(const PlaybackActionMatch& match) {
+  const std::uint32_t repetitions = match.repetitions == 0
+                                        ? 1
+                                        : match.repetitions;
+  const int steps = static_cast<int>(std::min<std::uint32_t>(
+      repetitions,
+      static_cast<std::uint32_t>((std::numeric_limits<int>::max)())));
+  switch (match.action) {
+    case PlaybackAction::SeekBackward:
+      return SeekBySteps{-steps};
+    case PlaybackAction::SeekForward:
+      return SeekBySteps{steps};
+    case PlaybackAction::VolumeUp:
+      return AdjustVolume{
+          0.10f * static_cast<float>(std::min(10, steps))};
+    case PlaybackAction::VolumeDown:
+      return AdjustVolume{
+          -0.10f * static_cast<float>(std::min(10, steps))};
+    default:
+      return match.action;
+  }
+}
+
+}  // namespace playback_input
 
 // Playback keeps a deliberately small application-level shortcut layer while
 // the media browser owns the terminal. Text-entry modes can suppress this

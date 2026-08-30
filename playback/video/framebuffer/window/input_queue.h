@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <deque>
 #include <mutex>
 
@@ -9,6 +10,8 @@
 
 class WindowInputQueue {
  public:
+  static constexpr std::size_t kMaximumPendingEvents = 256;
+
   void push(InputEvent ev);
   bool poll(InputEvent& ev);
   void clear();

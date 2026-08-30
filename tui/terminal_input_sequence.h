@@ -1,7 +1,9 @@
 #ifndef TERMINAL_INPUT_SEQUENCE_H
 #define TERMINAL_INPUT_SEQUENCE_H
 
-struct InputEvent;
+#include <cstdint>
+
+#include "input_event.h"
 
 class TerminalInputSequenceParser {
  public:
@@ -13,6 +15,8 @@ class TerminalInputSequenceParser {
   };
 
   Result feed(wchar_t ch, InputEvent& out);
+  Result feed(wchar_t ch, InputEvent& out, KeyPressKind pressKind,
+              std::uint32_t repeatCount);
   bool flushPendingEscape(InputEvent& out);
   void reset();
 
@@ -24,6 +28,8 @@ class TerminalInputSequenceParser {
 
   wchar_t buffer_[64]{};
   unsigned length_ = 0;
+  KeyPressKind pressKind_ = KeyPressKind::Initial;
+  std::uint32_t repeatCount_ = 1;
 };
 
 #endif

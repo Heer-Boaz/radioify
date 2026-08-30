@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 
 #include "playback/overlay/overlay.h"
@@ -299,6 +300,18 @@ void dispatchPlaybackInputCommand(
     playback_input::Command command) {
   const auto* action = std::get_if<PlaybackAction>(&command);
   if (!action) {
+    if (const auto* seek =
+            std::get_if<playback_input::SeekToRatio>(&command)) {
+      queuePlaybackSeekToRatio(session, seekState, seek->ratio);
+      return;
+    }
+    if (const auto* seek =
+            std::get_if<playback_input::SeekBySteps>(&command)) {
+      sendRelativeSeekRequest(
+          session, seekState,
+          5000000LL * static_cast<std::int64_t>(seek->steps));
+      return;
+    }
     if (const auto* volume =
             std::get_if<playback_input::AdjustVolume>(&command)) {
       session.dispatch(AdjustVolume{volume->delta});
@@ -426,14 +439,18 @@ void handlePlaybackInputEvent(SessionPort& session,
     }
     if (ev.type == InputEvent::Type::Key) {
       if (ev.key.vk == VK_ESCAPE || ev.key.vk == VK_BACK) {
+        if (isAutoRepeat(ev.key)) return;
         request.kind = playback_session::ContextMenuInputKind::Dismiss;
       } else if (ev.key.vk == VK_UP) {
         request.kind = playback_session::ContextMenuInputKind::MoveSelection;
-        request.selectionDelta = -1;
+        request.selectionDelta = -static_cast<int>(std::min<std::uint32_t>(
+            keyPressCount(ev.key), (std::numeric_limits<int>::max)()));
       } else if (ev.key.vk == VK_DOWN) {
         request.kind = playback_session::ContextMenuInputKind::MoveSelection;
-        request.selectionDelta = 1;
+        request.selectionDelta = static_cast<int>(std::min<std::uint32_t>(
+            keyPressCount(ev.key), (std::numeric_limits<int>::max)()));
       } else if (ev.key.vk == VK_RETURN) {
+        if (isAutoRepeat(ev.key)) return;
         request.kind = playback_session::ContextMenuInputKind::ActivateSelection;
       } else {
         return;
