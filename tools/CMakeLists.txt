@@ -75,8 +75,8 @@ radioify_add_module_object_library(radioify_tool_playback_exit_coordinator_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_exit_coordinator_tests.cpp
 )
 
-radioify_add_module_object_library(radioify_tool_deferred_media_handoff_tests
-  ${CMAKE_CURRENT_SOURCE_DIR}/deferred_media_handoff_tests.cpp
+radioify_add_module_object_library(radioify_tool_video_handoff_controller_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/video_handoff_controller_tests.cpp
 )
 
 radioify_add_module_object_library(radioify_tool_video_output_color_tests

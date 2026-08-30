@@ -696,13 +696,13 @@ radioify_link_repo_target(playback_exit_coordinator_tests)
 add_test(NAME playback_exit_coordinator_tests
          COMMAND $<TARGET_FILE:playback_exit_coordinator_tests>)
 
-add_executable(deferred_media_handoff_tests)
-target_sources(deferred_media_handoff_tests PRIVATE
-  $<TARGET_OBJECTS:radioify_tool_deferred_media_handoff_tests>
+add_executable(video_handoff_controller_tests)
+target_sources(video_handoff_controller_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_video_handoff_controller_tests>
 )
-radioify_link_repo_target(deferred_media_handoff_tests)
-add_test(NAME deferred_media_handoff_tests
-         COMMAND $<TARGET_FILE:deferred_media_handoff_tests>)
+radioify_link_repo_target(video_handoff_controller_tests)
+add_test(NAME video_handoff_controller_tests
+         COMMAND $<TARGET_FILE:video_handoff_controller_tests>)
 
 add_executable(overlay_control_pointer_tests)
 target_sources(overlay_control_pointer_tests PRIVATE

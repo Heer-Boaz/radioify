@@ -9,10 +9,10 @@
 
 #include "app/media_processing_coordinator.h"
 #include "app/playback_control_router.h"
+#include "app/video_handoff_controller.h"
 #include "audio/media_formats.h"
 #include "core/path_identity.h"
 #include "playback/target.h"
-#include "tui/deferred_media_handoff.h"
 #include "tui/media_activation_plan.h"
 
 namespace {
@@ -363,12 +363,6 @@ struct TuiMediaCoordinator::Impl {
                                tui_media_activation::OpenDirectory, Quit>;
   using CommandBuildResult = std::variant<Command, MediaCommandFailure>;
 
-  enum class DeferredHandoffStart : std::uint8_t {
-    WaitingForModal,
-    Started,
-    Failed,
-  };
-
   class DriveScope {
    public:
     explicit DriveScope(bool& driving) : driving_(driving) { driving_ = true; }
@@ -504,37 +498,34 @@ struct TuiMediaCoordinator::Impl {
     }
   }
 
-  DeferredHandoffStart tryStartDeferredVideoHandoff() {
-    if (!videoSession_ || !externalHandoff_.awaitingRequest()) {
-      return DeferredHandoffStart::Failed;
+  application_playback::VideoHandoffStart
+  tryStartDeferredVideoHandoff() {
+    if (!videoSession_) {
+      return application_playback::VideoHandoffStart::NoPendingCommand;
     }
-    if (videoSession_->capturesBrowserInput()) {
-      return DeferredHandoffStart::WaitingForModal;
-    }
-
-    const std::optional<playback_session_exit::RequestId> requestId =
-        videoSession_->requestHandoff();
-    if (!requestId) return DeferredHandoffStart::Failed;
-
-    if (!externalHandoff_.markRequestStarted(*requestId)) {
-      (void)videoSession_->resolveHandoff(*requestId, false);
+    const application_playback::VideoHandoffStart start =
+        externalHandoff_.tryStart(*videoSession_);
+    if (start == application_playback::VideoHandoffStart::RequestStarted ||
+        start == application_playback::VideoHandoffStart::Failed) {
       drainVideoSessionEvents();
-      return DeferredHandoffStart::Failed;
     }
-    drainVideoSessionEvents();
-    return DeferredHandoffStart::Started;
+    return start;
   }
 
   void resumeDeferredVideoHandoff() {
     if (!videoSession_ || !externalHandoff_.awaitingRequest()) return;
-    const DeferredHandoffStart start = tryStartDeferredVideoHandoff();
-    if (start == DeferredHandoffStart::WaitingForModal) return;
-    if (start == DeferredHandoffStart::Started) {
+    const application_playback::VideoHandoffStart start =
+        tryStartDeferredVideoHandoff();
+    if (start ==
+        application_playback::VideoHandoffStart::WaitingForInteraction) {
+      return;
+    }
+    if (start ==
+        application_playback::VideoHandoffStart::RequestStarted) {
       clearCommandError();
       return;
     }
 
-    externalHandoff_.clear();
     (void)reject(
         MediaCommandFailureKind::Busy,
         "Could not complete the requested media change because the current "
@@ -552,9 +543,11 @@ struct TuiMediaCoordinator::Impl {
     if (!externalHandoff_.enqueue(std::move(command))) {
       return reject(MediaCommandFailureKind::Busy, {});
     }
-    const DeferredHandoffStart start = tryStartDeferredVideoHandoff();
-    if (start == DeferredHandoffStart::Failed) {
-      externalHandoff_.clear();
+    const application_playback::VideoHandoffStart start =
+        tryStartDeferredVideoHandoff();
+    if (start == application_playback::VideoHandoffStart::Failed ||
+        start ==
+            application_playback::VideoHandoffStart::NoPendingCommand) {
       return reject(
           MediaCommandFailureKind::Busy,
           "Could not complete the requested media change because the current "
@@ -911,7 +904,7 @@ struct TuiMediaCoordinator::Impl {
   std::optional<PendingVideoOpen> pendingVideoOpen_;
   std::optional<PendingAudioFallback> pendingAudioFallback_;
   std::optional<Command> pendingCommand_;
-  tui_media_handoff::DeferredCommand<Command> externalHandoff_;
+  application_playback::VideoHandoffController<Command> externalHandoff_;
   std::uint64_t lastDecisionValue_ = 0;
   std::string commandError_;
   // Commands and session pumping are owner-thread operations. Keeping their

@@ -13,6 +13,7 @@
 #include "playback/control/system_control_state.h"
 #include "playback/media_processing_actions.h"
 #include "playback/session/event.h"
+#include "playback/session/handoff_endpoint.h"
 #include "playback/session/open_outcome.h"
 #include "playback/session/presentation_policy.h"
 #include "playback/session/state.h"
@@ -50,7 +51,7 @@ struct VideoSessionRequest {
 // Application-facing protocol for one video playback session. The shell owns
 // lifecycle and handoff; concrete decoding, rendering and windowing remain
 // behind this boundary.
-class VideoSession {
+class VideoSession : public HandoffEndpoint {
  public:
   virtual ~VideoSession() = default;
 
@@ -66,6 +67,9 @@ class VideoSession {
   virtual PlaybackControlState controlState() const = 0;
   virtual PlaybackPresentationState presentationState() const = 0;
   virtual bool capturesBrowserInput() const = 0;
+  bool handoffRequestDeferred() const final override {
+    return capturesBrowserInput();
+  }
   virtual void setExternalInputModal(bool modal) = 0;
   virtual bool handleInputEvent(const InputEvent& event) = 0;
   virtual bool pollWindowInput(InputEvent& event) = 0;
@@ -76,9 +80,10 @@ class VideoSession {
   virtual bool togglePictureInPicture() = 0;
   virtual bool toggleFullscreen() = 0;
   virtual bool activatePresentation() = 0;
-  virtual std::optional<playback_session_exit::RequestId> requestHandoff() = 0;
+  virtual std::optional<playback_session_exit::RequestId> requestHandoff()
+      override = 0;
   virtual bool resolveHandoff(playback_session_exit::RequestId requestId,
-                              bool accepted) = 0;
+                              bool accepted) override = 0;
   virtual std::vector<Event> drainEvents() = 0;
   virtual void mediaTaskFinished(
       const playback_media_processing::Completion& completion) = 0;
