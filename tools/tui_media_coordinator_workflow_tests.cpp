@@ -25,6 +25,7 @@ bool expect(bool condition, const char* message) {
 class RecordingAudioSession final : public audio_playback::Session {
  public:
   bool startFile(const std::filesystem::path& file, int trackIndex) override {
+    startedFiles.push_back(file);
     snapshot_.source = AudioPlaybackSource{file, trackIndex};
     snapshot_.ready = true;
     return true;
@@ -44,6 +45,7 @@ class RecordingAudioSession final : public audio_playback::Session {
   int pauseRequests = 0;
   int toggleRequests = 0;
   int stopRequests = 0;
+  std::vector<std::filesystem::path> startedFiles;
   std::optional<double> lastSeekRatio;
 
  private:
@@ -248,6 +250,82 @@ int main() {
                    sessions.back()->controlCommands.empty(),
                "commands from the retired session must not reach its "
                "replacement");
+
+  const PlaybackControlSessionId secondVideoControlSession =
+      coordinator.controlSessionId();
+  const std::filesystem::path firstAudio = "first.flac";
+  const std::filesystem::path secondAudio = "second.flac";
+  ok &= expect(
+      coordinator.startPlayback(
+          routeFor(firstAudio),
+          playback_queue::sourceFromFiles({firstAudio, secondAudio})) &&
+          sessions.back()->handoffResolutions.size() == 1 &&
+          sessions.back()->handoffResolutions.front().second,
+      "switching from video to audio must use the same accepted handoff "
+      "workflow");
+
+  const TuiMediaCoordinator::PollResult audioHandoff = coordinator.poll();
+  const PlaybackControlSessionId firstAudioControlSession =
+      coordinator.controlSessionId();
+  ok &= expect(audioHandoff.playbackChanged && !coordinator.videoReady() &&
+                   audio.startedFiles ==
+                       std::vector<std::filesystem::path>{firstAudio} &&
+                   firstAudioControlSession.valid() &&
+                   firstAudioControlSession != secondVideoControlSession,
+               "completing the handoff must activate audio and rotate "
+               "control ownership");
+
+  ok &= expect(
+      !coordinator.handleSystemControlCommand(
+          {secondVideoControlSession, PlaybackControlCommand::Pause}) &&
+          coordinator.handleSystemControlCommand(
+              {firstAudioControlSession, PlaybackControlCommand::Pause}) &&
+          coordinator.seekToRatio(0.4) && audio.pauseRequests == 1 &&
+          audio.lastSeekRatio == 0.4,
+      "audio controls must accept only the active identity and route seek "
+      "through the audio session");
+
+  ok &= expect(
+      coordinator.handleSystemControlCommand(
+          {firstAudioControlSession, PlaybackControlCommand::Next}) &&
+          audio.startedFiles == std::vector<std::filesystem::path>{
+                                    firstAudio, secondAudio} &&
+          coordinator.controlSessionId().valid() &&
+          coordinator.controlSessionId() != firstAudioControlSession,
+      "queue transport must activate the adjacent item and rotate control "
+      "ownership as one workflow");
+
+  const PlaybackControlSessionId secondAudioControlSession =
+      coordinator.controlSessionId();
+  ok &= expect(
+      !coordinator.handleSystemControlCommand(
+          {firstAudioControlSession, PlaybackControlCommand::Play}) &&
+          coordinator.handleSystemControlCommand(
+              {secondAudioControlSession, PlaybackControlCommand::Stop}) &&
+          audio.playRequests == 0 && audio.stopRequests == 1 &&
+          !coordinator.controlSessionId().valid(),
+      "stopping audio must retire its identity without accepting commands "
+      "from the previous queue item");
+
+  const std::filesystem::path thirdVideo = "third.mp4";
+  ok &= expect(
+      coordinator.startPlayback(routeFor(thirdVideo),
+                                playback_queue::singleSource(
+                                    playbackFileTarget(thirdVideo))) &&
+          coordinator.videoReady() && sessions.size() == 3,
+      "video playback must remain activatable after an audio session stops");
+
+  const PlaybackControlSessionId thirdVideoControlSession =
+      coordinator.controlSessionId();
+  ok &= expect(
+      coordinator.handleSystemControlCommand(
+          {thirdVideoControlSession, PlaybackControlCommand::Stop}) &&
+          sessions.back()->controlCommands ==
+              std::vector<PlaybackControlCommand>{
+                  PlaybackControlCommand::Stop} &&
+          !coordinator.controlSessionId().valid(),
+      "video stop must reach the active endpoint before retiring its control "
+      "identity");
 
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

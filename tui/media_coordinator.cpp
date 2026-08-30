@@ -2,12 +2,13 @@
 
 #include <cassert>
 #include <cstdint>
+#include <functional>
 #include <stdexcept>
 #include <utility>
 #include <variant>
 
 #include "app/media_processing_coordinator.h"
-#include "audio/audioplayback.h"
+#include "app/playback_control_router.h"
 #include "audio/media_formats.h"
 #include "core/path_identity.h"
 #include "playback/target.h"
@@ -68,7 +69,9 @@ class MediaCommandResult {
 }  // namespace
 
 struct TuiMediaCoordinator::Impl {
-  explicit Impl(Services services) : services_(std::move(services)) {
+  explicit Impl(Services services)
+      : services_(std::move(services)),
+        playbackControl_(services_.audioPlayback) {
     if (!services_.createVideoSession) {
       throw std::invalid_argument(
           "TuiMediaCoordinator requires a video-session factory.");
@@ -174,7 +177,7 @@ struct TuiMediaCoordinator::Impl {
   }
 
   PlaybackControlSessionId controlSessionId() const {
-    return controlSessionId_;
+    return playbackControl_.sessionId();
   }
 
   PlaybackShellTerminalRole terminalRole() const {
@@ -182,23 +185,21 @@ struct TuiMediaCoordinator::Impl {
                          : PlaybackShellTerminalRole::Browser;
   }
 
-  static std::optional<PlaybackTarget> playbackTargetForAudio(
-      const std::optional<AudioPlaybackSource>& source) {
-    if (!source) return std::nullopt;
-    if (source->trackIndex) {
-      if (std::optional<PlaybackTarget> trackTarget =
-              playbackTrackTarget(source->file, *source->trackIndex)) {
-        return trackTarget;
-      }
-    }
-    return playbackFileTarget(source->file);
+  application_playback::VideoSessionRef videoSessionRef() {
+    if (!videoSession_) return std::nullopt;
+    return std::ref(*videoSession_);
+  }
+
+  application_playback::ConstVideoSessionRef videoSessionRef() const {
+    if (!videoSession_) return std::nullopt;
+    return std::cref(*videoSession_);
   }
 
   std::optional<VideoSnapshot> videoSnapshot() const {
-    if (!videoSession_ || !videoSession_->ready()) return std::nullopt;
-    PlaybackControlState control = videoSession_->controlState();
-    control.session = controlSessionId_;
-    return VideoSnapshot{std::move(control),
+    std::optional<PlaybackControlState> control =
+        playbackControl_.videoControlState(videoSessionRef());
+    if (!control) return std::nullopt;
+    return VideoSnapshot{std::move(*control),
                          videoSession_->presentationState()};
   }
 
@@ -260,59 +261,18 @@ struct TuiMediaCoordinator::Impl {
   }
 
   bool handleControlCommand(PlaybackControlCommand command) {
-    if (videoSession_) {
-      const bool handled = videoSession_->handleControlCommand(command);
-      drainVideoSessionEvents();
-      if (handled && command == PlaybackControlCommand::Stop) {
-        endControlSession();
-      }
-      return handled;
-    }
-
-    const AudioPlaybackSnapshot audio = audioPlayback().snapshot();
-    const bool hasAudioTarget =
-        playbackTargetForAudio(audio.source).has_value();
-    switch (command) {
-      case PlaybackControlCommand::Play:
-        if (!hasAudioTarget) return false;
-        audioPlayback().play();
-        return true;
-      case PlaybackControlCommand::Pause:
-        if (!hasAudioTarget) return false;
-        audioPlayback().pause();
-        return true;
-      case PlaybackControlCommand::TogglePause:
-        if (!hasAudioTarget) return false;
-        audioPlayback().togglePause();
-        return true;
-      case PlaybackControlCommand::Stop:
-        if (!audio.ready) return false;
-        audioPlayback().stop();
-        endControlSession();
-        return true;
-      case PlaybackControlCommand::Previous:
-        if (!hasAudioTarget) return false;
-        return transport(playback_queue::Direction::Previous).accepted();
-      case PlaybackControlCommand::Next:
-        if (!hasAudioTarget) return false;
-        return transport(playback_queue::Direction::Next).accepted();
-    }
-    return false;
+    return applyControlDispatch(
+        playbackControl_.dispatch(command, videoSessionRef()));
   }
 
   bool handleSystemControlCommand(
       const PlaybackControlCommandEvent& event) {
-    if (!event.session.valid() || event.session != controlSessionId_) {
-      return false;
-    }
-    return handleControlCommand(event.command);
+    return applyControlDispatch(
+        playbackControl_.dispatch(event, videoSessionRef()));
   }
 
   bool seekToRatio(double ratio) {
-    if (videoSession_) return videoSession_->seekToRatio(ratio);
-    if (!audioPlayback().snapshot().ready) return false;
-    audioPlayback().seekToRatio(ratio);
-    return true;
+    return playbackControl_.seekToRatio(ratio, videoSessionRef());
   }
 
   bool toggleWindowPresentation() {
@@ -676,6 +636,26 @@ struct TuiMediaCoordinator::Impl {
 
   void releaseForegroundPlayback() { interactivePlayback_.reset(); }
 
+  bool applyControlDispatch(
+      application_playback::ControlDispatch dispatch) {
+    if (const auto* videoDispatch =
+            std::get_if<application_playback::VideoControlDispatched>(
+                &dispatch)) {
+      drainVideoSessionEvents();
+      if (videoDispatch->retireControlSession) {
+        playbackControl_.endSession();
+      }
+      return videoDispatch->handled;
+    }
+    if (const auto* transportRequest =
+            std::get_if<application_playback::QueueTransportRequested>(
+                &dispatch)) {
+      return transport(transportRequest->direction).accepted();
+    }
+    return std::holds_alternative<application_playback::ControlApplied>(
+        dispatch);
+  }
+
   MediaCommandResult presentPlayback(
       playback_queue::Queue::PreparedActivation activation) {
     const playback_route::Route& route = activation.route();
@@ -695,14 +675,14 @@ struct TuiMediaCoordinator::Impl {
 
     if (const std::optional<int> trackIndex =
             playbackTargetTrackIndex(target)) {
-      endControlSession();
+      playbackControl_.endSession();
       if (!audioPlayback().startFile(targetFile, *trackIndex)) {
         publishEvent(AudioPlaybackFailed{targetFile});
         return MediaCommandResult::rejected(
             {MediaCommandFailureKind::PlaybackFailed, {}});
       }
       services_.queue.commit(std::move(activation));
-      beginControlSession();
+      playbackControl_.beginSession();
       return MediaCommandResult::applied();
     }
     if (isSupportedImageExt(targetFile)) {
@@ -711,18 +691,18 @@ struct TuiMediaCoordinator::Impl {
            "The image request did not contain an image sequence."});
     }
     if (!isSupportedVideoExt(targetFile)) {
-      endControlSession();
+      playbackControl_.endSession();
       if (!audioPlayback().startFile(targetFile, 0)) {
         publishEvent(AudioPlaybackFailed{targetFile});
         return MediaCommandResult::rejected(
             {MediaCommandFailureKind::PlaybackFailed, {}});
       }
       services_.queue.commit(std::move(activation));
-      beginControlSession();
+      playbackControl_.beginSession();
       return MediaCommandResult::applied();
     }
 
-    endControlSession();
+    playbackControl_.endSession();
     playback_session::VideoSessionRequest sessionRequest(
         services_.mediaProcessingActions);
     sessionRequest.file = targetFile;
@@ -763,7 +743,7 @@ struct TuiMediaCoordinator::Impl {
     if (std::holds_alternative<playback_session::OpenReady>(openOutcome)) {
       services_.queue.commit(std::move(pending.activation));
       videoTarget_ = std::move(pending.target);
-      beginControlSession();
+      playbackControl_.beginSession();
       playbackStateChanged();
       return MediaCommandResult::applied();
     }
@@ -806,7 +786,7 @@ struct TuiMediaCoordinator::Impl {
         videoTarget_ ? playbackTargetFile(*videoTarget_)
                      : std::filesystem::path{};
     continuationState_ = std::move(completion.continuityState);
-    endControlSession();
+    playbackControl_.endSession();
     videoSession_.reset();
     videoTarget_.reset();
     if (completion.intent != PlaybackSessionExitIntent::QuitApplication &&
@@ -909,7 +889,7 @@ struct TuiMediaCoordinator::Impl {
         publishEvent(AudioPlaybackFailed{pending.file});
       } else {
         services_.queue.commit(std::move(pending.activation));
-        beginControlSession();
+        playbackControl_.beginSession();
       }
     }
     playbackStateChanged();
@@ -917,19 +897,12 @@ struct TuiMediaCoordinator::Impl {
     return true;
   }
 
-  void beginControlSession() {
-    ++lastControlSessionValue_;
-    if (lastControlSessionValue_ == 0) ++lastControlSessionValue_;
-    controlSessionId_ = {lastControlSessionValue_};
-  }
-
-  void endControlSession() { controlSessionId_ = {}; }
-
   void publishEvent(Event event) {
     events_.push_back(std::move(event));
   }
 
   Services services_;
+  application_playback::PlaybackControlRouter playbackControl_;
   PlaybackSessionContinuationState continuationState_;
   std::optional<media_processing::Coordinator::InteractivePlaybackLease>
       interactivePlayback_;
@@ -939,9 +912,7 @@ struct TuiMediaCoordinator::Impl {
   std::optional<PendingAudioFallback> pendingAudioFallback_;
   std::optional<Command> pendingCommand_;
   tui_media_handoff::DeferredCommand<Command> externalHandoff_;
-  std::uint64_t lastControlSessionValue_ = 0;
   std::uint64_t lastDecisionValue_ = 0;
-  PlaybackControlSessionId controlSessionId_;
   std::string commandError_;
   // Commands and session pumping are owner-thread operations. Keeping their
   // events as an outbox avoids pretending they are asynchronous wait sources.
