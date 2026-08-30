@@ -137,6 +137,8 @@ void stopAndUninitActiveDecoder(AudioPlaybackState& audio) {
   audio.state.sourceAtEnd.store(false, std::memory_order_relaxed);
   audio.state.processedAtEnd.store(false, std::memory_order_relaxed);
   audio.state.audioClock.reset(0);
+  audio.nowPlaying.clear();
+  audio.trackIndex = 0;
   audio.state.audioQueueCv.notify_all();
 }
 
@@ -182,11 +184,20 @@ void resetPlaybackStateForLoad(AudioPlaybackState& audio, uint64_t startFrame,
   audio.state.channels = audio.channels;
 }
 
-bool loadFileAt(AudioPlaybackState& audio, const std::filesystem::path& file,
-                uint64_t startFrame, int trackIndex) {
+audio_playback::FileStartResult loadFileAt(
+    AudioPlaybackState& audio, std::filesystem::path file,
+    uint64_t startFrame, int trackIndex) {
   if (!validateSupportedAudioInputFile(file, &audio.lastInitError)) {
-    return false;
+    return audio_playback::FileStartResult::RejectedPreservingPlayback;
   }
+  const AudioBackendHandlers* backend = selectAudioBackend(file);
+  if (!backend) {
+    audio.lastInitError = "Unsupported audio format.";
+    return audio_playback::FileStartResult::RejectedPreservingPlayback;
+  }
+
+  // Everything above this boundary is observational: failures must leave the
+  // current endpoint intact. From here on the old playback may be replaced.
   audio.melodyAnalysis.stop();
   audio.state.audioLeadSilenceFrames.store(0);
   if (audio.audition.active.load()) {
@@ -198,12 +209,6 @@ bool loadFileAt(AudioPlaybackState& audio, const std::filesystem::path& file,
   audio.gmeWarning.clear();
   audio.gsfWarning.clear();
   audio.vgmWarning.clear();
-
-  const AudioBackendHandlers* backend = selectAudioBackend(file);
-  if (!backend) {
-    audio.lastInitError = "Unsupported audio format.";
-    return false;
-  }
 
   drainPlaybackPipelineForReplacement(audio);
   audio.state.sourcePreparing.store(true, std::memory_order_release);
@@ -224,7 +229,7 @@ bool loadFileAt(AudioPlaybackState& audio, const std::filesystem::path& file,
     queuedAudioSourceStopProcessing(&audio.state);
     audio.state.sourcePreparing.store(false, std::memory_order_release);
     audioPipelineTransitionReset(audio.state.pipelineTransition);
-    return false;
+    return audio_playback::FileStartResult::FailedAfterReplacingPlayback;
   }
 
   seekLoadedDecoderToStart(audio, backend, &startFrame);
@@ -239,7 +244,7 @@ bool loadFileAt(AudioPlaybackState& audio, const std::filesystem::path& file,
       audio.lastInitError = "Failed to start audio source decoder.";
       audio.state.sourcePreparing.store(false, std::memory_order_release);
       audioPipelineTransitionReset(audio.state.pipelineTransition);
-      return false;
+      return audio_playback::FileStartResult::FailedAfterReplacingPlayback;
     }
   }
 
@@ -250,7 +255,7 @@ bool loadFileAt(AudioPlaybackState& audio, const std::filesystem::path& file,
     audio.lastInitError = "Failed to prime audio source.";
     audio.state.sourcePreparing.store(false, std::memory_order_release);
     audioPipelineTransitionReset(audio.state.pipelineTransition);
-    return false;
+    return audio_playback::FileStartResult::FailedAfterReplacingPlayback;
   }
   activateBackend(audio, backend, trackIndex);
   audio.state.sourcePreparing.store(false, std::memory_order_release);
@@ -261,7 +266,7 @@ bool loadFileAt(AudioPlaybackState& audio, const std::filesystem::path& file,
     audio.state.sourcePreparing.store(false, std::memory_order_release);
     stopAndUninitActiveDecoder(audio);
     audioPipelineTransitionReset(audio.state.pipelineTransition);
-    return false;
+    return audio_playback::FileStartResult::FailedAfterReplacingPlayback;
   }
 
   const uint64_t analysisLeadInFrames = audio.state.audioLeadSilenceFrames.load();
@@ -273,7 +278,7 @@ bool loadFileAt(AudioPlaybackState& audio, const std::filesystem::path& file,
   }
 
   audio.nowPlaying = file;
-  return true;
+  return audio_playback::FileStartResult::Started;
 }
 
 void stopPlayback(AudioPlaybackState& audio) {
@@ -315,8 +320,9 @@ void stopPlayback(AudioPlaybackState& audio) {
 
 static bool audioIsEnabled(const AudioPlaybackState& audio);
 static bool audioIsReady(const AudioPlaybackState& audio);
-static bool audioStartFile(AudioPlaybackState& audio,
-                           const std::filesystem::path& file, int trackIndex);
+static audio_playback::FileStartResult audioStartFile(
+    AudioPlaybackState& audio, const std::filesystem::path& file,
+    int trackIndex);
 static void audioStop(AudioPlaybackState& audio);
 static std::optional<AudioPlaybackSource> audioGetPlaybackSource(
     const AudioPlaybackState& audio);
@@ -393,8 +399,8 @@ bool AudioPlaybackRuntime::enabled() const { return audioIsEnabled(*state_); }
 
 bool AudioPlaybackRuntime::ready() const { return audioIsReady(*state_); }
 
-bool AudioPlaybackRuntime::startFile(const std::filesystem::path& file,
-                                     int trackIndex) {
+audio_playback::FileStartResult AudioPlaybackRuntime::startFile(
+    const std::filesystem::path& file, int trackIndex) {
   return audioStartFile(*state_, file, trackIndex);
 }
 
@@ -609,9 +615,9 @@ static bool audioIsReady(const AudioPlaybackState& audio) {
   return audio.decoderReady;
 }
 
-static bool audioStartFile(AudioPlaybackState& audio,
-                           const std::filesystem::path& file,
-                           int trackIndex) {
+static audio_playback::FileStartResult audioStartFile(
+    AudioPlaybackState& audio, const std::filesystem::path& file,
+    int trackIndex) {
   return loadFileAt(audio, file, 0, trackIndex);
 }
 

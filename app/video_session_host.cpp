@@ -10,12 +10,17 @@ struct VideoSessionHost::Impl {
 
   struct Opening {
     Opening(SessionPtr session,
+            VideoActivationTransaction transaction,
             playback_queue::Queue::PreparedActivation activation)
-        : session(std::move(session)),
-          activation(std::move(activation)) {}
+        : transaction(std::move(transaction)),
+          activation(std::move(activation)),
+          session(std::move(session)) {}
 
-    SessionPtr session;
+    // Session destruction must finish replacing/stopping its audio stream
+    // before an unresolved activation transaction restores displaced audio.
+    VideoActivationTransaction transaction;
     playback_queue::Queue::PreparedActivation activation;
+    SessionPtr session;
   };
 
   struct Active {
@@ -74,14 +79,17 @@ struct VideoSessionHost::Impl {
 
   OpenFinished finishOpen(
       SessionPtr session,
+      VideoActivationTransaction transaction,
       playback_queue::Queue::PreparedActivation activation,
       playback_session::OpenOutcome outcome) {
     if (std::holds_alternative<playback_session::OpenReady>(outcome)) {
       state.emplace<Active>(std::move(session), activation.route().target);
     } else {
+      session.reset();
       state.emplace<std::monostate>();
     }
-    return OpenFinished{std::move(activation), std::move(outcome)};
+    return OpenFinished{std::move(transaction), std::move(activation),
+                        std::move(outcome)};
   }
 
   playback_session::VideoSessionFactory factory;
@@ -246,6 +254,7 @@ bool VideoSessionHost::resolveHandoff(
 
 VideoSessionHost::StartResult VideoSessionHost::start(
     playback_session::VideoSessionRequest request,
+    VideoActivationTransaction transaction,
     playback_queue::Queue::PreparedActivation activation) {
   if (!empty()) {
     return StartRejected{VideoSessionStartFailure::HostOccupied};
@@ -263,11 +272,11 @@ VideoSessionHost::StartResult VideoSessionHost::start(
       current->startOpen();
   if (!outcome) {
     impl_->state.emplace<Impl::Opening>(
-        std::move(current), std::move(activation));
+        std::move(current), std::move(transaction), std::move(activation));
     return OpenPending{};
   }
-  return impl_->finishOpen(std::move(current), std::move(activation),
-                           std::move(*outcome));
+  return impl_->finishOpen(std::move(current), std::move(transaction),
+                           std::move(activation), std::move(*outcome));
 }
 
 std::optional<VideoSessionHost::OpenFinished>
@@ -281,11 +290,13 @@ VideoSessionHost::pumpOpen() {
 
   std::unique_ptr<playback_session::VideoSession> current =
       std::move(openingState->session);
+  VideoActivationTransaction transaction =
+      std::move(openingState->transaction);
   playback_queue::Queue::PreparedActivation activation =
       std::move(openingState->activation);
   impl_->state.emplace<std::monostate>();
-  return impl_->finishOpen(std::move(current), std::move(activation),
-                           std::move(*outcome));
+  return impl_->finishOpen(std::move(current), std::move(transaction),
+                           std::move(activation), std::move(*outcome));
 }
 
 bool VideoSessionHost::pumpPlayback() {

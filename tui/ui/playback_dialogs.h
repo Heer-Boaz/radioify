@@ -4,7 +4,7 @@
 #include <optional>
 #include <string>
 
-#include "tui/media_activation_decision.h"
+#include "app/audio_activation.h"
 #include "tui/ui/dialog.h"
 
 namespace tui_playback_dialogs {
@@ -19,10 +19,10 @@ tui_dialog::Content
 videoPlaybackFailure(const std::filesystem::path &file,
                      const playback_session::Problem &problem);
 tui_dialog::Content
-audioFallback(const tui_media_activation::AudioFallbackRequest &request);
+audioFallback(const application_playback::AudioFallbackRequest &request);
 
 struct AudioFallbackResolution {
-  tui_media_activation::DecisionId decision;
+  application_playback::AudioFallbackDecisionId decision;
   bool playAudio = false;
 };
 
@@ -32,14 +32,16 @@ struct AudioFallbackResolution {
 class AudioFallbackSession {
 public:
   void opened(tui_dialog::DialogId dialog,
-              tui_media_activation::DecisionId decision);
+              application_playback::AudioFallbackDecisionId decision);
   std::optional<AudioFallbackResolution>
   handle(const tui_dialog::ButtonActivation &activation);
   std::optional<AudioFallbackResolution> dismissed(tui_dialog::DialogId dialog);
+  std::optional<tui_dialog::DialogId> revoke(
+      application_playback::AudioFallbackDecisionId decision);
 
 private:
   std::optional<tui_dialog::DialogId> dialog_;
-  std::optional<tui_media_activation::DecisionId> decision_;
+  std::optional<application_playback::AudioFallbackDecisionId> decision_;
 };
 
 } // namespace tui_playback_dialogs

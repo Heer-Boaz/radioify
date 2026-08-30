@@ -74,8 +74,8 @@ class AudioPlaybackRuntime final : public audio_playback::Session {
   // internal; shells receive this owner instead of reaching into shared state.
   bool enabled() const;
   bool ready() const;
-  bool startFile(const std::filesystem::path& file,
-                 int trackIndex = 0) override;
+  audio_playback::FileStartResult startFile(
+      const std::filesystem::path& file, int trackIndex = 0) override;
   void stop() override;
   AudioPlaybackSnapshot snapshot() const override;
   AudioPerfStats perfStats() const;

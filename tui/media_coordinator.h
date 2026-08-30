@@ -7,6 +7,7 @@
 #include <variant>
 #include <vector>
 
+#include "app/audio_activation.h"
 #include "app/playback_queue.h"
 #include "app/playback_route.h"
 #include "audio/playback_session.h"
@@ -19,7 +20,6 @@
 #include "playback/session/video_session.h"
 #include "playback/target.h"
 #include "tui/image_viewer_sequence.h"
-#include "tui/media_activation_decision.h"
 
 struct InputEvent;
 namespace media_processing {
@@ -65,7 +65,8 @@ class TuiMediaCoordinator {
 
   using Event = std::variant<ApplyAudioPictureInPicture, CommandErrorChanged,
                              AudioPlaybackFailed, VideoPlaybackFailed,
-                             tui_media_activation::AudioFallbackRequest,
+                             application_playback::AudioFallbackRequest,
+                             application_playback::AudioFallbackRevoked,
                              ShowImages, QuitRequested, PlaybackStateChanged,
                              ActivateBrowserSurface, OpenBrowserDirectory>;
 
@@ -125,8 +126,9 @@ class TuiMediaCoordinator {
   bool togglePictureInPicture();
   bool toggleFullscreen();
   bool activateVideoPresentation();
-  bool resolveAudioFallback(tui_media_activation::DecisionId decision,
-                            bool playAudio);
+  bool resolveAudioFallback(
+      application_playback::AudioFallbackDecisionId decision,
+      bool playAudio);
 
   void requestQuit();
 

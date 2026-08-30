@@ -185,7 +185,9 @@ static void reloadKssWithOptions(AudioPlaybackState& audio) {
   if (!audio.decoderReady || !isAudioMode(audio, AudioMode::Kss)) return;
   uint64_t resumeFrame = audio.state.framesPlayed.load();
   bool wasPaused = audio.state.paused.load();
-  if (loadFileAt(audio, audio.nowPlaying, resumeFrame, audio.trackIndex)) {
+  if (audio_playback::fileStartSucceeded(
+          loadFileAt(audio, audio.nowPlaying, resumeFrame,
+                     audio.trackIndex))) {
     if (wasPaused) {
       audio.state.paused.store(true);
     }
@@ -391,9 +393,9 @@ bool audioStopKssInstrumentAudition(AudioPlaybackState& audio) {
   audio.audition.hash = 0;
 
   if (audio.audition.resumeValid) {
-    bool resumed = loadFileAt(audio, audio.audition.resumeFile,
-                              audio.audition.resumeFrame,
-                              audio.audition.resumeTrackIndex);
+    const bool resumed = audio_playback::fileStartSucceeded(loadFileAt(
+        audio, audio.audition.resumeFile, audio.audition.resumeFrame,
+        audio.audition.resumeTrackIndex));
     if (resumed && audio.audition.resumePaused) {
       audio.state.paused.store(true);
     }
@@ -712,7 +714,9 @@ static void reloadNsfWithOptions(AudioPlaybackState& audio) {
   if (!isGmeExt(audio.nowPlaying)) return;
   uint64_t resumeFrame = audio.state.framesPlayed.load();
   bool wasPaused = audio.state.paused.load();
-  if (loadFileAt(audio, audio.nowPlaying, resumeFrame, audio.trackIndex)) {
+  if (audio_playback::fileStartSucceeded(
+          loadFileAt(audio, audio.nowPlaying, resumeFrame,
+                     audio.trackIndex))) {
     if (wasPaused) {
       audio.state.paused.store(true);
     }
@@ -787,7 +791,9 @@ static void reloadVgmWithOptions(AudioPlaybackState& audio) {
   if (!isVgmExt(audio.nowPlaying)) return;
   uint64_t resumeFrame = audio.state.framesPlayed.load();
   bool wasPaused = audio.state.paused.load();
-  if (loadFileAt(audio, audio.nowPlaying, resumeFrame, audio.trackIndex)) {
+  if (audio_playback::fileStartSucceeded(
+          loadFileAt(audio, audio.nowPlaying, resumeFrame,
+                     audio.trackIndex))) {
     if (wasPaused) {
       audio.state.paused.store(true);
     }

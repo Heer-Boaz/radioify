@@ -40,7 +40,8 @@ tui_dialog::Content errorDialog(std::string title, std::string message,
 }
 
 void clear(std::optional<tui_dialog::DialogId> &dialog,
-           std::optional<tui_media_activation::DecisionId> &decision) {
+           std::optional<application_playback::AudioFallbackDecisionId>
+               &decision) {
   dialog.reset();
   decision.reset();
 }
@@ -85,7 +86,7 @@ videoPlaybackFailure(const std::filesystem::path &file,
 }
 
 tui_dialog::Content
-audioFallback(const tui_media_activation::AudioFallbackRequest &request) {
+audioFallback(const application_playback::AudioFallbackRequest &request) {
   tui_dialog::Content content;
   content.title = "Play audio only?";
   appendText(content,
@@ -102,7 +103,8 @@ audioFallback(const tui_media_activation::AudioFallbackRequest &request) {
 }
 
 void AudioFallbackSession::opened(tui_dialog::DialogId dialog,
-                                  tui_media_activation::DecisionId decision) {
+                                  application_playback::AudioFallbackDecisionId
+                                      decision) {
   dialog_ = dialog;
   decision_ = decision;
 }
@@ -126,6 +128,16 @@ AudioFallbackSession::dismissed(tui_dialog::DialogId dialog) {
   const AudioFallbackResolution resolution{*decision_, false};
   clear(dialog_, decision_);
   return resolution;
+}
+
+std::optional<tui_dialog::DialogId> AudioFallbackSession::revoke(
+    application_playback::AudioFallbackDecisionId decision) {
+  if (!dialog_ || !decision_ || decision != *decision_) {
+    return std::nullopt;
+  }
+  const tui_dialog::DialogId dialog = *dialog_;
+  clear(dialog_, decision_);
+  return dialog;
 }
 
 } // namespace tui_playback_dialogs

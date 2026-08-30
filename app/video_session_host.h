@@ -7,6 +7,7 @@
 #include <variant>
 #include <vector>
 
+#include "app/playback_activation_controller.h"
 #include "app/playback_queue.h"
 #include "playback/session/handoff_endpoint.h"
 #include "playback/session/video_session.h"
@@ -21,12 +22,13 @@ enum class VideoSessionStartFailure : std::uint8_t {
 
 // Owns the mutually exclusive lifecycle states of one video session. The
 // caller retains policy decisions (queue commit, fallback and user-visible
-// errors), while session, target and prepared activation transition as one
-// unit and cannot drift apart.
+// errors), while session, target, prepared activation and its suspended
+// transport transaction transition as one unit and cannot drift apart.
 class VideoSessionHost final : public playback_session::HandoffEndpoint {
  public:
   struct OpenPending {};
   struct OpenFinished {
+    VideoActivationTransaction transaction;
     playback_queue::Queue::PreparedActivation activation;
     playback_session::OpenOutcome outcome;
   };
@@ -93,6 +95,7 @@ class VideoSessionHost final : public playback_session::HandoffEndpoint {
 
   StartResult start(
       playback_session::VideoSessionRequest request,
+      VideoActivationTransaction transaction,
       playback_queue::Queue::PreparedActivation activation);
   std::optional<OpenFinished> pumpOpen();
   bool pumpPlayback();

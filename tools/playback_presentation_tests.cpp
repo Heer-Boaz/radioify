@@ -47,6 +47,22 @@ int main() {
                "audio projection must own transport state and ignore orphaned "
                "video presentation");
 
+  const PlaybackPresentationModel unownedAudio = playbackPresentationModel(
+      audio, {}, std::nullopt, std::nullopt);
+  ok &= expect(unownedAudio.audioTarget && unownedAudio.currentTarget &&
+                   !unownedAudio.control,
+               "an observable audio source without an active control identity "
+               "must not publish actionable transport state");
+
+  AudioPlaybackSnapshot unavailableAudio = audio;
+  unavailableAudio.ready = false;
+  const PlaybackPresentationModel unavailable = playbackPresentationModel(
+      unavailableAudio, session, std::nullopt, std::nullopt);
+  ok &= expect(unavailable.audioTarget && unavailable.currentTarget &&
+                   !unavailable.control,
+               "an unavailable endpoint must not publish actionable transport "
+               "state even when its source metadata is still observable");
+
   PlaybackControlState videoControl(
       playbackFileTarget(std::filesystem::path("movie.mp4")), true);
   videoControl.session = session;

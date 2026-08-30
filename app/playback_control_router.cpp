@@ -22,7 +22,10 @@ PlaybackControlSessionId PlaybackControlRouter::sessionId() const noexcept {
 std::optional<PlaybackControlState>
 PlaybackControlRouter::videoControlState(
     ConstVideoSessionRef videoSession) const {
-  if (!videoSession || !videoSession->get().ready()) return std::nullopt;
+  if (!sessionId_.valid() || !videoSession ||
+      !videoSession->get().ready()) {
+    return std::nullopt;
+  }
   PlaybackControlState control = videoSession->get().controlState();
   control.session = sessionId_;
   return control;
@@ -30,6 +33,7 @@ PlaybackControlRouter::videoControlState(
 
 ControlDispatch PlaybackControlRouter::dispatch(
     PlaybackControlCommand command, VideoSessionRef videoSession) {
+  if (!sessionId_.valid()) return ControlUnhandled{};
   if (videoSession) {
     const bool handled = videoSession->get().handleControlCommand(command);
     return VideoControlDispatched{
@@ -77,6 +81,7 @@ ControlDispatch PlaybackControlRouter::dispatch(
 
 bool PlaybackControlRouter::seekToRatio(double ratio,
                                         VideoSessionRef videoSession) {
+  if (!sessionId_.valid()) return false;
   if (videoSession) return videoSession->get().seekToRatio(ratio);
   if (!audioPlayback_.snapshot().ready) return false;
   audioPlayback_.seekToRatio(ratio);

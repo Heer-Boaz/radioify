@@ -59,7 +59,7 @@ PlaybackPresentationModel playbackPresentationModel(
   }
 
   model.currentTarget = model.audioTarget;
-  if (model.audioTarget) {
+  if (model.audioTarget && model.audio.ready && controlSession.valid()) {
     model.control =
         controlStateForAudio(model.audio, *model.audioTarget, controlSession);
   }

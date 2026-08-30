@@ -612,6 +612,7 @@ target_sources(tui_media_coordinator_workflow_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_tui_media_coordinator_workflow_tests>
   $<TARGET_OBJECTS:radioify_video_sidecar_identity>
   $<TARGET_OBJECTS:radioify_transcript_artifact>
+  ${CMAKE_SOURCE_DIR}/app/playback_activation_controller.cpp
   ${CMAKE_SOURCE_DIR}/app/playback_control_router.cpp
   ${CMAKE_SOURCE_DIR}/app/video_session_host.cpp
   ${CMAKE_SOURCE_DIR}/tui/media_coordinator.cpp

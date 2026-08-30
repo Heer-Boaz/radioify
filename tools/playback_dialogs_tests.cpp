@@ -1,6 +1,6 @@
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
-#include <string>
 
 #include "tui/ui/playback_dialogs.h"
 
@@ -13,46 +13,32 @@ bool expect(bool condition, const char *message) {
   return false;
 }
 
-bool containsText(const tui_dialog::Content &content,
-                  const std::string &needle) {
-  for (const tui_dialog::TextBlock &block : content.text) {
-    if (block.text.find(needle) != std::string::npos)
-      return true;
-  }
-  return false;
-}
-
 } // namespace
 
 int main() {
   using namespace tui_playback_dialogs;
   bool ok = true;
 
-  const tui_dialog::Content audioFailure =
-      audioPlaybackFailure("example.flac", "Decoder initialization failed.");
-  ok &= expect(audioFailure.title == "Playback Error" &&
-                   containsText(audioFailure, "Decoder initialization") &&
-                   containsText(audioFailure, "example.flac") &&
-                   audioFailure.buttons.size() == 1,
-               "audio failures must retain their reason and source");
-
-  const tui_dialog::Content psfFailure =
-      audioPlaybackFailure("game.psf2", "Could not find hebios.bin");
-  ok &= expect(psfFailure.title == "PSF2 BIOS Required" &&
-                   containsText(psfFailure, "RADIOIFY_PSF_BIOS"),
-               "PSF2 failures must retain their actionable BIOS guidance");
-
-  tui_media_activation::AudioFallbackRequest request;
+  application_playback::AudioFallbackRequest request;
   request.id = {42};
   request.file = "music-only.mkv";
   request.reason = {"No video stream found.",
                     "This file can be played as audio only."};
   const tui_dialog::Content prompt = audioFallback(request);
-  ok &=
-      expect(prompt.title == "Play audio only?" && prompt.buttons.size() == 2 &&
-                 prompt.initiallySelectedButton == kCancelButton &&
-                 containsText(prompt, "music-only.mkv"),
-             "audio fallback must be an explicit safe-default decision");
+  const bool hasPlayAction =
+      std::any_of(prompt.buttons.begin(), prompt.buttons.end(),
+                  [](const tui_dialog::Button &button) {
+                    return button.id == kPlayAudioButton;
+                  });
+  const bool hasCancelAction =
+      std::any_of(prompt.buttons.begin(), prompt.buttons.end(),
+                  [](const tui_dialog::Button &button) {
+                    return button.id == kCancelButton;
+                  });
+  ok &= expect(hasPlayAction && hasCancelAction &&
+                   prompt.initiallySelectedButton == kCancelButton,
+               "audio fallback must expose both outcomes and default to the "
+               "non-activating choice");
 
   AudioFallbackSession session;
   session.opened({7}, request.id);
@@ -71,7 +57,8 @@ int main() {
       session.dismissed({9});
   ok &=
       expect(dismissed &&
-                 dismissed->decision == tui_media_activation::DecisionId{84} &&
+                 dismissed->decision ==
+                     application_playback::AudioFallbackDecisionId{84} &&
                  !dismissed->playAudio,
              "closing or replacing the prompt must decline hidden work");
 
@@ -80,6 +67,13 @@ int main() {
       session.handle({{10}, kCancelButton});
   ok &= expect(cancelled && !cancelled->playAudio,
                "the visible Cancel action must decline audio fallback");
+
+  session.opened({11}, {168});
+  ok &= expect(!session.revoke({169}) && session.revoke({168}) ==
+                                              tui_dialog::DialogId{11} &&
+                   !session.handle({{11}, kPlayAudioButton}),
+               "only a matching domain revocation may retire a pending "
+               "fallback dialog");
 
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

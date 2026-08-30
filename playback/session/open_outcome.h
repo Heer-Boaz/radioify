@@ -1,14 +1,10 @@
 #pragma once
 
-#include <string>
 #include <variant>
 
-namespace playback_session {
+#include "playback/session/problem.h"
 
-struct Problem {
-  std::string message;
-  std::string detail;
-};
+namespace playback_session {
 
 struct OpenReady {};
 struct OpenCancelled {};

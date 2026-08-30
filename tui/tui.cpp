@@ -654,7 +654,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   };
 
   const auto showAudioFallbackDialog =
-      [&](const tui_media_activation::AudioFallbackRequest& request) {
+      [&](const application_playback::AudioFallbackRequest& request) {
         const tui_dialog::DialogId dialog = openShellDialog(
             audioFallbackDialogOwner,
             tui_playback_dialogs::audioFallback(request));
@@ -689,8 +689,19 @@ int runTui(Options o, ApplicationRuntime& runtime) {
             markDirty();
           } else if constexpr (
               std::is_same_v<
-                  Event, tui_media_activation::AudioFallbackRequest>) {
+                  Event, application_playback::AudioFallbackRequest>) {
             showAudioFallbackDialog(value);
+            markDirty();
+          } else if constexpr (
+              std::is_same_v<
+                  Event, application_playback::AudioFallbackRevoked>) {
+            if (std::optional<tui_dialog::DialogId> dialog =
+                    audioFallbackDialog.revoke(value.id)) {
+              if (std::optional<shell_overlay_stack::DialogLease> dismissed =
+                      shellOverlays.dismissDialog(*dialog)) {
+                retireShellDialog(*dismissed);
+              }
+            }
             markDirty();
           } else if constexpr (
               std::is_same_v<Event, TuiMediaCoordinator::ShowImages>) {

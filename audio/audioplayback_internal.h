@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "audio/file_start_result.h"
 #include "core/runtime_defaults.h"
 #include "audition_worker.h"
 #include "clock.h"
@@ -149,5 +150,6 @@ void dataCallback(ma_device* device, void* output, const void* input,
                   ma_uint32 frameCount);
 void stopAndUninitActiveDecoder(AudioPlaybackState& audio);
 void stopPlayback(AudioPlaybackState& audio);
-bool loadFileAt(AudioPlaybackState& audio, const std::filesystem::path& file,
-                uint64_t startFrame, int trackIndex);
+audio_playback::FileStartResult loadFileAt(
+    AudioPlaybackState& audio, std::filesystem::path file,
+    uint64_t startFrame, int trackIndex);

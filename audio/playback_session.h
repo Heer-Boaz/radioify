@@ -2,6 +2,7 @@
 
 #include <filesystem>
 
+#include "audio/file_start_result.h"
 #include "audio/playback_snapshot.h"
 
 namespace audio_playback {
@@ -12,8 +13,8 @@ class Session {
  public:
   virtual ~Session() = default;
 
-  virtual bool startFile(const std::filesystem::path& file,
-                         int trackIndex) = 0;
+  virtual FileStartResult startFile(const std::filesystem::path& file,
+                                    int trackIndex) = 0;
   virtual void stop() = 0;
   virtual AudioPlaybackSnapshot snapshot() const = 0;
   virtual void play() = 0;

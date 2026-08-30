@@ -6,6 +6,7 @@
 #include <variant>
 
 #include "app/media_processing_coordinator.h"
+#include "app/playback_activation_controller.h"
 #include "app/playback_control_router.h"
 #include "app/video_handoff_controller.h"
 #include "app/video_session_host.h"
@@ -71,11 +72,9 @@ struct TuiMediaCoordinator::Impl {
   explicit Impl(Services services)
       : services_(std::move(services)),
         playbackControl_(services_.audioPlayback),
+        playbackActivation_(services_.queue, services_.audioPlayback,
+                            playbackControl_, services_.mediaProcessing),
         videoSessions_(std::move(services_.createVideoSession)) {}
-
-  audio_playback::Session& audioPlayback() const {
-    return services_.audioPlayback;
-  }
 
   MediaCommandResult startPlayback(playback_route::Route route,
                                    playback_queue::Source source) {
@@ -149,7 +148,7 @@ struct TuiMediaCoordinator::Impl {
         if (videoSessions_.pumpPlayback()) {
           drainVideoSessionEvents();
           assert(videoSessions_.completionPending());
-          playbackControl_.endSession();
+          playbackActivation_.retireControlSession();
           std::optional<VideoSessions::SessionFinished> finished =
               videoSessions_.takeCompletion();
           assert(finished);
@@ -223,7 +222,8 @@ struct TuiMediaCoordinator::Impl {
     const bool sessionCanHandoff =
         videoSessions_.empty() || videoSessions_.ready();
     return sessionCanHandoff && !driving_ && !pendingCommand_ &&
-           !pendingAudioFallback_ && externalHandoff_.empty();
+           !playbackActivation_.audioFallbackPending() &&
+           externalHandoff_.empty();
   }
 
   void setExternalInputModal(bool modal) {
@@ -310,15 +310,19 @@ struct TuiMediaCoordinator::Impl {
 
   void requestQuit() {
     if (!videoSessions_.requestQuit()) {
-      pendingAudioFallback_.reset();
+      if (std::optional<application_playback::AudioFallbackDecisionId>
+              revoked = playbackActivation_.cancelAudioFallback()) {
+        publishEvent(application_playback::AudioFallbackRevoked{*revoked});
+      }
       pendingCommand_.reset();
       releaseForegroundPlayback();
       publishEvent(QuitRequested{});
     }
   }
 
-  bool resolveAudioFallback(tui_media_activation::DecisionId decision,
-                            bool playAudio) {
+  bool resolveAudioFallback(
+      application_playback::AudioFallbackDecisionId decision,
+      bool playAudio) {
     return resolveAudioFallbackImpl(decision, playAudio);
   }
 
@@ -328,12 +332,6 @@ struct TuiMediaCoordinator::Impl {
   };
 
   using VideoSessions = application_playback::VideoSessionHost;
-
-  struct PendingAudioFallback {
-    tui_media_activation::DecisionId decision;
-    playback_queue::Queue::PreparedActivation activation;
-    std::filesystem::path file;
-  };
 
   struct Quit {};
 
@@ -539,7 +537,7 @@ struct TuiMediaCoordinator::Impl {
     if (!videoSessions_.empty()) {
       return requestVideoHandoff(std::move(command));
     }
-    if (pendingCommand_ || pendingAudioFallback_) {
+    if (pendingCommand_ || playbackActivation_.audioFallbackPending()) {
       return reject(MediaCommandFailureKind::Busy, {});
     }
     if (driving_) {
@@ -573,7 +571,8 @@ struct TuiMediaCoordinator::Impl {
   }
 
   std::optional<MediaCommandResult> drainPendingCommands() {
-    if (!videoSessions_.empty() || pendingAudioFallback_ || driving_ ||
+    if (!videoSessions_.empty() ||
+        playbackActivation_.audioFallbackPending() || driving_ ||
         !pendingCommand_) {
       return std::nullopt;
     }
@@ -600,14 +599,12 @@ struct TuiMediaCoordinator::Impl {
   }
 
   bool foregroundPlaybackReady() {
-    if (!interactivePlayback_) {
-      interactivePlayback_.emplace(
-          services_.mediaProcessing.acquireInteractivePlayback());
-    }
-    return interactivePlayback_->ready();
+    return playbackActivation_.interactivePlaybackReady();
   }
 
-  void releaseForegroundPlayback() { interactivePlayback_.reset(); }
+  void releaseForegroundPlayback() {
+    playbackActivation_.releaseInteractivePlayback();
+  }
 
   bool applyControlDispatch(
       application_playback::ControlDispatch dispatch) {
@@ -616,7 +613,7 @@ struct TuiMediaCoordinator::Impl {
                 &dispatch)) {
       drainVideoSessionEvents();
       if (videoDispatch->retireControlSession) {
-        playbackControl_.endSession();
+        playbackActivation_.retireControlSession();
       }
       return videoDispatch->handled;
     }
@@ -639,24 +636,10 @@ struct TuiMediaCoordinator::Impl {
       pendingCommand_.emplace(PreparedPlayback{std::move(activation)});
       return MediaCommandResult::deferred();
     }
-    if (!videoTarget) releaseForegroundPlayback();
 
-    if (route.videoContinuation) {
-      continuationState_ = *route.videoContinuation;
-    }
-    publishEvent(ApplyAudioPictureInPicture{route.audioPictureInPicture});
-
-    if (const std::optional<int> trackIndex =
-            playbackTargetTrackIndex(target)) {
-      playbackControl_.endSession();
-      if (!audioPlayback().startFile(targetFile, *trackIndex)) {
-        publishEvent(AudioPlaybackFailed{targetFile});
-        return MediaCommandResult::rejected(
-            {MediaCommandFailureKind::PlaybackFailed, {}});
-      }
-      services_.queue.commit(std::move(activation));
-      playbackControl_.beginSession();
-      return MediaCommandResult::applied();
+    if (playbackTargetTrackIndex(target)) {
+      return finishAudioActivation(
+          playbackActivation_.activateAudio(std::move(activation)));
     }
     if (isSupportedImageExt(targetFile)) {
       return MediaCommandResult::rejected(
@@ -664,33 +647,34 @@ struct TuiMediaCoordinator::Impl {
            "The image request did not contain an image sequence."});
     }
     if (!isSupportedVideoExt(targetFile)) {
-      playbackControl_.endSession();
-      if (!audioPlayback().startFile(targetFile, 0)) {
-        publishEvent(AudioPlaybackFailed{targetFile});
-        return MediaCommandResult::rejected(
-            {MediaCommandFailureKind::PlaybackFailed, {}});
-      }
-      services_.queue.commit(std::move(activation));
-      playbackControl_.beginSession();
-      return MediaCommandResult::applied();
+      return finishAudioActivation(
+          playbackActivation_.activateAudio(std::move(activation)));
     }
 
     if (!videoSessions_.empty()) {
       return reject(MediaCommandFailureKind::Busy,
                     "Another playback session is already active.");
     }
-    playbackControl_.endSession();
+    std::optional<application_playback::VideoActivationTransaction>
+        videoActivation = playbackActivation_.beginVideoActivation();
+    if (!videoActivation) {
+      return reject(MediaCommandFailureKind::Busy,
+                    "Another playback activation is already pending.");
+    }
     playback_session::VideoSessionRequest sessionRequest(
         services_.mediaProcessingActions);
+    const PlaybackSessionContinuationState requestedContinuation =
+        route.videoContinuation.value_or(continuationState_);
     sessionRequest.config = sessionConfig(services_.videoConfig,
-                                          continuationState_);
-    sessionRequest.continuityState = continuationState_;
+                                          requestedContinuation);
+    sessionRequest.continuityState = requestedContinuation;
     sessionRequest.sessionIntent = route.sessionIntent;
     sessionRequest.capabilities.transportHandoff = true;
     sessionRequest.capabilities.openFilesHandoff = true;
     sessionRequest.capabilities.browserSurfaceActivation = true;
     VideoSessions::StartResult start = videoSessions_.start(
-        std::move(sessionRequest), std::move(activation));
+        std::move(sessionRequest), std::move(*videoActivation),
+        std::move(activation));
     if (auto* rejected =
             std::get_if<VideoSessions::StartRejected>(&start)) {
       if (rejected->failure ==
@@ -716,28 +700,60 @@ struct TuiMediaCoordinator::Impl {
 
   MediaCommandResult finishVideoOpen(
       VideoSessions::OpenFinished opened) {
-    const std::filesystem::path& targetFile =
+    const std::filesystem::path targetFile =
         playbackTargetFile(opened.activation.route().target);
     if (std::holds_alternative<playback_session::OpenReady>(opened.outcome)) {
-      services_.queue.commit(std::move(opened.activation));
-      playbackControl_.beginSession();
+      const playback_route::Route route = opened.activation.route();
+      std::optional<application_playback::PlaybackActivated> activated =
+          playbackActivation_.activateReadyVideo(
+              std::move(opened.transaction),
+              std::move(opened.activation));
+      if (!activated) {
+        if (application_playback::VideoSessionRef session =
+                videoSessions_.session()) {
+          session->get().requestStop();
+        }
+        releaseForegroundPlayback();
+        publishEvent(VideoPlaybackFailed{
+            targetFile,
+            {"Video activation could not be committed.",
+             "The activation transaction no longer matched the opening "
+             "video session."}});
+        playbackStateChanged();
+        return MediaCommandResult::handledWithoutPlayback();
+      }
+      if (route.videoContinuation) {
+        continuationState_ = *route.videoContinuation;
+      }
+      publishEvent(ApplyAudioPictureInPicture{
+          activated->audioPictureInPicture});
       playbackStateChanged();
       return MediaCommandResult::applied();
     }
     if (auto* fallback =
             std::get_if<playback_session::OpenAudioFallback>(
                 &opened.outcome)) {
-      const tui_media_activation::DecisionId decision = nextDecisionId();
-      pendingAudioFallback_.emplace(
-          PendingAudioFallback{decision, std::move(opened.activation),
-                               targetFile});
-      publishEvent(tui_media_activation::AudioFallbackRequest{
-          decision, targetFile, std::move(fallback->reason)});
+      std::optional<application_playback::AudioFallbackRequest> request =
+          playbackActivation_.deferAudioFallback(
+              std::move(opened.transaction),
+              std::move(opened.activation), std::move(fallback->reason));
+      if (!request) {
+        releaseForegroundPlayback();
+        publishEvent(VideoPlaybackFailed{
+            targetFile,
+            {"Audio fallback could not be prepared.",
+             "Another audio fallback decision is already pending."}});
+        playbackStateChanged();
+        return MediaCommandResult::handledWithoutPlayback();
+      }
+      publishEvent(std::move(*request));
       playbackStateChanged();
       return MediaCommandResult::deferred();
     }
     if (std::holds_alternative<playback_session::OpenQuitApplication>(
             opened.outcome)) {
+      (void)playbackActivation_.discardVideoActivation(
+          std::move(opened.transaction));
       releaseForegroundPlayback();
       enqueueQuit();
       playbackStateChanged();
@@ -809,6 +825,22 @@ struct TuiMediaCoordinator::Impl {
         std::move(command));
   }
 
+  MediaCommandResult finishAudioActivation(
+      application_playback::AudioActivationResult result) {
+    if (auto* failure =
+            std::get_if<application_playback::AudioActivationFailed>(
+                &result)) {
+      publishEvent(AudioPlaybackFailed{std::move(failure->file)});
+      return MediaCommandResult::rejected(
+          {MediaCommandFailureKind::PlaybackFailed, {}});
+    }
+    const auto& activated =
+        std::get<application_playback::PlaybackActivated>(result);
+    publishEvent(ApplyAudioPictureInPicture{
+        activated.audioPictureInPicture});
+    return MediaCommandResult::applied();
+  }
+
   MediaCommandResult reject(MediaCommandFailureKind kind,
                             std::string message) {
     return reject(MediaCommandFailure{kind, std::move(message)});
@@ -840,29 +872,22 @@ struct TuiMediaCoordinator::Impl {
     publishEvent(PlaybackStateChanged{});
   }
 
-  tui_media_activation::DecisionId nextDecisionId() {
-    ++lastDecisionValue_;
-    if (lastDecisionValue_ == 0) ++lastDecisionValue_;
-    return {lastDecisionValue_};
-  }
+  bool resolveAudioFallbackImpl(
+      application_playback::AudioFallbackDecisionId decision,
+      bool playAudio) {
+    std::optional<application_playback::AudioFallbackResolution> resolution =
+        playbackActivation_.resolveAudioFallback(decision, playAudio);
+    if (!resolution) return false;
 
-  bool resolveAudioFallbackImpl(tui_media_activation::DecisionId decision,
-                                bool playAudio) {
-    if (!pendingAudioFallback_ ||
-        pendingAudioFallback_->decision != decision) {
-      return false;
-    }
-
-    PendingAudioFallback pending = std::move(*pendingAudioFallback_);
-    pendingAudioFallback_.reset();
-    releaseForegroundPlayback();
-    if (playAudio) {
-      if (!audioPlayback().startFile(pending.file, 0)) {
-        publishEvent(AudioPlaybackFailed{pending.file});
-      } else {
-        services_.queue.commit(std::move(pending.activation));
-        playbackControl_.beginSession();
-      }
+    if (auto* failure =
+            std::get_if<application_playback::AudioActivationFailed>(
+                &*resolution)) {
+      publishEvent(AudioPlaybackFailed{std::move(failure->file)});
+    } else if (auto* activated =
+                   std::get_if<application_playback::PlaybackActivated>(
+                       &*resolution)) {
+      publishEvent(ApplyAudioPictureInPicture{
+          activated->audioPictureInPicture});
     }
     playbackStateChanged();
     clearCommandError();
@@ -875,14 +900,11 @@ struct TuiMediaCoordinator::Impl {
 
   Services services_;
   application_playback::PlaybackControlRouter playbackControl_;
+  application_playback::PlaybackActivationController playbackActivation_;
   VideoSessions videoSessions_;
   PlaybackSessionContinuationState continuationState_;
-  std::optional<media_processing::Coordinator::InteractivePlaybackLease>
-      interactivePlayback_;
-  std::optional<PendingAudioFallback> pendingAudioFallback_;
   std::optional<Command> pendingCommand_;
   application_playback::VideoHandoffController<Command> externalHandoff_;
-  std::uint64_t lastDecisionValue_ = 0;
   std::string commandError_;
   // Commands and session pumping are owner-thread operations. Keeping their
   // events as an outbox avoids pretending they are asynchronous wait sources.
@@ -1011,7 +1033,8 @@ bool TuiMediaCoordinator::activateVideoPresentation() {
 }
 
 bool TuiMediaCoordinator::resolveAudioFallback(
-    tui_media_activation::DecisionId decision, bool playAudio) {
+    application_playback::AudioFallbackDecisionId decision,
+    bool playAudio) {
   return impl_->resolveAudioFallback(decision, playAudio);
 }
 
