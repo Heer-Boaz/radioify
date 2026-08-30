@@ -889,7 +889,9 @@ float4 PS_UI(PS_INPUT input) : SV_Target {
     #endif
 }
 
-VideoWindow::VideoWindow(GpuRuntime& gpu) : m_gpu(gpu) {}
+VideoWindow::VideoWindow(GpuRuntime& gpu,
+                         SystemMediaCommandOwner systemMediaCommandOwner)
+    : m_gpu(gpu), m_systemMediaCommandOwner(systemMediaCommandOwner) {}
 
 VideoWindow::~VideoWindow() {
     Close();

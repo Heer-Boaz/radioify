@@ -1063,6 +1063,7 @@ add_executable(playback_control_session_mailbox_tests)
 target_sources(playback_control_session_mailbox_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_playback_control_session_mailbox_tests>
   ${CMAKE_SOURCE_DIR}/playback/control/session_command_mailbox.cpp
+  ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
 )
 radioify_link_repo_target(playback_control_session_mailbox_tests)
 add_test(NAME playback_control_session_mailbox_tests

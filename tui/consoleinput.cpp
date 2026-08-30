@@ -226,6 +226,11 @@ void ConsoleInput::enableTerminalMouseInput() {
   }
 }
 
+void ConsoleInput::setSystemMediaCommandOwner(
+    SystemMediaCommandOwner owner) {
+  systemMediaCommandOwner_ = owner;
+}
+
 void ConsoleInput::disableTerminalMouseInput() {
   if (!terminalMouseInput_) return;
   writeTerminalSequence(output_, kDisableTerminalMouseInput);
@@ -314,6 +319,11 @@ bool ConsoleInput::poll(InputEvent& out) {
     if (rec.EventType == KEY_EVENT) {
       const auto& kev = rec.Event.KeyEvent;
       if (!kev.bKeyDown) {
+        count--;
+        continue;
+      }
+      if (!shouldDispatchLocalVirtualKey(kev.wVirtualKeyCode,
+                                         systemMediaCommandOwner_)) {
         count--;
         continue;
       }

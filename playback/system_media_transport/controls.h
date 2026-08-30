@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include "core/native_wait_handle.h"
 #include "playback/control/command.h"
 #include "playback/control/system_control_state.h"
 
@@ -24,6 +25,7 @@ class PlaybackSystemControls {
   void clear();
   void update(const State& state);
   bool pollCommand(PlaybackControlCommandEvent* out);
+  NativeWaitHandle nativeWaitHandle() const;
 
  private:
   struct Impl;

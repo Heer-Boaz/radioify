@@ -3,18 +3,14 @@
 #include <filesystem>
 
 #include "core/runtime_defaults.h"
-
-enum class SystemMediaCommandOwner {
-  NativeWindowFallback,
-  SystemMediaTransportControls,
-};
+#include "playback/input/media_keys.h"
 
 struct VideoPlaybackConfig {
   bool enableAscii = kDefaultAsciiPlaybackEnabled;
   bool enableAudio = kDefaultAudioPlaybackEnabled;
   bool debugOverlay = false;
   SystemMediaCommandOwner systemMediaCommandOwner =
-      SystemMediaCommandOwner::NativeWindowFallback;
+      SystemMediaCommandOwner::LocalInputFallback;
 };
 
 void configureFfmpegVideoLog(const std::filesystem::path& path);

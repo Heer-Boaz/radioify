@@ -105,11 +105,17 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
 
     if (window_input_events::isKeyDownMessage(uMsg, wParam)) {
         const WORD key = static_cast<WORD>(wParam);
-        if (pThis->m_systemMediaInputEnabled.load(
-                std::memory_order_relaxed) ||
-            !window_input_events::isSystemMediaVirtualKey(key)) {
-            pThis->m_input.push(
-                window_input_events::keyFromVirtualKey(key));
+        const auto route = window_input_events::routeKeyDown(
+            key, pThis->m_systemMediaCommandOwner);
+        if (route == window_input_events::KeyDownRoute::Queue) {
+            pThis->m_input.push(window_input_events::keyFromVirtualKey(key));
+            return 0;
+        }
+        if (route ==
+            window_input_events::KeyDownRoute::DelegateToDefaultWindowProcedure) {
+            // DefWindowProc turns media virtual keys into WM_APPCOMMAND. That
+            // message is Radioify's sole local media-command ingress.
+            return DefWindowProcW(hWnd, uMsg, wParam, lParam);
         }
         return 0;
     }
@@ -131,12 +137,9 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     }
 
     if (uMsg == WM_APPCOMMAND) {
-        const auto mediaPolicy =
-            pThis->m_systemMediaInputEnabled.load(std::memory_order_relaxed)
-                ? window_input_events::SystemMediaInputPolicy::Translate
-                : window_input_events::SystemMediaInputPolicy::Ignore;
         window_input_events::AppCommandTranslation translation =
-            window_input_events::translateAppCommand(lParam, mediaPolicy);
+            window_input_events::translateAppCommand(
+                lParam, pThis->m_systemMediaCommandOwner);
         if (translation.event) {
             pThis->m_input.push(std::move(*translation.event));
         }

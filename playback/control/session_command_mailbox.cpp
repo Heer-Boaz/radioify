@@ -6,11 +6,13 @@ void PlaybackControlSessionCommandMailbox::activate(
   if (!session.valid()) {
     activeSession_ = {};
     pending_.clear();
+    ready_.clear();
     return;
   }
   if (session != activeSession_) {
     activeSession_ = session;
     pending_.clear();
+    ready_.clear();
   }
 }
 
@@ -18,6 +20,7 @@ void PlaybackControlSessionCommandMailbox::deactivate() {
   std::lock_guard<std::mutex> lock(mutex_);
   activeSession_ = {};
   pending_.clear();
+  ready_.clear();
 }
 
 void PlaybackControlSessionCommandMailbox::publish(
@@ -25,6 +28,7 @@ void PlaybackControlSessionCommandMailbox::publish(
   std::lock_guard<std::mutex> lock(mutex_);
   if (!activeSession_.valid()) return;
   pending_.push_back({activeSession_, command});
+  ready_.signal();
 }
 
 bool PlaybackControlSessionCommandMailbox::poll(
@@ -35,8 +39,19 @@ bool PlaybackControlSessionCommandMailbox::poll(
          pending_.front().session != activeSession_) {
     pending_.pop_front();
   }
-  if (pending_.empty()) return false;
+  if (pending_.empty()) {
+    ready_.clear();
+    return false;
+  }
   *out = pending_.front();
   pending_.pop_front();
+  if (pending_.empty()) {
+    ready_.clear();
+  }
   return true;
+}
+
+NativeWaitHandle PlaybackControlSessionCommandMailbox::nativeWaitHandle()
+    const {
+  return ready_.nativeWaitHandle();
 }

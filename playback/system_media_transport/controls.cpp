@@ -330,6 +330,11 @@ struct PlaybackSystemControls::Impl {
     return commandMailbox.poll(out);
   }
 
+  NativeWaitHandle nativeWaitHandle() const {
+    return available ? commandMailbox.nativeWaitHandle()
+                     : NativeWaitHandle{};
+  }
+
   ~Impl() {
     if (available) {
       clear();
@@ -365,4 +370,8 @@ void PlaybackSystemControls::update(const State& state) { impl_->update(state); 
 
 bool PlaybackSystemControls::pollCommand(PlaybackControlCommandEvent* out) {
   return impl_->pollCommand(out);
+}
+
+NativeWaitHandle PlaybackSystemControls::nativeWaitHandle() const {
+  return impl_->nativeWaitHandle();
 }

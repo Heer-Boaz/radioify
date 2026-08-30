@@ -3,6 +3,8 @@
 #include <deque>
 #include <mutex>
 
+#include "core/native_wait_handle.h"
+#include "core/waitable_signal.h"
 #include "playback/control/command.h"
 
 // Thread-safe boundary between process-wide operating-system callbacks and a
@@ -14,9 +16,11 @@ class PlaybackControlSessionCommandMailbox {
   void deactivate();
   void publish(PlaybackControlCommand command);
   bool poll(PlaybackControlCommandEvent* out);
+  NativeWaitHandle nativeWaitHandle() const;
 
  private:
   std::mutex mutex_;
   PlaybackControlSessionId activeSession_;
   std::deque<PlaybackControlCommandEvent> pending_;
+  WaitableSignal ready_;
 };

@@ -78,14 +78,11 @@ struct WindowPresenter::Impl {
         gpu(gpu),
         nativeWindowTitle(nativePlaybackWindowTitle(mediaTitle)),
         presentationSource(std::move(presentationSource)),
-        window(gpu) {
+        window(gpu, systemMediaCommandOwner) {
     if (!this->presentationSource) {
       throw std::invalid_argument(
           "WindowPresenter requires a presentation source");
     }
-    window.SetSystemMediaInputEnabled(
-        systemMediaCommandOwner ==
-        SystemMediaCommandOwner::NativeWindowFallback);
     window.SetVsync(true);
   }
 

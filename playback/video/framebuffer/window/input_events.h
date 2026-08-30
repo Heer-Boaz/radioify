@@ -11,12 +11,14 @@
 #include <optional>
 
 #include "input_event.h"
+#include "playback/input/media_keys.h"
 
 namespace window_input_events {
 
-enum class SystemMediaInputPolicy {
-  Ignore,
-  Translate,
+enum class KeyDownRoute : std::uint8_t {
+  Queue,
+  DelegateToDefaultWindowProcedure,
+  Consume,
 };
 
 struct AppCommandTranslation {
@@ -26,13 +28,13 @@ struct AppCommandTranslation {
 
 bool isKeyDownMessage(UINT message, WPARAM key);
 bool isSuppressedSystemCharacter(UINT message, WPARAM key);
-bool isSystemMediaVirtualKey(WORD key);
+KeyDownRoute routeKeyDown(WORD key, SystemMediaCommandOwner owner);
 
 InputEvent keyFromVirtualKey(WORD key);
 
 std::optional<InputEvent> inputEventFromXButton(WPARAM wParam);
 AppCommandTranslation translateAppCommand(
-    LPARAM lParam, SystemMediaInputPolicy mediaPolicy);
+    LPARAM lParam, SystemMediaCommandOwner owner);
 
 MouseButtons mouseButtonsFromWParam(WPARAM wParam);
 InputEvent mouseEvent(int x, int y, MouseEventKind kind, MouseButtons buttons,

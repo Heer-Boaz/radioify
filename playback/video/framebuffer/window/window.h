@@ -22,6 +22,7 @@
 #include "playback/overlay/context_menu.h"
 #include "playback/overlay/interaction.h"
 #include "playback/overlay/media_action_confirmation_presentation.h"
+#include "playback/input/media_keys.h"
 #include "playback/video/gpu/videoprocessor.h"
 #include "playback/video/framebuffer/video_output_color.h"
 #include "playback/video/subtitle/font_attachments.h"
@@ -141,7 +142,8 @@ public:
     static constexpr int kDefaultVideoClientWidth = 1280;
     static constexpr int kDefaultVideoClientHeight = 720;
 
-    explicit VideoWindow(GpuRuntime& gpu);
+    VideoWindow(GpuRuntime& gpu,
+                SystemMediaCommandOwner systemMediaCommandOwner);
     ~VideoWindow();
 
     // Creates the native resources without exposing an intermediate window.
@@ -165,9 +167,6 @@ public:
     void SetVsync(bool enabled);
     std::string GetSubtitleRenderError() const;
     void SetCaptureAllMouseInput(bool enabled) { m_captureAllMouseInput = enabled; }
-    void SetSystemMediaInputEnabled(bool enabled) {
-        m_systemMediaInputEnabled.store(enabled, std::memory_order_relaxed);
-    }
     playback_overlay::InteractionHit OverlayHitAt(
         double x, double y, bool capturedProgress = false) const;
     bool OverlayEditBoundaryHandleAt(double x, double y) const;
@@ -410,7 +409,7 @@ private:
     WindowRestoreState m_pictureInPictureRestoreState;
     WindowDisplayLifecycle m_displayLifecycle;
     bool m_captureAllMouseInput = false;
-    std::atomic<bool> m_systemMediaInputEnabled{true};
+    const SystemMediaCommandOwner m_systemMediaCommandOwner;
     bool m_leftMouseCaptureActive = false;
     bool m_editBoundaryCaptureActive = false;
     std::atomic<bool> m_cursorVisible{true};

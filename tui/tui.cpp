@@ -405,10 +405,13 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   PlaybackSystemControls systemControls;
   const bool systemMediaTransportControlsAvailable =
       systemControls.initialize();
+  const SystemMediaCommandOwner systemMediaCommandOwner =
+      systemMediaTransportControlsAvailable
+          ? SystemMediaCommandOwner::SystemMediaTransportControls
+          : SystemMediaCommandOwner::LocalInputFallback;
+  input.setSystemMediaCommandOwner(systemMediaCommandOwner);
 
-  VideoWindow tuiWindow(gpu);
-  tuiWindow.SetSystemMediaInputEnabled(
-      !systemMediaTransportControlsAvailable);
+  VideoWindow tuiWindow(gpu, systemMediaCommandOwner);
   bool windowTuiEnabled = o.enableWindow;
   if (windowTuiEnabled) {
     const WindowClientSize clientSize = initialWindowTuiClientSize(screen);
@@ -433,10 +436,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   videoConfig.enableAscii = o.enableAscii;
   videoConfig.enableAudio = o.enableAudio;
   videoConfig.debugOverlay = o.asciiDebugOverlay;
-  videoConfig.systemMediaCommandOwner =
-      systemMediaTransportControlsAvailable
-          ? SystemMediaCommandOwner::SystemMediaTransportControls
-          : SystemMediaCommandOwner::NativeWindowFallback;
+  videoConfig.systemMediaCommandOwner = systemMediaCommandOwner;
 
   std::optional<OpenFilesRequest> initialOpenRequest;
 
@@ -534,7 +534,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       tuiWindow.PresentTextGrid(windowCells, gridWidth, gridHeight);
     }
   };
-  AudioPictureInPictureWindow audioPictureInPicture(gpu);
+  AudioPictureInPictureWindow audioPictureInPicture(
+      gpu, systemMediaCommandOwner);
   ApplicationInputPump applicationInputPump;
   pointer_input::MouseDoubleClickTracker browserDoubleClickTracker;
   BrowserViewport viewport;
@@ -725,10 +726,14 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         },
         event);
   };
-  auto mediaWaitHandles = [&]() {
+  auto applicationActivityWaitHandles = [&]() {
     std::vector<NativeWaitHandle> handles = mediaCoordinator.waitHandles();
     if (NativeWaitHandle taskWake = mediaTasks.waitHandle()) {
       handles.push_back(taskWake);
+    }
+    if (NativeWaitHandle systemControlWake =
+            systemControls.nativeWaitHandle()) {
+      handles.push_back(systemControlWake);
     }
     return handles;
   };
@@ -1679,7 +1684,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       dirtyFlags = UiDirtyFlags::None;
       forceFullRedraw = false;
       const std::vector<NativeWaitHandle> activityHandles =
-          mediaWaitHandles();
+          applicationActivityWaitHandles();
       waitForBrowserWake(
           input, openFileRequestWakeHandle(),
           browserThumbnails.waitHandle(),
@@ -2014,7 +2019,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     if (!dirty) {
       const wake_schedule::Deadline wakeDeadline = computeWakeDeadline(now);
       const std::vector<NativeWaitHandle> activityHandles =
-          mediaWaitHandles();
+          applicationActivityWaitHandles();
       DWORD waitResult = waitForBrowserWake(
           input, openFileRequestWakeHandle(),
           browserThumbnails.waitHandle(),

@@ -65,16 +65,13 @@ bool isSuppressedSystemCharacter(UINT message, WPARAM key) {
   return message == WM_SYSCHAR && key == VK_RETURN;
 }
 
-bool isSystemMediaVirtualKey(WORD key) {
-  switch (key) {
-    case VK_MEDIA_PLAY_PAUSE:
-    case VK_MEDIA_STOP:
-    case VK_MEDIA_PREV_TRACK:
-    case VK_MEDIA_NEXT_TRACK:
-      return true;
-    default:
-      return false;
+KeyDownRoute routeKeyDown(WORD key, SystemMediaCommandOwner owner) {
+  if (!isSystemMediaVirtualKey(key)) {
+    return KeyDownRoute::Queue;
   }
+  return localInputOwnsSystemMediaCommands(owner)
+             ? KeyDownRoute::DelegateToDefaultWindowProcedure
+             : KeyDownRoute::Consume;
 }
 
 InputEvent keyFromVirtualKey(WORD key) {
@@ -99,7 +96,8 @@ std::optional<InputEvent> inputEventFromXButton(WPARAM wParam) {
 }
 
 AppCommandTranslation translateAppCommand(
-    LPARAM lParam, SystemMediaInputPolicy mediaPolicy) {
+    LPARAM lParam, SystemMediaCommandOwner owner) {
+  const bool translateMedia = localInputOwnsSystemMediaCommands(owner);
   const int command = GET_APPCOMMAND_LPARAM(lParam);
   switch (command) {
     case APPCOMMAND_BROWSER_BACKWARD:
@@ -107,33 +105,33 @@ AppCommandTranslation translateAppCommand(
     case APPCOMMAND_BROWSER_FORWARD:
       return {true, inputActionEvent(InputAction::Forward)};
     case APPCOMMAND_MEDIA_PLAY_PAUSE:
-      return {true, mediaPolicy == SystemMediaInputPolicy::Translate
+      return {true, translateMedia
                         ? std::optional<InputEvent>(
                               keyEvent(VK_MEDIA_PLAY_PAUSE))
                         : std::nullopt};
     case APPCOMMAND_MEDIA_PLAY:
-      return {true, mediaPolicy == SystemMediaInputPolicy::Translate
+      return {true, translateMedia
                         ? std::optional<InputEvent>(
                               keyEvent(kPlaybackVkMediaPlay))
                         : std::nullopt};
     case APPCOMMAND_MEDIA_PAUSE:
-      return {true, mediaPolicy == SystemMediaInputPolicy::Translate
+      return {true, translateMedia
                         ? std::optional<InputEvent>(
                               keyEvent(kPlaybackVkMediaPause))
                         : std::nullopt};
     case APPCOMMAND_MEDIA_STOP:
-      return {true, mediaPolicy == SystemMediaInputPolicy::Translate
+      return {true, translateMedia
                         ? std::optional<InputEvent>(keyEvent(VK_MEDIA_STOP))
                         : std::nullopt};
     case APPCOMMAND_MEDIA_PREVIOUSTRACK:
     case APPCOMMAND_MEDIA_CHANNEL_DOWN:
-      return {true, mediaPolicy == SystemMediaInputPolicy::Translate
+      return {true, translateMedia
                         ? std::optional<InputEvent>(
                               keyEvent(VK_MEDIA_PREV_TRACK))
                         : std::nullopt};
     case APPCOMMAND_MEDIA_NEXTTRACK:
     case APPCOMMAND_MEDIA_CHANNEL_UP:
-      return {true, mediaPolicy == SystemMediaInputPolicy::Translate
+      return {true, translateMedia
                         ? std::optional<InputEvent>(
                               keyEvent(VK_MEDIA_NEXT_TRACK))
                         : std::nullopt};
