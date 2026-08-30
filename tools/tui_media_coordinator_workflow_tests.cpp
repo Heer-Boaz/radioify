@@ -415,9 +415,20 @@ int main() {
       coordinator.startPlayback(
           routeFor(first),
           playback_queue::sourceFromFiles({first, second})) &&
-          coordinator.videoReady() && sessions.size() == 1 &&
+          coordinator.shellSnapshot().videoReady && sessions.size() == 1 &&
           sessions.front()->file == first,
       "opening a video must create and activate exactly one video session");
+
+  const TuiMediaCoordinator::ShellSnapshot firstShellSnapshot =
+      coordinator.shellSnapshot();
+  ok &= expect(
+      firstShellSnapshot.videoReady &&
+          firstShellSnapshot.terminalRole ==
+              PlaybackShellTerminalRole::Playback &&
+          !firstShellSnapshot.videoTransition &&
+          !firstShellSnapshot.capturesBrowserInput &&
+          firstShellSnapshot.acceptsExternalMediaChange,
+      "an active terminal video must publish one coherent shell state");
 
   const PlaybackControlSessionId firstControlSession =
       coordinator.controlSessionId();
@@ -446,12 +457,18 @@ int main() {
 
   const TuiMediaCoordinator::PlaybackSnapshot windowedPlaybackSnapshot =
       coordinator.playbackSnapshot();
+  const TuiMediaCoordinator::ShellSnapshot windowedShellSnapshot =
+      coordinator.shellSnapshot();
   ok &= expect(
       windowedPlaybackSnapshot.controlSession == firstControlSession &&
           windowedPlaybackSnapshot.video &&
           windowedPlaybackSnapshot.video->control.session ==
               firstControlSession &&
           windowedPlaybackSnapshot.video->presentation.requiresNativeWindow() &&
+          windowedShellSnapshot.videoReady &&
+          windowedShellSnapshot.terminalRole ==
+              PlaybackShellTerminalRole::Browser &&
+          windowedShellSnapshot.acceptsExternalMediaChange &&
           sessions.front()->viewSnapshotCalls == 2,
       "changing window presentation must update the next coherent session "
       "snapshot without rotating transport ownership");
@@ -479,7 +496,7 @@ int main() {
   const TuiMediaCoordinator::PollResult handoff = coordinator.poll();
   ok &= expect(handoff.playbackChanged && sessions.size() == 2 &&
                    sessions.back()->file == second &&
-                   coordinator.videoReady() &&
+                   coordinator.shellSnapshot().videoReady &&
                    coordinator.controlSessionId().valid() &&
                    coordinator.controlSessionId() != firstControlSession,
                "pumping an accepted handoff must close the old session, "
@@ -510,7 +527,13 @@ int main() {
       coordinator.controlSessionId();
   const TuiMediaCoordinator::PlaybackSnapshot audioPlaybackSnapshot =
       coordinator.playbackSnapshot();
-  ok &= expect(audioHandoff.playbackChanged && !coordinator.videoReady() &&
+  const TuiMediaCoordinator::ShellSnapshot audioShellSnapshot =
+      coordinator.shellSnapshot();
+  ok &= expect(audioHandoff.playbackChanged &&
+                   !audioShellSnapshot.videoReady &&
+                   audioShellSnapshot.terminalRole ==
+                       PlaybackShellTerminalRole::Browser &&
+                   audioShellSnapshot.acceptsExternalMediaChange &&
                    audio.startedFiles ==
                        std::vector<std::filesystem::path>{firstAudio} &&
                    audio.startedTrackIndices == std::vector<int>{7} &&
@@ -601,7 +624,7 @@ int main() {
       coordinator.startPlayback(
           std::move(rejectedVideoRoute),
           playback_queue::singleSource(playbackFileTarget(rejectedVideo))) &&
-          !coordinator.videoReady() && audio.snapshot().source &&
+          !coordinator.shellSnapshot().videoReady && audio.snapshot().source &&
           audio.snapshot().source->file == secondAudio &&
           coordinator.controlSessionId().valid() &&
           coordinator.controlSessionId() != secondAudioControlSession &&
@@ -651,7 +674,7 @@ int main() {
           routeFor(cancelledVideo),
           playback_queue::sourceFromFiles(
               {cancelledVideo, uncommittedSuccessor})) &&
-          !coordinator.videoReady() &&
+          !coordinator.shellSnapshot().videoReady &&
           !coordinator.controlSessionId().valid() &&
           !queue.prepareTransport(playback_queue::Direction::Next),
       "a cancelled video open must discard the session and its prepared "
@@ -666,9 +689,9 @@ int main() {
           routeFor(declinedFallback),
           playback_queue::sourceFromFiles(
               {declinedFallback, declinedFallbackSuccessor})) &&
-          !coordinator.videoReady() &&
+          !coordinator.shellSnapshot().videoReady &&
           !coordinator.controlSessionId().valid() &&
-          !coordinator.canAcceptExternalMediaChange(),
+          !coordinator.shellSnapshot().acceptsExternalMediaChange,
       "an audio fallback offer must retain its activation without exposing "
       "partial playback state");
   const TuiMediaCoordinator::PollResult declinedFallbackResult =
@@ -703,7 +726,7 @@ int main() {
           routeFor(revokedFallback),
           playback_queue::singleSource(
               playbackFileTarget(revokedFallback))) &&
-          !coordinator.canAcceptExternalMediaChange(),
+          !coordinator.shellSnapshot().acceptsExternalMediaChange,
       "a fallback pending during quit must remain an identifiable domain "
       "request");
   const TuiMediaCoordinator::PollResult revocableFallbackResult =
@@ -734,7 +757,7 @@ int main() {
   ok &= expect(revocableDecision && fallbackRevoked &&
                    !coordinator.resolveAudioFallback(*revocableDecision,
                                                      true) &&
-                   coordinator.canAcceptExternalMediaChange(),
+                   coordinator.shellSnapshot().acceptsExternalMediaChange,
                "quit must revoke the published fallback identity and discard "
                "its hidden activation");
 
@@ -748,7 +771,7 @@ int main() {
           std::move(acceptedFallbackRoute),
           playback_queue::singleSource(
               playbackFileTarget(acceptedFallback))) &&
-          !coordinator.videoReady(),
+          !coordinator.shellSnapshot().videoReady,
       "a later fallback workflow must remain available after a decline");
   const TuiMediaCoordinator::PollResult acceptedFallbackResult =
       coordinator.poll();
@@ -810,7 +833,7 @@ int main() {
           routeFor(asyncCancelledVideo),
           playback_queue::sourceFromFiles(
               {asyncCancelledVideo, asyncCancelledSuccessor})) &&
-          !coordinator.videoReady() &&
+          !coordinator.shellSnapshot().videoReady &&
           !coordinator.controlSessionId().valid() &&
           audio.snapshot().source &&
           audio.snapshot().source->file == acceptedFallback,
@@ -821,7 +844,8 @@ int main() {
   const PlaybackControlSessionId restoredAfterAsyncCancel =
       coordinator.controlSessionId();
   ok &= expect(
-      asyncCancellation.playbackChanged && !coordinator.videoReady() &&
+      asyncCancellation.playbackChanged &&
+          !coordinator.shellSnapshot().videoReady &&
           restoredAfterAsyncCancel.valid() &&
           restoredAfterAsyncCancel != fallbackControlSession &&
           audio.snapshot().source &&
@@ -856,18 +880,24 @@ int main() {
   const std::filesystem::path thirdVideo = "third.mp4";
   const std::size_t sessionsBeforeAsyncOpen = sessions.size();
   nextVideoOpenPlan = VideoOpenPlan::ReadyOnPump;
+  const bool thirdVideoAccepted = coordinator.startPlayback(
+      routeFor(thirdVideo),
+      playback_queue::singleSource(playbackFileTarget(thirdVideo)));
+  const TuiMediaCoordinator::ShellSnapshot openingShellSnapshot =
+      coordinator.shellSnapshot();
   ok &= expect(
-      coordinator.startPlayback(routeFor(thirdVideo),
-                                playback_queue::singleSource(
-                                    playbackFileTarget(thirdVideo))) &&
-          !coordinator.videoReady() &&
+      thirdVideoAccepted && !openingShellSnapshot.videoReady &&
+          openingShellSnapshot.terminalRole ==
+              PlaybackShellTerminalRole::Playback &&
+          !openingShellSnapshot.acceptsExternalMediaChange &&
           sessions.size() == sessionsBeforeAsyncOpen + 1 &&
           !coordinator.controlSessionId().valid(),
       "an asynchronous video open must retain activation without publishing "
       "control ownership early");
 
   const TuiMediaCoordinator::PollResult thirdVideoOpen = coordinator.poll();
-  ok &= expect(thirdVideoOpen.playbackChanged && coordinator.videoReady() &&
+  ok &= expect(thirdVideoOpen.playbackChanged &&
+                   coordinator.shellSnapshot().videoReady &&
                    coordinator.controlSessionId().valid(),
                "a completed asynchronous open must atomically activate the "
                "video and its control identity");
@@ -890,7 +920,8 @@ int main() {
 
   const TuiMediaCoordinator::PollResult stoppedThirdVideo =
       coordinator.poll();
-  ok &= expect(stoppedThirdVideo.playbackChanged && !coordinator.videoReady(),
+  ok &= expect(stoppedThirdVideo.playbackChanged &&
+                   !coordinator.shellSnapshot().videoReady,
                "the stopped video must complete before the quit-preemption "
                "workflow starts");
 
@@ -901,7 +932,7 @@ int main() {
           routeFor(acknowledgementFailureVideo),
           playback_queue::singleSource(
               playbackFileTarget(acknowledgementFailureVideo))) &&
-          coordinator.videoReady(),
+          coordinator.shellSnapshot().videoReady,
       "handoff acknowledgement failure requires an active owner session");
   const std::size_t sessionsBeforeAcknowledgementFailure = sessions.size();
   sessions.back()->rejectNextHandoffResolution = true;
@@ -912,7 +943,7 @@ int main() {
           routeFor(initiallyRejectedReplacement),
           playback_queue::singleSource(
               playbackFileTarget(initiallyRejectedReplacement))) &&
-          coordinator.videoReady() &&
+          coordinator.shellSnapshot().videoReady &&
           sessions.size() == sessionsBeforeAcknowledgementFailure &&
           sessions.back()->handoffResolutions.size() == 1 &&
           sessions.back()->handoffAborts.size() == 1 &&
@@ -931,7 +962,7 @@ int main() {
           }));
   ok &= expect(!acknowledgementFailureFeedback.playbackChanged &&
                    acknowledgementFailureEvents == 1 &&
-                   coordinator.videoReady(),
+                   coordinator.shellSnapshot().videoReady,
                "one failed acknowledgement must publish exactly one error "
                "event without changing playback");
 
@@ -948,7 +979,7 @@ int main() {
   const TuiMediaCoordinator::PollResult recoveredHandoff =
       coordinator.poll();
   ok &= expect(recoveredHandoff.playbackChanged &&
-                   coordinator.videoReady() &&
+                   coordinator.shellSnapshot().videoReady &&
                    sessions.size() ==
                        sessionsBeforeAcknowledgementFailure + 1 &&
                    sessions.back()->file == recoveredReplacement,
@@ -960,7 +991,7 @@ int main() {
   const TuiMediaCoordinator::PollResult stoppedRecoveredReplacement =
       coordinator.poll();
   ok &= expect(stoppedRecoveredReplacement.playbackChanged &&
-                   !coordinator.videoReady(),
+                   !coordinator.shellSnapshot().videoReady,
                "the recovered replacement must stop before quit preemption");
 
   const std::filesystem::path quittingVideo = "quitting-video.mp4";
@@ -968,7 +999,7 @@ int main() {
       coordinator.startPlayback(
           routeFor(quittingVideo),
           playback_queue::singleSource(playbackFileTarget(quittingVideo))) &&
-          coordinator.videoReady(),
+          coordinator.shellSnapshot().videoReady,
       "quit preemption requires one active owner session");
   const std::size_t sessionsBeforePreemptedChange = sessions.size();
   const std::filesystem::path preemptedVideo = "must-not-open.mp4";
@@ -990,7 +1021,7 @@ int main() {
   ok &= expect(
       quitPreemption.playbackChanged && quitEvents == 1 &&
           sessions.size() == sessionsBeforePreemptedChange &&
-          !coordinator.videoReady(),
+          !coordinator.shellSnapshot().videoReady,
       "a committed session quit must preempt an older accepted media change "
       "instead of opening it after session teardown");
 

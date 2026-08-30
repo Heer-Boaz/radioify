@@ -43,6 +43,15 @@ class TuiMediaCoordinator {
     std::optional<VideoSnapshot> video;
   };
 
+  struct ShellSnapshot {
+    PlaybackShellTerminalRole terminalRole =
+        PlaybackShellTerminalRole::Browser;
+    std::optional<playback_session::TransitionSnapshot> videoTransition;
+    bool videoReady = false;
+    bool capturesBrowserInput = false;
+    bool acceptsExternalMediaChange = false;
+  };
+
   struct ApplyAudioPictureInPicture {
     playback_route::AudioPictureInPicturePlan plan =
         playback_route::AudioPictureInPicturePlan::Keep;
@@ -109,16 +118,11 @@ class TuiMediaCoordinator {
   void handleMediaTaskCompletion(
       const media_processing::TaskCompletion& completion);
 
-  bool videoReady() const;
   PlaybackControlSessionId controlSessionId() const;
-  PlaybackShellTerminalRole terminalRole() const;
   PlaybackSnapshot playbackSnapshot() const;
-  std::optional<playback_session::TransitionSnapshot>
-  videoTransitionSnapshot() const;
+  ShellSnapshot shellSnapshot() const;
   std::vector<NativeWaitHandle> waitHandles() const;
   wake_schedule::Deadline nextWakeDeadline() const;
-  bool capturesBrowserInput() const;
-  bool canAcceptExternalMediaChange() const;
   void setExternalInputModal(bool modal);
 
   bool handleVideoInputEvent(const InputEvent& event);

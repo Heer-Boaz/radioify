@@ -26,6 +26,31 @@ enum class VideoSessionStartFailure : std::uint8_t {
 // transport transaction transition as one unit and cannot drift apart.
 class VideoSessionHost final : public playback_session::HandoffEndpoint {
  public:
+  enum class Lifecycle : std::uint8_t {
+    Empty,
+    Opening,
+    Active,
+    Completed,
+  };
+
+  // Owner-thread projection of the host variant for shell routing. A
+  // completed session is intentionally inert: completion has moved to the
+  // host and its former endpoint is never queried again.
+  struct Snapshot {
+    Lifecycle lifecycle = Lifecycle::Empty;
+    std::optional<PlaybackShellTerminalRole> terminalRole;
+    std::optional<playback_session::TransitionSnapshot> transition;
+    bool controllable = false;
+    bool capturesBrowserInput = false;
+
+    [[nodiscard]] bool empty() const noexcept {
+      return lifecycle == Lifecycle::Empty;
+    }
+    [[nodiscard]] bool ready() const noexcept {
+      return lifecycle == Lifecycle::Active && controllable;
+    }
+  };
+
   struct OpenPending {};
   struct OpenFinished {
     VideoActivationTransaction transaction;
@@ -63,15 +88,11 @@ class VideoSessionHost final : public playback_session::HandoffEndpoint {
   SessionRef session();
   ConstSessionRef session() const;
 
-  [[nodiscard]] std::optional<PlaybackShellTerminalRole> terminalRole()
-      const;
+  [[nodiscard]] Snapshot snapshot() const;
   [[nodiscard]] std::optional<playback_session::ViewSnapshot> viewSnapshot()
       const;
-  [[nodiscard]] std::optional<playback_session::TransitionSnapshot>
-  transitionSnapshot() const;
   [[nodiscard]] std::vector<NativeWaitHandle> activityWaitHandles() const;
   [[nodiscard]] wake_schedule::Deadline nextWakeDeadline() const;
-  [[nodiscard]] bool capturesBrowserInput() const;
 
   void setExternalInputModal(bool modal);
   bool handleInputEvent(const InputEvent& event);

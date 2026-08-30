@@ -760,16 +760,19 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   }
 
   const auto openFileRequestWakeHandle = [&]() {
-    return shellOverlays.inputModal() ||
-                   !mediaCoordinator.canAcceptExternalMediaChange()
-               ? NativeWaitHandle{}
-               : openFileRequests.nativeWaitHandle();
+    if (shellOverlays.inputModal() ||
+        !mediaCoordinator.shellSnapshot().acceptsExternalMediaChange) {
+      return NativeWaitHandle{};
+    }
+    return openFileRequests.nativeWaitHandle();
   };
   const auto synchronizeNativeInputModality = [&]() {
     const bool shellModal = shellOverlays.inputModal();
     mediaCoordinator.setExternalInputModal(shellModal);
+    const TuiMediaCoordinator::ShellSnapshot shell =
+        mediaCoordinator.shellSnapshot();
     const bool acceptsFileDrop =
-        !shellModal && !mediaCoordinator.capturesBrowserInput();
+        !shellModal && !shell.capturesBrowserInput;
     tuiWindow.SetFileDropAcceptanceEnabled(acceptsFileDrop);
     audioPictureInPicture.setFileDropAcceptanceEnabled(acceptsFileDrop);
   };
@@ -1134,7 +1137,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       };
 
   auto activateRadioifySurface = [&]() {
-    if (mediaCoordinator.videoReady()) {
+    if (mediaCoordinator.shellSnapshot().videoReady) {
       mediaCoordinator.activateVideoPresentation();
       return;
     }
@@ -1491,7 +1494,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   };
 
   PlaybackShellTerminalRole previousTerminalRole =
-      mediaCoordinator.terminalRole();
+      mediaCoordinator.shellSnapshot().terminalRole;
   while (running) {
     synchronizeNativeInputModality();
     TuiMediaCoordinator::PollResult mediaUpdate = mediaCoordinator.poll();
@@ -1533,8 +1536,9 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     dispatchShellDialogEvents();
     if (!running) break;
     syncShellControls();
-    const PlaybackShellTerminalRole terminalRole =
-        mediaCoordinator.terminalRole();
+    const TuiMediaCoordinator::ShellSnapshot shellState =
+        mediaCoordinator.shellSnapshot();
+    const PlaybackShellTerminalRole terminalRole = shellState.terminalRole;
     if (terminalRole != previousTerminalRole) {
       previousTerminalRole = terminalRole;
       browserDoubleClickTracker.reset();
@@ -1609,7 +1613,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
 
     bool admittedExternalMediaChange = false;
     if (!shellOverlays.inputModal() &&
-        mediaCoordinator.canAcceptExternalMediaChange() &&
+        mediaCoordinator.shellSnapshot().acceptsExternalMediaChange &&
         !pendingAudioPictureInPictureOpens.empty()) {
       AudioPictureInPictureWindow::OpenFiles request =
           std::move(pendingAudioPictureInPictureOpens.front());
@@ -1628,20 +1632,19 @@ int runTui(Options o, ApplicationRuntime& runtime) {
 
     OpenFilesRequest openRequest;
     if (!admittedExternalMediaChange && !shellOverlays.inputModal() &&
-        mediaCoordinator.canAcceptExternalMediaChange() &&
+        mediaCoordinator.shellSnapshot().acceptsExternalMediaChange &&
         openFileRequests.poll(openRequest)) {
       if (playOpenFilesRequest(openRequest)) {
         markDirty(UiDirtyFlags::Async);
       }
     }
 
-    if (mediaCoordinator.terminalRole() !=
-        PlaybackShellTerminalRole::Browser) {
-      const std::optional<playback_session::TransitionSnapshot> transition =
-          mediaCoordinator.videoTransitionSnapshot();
-      if (transition) {
+    const TuiMediaCoordinator::ShellSnapshot playbackShell =
+        mediaCoordinator.shellSnapshot();
+    if (playbackShell.terminalRole != PlaybackShellTerminalRole::Browser) {
+      if (playbackShell.videoTransition) {
         videoTransitionLayout = tui_video_transition_view::draw(
-            screen, *transition, videoTransitionStyles);
+            screen, *playbackShell.videoTransition, videoTransitionStyles);
         presentTextGrid();
       } else {
         videoTransitionLayout = {};
@@ -1672,8 +1675,9 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         if (deferCommittedFileDrop(playbackEvent)) {
           continue;
         }
-        if (transition && tui_video_transition_view::cancelRequested(
-                              playbackEvent, videoTransitionLayout)) {
+        if (playbackShell.videoTransition &&
+            tui_video_transition_view::cancelRequested(
+                playbackEvent, videoTransitionLayout)) {
           mediaCoordinator.handleControlCommand(PlaybackControlCommand::Stop);
           continue;
         }
@@ -1718,7 +1722,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       if (deferCommittedFileDrop(ev)) {
         return;
       }
-      if (mediaCoordinator.capturesBrowserInput()) {
+      if (mediaCoordinator.shellSnapshot().capturesBrowserInput) {
         if (ev.type == InputEvent::Type::Key ||
             ev.type == InputEvent::Type::Action ||
             (ev.type == InputEvent::Type::Resize &&
@@ -1836,7 +1840,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         markDirty();
         return;
       }
-      if (mediaCoordinator.videoReady() && !browserSearchFocused(browser) &&
+      if (mediaCoordinator.shellSnapshot().videoReady &&
+          !browserSearchFocused(browser) &&
           (ev.type == InputEvent::Type::Key ||
            ev.type == InputEvent::Type::Action)) {
         const std::optional<PlaybackAction> action =
@@ -1893,7 +1898,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       return mediaCoordinator.pollVideoWindowInput(event);
     };
     if (running &&
-        mediaCoordinator.terminalRole() ==
+        mediaCoordinator.shellSnapshot().terminalRole ==
             PlaybackShellTerminalRole::Browser &&
         applicationInputPump.pollNext(input, shellInputWindow,
                                       pollPlaybackWindow, ev, inputSurface)) {
@@ -1909,7 +1914,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       return 0;
     }
     if (!running) break;
-    if (mediaCoordinator.terminalRole() !=
+    if (mediaCoordinator.shellSnapshot().terminalRole !=
         PlaybackShellTerminalRole::Browser) {
       continue;
     }

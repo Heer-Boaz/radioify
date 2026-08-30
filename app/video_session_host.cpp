@@ -127,11 +127,30 @@ VideoSessionHost::ConstSessionRef VideoSessionHost::session() const {
   return impl_->session();
 }
 
-std::optional<PlaybackShellTerminalRole> VideoSessionHost::terminalRole()
-    const {
-  ConstSessionRef current = session();
-  if (!current) return std::nullopt;
-  return current->get().terminalRole();
+VideoSessionHost::Snapshot VideoSessionHost::snapshot() const {
+  Snapshot result;
+  if (const auto* openingState =
+          std::get_if<Impl::Opening>(&impl_->state)) {
+    result.lifecycle = Lifecycle::Opening;
+    result.terminalRole = openingState->session->terminalRole();
+    result.transition = openingState->session->transitionSnapshot();
+    result.capturesBrowserInput =
+        openingState->session->capturesBrowserInput();
+    return result;
+  }
+  if (const auto* activeState = std::get_if<Impl::Active>(&impl_->state)) {
+    result.lifecycle = Lifecycle::Active;
+    result.terminalRole = activeState->session->terminalRole();
+    result.transition = activeState->session->transitionSnapshot();
+    result.controllable = activeState->session->ready();
+    result.capturesBrowserInput =
+        activeState->session->capturesBrowserInput();
+    return result;
+  }
+  if (std::holds_alternative<Impl::Completed>(impl_->state)) {
+    result.lifecycle = Lifecycle::Completed;
+  }
+  return result;
 }
 
 std::optional<playback_session::ViewSnapshot>
@@ -139,12 +158,6 @@ VideoSessionHost::viewSnapshot() const {
   const auto* activeState = std::get_if<Impl::Active>(&impl_->state);
   return activeState ? activeState->session->viewSnapshot()
                      : std::nullopt;
-}
-
-std::optional<playback_session::TransitionSnapshot>
-VideoSessionHost::transitionSnapshot() const {
-  ConstSessionRef current = session();
-  return current ? current->get().transitionSnapshot() : std::nullopt;
 }
 
 std::vector<NativeWaitHandle> VideoSessionHost::activityWaitHandles() const {
@@ -156,11 +169,6 @@ std::vector<NativeWaitHandle> VideoSessionHost::activityWaitHandles() const {
 wake_schedule::Deadline VideoSessionHost::nextWakeDeadline() const {
   ConstSessionRef current = session();
   return current ? current->get().nextWakeDeadline() : std::nullopt;
-}
-
-bool VideoSessionHost::capturesBrowserInput() const {
-  ConstSessionRef current = session();
-  return current && current->get().capturesBrowserInput();
 }
 
 void VideoSessionHost::setExternalInputModal(bool modal) {

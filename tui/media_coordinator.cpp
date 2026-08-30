@@ -169,17 +169,8 @@ struct TuiMediaCoordinator::Impl {
     return PollResult{playbackChanged, std::move(events)};
   }
 
-  bool videoReady() const {
-    return videoSessions_.ready();
-  }
-
   PlaybackControlSessionId controlSessionId() const {
     return playbackControl_.sessionId();
-  }
-
-  PlaybackShellTerminalRole terminalRole() const {
-    return videoSessions_.terminalRole().value_or(
-        PlaybackShellTerminalRole::Browser);
   }
 
   application_playback::VideoSessionRef videoSessionRef() {
@@ -207,9 +198,19 @@ struct TuiMediaCoordinator::Impl {
     return result;
   }
 
-  std::optional<playback_session::TransitionSnapshot>
-  videoTransitionSnapshot() const {
-    return videoSessions_.transitionSnapshot();
+  ShellSnapshot shellSnapshot() const {
+    application_playback::VideoSessionHost::Snapshot video =
+        videoSessions_.snapshot();
+    ShellSnapshot result;
+    result.terminalRole = video.terminalRole.value_or(
+        PlaybackShellTerminalRole::Browser);
+    result.videoTransition = std::move(video.transition);
+    result.videoReady = video.ready();
+    result.capturesBrowserInput = video.capturesBrowserInput;
+    result.acceptsExternalMediaChange =
+        (video.empty() || video.ready()) && commandWorkflow_.idle() &&
+        !playbackActivation_.audioFallbackPending();
+    return result;
   }
 
   std::vector<NativeWaitHandle> waitHandles() const {
@@ -222,17 +223,6 @@ struct TuiMediaCoordinator::Impl {
       wake_schedule::include(deadline, wake_schedule::Clock::now());
     }
     return deadline;
-  }
-
-  bool capturesBrowserInput() const {
-    return videoSessions_.capturesBrowserInput();
-  }
-
-  bool canAcceptExternalMediaChange() const {
-    const bool sessionCanHandoff =
-        videoSessions_.empty() || videoSessions_.ready();
-    return sessionCanHandoff && commandWorkflow_.idle() &&
-           !playbackActivation_.audioFallbackPending();
   }
 
   void setExternalInputModal(bool modal) {
@@ -980,14 +970,8 @@ void TuiMediaCoordinator::handleMediaTaskCompletion(
   impl_->handleMediaTaskCompletion(completion);
 }
 
-bool TuiMediaCoordinator::videoReady() const { return impl_->videoReady(); }
-
 PlaybackControlSessionId TuiMediaCoordinator::controlSessionId() const {
   return impl_->controlSessionId();
-}
-
-PlaybackShellTerminalRole TuiMediaCoordinator::terminalRole() const {
-  return impl_->terminalRole();
 }
 
 TuiMediaCoordinator::PlaybackSnapshot
@@ -995,9 +979,9 @@ TuiMediaCoordinator::playbackSnapshot() const {
   return impl_->playbackSnapshot();
 }
 
-std::optional<playback_session::TransitionSnapshot>
-TuiMediaCoordinator::videoTransitionSnapshot() const {
-  return impl_->videoTransitionSnapshot();
+TuiMediaCoordinator::ShellSnapshot TuiMediaCoordinator::shellSnapshot()
+    const {
+  return impl_->shellSnapshot();
 }
 
 std::vector<NativeWaitHandle> TuiMediaCoordinator::waitHandles() const {
@@ -1006,14 +990,6 @@ std::vector<NativeWaitHandle> TuiMediaCoordinator::waitHandles() const {
 
 wake_schedule::Deadline TuiMediaCoordinator::nextWakeDeadline() const {
   return impl_->nextWakeDeadline();
-}
-
-bool TuiMediaCoordinator::capturesBrowserInput() const {
-  return impl_->capturesBrowserInput();
-}
-
-bool TuiMediaCoordinator::canAcceptExternalMediaChange() const {
-  return impl_->canAcceptExternalMediaChange();
 }
 
 void TuiMediaCoordinator::setExternalInputModal(bool modal) {
