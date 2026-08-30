@@ -94,5 +94,40 @@ int main() {
   ok &= expect(first.handled && !second.handled,
                "only one exit transaction may be active at a time");
 
+  ExitCoordinator abortedHandoff;
+  Transition abortStart = abortedHandoff.request(
+      ExternalHandoff{}, true, true);
+  const RequestId abortId = *abortStart.requestId;
+  Transition staleAbort = abortedHandoff.abortHandoff(abortId + 1);
+  ok &= expect(!staleAbort.handled && abortedHandoff.pending(),
+               "a stale host abort must not disturb another exit request");
+  Transition aborted = abortedHandoff.abortHandoff(abortId);
+  ok &= expect(aborted.handled && aborted.resumePlayback &&
+                   !abortedHandoff.pending() &&
+                   !aborted.handoffCancellation,
+               "an exact host abort must close the transaction without "
+               "publishing a cancellation back to the host");
+  Transition afterAbort = abortedHandoff.request(StopSession{}, false, true);
+  ok &= expect(afterAbort.handled && afterAbort.finishSession,
+               "a closed handoff must release the session exit protocol");
+
+  ExitCoordinator abortedDecision;
+  Transition decisionStart = abortedDecision.request(
+      ExternalHandoff{}, false, true);
+  const RequestId decisionId = *decisionStart.requestId;
+  ok &= expect(decisionStart.handoffRequest &&
+                   abortedDecision.awaitingHandoffDecision(),
+               "acknowledgement recovery requires a published request");
+  Transition decisionAbort = abortedDecision.abortHandoff(decisionId);
+  ok &= expect(decisionAbort.handled && !decisionAbort.finishSession &&
+                   !abortedDecision.pending(),
+               "aborting an unacknowledged host decision must release its "
+               "serialized request slot");
+  Transition afterDecisionAbort = abortedDecision.request(
+      ExternalHandoff{}, false, true);
+  ok &= expect(afterDecisionAbort.handled &&
+                   afterDecisionAbort.handoffRequest,
+               "a later handoff must start after acknowledgement recovery");
+
   return ok ? 0 : 1;
 }

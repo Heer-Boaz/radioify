@@ -252,6 +252,12 @@ bool VideoSessionHost::resolveHandoff(
   return current && current->get().resolveHandoff(requestId, accepted);
 }
 
+bool VideoSessionHost::abortHandoff(
+    playback_session_exit::RequestId requestId) {
+  SessionRef current = session();
+  return current && current->get().abortHandoff(requestId);
+}
+
 VideoSessionHost::StartResult VideoSessionHost::start(
     playback_session::VideoSessionRequest request,
     VideoActivationTransaction transaction,

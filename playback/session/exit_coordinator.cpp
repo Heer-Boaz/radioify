@@ -86,6 +86,17 @@ Transition ExitCoordinator::resolve(RequestId requestId, bool accepted) {
   return transition;
 }
 
+Transition ExitCoordinator::abortHandoff(RequestId requestId) {
+  if (!pending_ || pending_->requestId != requestId) return {};
+
+  Transition transition;
+  transition.handled = true;
+  transition.requestId = requestId;
+  transition.resumePlayback = pending_->resumePlaybackOnCancel;
+  pending_.reset();
+  return transition;
+}
+
 bool ExitCoordinator::confirmationVisible() const {
   return pending_ && pending_->phase == Phase::AwaitingConfirmation;
 }

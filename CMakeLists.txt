@@ -617,6 +617,7 @@ target_sources(tui_media_coordinator_workflow_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/app/video_session_host.cpp
   ${CMAKE_SOURCE_DIR}/tui/media_coordinator.cpp
   ${CMAKE_SOURCE_DIR}/tui/media_activation_plan.cpp
+  ${CMAKE_SOURCE_DIR}/tui/media_command_workflow.cpp
   ${CMAKE_SOURCE_DIR}/tui/image_viewer_sequence.cpp
   ${CMAKE_SOURCE_DIR}/app/media_processing_coordinator.cpp
   ${CMAKE_SOURCE_DIR}/app/playback_queue.cpp
@@ -640,6 +641,15 @@ target_sources(tui_media_coordinator_workflow_tests PRIVATE
 radioify_link_repo_target(tui_media_coordinator_workflow_tests)
 add_test(NAME tui_media_coordinator_workflow_tests
          COMMAND $<TARGET_FILE:tui_media_coordinator_workflow_tests>)
+
+add_executable(media_command_workflow_tests)
+target_sources(media_command_workflow_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_media_command_workflow_tests>
+  ${CMAKE_SOURCE_DIR}/tui/media_command_workflow.cpp
+)
+radioify_link_repo_target(media_command_workflow_tests)
+add_test(NAME media_command_workflow_tests
+         COMMAND $<TARGET_FILE:media_command_workflow_tests>)
 
 add_executable(terminal_input_sequence_tests)
 target_sources(terminal_input_sequence_tests PRIVATE
@@ -697,14 +707,6 @@ target_sources(playback_exit_coordinator_tests PRIVATE
 radioify_link_repo_target(playback_exit_coordinator_tests)
 add_test(NAME playback_exit_coordinator_tests
          COMMAND $<TARGET_FILE:playback_exit_coordinator_tests>)
-
-add_executable(video_handoff_controller_tests)
-target_sources(video_handoff_controller_tests PRIVATE
-  $<TARGET_OBJECTS:radioify_tool_video_handoff_controller_tests>
-)
-radioify_link_repo_target(video_handoff_controller_tests)
-add_test(NAME video_handoff_controller_tests
-         COMMAND $<TARGET_FILE:video_handoff_controller_tests>)
 
 add_executable(overlay_control_pointer_tests)
 target_sources(overlay_control_pointer_tests PRIVATE

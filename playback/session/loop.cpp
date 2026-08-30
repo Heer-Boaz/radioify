@@ -419,6 +419,17 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     return true;
   }
 
+  bool abortHandoff(playback_session_exit::RequestId requestId) {
+    const playback_session_exit::Transition transition =
+        exitCoordinator.abortHandoff(requestId);
+    if (!transition.handled) return false;
+    exitWhenExportSucceeds = false;
+    overlayControlHover = -1;
+    applyExitTransition(transition);
+    syncOverlayPresentation();
+    return true;
+  }
+
   void navigateBack() {
     if (exitCoordinator.confirmationVisible()) {
       cancelPendingExit();
@@ -1872,6 +1883,11 @@ PlaybackLoopRunner::requestHandoff() {
 bool PlaybackLoopRunner::resolveHandoff(
     playback_session_exit::RequestId requestId, bool accepted) {
   return impl_->resolveHandoff(requestId, accepted);
+}
+
+bool PlaybackLoopRunner::abortHandoff(
+    playback_session_exit::RequestId requestId) {
+  return impl_->abortHandoff(requestId);
 }
 
 std::vector<playback_session::Event> PlaybackLoopRunner::drainEvents() {

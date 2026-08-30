@@ -92,6 +92,8 @@ class VideoSessionHost final : public playback_session::HandoffEndpoint {
   std::optional<playback_session_exit::RequestId> requestHandoff() override;
   bool resolveHandoff(playback_session_exit::RequestId requestId,
                       bool accepted) override;
+  bool abortHandoff(
+      playback_session_exit::RequestId requestId) override;
 
   StartResult start(
       playback_session::VideoSessionRequest request,

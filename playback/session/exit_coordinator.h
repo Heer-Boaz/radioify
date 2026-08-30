@@ -56,6 +56,7 @@ class ExitCoordinator {
   Transition confirm();
   Transition cancel();
   Transition resolve(RequestId requestId, bool accepted);
+  Transition abortHandoff(RequestId requestId);
 
   bool pending() const { return pending_.has_value(); }
   bool confirmationVisible() const;

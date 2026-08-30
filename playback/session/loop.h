@@ -86,6 +86,7 @@ class PlaybackLoopRunner {
   std::optional<playback_session_exit::RequestId> requestHandoff();
   bool resolveHandoff(playback_session_exit::RequestId requestId,
                       bool accepted);
+  bool abortHandoff(playback_session_exit::RequestId requestId);
   std::vector<playback_session::Event> drainEvents();
   void mediaTaskFinished(
       const playback_media_processing::Completion& completion);

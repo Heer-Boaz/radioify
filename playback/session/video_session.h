@@ -84,6 +84,8 @@ class VideoSession : public HandoffEndpoint {
       override = 0;
   virtual bool resolveHandoff(playback_session_exit::RequestId requestId,
                               bool accepted) override = 0;
+  virtual bool abortHandoff(
+      playback_session_exit::RequestId requestId) override = 0;
   virtual std::vector<Event> drainEvents() = 0;
   virtual void mediaTaskFinished(
       const playback_media_processing::Completion& completion) = 0;

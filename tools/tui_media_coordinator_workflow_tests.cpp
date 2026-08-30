@@ -91,7 +91,12 @@ struct VideoSessionRecord {
   std::vector<PlaybackControlCommand> controlCommands;
   std::vector<std::pair<playback_session_exit::RequestId, bool>>
       handoffResolutions;
+  std::vector<playback_session_exit::RequestId> handoffAborts;
+  std::optional<playback_session_exit::RequestId> pendingHandoffRequest;
   bool completeOnNextPump = false;
+  PlaybackSessionExitIntent completionIntent =
+      PlaybackSessionExitIntent::Stop;
+  bool rejectNextHandoffResolution = false;
 };
 
 class RecordingVideoSession final : public playback_session::VideoSession {
@@ -136,6 +141,7 @@ class RecordingVideoSession final : public playback_session::VideoSession {
     if (!record_->completeOnNextPump) return std::nullopt;
     record_->completeOnNextPump = false;
     PlaybackSessionCompletion completion;
+    completion.intent = record_->completionIntent;
     completion.continuityState.presentation = presentation_;
     return completion;
   }
@@ -163,6 +169,10 @@ class RecordingVideoSession final : public playback_session::VideoSession {
   bool handleWindowInputEvent(const InputEvent&) override { return false; }
   bool handleControlCommand(PlaybackControlCommand command) override {
     record_->controlCommands.push_back(command);
+    if (command == PlaybackControlCommand::Stop) {
+      record_->completionIntent = PlaybackSessionExitIntent::Stop;
+      record_->completeOnNextPump = true;
+    }
     return true;
   }
   bool seekToRatio(double) override { return true; }
@@ -175,7 +185,9 @@ class RecordingVideoSession final : public playback_session::VideoSession {
   bool toggleFullscreen() override { return false; }
   bool activatePresentation() override { return true; }
   std::optional<playback_session_exit::RequestId> requestHandoff() override {
+    if (record_->pendingHandoffRequest) return std::nullopt;
     const playback_session_exit::RequestId requestId = nextRequestId_++;
+    record_->pendingHandoffRequest = requestId;
     playback_session_exit::HandoffRequest request;
     request.id = requestId;
     request.intent = playback_session_exit::ExternalHandoff{};
@@ -185,7 +197,20 @@ class RecordingVideoSession final : public playback_session::VideoSession {
   bool resolveHandoff(playback_session_exit::RequestId requestId,
                       bool accepted) override {
     record_->handoffResolutions.emplace_back(requestId, accepted);
+    if (record_->pendingHandoffRequest != requestId) return false;
+    if (record_->rejectNextHandoffResolution) {
+      record_->rejectNextHandoffResolution = false;
+      return false;
+    }
+    record_->pendingHandoffRequest.reset();
     if (accepted) record_->completeOnNextPump = true;
+    return true;
+  }
+  bool abortHandoff(
+      playback_session_exit::RequestId requestId) override {
+    record_->handoffAborts.push_back(requestId);
+    if (record_->pendingHandoffRequest != requestId) return false;
+    record_->pendingHandoffRequest.reset();
     return true;
   }
   std::vector<playback_session::Event> drainEvents() override {
@@ -197,8 +222,14 @@ class RecordingVideoSession final : public playback_session::VideoSession {
       const playback_media_processing::Completion&) override {}
   void mediaTaskActivityChanged(
       std::optional<playback_media_processing::Activity>) override {}
-  void requestStop() override { record_->completeOnNextPump = true; }
-  void requestQuit() override { record_->completeOnNextPump = true; }
+  void requestStop() override {
+    record_->completionIntent = PlaybackSessionExitIntent::Stop;
+    record_->completeOnNextPump = true;
+  }
+  void requestQuit() override {
+    record_->completionIntent = PlaybackSessionExitIntent::QuitApplication;
+    record_->completeOnNextPump = true;
+  }
 
  private:
   std::shared_ptr<VideoSessionRecord> record_;
@@ -822,6 +853,112 @@ int main() {
                   PlaybackControlCommand::Stop},
       "video stop must reach the active endpoint before retiring its control "
       "identity, and later direct commands must remain fenced out");
+
+  const TuiMediaCoordinator::PollResult stoppedThirdVideo =
+      coordinator.poll();
+  ok &= expect(stoppedThirdVideo.playbackChanged && !coordinator.videoReady(),
+               "the stopped video must complete before the quit-preemption "
+               "workflow starts");
+
+  const std::filesystem::path acknowledgementFailureVideo =
+      "handoff-ack-failure.mp4";
+  ok &= expect(
+      coordinator.startPlayback(
+          routeFor(acknowledgementFailureVideo),
+          playback_queue::singleSource(
+              playbackFileTarget(acknowledgementFailureVideo))) &&
+          coordinator.videoReady(),
+      "handoff acknowledgement failure requires an active owner session");
+  const std::size_t sessionsBeforeAcknowledgementFailure = sessions.size();
+  sessions.back()->rejectNextHandoffResolution = true;
+  const std::filesystem::path initiallyRejectedReplacement =
+      "initially-rejected-replacement.mp4";
+  ok &= expect(
+      !coordinator.startPlayback(
+          routeFor(initiallyRejectedReplacement),
+          playback_queue::singleSource(
+              playbackFileTarget(initiallyRejectedReplacement))) &&
+          coordinator.videoReady() &&
+          sessions.size() == sessionsBeforeAcknowledgementFailure &&
+          sessions.back()->handoffResolutions.size() == 1 &&
+          sessions.back()->handoffAborts.size() == 1 &&
+          !sessions.back()->pendingHandoffRequest,
+      "a failed endpoint acknowledgement must leave current playback intact "
+      "and must not publish the replacement as runnable work");
+  const TuiMediaCoordinator::PollResult acknowledgementFailureFeedback =
+      coordinator.poll();
+  const std::size_t acknowledgementFailureEvents =
+      static_cast<std::size_t>(std::count_if(
+          acknowledgementFailureFeedback.events.begin(),
+          acknowledgementFailureFeedback.events.end(),
+          [](const TuiMediaCoordinator::Event& event) {
+            return std::holds_alternative<
+                TuiMediaCoordinator::CommandErrorChanged>(event);
+          }));
+  ok &= expect(!acknowledgementFailureFeedback.playbackChanged &&
+                   acknowledgementFailureEvents == 1 &&
+                   coordinator.videoReady(),
+               "one failed acknowledgement must publish exactly one error "
+               "event without changing playback");
+
+  const std::filesystem::path recoveredReplacement =
+      "replacement-after-ack-failure.mp4";
+  ok &= expect(
+      coordinator.startPlayback(
+          routeFor(recoveredReplacement),
+          playback_queue::singleSource(
+              playbackFileTarget(recoveredReplacement))) &&
+          sessions.back()->handoffResolutions.size() == 2,
+      "a failed acknowledgement must release workflow ownership for a later "
+      "media command");
+  const TuiMediaCoordinator::PollResult recoveredHandoff =
+      coordinator.poll();
+  ok &= expect(recoveredHandoff.playbackChanged &&
+                   coordinator.videoReady() &&
+                   sessions.size() ==
+                       sessionsBeforeAcknowledgementFailure + 1 &&
+                   sessions.back()->file == recoveredReplacement,
+               "the next acknowledged handoff must activate the exact "
+               "replacement command");
+  ok &= expect(
+      coordinator.handleControlCommand(PlaybackControlCommand::Stop),
+      "the recovered replacement must remain controllable");
+  const TuiMediaCoordinator::PollResult stoppedRecoveredReplacement =
+      coordinator.poll();
+  ok &= expect(stoppedRecoveredReplacement.playbackChanged &&
+                   !coordinator.videoReady(),
+               "the recovered replacement must stop before quit preemption");
+
+  const std::filesystem::path quittingVideo = "quitting-video.mp4";
+  ok &= expect(
+      coordinator.startPlayback(
+          routeFor(quittingVideo),
+          playback_queue::singleSource(playbackFileTarget(quittingVideo))) &&
+          coordinator.videoReady(),
+      "quit preemption requires one active owner session");
+  const std::size_t sessionsBeforePreemptedChange = sessions.size();
+  const std::filesystem::path preemptedVideo = "must-not-open.mp4";
+  ok &= expect(
+      coordinator.startPlayback(
+          routeFor(preemptedVideo),
+          playback_queue::singleSource(playbackFileTarget(preemptedVideo))) &&
+          sessions.back()->handoffResolutions.size() == 1 &&
+          sessions.back()->handoffResolutions.front().second,
+      "the older media change must first be accepted by the active session");
+  coordinator.requestQuit();
+  const TuiMediaCoordinator::PollResult quitPreemption = coordinator.poll();
+  const std::size_t quitEvents = static_cast<std::size_t>(std::count_if(
+      quitPreemption.events.begin(), quitPreemption.events.end(),
+      [](const TuiMediaCoordinator::Event& event) {
+        return std::holds_alternative<TuiMediaCoordinator::QuitRequested>(
+            event);
+      }));
+  ok &= expect(
+      quitPreemption.playbackChanged && quitEvents == 1 &&
+          sessions.size() == sessionsBeforePreemptedChange &&
+          !coordinator.videoReady(),
+      "a committed session quit must preempt an older accepted media change "
+      "instead of opening it after session teardown");
 
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -55,6 +55,10 @@ radioify_add_module_object_library(
   ${CMAKE_CURRENT_SOURCE_DIR}/tui_media_coordinator_workflow_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_media_command_workflow_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/media_command_workflow_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_terminal_input_sequence_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/terminal_input_sequence_tests.cpp
 )
@@ -73,10 +77,6 @@ radioify_add_module_object_library(radioify_tool_presentation_controller_tests
 
 radioify_add_module_object_library(radioify_tool_playback_exit_coordinator_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_exit_coordinator_tests.cpp
-)
-
-radioify_add_module_object_library(radioify_tool_video_handoff_controller_tests
-  ${CMAKE_CURRENT_SOURCE_DIR}/video_handoff_controller_tests.cpp
 )
 
 radioify_add_module_object_library(radioify_tool_video_output_color_tests

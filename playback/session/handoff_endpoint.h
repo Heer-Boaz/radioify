@@ -18,6 +18,10 @@ class HandoffEndpoint {
   requestHandoff() = 0;
   virtual bool resolveHandoff(
       playback_session_exit::RequestId requestId, bool accepted) = 0;
+  // Closes an exact request when normal acknowledgement could not be
+  // committed. This is an error-recovery path, not a second resolution.
+  virtual bool abortHandoff(
+      playback_session_exit::RequestId requestId) = 0;
 };
 
 }  // namespace playback_session

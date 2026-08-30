@@ -559,6 +559,11 @@ bool PlaybackSession::resolveHandoff(
          impl_->loop->resolveHandoff(requestId, accepted);
 }
 
+bool PlaybackSession::abortHandoff(
+    playback_session_exit::RequestId requestId) {
+  return impl_->canControl() && impl_->loop->abortHandoff(requestId);
+}
+
 std::vector<playback_session::Event> PlaybackSession::drainEvents() {
   if (!impl_->canControl()) return {};
   return impl_->loop->drainEvents();

@@ -74,6 +74,8 @@ class PlaybackSession final : public playback_session::VideoSession {
   std::optional<playback_session_exit::RequestId> requestHandoff() override;
   bool resolveHandoff(playback_session_exit::RequestId requestId,
                       bool accepted) override;
+  bool abortHandoff(
+      playback_session_exit::RequestId requestId) override;
   std::vector<playback_session::Event> drainEvents() override;
   void mediaTaskFinished(
       const playback_media_processing::Completion& completion) override;

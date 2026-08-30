@@ -8,12 +8,12 @@
 #include "app/media_processing_coordinator.h"
 #include "app/playback_activation_controller.h"
 #include "app/playback_control_router.h"
-#include "app/video_handoff_controller.h"
 #include "app/video_session_host.h"
 #include "audio/media_formats.h"
 #include "core/path_identity.h"
 #include "playback/target.h"
 #include "tui/media_activation_plan.h"
+#include "tui/media_command_workflow.h"
 
 namespace {
 
@@ -84,7 +84,8 @@ struct TuiMediaCoordinator::Impl {
       return reject(MediaCommandFailureKind::QueueUnavailable,
                     "Unable to prepare the playback queue.");
     }
-    return submit(PreparedPlayback{std::move(*activation)});
+    return submit(tui_media_command::PreparedPlayback{
+        std::move(*activation)});
   }
 
   MediaCommandResult startFiles(
@@ -125,13 +126,14 @@ struct TuiMediaCoordinator::Impl {
     if (!activation) {
       return reject(MediaCommandFailureKind::QueueUnavailable, {});
     }
-    return submit(PreparedPlayback{std::move(*activation)});
+    return submit(tui_media_command::PreparedPlayback{
+        std::move(*activation)});
   }
 
   PollResult poll() {
     bool playbackChanged = false;
-    if (videoSessions_.empty() && pendingCommand_) {
-      drainPendingCommands();
+    if (videoSessions_.empty() && commandWorkflow_.hasDeferredCommand()) {
+      resumeDeferredCommandIfReady();
       playbackChanged = !videoSessions_.empty();
     }
     if (!videoSessions_.empty()) {
@@ -139,7 +141,7 @@ struct TuiMediaCoordinator::Impl {
         if (std::optional<VideoSessions::OpenFinished> opened =
                 videoSessions_.pumpOpen()) {
           finishVideoOpen(std::move(*opened));
-          drainPendingCommands();
+          resumeDeferredCommandIfReady();
           playbackChanged = true;
         }
       } else {
@@ -153,7 +155,7 @@ struct TuiMediaCoordinator::Impl {
               videoSessions_.takeCompletion();
           assert(finished);
           finishVideoSession(std::move(*finished));
-          drainPendingCommands();
+          resumeDeferredCommandIfReady();
           playbackChanged = true;
         } else {
           drainVideoSessionEvents();
@@ -221,9 +223,8 @@ struct TuiMediaCoordinator::Impl {
   bool canAcceptExternalMediaChange() const {
     const bool sessionCanHandoff =
         videoSessions_.empty() || videoSessions_.ready();
-    return sessionCanHandoff && !driving_ && !pendingCommand_ &&
-           !playbackActivation_.audioFallbackPending() &&
-           externalHandoff_.empty();
+    return sessionCanHandoff && commandWorkflow_.idle() &&
+           !playbackActivation_.audioFallbackPending();
   }
 
   void setExternalInputModal(bool modal) {
@@ -314,7 +315,8 @@ struct TuiMediaCoordinator::Impl {
               revoked = playbackActivation_.cancelAudioFallback()) {
         publishEvent(application_playback::AudioFallbackRevoked{*revoked});
       }
-      pendingCommand_.reset();
+      assert(videoSessions_.empty());
+      commandWorkflow_.discardRetainedCommands();
       releaseForegroundPlayback();
       publishEvent(QuitRequested{});
     }
@@ -327,30 +329,9 @@ struct TuiMediaCoordinator::Impl {
   }
 
  private:
-  struct PreparedPlayback {
-    playback_queue::Queue::PreparedActivation activation;
-  };
-
   using VideoSessions = application_playback::VideoSessionHost;
-
-  struct Quit {};
-
-  using Command = std::variant<PreparedPlayback,
-                               tui_media_activation::ShowImages,
-                               tui_media_activation::OpenDirectory, Quit>;
+  using Command = tui_media_command::Command;
   using CommandBuildResult = std::variant<Command, MediaCommandFailure>;
-
-  class DriveScope {
-   public:
-    explicit DriveScope(bool& driving) : driving_(driving) { driving_ = true; }
-    ~DriveScope() { driving_ = false; }
-
-    DriveScope(const DriveScope&) = delete;
-    DriveScope& operator=(const DriveScope&) = delete;
-
-   private:
-    bool& driving_;
-  };
 
   CommandBuildResult mediaCommandFromFiles(
       playback_route::Route route,
@@ -370,7 +351,8 @@ struct TuiMediaCoordinator::Impl {
           MediaCommandFailureKind::QueueUnavailable,
           "Unable to prepare the playback queue."};
     }
-    return Command(PreparedPlayback{std::move(*activation)});
+    return Command(tui_media_command::PreparedPlayback{
+        std::move(*activation)});
   }
 
   CommandBuildResult commandFromPlan(
@@ -409,96 +391,120 @@ struct TuiMediaCoordinator::Impl {
         tui_media_activation::planOpenFiles(request, defaultPresentation));
   }
 
-  MediaCommandResult enqueueOpenFiles(const OpenFilesRequest& request) {
-    if (pendingCommand_) return reject(MediaCommandFailureKind::Busy, {});
-    CommandBuildResult command = commandFromOpenFiles(request);
-    if (auto* failure = std::get_if<MediaCommandFailure>(&command)) {
-      return reject(std::move(*failure));
-    }
-    pendingCommand_.emplace(std::move(std::get<Command>(command)));
-    clearCommandError();
-    return MediaCommandResult::deferred();
+  void stageQuitAfterSessionExit() {
+    assert(videoSessions_.empty());
+    commandWorkflow_.preemptWithQuitAfterSessionExit();
   }
 
-  void enqueueQuit() {
-    if (!pendingCommand_) pendingCommand_.emplace(Quit{});
-  }
-
-  bool acceptSessionHandoff(
+  tui_media_command::HandoffRequestResolution
+  resolveSessionHandoffRequest(
       const playback_session_exit::HandoffRequest& request) {
-    if (pendingCommand_) return false;
-
     if (const auto* transport =
             std::get_if<playback_session_exit::Transport>(&request.intent)) {
       std::optional<playback_queue::Queue::PreparedActivation> successor =
           services_.queue.prepareTransport(
               transportDirection(transport->command));
-      if (!successor) return false;
-      pendingCommand_.emplace(PreparedPlayback{std::move(*successor)});
-      return true;
+      if (!successor) {
+        return commandWorkflow_.declineHandoffRequest(
+            request.id, videoSessions_);
+      }
+      return commandWorkflow_.resolveSessionHandoffRequest(
+          tui_media_command::PreparedPlayback{std::move(*successor)},
+          request.id, videoSessions_);
     }
     if (const auto* openFiles =
             std::get_if<playback_session_exit::OpenFiles>(&request.intent)) {
       OpenFilesRequest openRequest;
       openRequest.files = openFiles->files;
-      return enqueueOpenFiles(openRequest).accepted();
+      CommandBuildResult command = commandFromOpenFiles(openRequest);
+      if (auto* failure = std::get_if<MediaCommandFailure>(&command)) {
+        (void)reject(std::move(*failure));
+        return commandWorkflow_.declineHandoffRequest(
+            request.id, videoSessions_);
+      }
+      return commandWorkflow_.resolveSessionHandoffRequest(
+          std::move(std::get<Command>(command)), request.id,
+          videoSessions_);
     }
-    if (!std::holds_alternative<playback_session_exit::ExternalHandoff>(
-            request.intent) ||
-        !externalHandoff_.matches(request.id)) {
-      return false;
+    if (std::holds_alternative<playback_session_exit::ExternalHandoff>(
+            request.intent)) {
+      return commandWorkflow_.resolveExternalHandoffRequest(
+          request.id, videoSessions_);
     }
-    std::optional<Command> command = externalHandoff_.accept(request.id);
-    if (!command) return false;
-    pendingCommand_.emplace(std::move(*command));
-    return true;
+    return commandWorkflow_.declineHandoffRequest(request.id,
+                                                  videoSessions_);
   }
 
-  void drainVideoSessionEvents() {
+  bool drainVideoSessionEvents() {
+    bool externalHandoffFailed = false;
     std::vector<playback_session::Event> sessionEvents =
         videoSessions_.drainEvents();
     for (const playback_session::Event& event : sessionEvents) {
       if (const auto* request =
               std::get_if<playback_session_exit::HandoffRequest>(&event)) {
-        const bool accepted = acceptSessionHandoff(*request);
-        videoSessions_.resolveHandoff(request->id, accepted);
+        const bool external =
+            std::holds_alternative<playback_session_exit::ExternalHandoff>(
+                request->intent);
+        const tui_media_command::HandoffRequestResolution resolution =
+            resolveSessionHandoffRequest(*request);
+        const bool acknowledgementAborted =
+            resolution == tui_media_command::HandoffRequestResolution::
+                              AbortedAfterAcknowledgementFailure;
+        const bool protocolFault =
+            resolution == tui_media_command::HandoffRequestResolution::
+                              ProtocolFault;
+        if (acknowledgementAborted || protocolFault) {
+          (void)reject(
+              MediaCommandFailureKind::Busy,
+              protocolFault
+                  ? "The current playback session lost synchronization while "
+                    "changing media. Close the current video before trying "
+                    "again."
+                  : "The current playback session could not acknowledge the "
+                    "requested media change. The request was cancelled and "
+                    "playback was left unchanged.");
+          externalHandoffFailed = externalHandoffFailed || external;
+        }
         continue;
       }
       if (const auto* cancellation =
               std::get_if<playback_session_exit::HandoffCancellation>(
                   &event)) {
-        (void)externalHandoff_.cancel(cancellation->id);
+        (void)commandWorkflow_.cancelHandoff(cancellation->id);
         continue;
       }
       publishEvent(ActivateBrowserSurface{});
     }
-  }
-
-  application_playback::VideoHandoffStart
-  tryStartDeferredVideoHandoff() {
-    if (videoSessions_.empty()) {
-      return application_playback::VideoHandoffStart::NoPendingCommand;
-    }
-    const application_playback::VideoHandoffStart start =
-        externalHandoff_.tryStart(videoSessions_);
-    if (start == application_playback::VideoHandoffStart::RequestStarted ||
-        start == application_playback::VideoHandoffStart::Failed) {
-      drainVideoSessionEvents();
-    }
-    return start;
+    return externalHandoffFailed;
   }
 
   void resumeDeferredVideoHandoff() {
-    if (videoSessions_.empty() || !externalHandoff_.awaitingRequest()) return;
-    const application_playback::VideoHandoffStart start =
-        tryStartDeferredVideoHandoff();
-    if (start ==
-        application_playback::VideoHandoffStart::WaitingForInteraction) {
+    if (videoSessions_.empty() ||
+        !commandWorkflow_.handoffAwaitingRequest()) {
       return;
     }
+    const tui_media_command::HandoffProgress start =
+        commandWorkflow_.resumeHandoff(videoSessions_);
+    bool handoffFailed = false;
+    if (start == tui_media_command::HandoffProgress::RequestStarted ||
+        start == tui_media_command::HandoffProgress::RequestRejected) {
+      handoffFailed = drainVideoSessionEvents();
+    }
     if (start ==
-        application_playback::VideoHandoffStart::RequestStarted) {
+        tui_media_command::HandoffProgress::WaitingForInteraction) {
+      return;
+    }
+    if (start == tui_media_command::HandoffProgress::RequestStarted &&
+        !handoffFailed) {
       clearCommandError();
+      return;
+    }
+    if (handoffFailed) return;
+    if (start == tui_media_command::HandoffProgress::ProtocolFault) {
+      (void)reject(
+          MediaCommandFailureKind::Busy,
+          "The current playback session could not cancel an invalid media "
+          "handoff. Close the current video before trying again.");
       return;
     }
 
@@ -512,18 +518,29 @@ struct TuiMediaCoordinator::Impl {
     if (!videoSessions_.ready()) {
       return reject(MediaCommandFailureKind::Busy, {});
     }
-    if (pendingCommand_ || !externalHandoff_.empty()) {
+    if (!commandWorkflow_.idle()) {
       return reject(MediaCommandFailureKind::Busy,
                     "Another media change is already pending.");
     }
-    if (!externalHandoff_.enqueue(std::move(command))) {
-      return reject(MediaCommandFailureKind::Busy, {});
+    const tui_media_command::HandoffProgress start =
+        commandWorkflow_.beginHandoff(std::move(command), videoSessions_);
+    bool handoffFailed = false;
+    if (start == tui_media_command::HandoffProgress::RequestStarted ||
+        start == tui_media_command::HandoffProgress::RequestRejected) {
+      handoffFailed = drainVideoSessionEvents();
     }
-    const application_playback::VideoHandoffStart start =
-        tryStartDeferredVideoHandoff();
-    if (start == application_playback::VideoHandoffStart::Failed ||
-        start ==
-            application_playback::VideoHandoffStart::NoPendingCommand) {
+    if (handoffFailed) {
+      return MediaCommandResult::rejected(
+          {MediaCommandFailureKind::Busy, {}});
+    }
+    if (start == tui_media_command::HandoffProgress::ProtocolFault) {
+      return reject(
+          MediaCommandFailureKind::Busy,
+          "The current playback session could not cancel an invalid media "
+          "handoff. Close the current video before trying again.");
+    }
+    if (start == tui_media_command::HandoffProgress::RequestRejected ||
+        start == tui_media_command::HandoffProgress::Busy) {
       return reject(
           MediaCommandFailureKind::Busy,
           "Could not complete the requested media change because the current "
@@ -537,48 +554,53 @@ struct TuiMediaCoordinator::Impl {
     if (!videoSessions_.empty()) {
       return requestVideoHandoff(std::move(command));
     }
-    if (pendingCommand_ || playbackActivation_.audioFallbackPending()) {
+    if (playbackActivation_.audioFallbackPending()) {
       return reject(MediaCommandFailureKind::Busy, {});
     }
-    if (driving_) {
-      if (pendingCommand_) return reject(MediaCommandFailureKind::Busy, {});
-      pendingCommand_.emplace(std::move(command));
+    if (commandWorkflow_.dispatching()) {
+      if (!commandWorkflow_.queueDuringDispatch(
+              std::move(command),
+              tui_media_command::DeferralReason::AfterCurrentDispatch)) {
+        return reject(MediaCommandFailureKind::Busy, {});
+      }
       clearCommandError();
       return MediaCommandResult::deferred();
+    }
+    if (!commandWorkflow_.idle()) {
+      return reject(MediaCommandFailureKind::Busy, {});
     }
     return drive(std::move(command));
   }
 
   MediaCommandResult drive(Command initialCommand) {
-    if (driving_) return reject(MediaCommandFailureKind::Busy, {});
+    std::optional<tui_media_command::Workflow::DispatchLease> dispatchLease =
+        commandWorkflow_.beginDispatch();
+    if (!dispatchLease) return reject(MediaCommandFailureKind::Busy, {});
 
-    DriveScope driveScope(driving_);
     std::optional<Command> command(std::move(initialCommand));
     MediaCommandResult result = MediaCommandResult::handledWithoutPlayback();
     while (command) {
       result = dispatch(std::move(*command));
       if (!result.accepted()) {
-        pendingCommand_.reset();
+        commandWorkflow_.discardQueuedDuringDispatch();
         publishFailure(result);
         return result;
       }
       if (result.isDeferred()) break;
       if (!videoSessions_.empty()) break;
-      command = std::exchange(pendingCommand_, std::nullopt);
+      command = commandWorkflow_.takeDuringDispatch();
     }
     clearCommandError();
     return result;
   }
 
-  std::optional<MediaCommandResult> drainPendingCommands() {
+  void resumeDeferredCommandIfReady() {
     if (!videoSessions_.empty() ||
-        playbackActivation_.audioFallbackPending() || driving_ ||
-        !pendingCommand_) {
-      return std::nullopt;
+        playbackActivation_.audioFallbackPending()) {
+      return;
     }
-    Command command = std::move(*pendingCommand_);
-    pendingCommand_.reset();
-    return drive(std::move(command));
+    std::optional<Command> command = commandWorkflow_.takeDeferred();
+    if (command) (void)drive(std::move(*command));
   }
 
   static VideoPlaybackConfig sessionConfig(
@@ -633,7 +655,12 @@ struct TuiMediaCoordinator::Impl {
     const std::filesystem::path& targetFile = playbackTargetFile(target);
     const bool videoTarget = isSupportedVideoExt(targetFile);
     if (videoTarget && !foregroundPlaybackReady()) {
-      pendingCommand_.emplace(PreparedPlayback{std::move(activation)});
+      if (!commandWorkflow_.queueDuringDispatch(
+              tui_media_command::PreparedPlayback{std::move(activation)},
+              tui_media_command::DeferralReason::InteractivePlayback)) {
+        return reject(MediaCommandFailureKind::Busy,
+                      "Playback activation could not be deferred.");
+      }
       return MediaCommandResult::deferred();
     }
 
@@ -755,7 +782,7 @@ struct TuiMediaCoordinator::Impl {
       (void)playbackActivation_.discardVideoActivation(
           std::move(opened.transaction));
       releaseForegroundPlayback();
-      enqueueQuit();
+      stageQuitAfterSessionExit();
       playbackStateChanged();
       return MediaCommandResult::handledWithoutPlayback();
     }
@@ -777,25 +804,23 @@ struct TuiMediaCoordinator::Impl {
         playbackTargetFile(finished.target);
     PlaybackSessionCompletion completion = std::move(finished.completion);
     continuationState_ = std::move(completion.continuityState);
-    if (completion.intent != PlaybackSessionExitIntent::QuitApplication &&
-        !pendingCommand_) {
-      if (std::optional<Command> command = externalHandoff_.release()) {
-        pendingCommand_.emplace(std::move(*command));
-      }
+    if (completion.intent != PlaybackSessionExitIntent::QuitApplication) {
+      (void)commandWorkflow_.releaseHandoffForSessionExit();
     }
-    externalHandoff_.clear();
     if (completion.intent == PlaybackSessionExitIntent::QuitApplication) {
-      enqueueQuit();
+      stageQuitAfterSessionExit();
     }
     if (completion.failure) {
       publishEvent(VideoPlaybackFailed{completedFile,
                                        std::move(*completion.failure)});
     }
-    if (!pendingCommand_) releaseForegroundPlayback();
+    if (!commandWorkflow_.hasDeferredCommand()) {
+      releaseForegroundPlayback();
+    }
     playbackStateChanged();
   }
 
-  MediaCommandResult dispatch(PreparedPlayback playback) {
+  MediaCommandResult dispatch(tui_media_command::PreparedPlayback playback) {
     return presentPlayback(std::move(playback.activation));
   }
 
@@ -813,7 +838,7 @@ struct TuiMediaCoordinator::Impl {
     return MediaCommandResult::applied();
   }
 
-  MediaCommandResult dispatch(Quit) {
+  MediaCommandResult dispatch(tui_media_command::QuitApplication) {
     releaseForegroundPlayback();
     publishEvent(QuitRequested{});
     return MediaCommandResult::applied();
@@ -903,13 +928,11 @@ struct TuiMediaCoordinator::Impl {
   application_playback::PlaybackActivationController playbackActivation_;
   VideoSessions videoSessions_;
   PlaybackSessionContinuationState continuationState_;
-  std::optional<Command> pendingCommand_;
-  application_playback::VideoHandoffController<Command> externalHandoff_;
+  tui_media_command::Workflow commandWorkflow_;
   std::string commandError_;
   // Commands and session pumping are owner-thread operations. Keeping their
   // events as an outbox avoids pretending they are asynchronous wait sources.
   std::vector<Event> events_;
-  bool driving_ = false;
 };
 
 TuiMediaCoordinator::TuiMediaCoordinator(Services services)
