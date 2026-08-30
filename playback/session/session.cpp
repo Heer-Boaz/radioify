@@ -197,7 +197,8 @@ struct PlaybackSession::Impl {
     Finished,
   };
 
-  Impl(Request startRequest, Dependencies sessionDependencies)
+  Impl(playback_session::VideoSessionRequest startRequest,
+       Dependencies sessionDependencies)
       : request(std::move(startRequest)),
         dependencies(std::move(sessionDependencies)),
         enableAscii(request.config.enableAscii),
@@ -385,7 +386,7 @@ struct PlaybackSession::Impl {
   static constexpr auto kTransitionRedrawInterval =
       std::chrono::milliseconds(120);
 
-  Request request;
+  playback_session::VideoSessionRequest request;
   Dependencies dependencies;
   const bool enableAscii;
   const bool enableAudio;
@@ -404,7 +405,8 @@ struct PlaybackSession::Impl {
   std::unique_ptr<PlaybackLoopRunner> loop;
 };
 
-PlaybackSession::PlaybackSession(Request request, Dependencies dependencies)
+PlaybackSession::PlaybackSession(playback_session::VideoSessionRequest request,
+                                 Dependencies dependencies)
     : impl_(std::make_unique<Impl>(std::move(request),
                                   std::move(dependencies))) {}
 

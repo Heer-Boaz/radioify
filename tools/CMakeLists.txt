@@ -50,6 +50,11 @@ radioify_add_module_object_library(radioify_tool_playback_session_input_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_session_input_tests.cpp
 )
 
+radioify_add_module_object_library(
+  radioify_tool_tui_media_coordinator_workflow_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/tui_media_coordinator_workflow_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_terminal_input_sequence_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/terminal_input_sequence_tests.cpp
 )

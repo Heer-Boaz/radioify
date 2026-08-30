@@ -1,23 +1,7 @@
 #pragma once
 
-#include <filesystem>
 #include <memory>
-#include <optional>
-#include <utility>
-#include <vector>
-
-#include "core/native_wait_handle.h"
-#include "core/wake_deadline.h"
-#include "playback/control/command.h"
-#include "playback/control/system_control_state.h"
-#include "playback/control/transport.h"
-#include "playback/media_processing_actions.h"
-#include "playback/session/event.h"
-#include "playback/session/open_outcome.h"
-#include "playback/session/transition_state.h"
-#include "playback/session/presentation_policy.h"
-#include "playback/session/state.h"
-#include "playback/video/playback.h"
+#include "playback/session/video_session.h"
 #include "tui/style.h"
 
 class ConsoleScreen;
@@ -28,18 +12,7 @@ namespace playback_session {
 class SubtitleLoadService;
 }
 
-enum class PlaybackSessionExitIntent {
-  Stop,
-  QuitApplication,
-};
-
-struct PlaybackSessionCompletion {
-  PlaybackSessionExitIntent intent = PlaybackSessionExitIntent::Stop;
-  PlaybackSessionContinuationState continuityState;
-  std::optional<playback_session::Problem> failure;
-};
-
-class PlaybackSession {
+class PlaybackSession final : public playback_session::VideoSession {
  public:
   struct Appearance {
     Style baseStyle;
@@ -49,20 +22,6 @@ class PlaybackSession {
     Style progressFrameStyle;
     Color progressStart;
     Color progressEnd;
-  };
-
-  // Session-owned activation data; it remains valid across pump() calls.
-  struct Request {
-    explicit Request(
-        playback_media_processing::Actions mediaProcessingActions)
-        : mediaProcessingActions(std::move(mediaProcessingActions)) {}
-
-    std::filesystem::path file;
-    VideoPlaybackConfig config;
-    PlaybackSessionContinuationState continuityState;
-    PlaybackSessionIntent sessionIntent = PlaybackSessionIntent::View;
-    playback_session::Capabilities capabilities;
-    playback_media_processing::Actions mediaProcessingActions;
   };
 
   // Process services and the screen are borrowed and must outlive the
@@ -76,8 +35,9 @@ class PlaybackSession {
     Appearance appearance;
   };
 
-  PlaybackSession(Request request, Dependencies dependencies);
-  ~PlaybackSession();
+  PlaybackSession(playback_session::VideoSessionRequest request,
+                  Dependencies dependencies);
+  ~PlaybackSession() override;
 
   PlaybackSession(PlaybackSession&&) noexcept;
   PlaybackSession& operator=(PlaybackSession&&) noexcept;
@@ -88,39 +48,39 @@ class PlaybackSession {
   // Opening can be asynchronous. An empty startOpen() result keeps the session
   // alive but not controllable; the owner drives pumpOpen(), wait handles and
   // deadlines until a terminal open outcome is returned.
-  std::optional<playback_session::OpenOutcome> startOpen();
-  std::optional<playback_session::OpenOutcome> pumpOpen();
-  bool opening() const;
-  bool ready() const;
+  std::optional<playback_session::OpenOutcome> startOpen() override;
+  std::optional<playback_session::OpenOutcome> pumpOpen() override;
+  bool opening() const override;
+  bool ready() const override;
   std::optional<playback_session::TransitionSnapshot> transitionSnapshot()
-      const;
-  std::optional<PlaybackSessionCompletion> pump();
-  PlaybackShellTerminalRole terminalRole() const;
-  std::vector<NativeWaitHandle> activityWaitHandles() const;
-  wake_schedule::Deadline nextWakeDeadline() const;
-  PlaybackControlState controlState() const;
-  PlaybackPresentationState presentationState() const;
-  bool capturesBrowserInput() const;
-  void setExternalInputModal(bool modal);
-  bool handleInputEvent(const InputEvent& event);
-  bool pollWindowInput(InputEvent& event);
-  bool handleWindowInputEvent(const InputEvent& event);
-  bool handleControlCommand(PlaybackControlCommand command);
-  bool seekToRatio(double ratio);
-  bool toggleWindowPresentation();
-  bool togglePictureInPicture();
-  bool toggleFullscreen();
-  bool activatePresentation();
-  std::optional<playback_session_exit::RequestId> requestHandoff();
+      const override;
+  std::optional<PlaybackSessionCompletion> pump() override;
+  PlaybackShellTerminalRole terminalRole() const override;
+  std::vector<NativeWaitHandle> activityWaitHandles() const override;
+  wake_schedule::Deadline nextWakeDeadline() const override;
+  PlaybackControlState controlState() const override;
+  PlaybackPresentationState presentationState() const override;
+  bool capturesBrowserInput() const override;
+  void setExternalInputModal(bool modal) override;
+  bool handleInputEvent(const InputEvent& event) override;
+  bool pollWindowInput(InputEvent& event) override;
+  bool handleWindowInputEvent(const InputEvent& event) override;
+  bool handleControlCommand(PlaybackControlCommand command) override;
+  bool seekToRatio(double ratio) override;
+  bool toggleWindowPresentation() override;
+  bool togglePictureInPicture() override;
+  bool toggleFullscreen() override;
+  bool activatePresentation() override;
+  std::optional<playback_session_exit::RequestId> requestHandoff() override;
   bool resolveHandoff(playback_session_exit::RequestId requestId,
-                      bool accepted);
-  std::vector<playback_session::Event> drainEvents();
+                      bool accepted) override;
+  std::vector<playback_session::Event> drainEvents() override;
   void mediaTaskFinished(
-      const playback_media_processing::Completion& completion);
+      const playback_media_processing::Completion& completion) override;
   void mediaTaskActivityChanged(
-      std::optional<playback_media_processing::Activity> activity);
-  void requestStop();
-  void requestQuit();
+      std::optional<playback_media_processing::Activity> activity) override;
+  void requestStop() override;
+  void requestQuit() override;
 
  private:
   struct Impl;

@@ -9,13 +9,14 @@
 
 #include "app/playback_queue.h"
 #include "app/playback_route.h"
+#include "audio/playback_session.h"
 #include "core/native_wait_handle.h"
 #include "core/open_file_requests.h"
 #include "core/wake_deadline.h"
 #include "playback/control/command.h"
 #include "playback/control/system_control_state.h"
 #include "playback/media_processing_actions.h"
-#include "playback/session/session.h"
+#include "playback/session/video_session.h"
 #include "playback/target.h"
 #include "tui/image_viewer_sequence.h"
 #include "tui/media_activation_decision.h"
@@ -77,7 +78,8 @@ class TuiMediaCoordinator {
     playback_queue::Queue& queue;
     media_processing::Coordinator& mediaProcessing;
     playback_media_processing::Actions mediaProcessingActions;
-    PlaybackSession::Dependencies sessionDependencies;
+    audio_playback::Session& audioPlayback;
+    playback_session::VideoSessionFactory createVideoSession;
     VideoPlaybackConfig videoConfig;
   };
 

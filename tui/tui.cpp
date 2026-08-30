@@ -567,6 +567,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   PlaybackSession::Dependencies mediaSessionDependencies{
       audioPlayback, gpu, screen, runtime.subtitleLoader(),
       theme.playbackSessionAppearance()};
+  playback_session::VideoSessionFactory createVideoSession =
+      [mediaSessionDependencies](
+          playback_session::VideoSessionRequest request) {
+        return std::make_unique<PlaybackSession>(
+            std::move(request), mediaSessionDependencies);
+      };
   playback_queue::Queue& playbackQueue = runtime.playbackQueue();
   media_processing::Coordinator& mediaProcessing = runtime.mediaProcessing();
   media_processing::Actions& mediaActions = runtime.mediaActions();
@@ -575,7 +581,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   tui_media_tasks::Controller mediaTasks(mediaProcessing, mediaActions);
   TuiMediaCoordinator mediaCoordinator(
       {playbackQueue, mediaProcessing, mediaProcessingActions,
-       mediaSessionDependencies, videoConfig});
+       audioPlayback, std::move(createVideoSession), videoConfig});
 
   shell_overlay_stack::Model shellOverlays;
   const shell_overlay_stack::DialogOwner informationDialogOwner =

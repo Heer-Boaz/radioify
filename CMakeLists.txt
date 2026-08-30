@@ -607,6 +607,37 @@ radioify_link_repo_target(playback_session_input_tests)
 add_test(NAME playback_session_input_tests
          COMMAND $<TARGET_FILE:playback_session_input_tests>)
 
+add_executable(tui_media_coordinator_workflow_tests)
+target_sources(tui_media_coordinator_workflow_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_tui_media_coordinator_workflow_tests>
+  $<TARGET_OBJECTS:radioify_video_sidecar_identity>
+  $<TARGET_OBJECTS:radioify_transcript_artifact>
+  ${CMAKE_SOURCE_DIR}/tui/media_coordinator.cpp
+  ${CMAKE_SOURCE_DIR}/tui/media_activation_plan.cpp
+  ${CMAKE_SOURCE_DIR}/tui/image_viewer_sequence.cpp
+  ${CMAKE_SOURCE_DIR}/app/media_processing_coordinator.cpp
+  ${CMAKE_SOURCE_DIR}/app/playback_queue.cpp
+  ${CMAKE_SOURCE_DIR}/app/playback_route.cpp
+  ${CMAKE_SOURCE_DIR}/playback/media_action_context.cpp
+  ${CMAKE_SOURCE_DIR}/playback/media_processing_actions.cpp
+  ${CMAKE_SOURCE_DIR}/playback/media_processing_cancellation.cpp
+  ${CMAKE_SOURCE_DIR}/playback/target_kind.cpp
+  ${CMAKE_SOURCE_DIR}/playback/target_resolver.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/transcript/generation_job.cpp
+  ${CMAKE_SOURCE_DIR}/audio/separation/artifact.cpp
+  ${CMAKE_SOURCE_DIR}/audio/separation/job.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+  ${CMAKE_SOURCE_DIR}/core/diagnostic_log.cpp
+  ${CMAKE_SOURCE_DIR}/core/file_output.cpp
+  ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/core/utf8.cpp
+  ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
+)
+radioify_link_repo_target(tui_media_coordinator_workflow_tests)
+add_test(NAME tui_media_coordinator_workflow_tests
+         COMMAND $<TARGET_FILE:tui_media_coordinator_workflow_tests>)
+
 add_executable(terminal_input_sequence_tests)
 target_sources(terminal_input_sequence_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_terminal_input_sequence_tests>

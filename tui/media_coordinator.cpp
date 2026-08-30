@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <stdexcept>
 #include <utility>
 #include <variant>
 
@@ -67,10 +68,15 @@ class MediaCommandResult {
 }  // namespace
 
 struct TuiMediaCoordinator::Impl {
-  explicit Impl(Services services) : services_(std::move(services)) {}
+  explicit Impl(Services services) : services_(std::move(services)) {
+    if (!services_.createVideoSession) {
+      throw std::invalid_argument(
+          "TuiMediaCoordinator requires a video-session factory.");
+    }
+  }
 
-  AudioPlaybackRuntime& audioPlayback() const {
-    return services_.sessionDependencies.audioPlayback;
+  audio_playback::Session& audioPlayback() const {
+    return services_.audioPlayback;
   }
 
   MediaCommandResult startPlayback(playback_route::Route route,
@@ -129,7 +135,7 @@ struct TuiMediaCoordinator::Impl {
     bool playbackChanged = false;
     if (!videoSession_ && pendingCommand_) {
       drainPendingCommands();
-      playbackChanged = videoSession_.has_value();
+      playbackChanged = static_cast<bool>(videoSession_);
     }
     if (videoSession_) {
       if (videoSession_->opening()) {
@@ -717,7 +723,7 @@ struct TuiMediaCoordinator::Impl {
     }
 
     endControlSession();
-    PlaybackSession::Request sessionRequest(
+    playback_session::VideoSessionRequest sessionRequest(
         services_.mediaProcessingActions);
     sessionRequest.file = targetFile;
     sessionRequest.config = sessionConfig(services_.videoConfig,
@@ -727,8 +733,16 @@ struct TuiMediaCoordinator::Impl {
     sessionRequest.capabilities.transportHandoff = true;
     sessionRequest.capabilities.openFilesHandoff = true;
     sessionRequest.capabilities.browserSurfaceActivation = true;
-    videoSession_.emplace(std::move(sessionRequest),
-                          services_.sessionDependencies);
+    videoSession_ = services_.createVideoSession(std::move(sessionRequest));
+    if (!videoSession_) {
+      releaseForegroundPlayback();
+      publishEvent(VideoPlaybackFailed{
+          targetFile,
+          {"Video playback could not be started.",
+           "The application video-session factory returned no session."}});
+      playbackStateChanged();
+      return MediaCommandResult::handledWithoutPlayback();
+    }
 
     std::optional<playback_session::OpenOutcome> openOutcome =
         videoSession_->startOpen();
@@ -919,7 +933,7 @@ struct TuiMediaCoordinator::Impl {
   PlaybackSessionContinuationState continuationState_;
   std::optional<media_processing::Coordinator::InteractivePlaybackLease>
       interactivePlayback_;
-  std::optional<PlaybackSession> videoSession_;
+  std::unique_ptr<playback_session::VideoSession> videoSession_;
   std::optional<PlaybackTarget> videoTarget_;
   std::optional<PendingVideoOpen> pendingVideoOpen_;
   std::optional<PendingAudioFallback> pendingAudioFallback_;

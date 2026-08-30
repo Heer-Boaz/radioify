@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "audio/analysis/melody_types.h"
+#include "audio/playback_session.h"
 #include "audio/playback_snapshot.h"
 #include "audiofilter/radio1938/radio_reception_profile.h"
 #include "core/runtime_defaults.h"
@@ -59,7 +60,7 @@ struct AudioPlaybackState;
 
 // Owns an audio playback session. Keep this object alive for every dependent
 // player and worker so they are joined before the session is shut down.
-class AudioPlaybackRuntime {
+class AudioPlaybackRuntime final : public audio_playback::Session {
  public:
   explicit AudioPlaybackRuntime(const AudioPlaybackConfig& config);
   ~AudioPlaybackRuntime();
@@ -73,9 +74,10 @@ class AudioPlaybackRuntime {
   // internal; shells receive this owner instead of reaching into shared state.
   bool enabled() const;
   bool ready() const;
-  bool startFile(const std::filesystem::path& file, int trackIndex = 0);
-  void stop();
-  AudioPlaybackSnapshot snapshot() const;
+  bool startFile(const std::filesystem::path& file,
+                 int trackIndex = 0) override;
+  void stop() override;
+  AudioPlaybackSnapshot snapshot() const override;
   AudioPerfStats perfStats() const;
   bool startStream(uint64_t totalFrames);
   void stopStream();
@@ -98,11 +100,11 @@ class AudioPlaybackRuntime {
   uint64_t streamUpdateCounter() const;
   uint64_t waitForStreamUpdate(uint64_t lastCounter, int timeoutMs) const;
   void setHold(bool hold);
-  void play();
-  void pause();
-  void togglePause();
+  void play() override;
+  void pause() override;
+  void togglePause() override;
   void seekBy(int direction);
-  void seekToRatio(double ratio);
+  void seekToRatio(double ratio) override;
   void cycleRadioFilter();
   void toggle50Hz();
   void adjustVolume(float delta);

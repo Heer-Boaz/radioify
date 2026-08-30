@@ -102,6 +102,14 @@ int main() {
                "playback-feedback commands as one session workflow");
 
   session.clear();
+  playback_session_input::handlePlaybackInputEvent(
+      session, seekState, keyEvent('W', 'w', LEFT_CTRL_PRESSED));
+  ok &= expect(session.contains(Action::ToggleWindowPresentation) &&
+                   !session.containsType<playback_session_input::SetPaused>(),
+               "switching to or from native presentation must remain "
+               "independent from transport state");
+
+  session.clear();
   session.state.pictureInPicture = true;
   playback_session_input::handlePlaybackInputEvent(
       session, seekState, keyEvent('P', 'p'));
