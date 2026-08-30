@@ -242,12 +242,14 @@ bool executeOverlayControl(SessionPort& session,
       return session.dispatch(CommandAction::ConfirmPendingExit);
     case Action::CancelPendingExit:
       return session.dispatch(CommandAction::CancelPendingExit);
-    case Action::ConfirmMediaTaskCancellation:
+    case Action::CancelMediaTask:
+      return session.dispatch(CommandAction::CancelActiveMediaTask);
+    case Action::ConfirmMediaAction:
       return session.dispatch(
-          CommandAction::ConfirmMediaTaskCancellation);
-    case Action::DismissMediaTaskCancellation:
+          CommandAction::ConfirmMediaAction);
+    case Action::DismissMediaAction:
       return session.dispatch(
-          CommandAction::DismissMediaTaskCancellation);
+          CommandAction::DismissMediaAction);
   }
   return false;
 }
@@ -386,20 +388,20 @@ void dispatchPlaybackInputCommand(
     case PlaybackAction::CancelVideoEditPrompt:
       session.dispatch(CommandAction::NavigateBack);
       break;
-    case PlaybackAction::SelectPreviousMediaTaskCancellationAction:
+    case PlaybackAction::SelectPreviousMediaActionConfirmation:
       session.dispatch(
-          CommandAction::SelectPreviousMediaTaskCancellationAction);
+          CommandAction::SelectPreviousMediaActionConfirmation);
       break;
-    case PlaybackAction::SelectNextMediaTaskCancellationAction:
+    case PlaybackAction::SelectNextMediaActionConfirmation:
       session.dispatch(
-          CommandAction::SelectNextMediaTaskCancellationAction);
+          CommandAction::SelectNextMediaActionConfirmation);
       break;
-    case PlaybackAction::ActivateMediaTaskCancellationAction:
+    case PlaybackAction::ActivateMediaActionConfirmation:
       session.dispatch(
-          CommandAction::ActivateSelectedMediaTaskCancellationAction);
+          CommandAction::ActivateSelectedMediaActionConfirmation);
       break;
-    case PlaybackAction::DismissMediaTaskCancellation:
-      session.dispatch(CommandAction::DismissMediaTaskCancellation);
+    case PlaybackAction::DismissMediaActionConfirmation:
+      session.dispatch(CommandAction::DismissMediaAction);
       break;
     case PlaybackAction::ToggleOptions:
     case PlaybackAction::TogglePitchMonitor:
@@ -444,9 +446,9 @@ void handlePlaybackInputEvent(SessionPort& session,
   const playback_video_edit::Prompt editPrompt =
       initialState.videoEditPrompt;
   uint32_t shortcutContexts = 0;
-  if (initialState.mediaTaskCancellationPrompt) {
+  if (initialState.mediaActionConfirmationPrompt) {
     shortcutContexts =
-        kPlaybackShortcutContextMediaTaskCancellationConfirmation;
+        kPlaybackShortcutContextMediaActionConfirmation;
   } else if (editPrompt == playback_video_edit::Prompt::LeaveEditMode) {
     shortcutContexts = kPlaybackShortcutContextVideoEditLeaveConfirmation;
   } else if (editPrompt == playback_video_edit::Prompt::DiscardEdits) {
@@ -489,7 +491,7 @@ void handlePlaybackControlCommand(SessionPort& session,
                                   PlaybackSeekGestureState& seekState,
                                   PlaybackControlCommand command) {
   const SessionSnapshot state = session.snapshot();
-  if (state.mediaTaskCancellationPrompt ||
+  if (state.mediaActionConfirmationPrompt ||
       state.videoEditPrompt != playback_video_edit::Prompt::None) {
     return;
   }
@@ -572,7 +574,7 @@ void handlePlaybackMouseEvent(SessionPort& session,
   const auto& controlHit = interactionHit.control;
   const auto& contextMenuItemHit = interactionHit.contextMenuItem;
   if (rightPressed && mouse.kind == MouseEventKind::Press &&
-      !interactionState.mediaTaskCancellationPrompt &&
+      !interactionState.mediaActionConfirmationPrompt &&
       editPrompt == playback_video_edit::Prompt::None) {
     playback_session::ContextMenuInput request;
     request.kind = playback_session::ContextMenuInputKind::Open;
@@ -640,7 +642,7 @@ void handlePlaybackMouseEvent(SessionPort& session,
     return;
   }
   if (controlPointer.captured ||
-      interactionState.mediaTaskCancellationPrompt) {
+      interactionState.mediaActionConfirmationPrompt) {
     updateOverlayControlHover(
         session,
         controlHit ? playback_overlay::overlayControlToken(*controlHit) : -1);

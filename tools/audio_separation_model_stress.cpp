@@ -124,15 +124,24 @@ int wmain(int argc, wchar_t** argv) {
     if (commandLine.installBackend) {
       std::cerr << "Ensuring the certified Windows ML NVIDIA provider is "
                    "installed.\n";
+      const audio_separation::WindowsMlProviderSetupResult setup =
+          audio_separation::setupNvidiaWindowsMlBackend(
+              [](float progress, std::string phase) {
+                std::cerr << phase << ": " << std::fixed
+                          << std::setprecision(0) << progress * 100.0f
+                          << "%\n";
+              },
+              []() { return false; });
+      if (!setup.ready()) {
+        std::cerr << "NVIDIA Windows ML setup failed: " << setup.detail
+                  << '\n';
+        return EXIT_FAILURE;
+      }
     }
-    const auto provisioningPolicy =
-        commandLine.installBackend
-            ? audio_separation::ProviderProvisioningPolicy::InstallIfMissing
-            : audio_separation::
-                  ProviderProvisioningPolicy::ActivateInstalled;
     const auto resolutionStarted = std::chrono::steady_clock::now();
     audio_separation::WindowsMlBackendResolution resolution =
-        audio_separation::resolveNvidiaWindowsMlBackend(provisioningPolicy);
+        audio_separation::resolveNvidiaWindowsMlBackend(
+            audio_separation::ProviderProvisioningPolicy::ActivateInstalled);
     const double resolutionSeconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() -
                                      resolutionStarted)

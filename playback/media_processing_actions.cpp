@@ -30,6 +30,12 @@ ActionText actionText(playback_media_actions::Action action) {
       return {"Exporting transcript", "Transcript export could not start"};
     case Action::CancelMediaExport:
       return {"Cancelling export", "Media export could not be cancelled"};
+    case Action::SetUpAudioSeparation:
+      return {"Setting up audio separation",
+              "Audio separation setup could not start"};
+    case Action::CancelAudioSeparationSetup:
+      return {"Cancelling audio separation setup",
+              "Audio separation setup could not be cancelled"};
     case Action::SeparateAudio:
       return {"Separating audio", "Audio separation could not start"};
     case Action::CancelAudioSeparation:
@@ -43,6 +49,33 @@ ActionText actionText(playback_media_actions::Action action) {
     case Action::BrowseTracks:
     case Action::EditVideo:
       break;
+  }
+  return {};
+}
+
+ActionText cancellationText(Operation operation) {
+  switch (operation) {
+    case Operation::MelodyAnalysis:
+      return {"Cancelling melody analysis",
+              "Melody analysis could not be cancelled"};
+    case Operation::LoopSplit:
+      return {"Cancelling loop split",
+              "Loop splitting could not be cancelled"};
+    case Operation::SubtitleGeneration:
+      return {"Cancelling subtitle generation",
+              "Subtitle generation could not be cancelled"};
+    case Operation::AudioSeparationSetup:
+      return {"Cancelling audio separation setup",
+              "Audio separation setup could not be cancelled"};
+    case Operation::AudioSeparation:
+      return {"Cancelling audio separation",
+              "Audio separation could not be cancelled"};
+    case Operation::AudioExport:
+      return {"Cancelling audio export",
+              "Audio export could not be cancelled"};
+    case Operation::TranscriptTextExport:
+      return {"Cancelling transcript export",
+              "Transcript export could not be cancelled"};
   }
   return {};
 }
@@ -105,12 +138,9 @@ std::string rejectionReason(const RequestError& error) {
   return "the request was rejected";
 }
 
-}  // namespace
-
-ActionResult makeActionResult(playback_media_actions::Action action,
-                              const std::filesystem::path& sourceFile,
-                              const RequestResult& requestResult) {
-  const ActionText text = actionText(action);
+ActionResult makeResult(ActionText text,
+                        const std::filesystem::path& sourceFile,
+                        const RequestResult& requestResult) {
   if (requestResult.wasAccepted()) {
     return {true, text.accepted, std::nullopt};
   }
@@ -129,6 +159,14 @@ ActionResult makeActionResult(playback_media_actions::Action action,
   }
   finishSentence(result.feedback);
   return result;
+}
+
+}  // namespace
+
+ActionResult makeActionResult(playback_media_actions::Action action,
+                              const std::filesystem::path& sourceFile,
+                              const RequestResult& requestResult) {
+  return makeResult(actionText(action), sourceFile, requestResult);
 }
 
 std::optional<ActionResult> Actions::execute(
@@ -151,6 +189,14 @@ std::optional<ActionResult> Actions::execute(
     case playback_media_actions::Action::CancelMediaExport:
       return makeActionResult(action, sourceFile,
                               service_.requestMediaExportCancellation());
+    case playback_media_actions::Action::SetUpAudioSeparation:
+      // Setup is intentionally not executable without an explicit
+      // confirmation request prepared from current capability state.
+      return std::nullopt;
+    case playback_media_actions::Action::CancelAudioSeparationSetup:
+      return makeActionResult(
+          action, sourceFile,
+          service_.requestAudioSeparationSetupCancellation());
     case playback_media_actions::Action::SeparateAudio:
       return makeActionResult(action, sourceFile,
                               service_.requestAudioSeparation(sourceFile));
@@ -175,6 +221,43 @@ std::optional<CancellationRequest> Actions::prepareCancellation(
       action, sourceFile, service_.sourceStateFor(sourceFile));
 }
 
+std::optional<CancellationRequest> Actions::prepareCancellation(
+    const Activity& activity) const {
+  if (!activity.taskId || activity.sourceFile.empty() ||
+      !activity.cancellable || activity.cancelling) {
+    return std::nullopt;
+  }
+  return CancellationRequest{activity.taskId, activity.operation,
+                             activity.sourceFile};
+}
+
+std::optional<AudioSeparationSetupRequest>
+Actions::prepareAudioSeparationSetup(
+    playback_media_actions::Action action,
+    const std::filesystem::path& sourceFile) const {
+  return playback_media_processing::prepareAudioSeparationSetup(
+      action, sourceFile, service_.sourceStateFor(sourceFile));
+}
+
+ActionResult Actions::confirmAudioSeparationSetup(
+    const AudioSeparationSetupRequest& request) const {
+  return makeActionResult(
+      playback_media_actions::Action::SetUpAudioSeparation,
+      request.sourceFile,
+      service_.requestAudioSeparationSetup(request.sourceFile));
+}
+
+ActionResult Actions::confirmCancellation(
+    const CancellationRequest& request) const {
+  if (!request.taskId || request.sourceFile.empty()) {
+    return makeResult(
+        cancellationText(request.operation), request.sourceFile,
+        RequestResult::rejected(RequestFailure::NotRunning));
+  }
+  return makeResult(cancellationText(request.operation), request.sourceFile,
+                    service_.requestTaskCancellation(request.taskId));
+}
+
 playback_media_actions::Context Actions::contextForSource(
     const std::filesystem::path& sourceFile) const {
   playback_media_actions::Context context;
@@ -186,7 +269,9 @@ playback_media_actions::Context Actions::contextForSource(
   context.subtitleGenerationRunningForSource =
       state.subtitleGenerationRunning;
   context.hasGeneratedSubtitles = state.hasGeneratedSubtitles;
-  context.canSeparateAudio = state.audioSeparationAvailable;
+  context.audioSeparationAvailability = state.audioSeparationAvailability;
+  context.audioSeparationSetupRunningForSource =
+      state.audioSeparationSetupRunning;
   context.audioSeparationRunningForSource = state.audioSeparationRunning;
   context.hasSeparatedAudio = state.separatedAudioExists;
   context.canExportAudio = state.audioExportAvailable;

@@ -258,31 +258,180 @@ int main() {
   ok &= expect(!unsupportedAction,
                "surface-specific actions must remain outside processing");
 
+  std::atomic<bool> providerSetupRan{false};
+  std::atomic<bool> reboundSeparationRan{false};
+  std::atomic<int> bindingResolutionCount{0};
+  const std::string unavailableDetail =
+      "Injected provider setup requirement";
   processing::Coordinator::Operations unavailableOperations;
   unavailableOperations.separateAudio =
       audio_separation::OperationBinding::unavailable(
           audio_separation::OperationAvailability::SetupRequired,
-          "Install the certified native NVIDIA provider.");
+          unavailableDetail);
+  unavailableOperations.setupAudioSeparation =
+      [&](const audio_separation::ProviderSetupProgress& progress,
+          const audio_separation::ProviderSetupCancellation& cancellation) {
+        providerSetupRan.store(true, std::memory_order_release);
+        progress(0.5f, "Installing the certified NVIDIA provider");
+        if (cancellation()) {
+          return audio_separation::ProviderSetupResult{
+              audio_separation::ProviderSetupOutcome::Cancelled, {}};
+        }
+        return audio_separation::ProviderSetupResult{
+            audio_separation::ProviderSetupOutcome::Ready,
+            "The certified NVIDIA provider is ready."};
+      };
+  unavailableOperations.resolveAudioSeparation = [&]() {
+    bindingResolutionCount.fetch_add(1, std::memory_order_relaxed);
+    return audio_separation::OperationBinding::ready(
+        [&](const std::filesystem::path&,
+            const audio_separation::ArtifactPaths&,
+            const audio_separation::Job::ProgressReporter& progress,
+            const audio_separation::Job::DiagnosticReporter&,
+            const audio_separation::ExecutionControl& control,
+            const audio_separation::Job::CommitStarted& beginCommit,
+            std::string*) {
+          reboundSeparationRan.store(true, std::memory_order_release);
+          progress(1.0f, "Separating with the refreshed backend");
+          return control.checkpoint() && beginCommit();
+        },
+        "Refreshed test GPU backend");
+  };
   processing::Coordinator unavailableCoordinator(
       std::move(unavailableOperations));
   playback_media_processing::Actions unavailableActions(
       unavailableCoordinator);
   const auto unavailableContext =
       unavailableActions.contextForSource("movie.mp4");
+  const auto setupRequest = unavailableActions.prepareAudioSeparationSetup(
+      playback_media_actions::Action::SetUpAudioSeparation, "movie.mp4");
+  const auto unconfirmedSetup = unavailableActions.execute(
+      playback_media_actions::Action::SetUpAudioSeparation, "movie.mp4");
   const auto unavailableSeparation = unavailableActions.execute(
       playback_media_actions::Action::SeparateAudio, "movie.mp4");
   ok &= expect(
       !unavailableContext.canGenerateSubtitles &&
-          !unavailableContext.canSeparateAudio && unavailableSeparation &&
+          unavailableContext.audioSeparationAvailability ==
+              playback_media_processing::AudioSeparationAvailability::
+                  SetupRequired &&
+          setupRequest && !unconfirmedSetup && unavailableSeparation &&
           !unavailableSeparation->accepted && unavailableSeparation->error &&
           unavailableSeparation->error->failure ==
               playback_media_processing::RequestFailure::BackendUnavailable &&
-          unavailableSeparation->feedback ==
-              "Audio separation could not start: Install the certified "
-              "native NVIDIA provider. Source: "
-              "\"movie.mp4\".",
-      "availability and start diagnostics must derive from the same injected "
-      "backend");
+          unavailableSeparation->error->detail == unavailableDetail,
+      "capability discovery must expose setup without downloading or hiding "
+      "the backend diagnostic");
+
+  const auto confirmedSetup =
+      unavailableActions.confirmAudioSeparationSetup(*setupRequest);
+  const auto setupCompletion = waitForCompletion(unavailableCoordinator);
+  const auto readyContext =
+      unavailableActions.contextForSource("movie.mp4");
+  const auto reboundSeparation = unavailableActions.execute(
+      playback_media_actions::Action::SeparateAudio, "movie.mp4");
+  const auto reboundCompletion = waitForCompletion(unavailableCoordinator);
+  ok &= expect(
+      confirmedSetup.accepted &&
+          providerSetupRan.load(std::memory_order_acquire) && setupCompletion &&
+          setupCompletion->kind ==
+              processing::TaskKind::AudioSeparationSetup &&
+          setupCompletion->succeeded() &&
+          bindingResolutionCount.load(std::memory_order_relaxed) == 1 &&
+          readyContext.audioSeparationAvailability ==
+              playback_media_processing::AudioSeparationAvailability::Ready &&
+          reboundSeparation && reboundSeparation->accepted &&
+          reboundSeparationRan.load(std::memory_order_acquire) &&
+          reboundCompletion && reboundCompletion->succeeded(),
+      "confirmed setup must refresh the owned backend and make separation "
+      "executable without restarting the application");
+  unavailableCoordinator.shutdown();
+
+  std::atomic<bool> cancellableSetupStarted{false};
+  std::atomic<bool> setupCancellationObserved{false};
+  processing::Coordinator::Operations cancellableSetupOperations;
+  cancellableSetupOperations.separateAudio =
+      audio_separation::OperationBinding::unavailable(
+          audio_separation::OperationAvailability::SetupRequired,
+          "The optional NVIDIA provider is not installed.");
+  cancellableSetupOperations.setupAudioSeparation =
+      [&](const audio_separation::ProviderSetupProgress& progress,
+          const audio_separation::ProviderSetupCancellation& cancellation) {
+        progress(0.2f, "Downloading the optional NVIDIA provider");
+        cancellableSetupStarted.store(true, std::memory_order_release);
+        while (!cancellation()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        setupCancellationObserved.store(true, std::memory_order_release);
+        return audio_separation::ProviderSetupResult{
+            audio_separation::ProviderSetupOutcome::Cancelled, {}};
+      };
+  cancellableSetupOperations.resolveAudioSeparation = []() {
+    return audio_separation::OperationBinding::unavailable(
+        audio_separation::OperationAvailability::SetupRequired,
+        "The optional NVIDIA provider is not installed.");
+  };
+  processing::Coordinator cancellableSetupCoordinator(
+      std::move(cancellableSetupOperations));
+  processing::Actions cancellableSetupApplicationActions(
+      cancellableSetupCoordinator);
+  playback_media_processing::Actions cancellableSetupActions =
+      cancellableSetupApplicationActions.playbackActions();
+  tui_media_tasks::Controller cancellableSetupController(
+      cancellableSetupCoordinator, cancellableSetupApplicationActions);
+  const auto cancellableSetupRequest =
+      cancellableSetupActions.prepareAudioSeparationSetup(
+          playback_media_actions::Action::SetUpAudioSeparation,
+          "cancel-setup.mp4");
+  const auto cancellableSetupStart =
+      cancellableSetupRequest
+          ? std::optional<playback_media_processing::ActionResult>(
+                cancellableSetupController.confirmAudioSeparationSetup(
+                    *cancellableSetupRequest))
+          : std::nullopt;
+  const auto setupCardAfterStart =
+      cancellableSetupController.snapshot().activeCard;
+  const bool cancellableSetupRunning = waitUntil([&]() {
+    return cancellableSetupStarted.load(std::memory_order_acquire);
+  });
+  cancellableSetupController.poll();
+  const auto setupActivity = cancellableSetupCoordinator.activity();
+  const auto playbackSetupActivity =
+      processing::activityForPlayback(setupActivity);
+  const auto setupCancellationRequest =
+      cancellableSetupActions.prepareCancellation(
+          playback_media_actions::Action::CancelAudioSeparationSetup,
+          "cancel-setup.mp4");
+  const bool setupCancellationAccepted =
+      setupCancellationRequest &&
+      cancellableSetupController.confirmCancellation(
+          *setupCancellationRequest);
+  const auto setupCancellationCompletion =
+      waitForCompletion(cancellableSetupController);
+  ok &= expect(
+      cancellableSetupStart && cancellableSetupStart->accepted &&
+          setupCardAfterStart && cancellableSetupRunning && setupActivity &&
+          setupActivity->kind ==
+              processing::TaskKind::AudioSeparationSetup &&
+          setupActivity->cancellable && playbackSetupActivity &&
+          playbackSetupActivity->taskId == setupActivity->id &&
+          playbackSetupActivity->operation ==
+              playback_media_processing::Operation::AudioSeparationSetup &&
+          playbackSetupActivity->sourceFile == "cancel-setup.mp4" &&
+          playbackSetupActivity->progress &&
+          *playbackSetupActivity->progress == 0.2f &&
+          playbackSetupActivity->cancellable && setupCancellationRequest &&
+          setupCancellationAccepted &&
+          setupCancellationObserved.load(std::memory_order_acquire) &&
+          setupCancellationCompletion &&
+          setupCancellationCompletion->outcome ==
+              processing::TaskOutcome::Cancelled &&
+          cancellableSetupCoordinator.audioSeparationAvailabilityFor(
+              "cancel-setup.mp4") ==
+              playback_media_processing::AudioSeparationAvailability::
+                  SetupRequired,
+      "provider setup must use the shared stable-identity cancellation "
+      "contract and preserve capability state after cancellation");
+  cancellableSetupCoordinator.shutdown();
 
   processing::Coordinator::Operations completionQueueOperations;
   completionQueueOperations.analyzeMelody =
@@ -329,11 +478,17 @@ int main() {
                     .wasAccepted() &&
                    !coordinator.running(),
                "invalid work must not change coordinator state");
-  ok &= expect(coordinator.audioSeparationAvailableFor("clip.mp4") &&
-                   coordinator.audioSeparationAvailableFor("clip.flac") &&
-                   !coordinator.audioSeparationAvailableFor(
-                       "clip.dialogue.flac") &&
-                   !coordinator.audioSeparationAvailableFor("notes.txt"),
+  ok &= expect(
+      coordinator.audioSeparationAvailabilityFor("clip.mp4") ==
+              playback_media_processing::AudioSeparationAvailability::Ready &&
+          coordinator.audioSeparationAvailabilityFor("clip.flac") ==
+              playback_media_processing::AudioSeparationAvailability::Ready &&
+          coordinator.audioSeparationAvailabilityFor("clip.dialogue.flac") ==
+              playback_media_processing::AudioSeparationAvailability::
+                  Unavailable &&
+          coordinator.audioSeparationAvailabilityFor("notes.txt") ==
+              playback_media_processing::AudioSeparationAvailability::
+                  Unavailable,
                "availability must be centralized and reject managed stems");
 
   ok &= expect(coordinator.tryStartMelodyAnalysis(

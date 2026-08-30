@@ -157,6 +157,7 @@ struct TuiMediaCoordinator::Impl {
         }
       }
     }
+    synchronizeMediaTaskActivity();
     std::vector<Event> events;
     events.swap(events_);
     return PollResult{playbackChanged, std::move(events)};
@@ -338,15 +339,23 @@ struct TuiMediaCoordinator::Impl {
 
   void handleMediaTaskCompletion(
       const media_processing::TaskCompletion& completion) {
-    if (!videoSession_ || !videoTarget_ ||
-        !samePath(playbackTargetFile(*videoTarget_), completion.sourceFile)) {
-      return;
-    }
+    if (!videoSession_) return;
     if (std::optional<playback_media_processing::Completion> projected =
             media_processing::completionForPlayback(completion)) {
+      synchronizeMediaTaskActivity();
       videoSession_->mediaTaskFinished(*projected);
       resumeDeferredVideoHandoff();
     }
+  }
+
+  void synchronizeMediaTaskActivity() {
+    if (!videoSession_) return;
+    // Offline processing is application-scoped. Keep its status and direct
+    // cancellation available on whichever playback surface is active, even
+    // after navigating away from the source media.
+    videoSession_->mediaTaskActivityChanged(
+        media_processing::activityForPlayback(
+            services_.mediaProcessing.activity()));
   }
 
   void requestQuit() {
@@ -523,12 +532,6 @@ struct TuiMediaCoordinator::Impl {
               std::get_if<playback_session_exit::HandoffCancellation>(
                   &event)) {
         (void)externalHandoff_.cancel(cancellation->id);
-        continue;
-      }
-      if (const auto* taskCancellation =
-              std::get_if<
-                  playback_session::MediaTaskCancellationRequested>(&event)) {
-        publishEvent(*taskCancellation);
         continue;
       }
       publishEvent(ActivateBrowserSurface{});

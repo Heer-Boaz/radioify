@@ -5,48 +5,10 @@
 #include "app/media_processing_coordinator.h"
 #include "core/runtime_helpers.h"
 #include "playback/media_processing_actions.h"
+#include "playback/media_processing_presentation.h"
 #include "tui/shell_shortcuts.h"
 
 namespace {
-
-std::string activityTitle(const media_processing::TaskActivity& activity) {
-  using Kind = media_processing::TaskKind;
-  if (activity.kind == Kind::AudioSeparation) {
-    switch (activity.scheduling) {
-      case media_processing::TaskSchedulingState::Running:
-        break;
-      case media_processing::TaskSchedulingState::Suspending:
-        return "Pausing audio separation";
-      case media_processing::TaskSchedulingState::Suspended:
-        return "Audio separation paused";
-    }
-  }
-  switch (activity.kind) {
-    case Kind::MelodyAnalysis:
-      return activity.cancelling ? "Cancelling melody analysis"
-                                 : "Analyzing melody";
-    case Kind::LoopSplit:
-      return activity.cancelling ? "Cancelling loop split"
-                                 : "Splitting loop";
-    case Kind::SubtitleGeneration:
-      return activity.cancelling ? "Cancelling subtitles"
-                                 : "Generating subtitles";
-    case Kind::AudioSeparation:
-      return activity.cancelling ? "Cancelling audio separation"
-                                 : "Separating audio";
-    case Kind::AudioExport:
-      return activity.cancelling ? "Cancelling audio export"
-                                 : "Exporting audio";
-    case Kind::TranscriptTextExport:
-      return activity.cancelling ? "Cancelling transcript export"
-                                 : "Exporting transcript";
-  }
-  return "Processing media";
-}
-
-std::string activityOperationName(media_processing::TaskKind kind) {
-  return playback_media_processing::operationDisplayName(kind);
-}
 
 std::string completionText(
     const media_processing::TaskCompletion& completion) {
@@ -56,6 +18,8 @@ std::string completionText(
     switch (completion.kind) {
       case Kind::SubtitleGeneration:
         return "Subtitle generation cancelled.";
+      case Kind::AudioSeparationSetup:
+        return "Audio separation setup cancelled.";
       case Kind::AudioSeparation:
         return "Audio separation cancelled.";
       case Kind::MelodyAnalysis:
@@ -80,6 +44,9 @@ std::string completionText(
         break;
       case Kind::SubtitleGeneration:
         text = "Subtitle generation failed.";
+        break;
+      case Kind::AudioSeparationSetup:
+        text = "Audio separation setup failed.";
         break;
       case Kind::AudioSeparation:
         text = "Audio separation failed.";
@@ -112,6 +79,8 @@ std::string completionText(
       return filename.empty() ? "Subtitles ready."
                               : "Subtitles ready: " + filename;
     }
+    case Kind::AudioSeparationSetup:
+      return "Audio separation is ready.";
     case Kind::AudioSeparation:
       return "Audio stems ready: dialogue, music and effects.";
     case Kind::AudioExport: {
@@ -139,6 +108,8 @@ std::string failureTitle(media_processing::TaskKind kind) {
       return "Loop split failed";
     case Kind::SubtitleGeneration:
       return "Subtitle generation failed";
+    case Kind::AudioSeparationSetup:
+      return "Audio separation setup failed";
     case Kind::AudioSeparation:
       return "Audio separation failed";
     case Kind::AudioExport:
@@ -158,6 +129,9 @@ std::string failureSummary(media_processing::TaskKind kind) {
       return "Radioify could not split the selected loop.";
     case Kind::SubtitleGeneration:
       return "Radioify could not generate subtitles for this file.";
+    case Kind::AudioSeparationSetup:
+      return "Radioify could not set up the optional NVIDIA audio "
+             "component.";
     case Kind::AudioSeparation:
       return "Radioify could not separate this file into audio stems.";
     case Kind::AudioExport:
@@ -175,6 +149,8 @@ std::optional<playback_media_actions::Action> retryAction(
   switch (kind) {
     case Kind::SubtitleGeneration:
       return Action::GenerateSubtitles;
+    case Kind::AudioSeparationSetup:
+      return Action::SetUpAudioSeparation;
     case Kind::AudioSeparation:
       return Action::SeparateAudio;
     case Kind::AudioExport:
@@ -192,18 +168,22 @@ std::optional<playback_media_actions::Action> retryAction(
 
 MediaTaskCardModel mediaTaskCardModel(
     const media_processing::TaskActivity& activity) {
+  const playback_media_processing::Activity projected =
+      media_processing::activityForPlayback(activity);
+  const playback_media_processing::ActivityPresentation presentation =
+      playback_media_processing::presentActivity(projected);
   MediaTaskCardModel model;
   model.taskId = activity.id;
-  model.title = activityTitle(activity);
-  model.operationName = activityOperationName(activity.kind);
+  model.operation = activity.kind;
+  model.title = presentation.title;
+  model.operationName =
+      playback_media_processing::operationDisplayName(activity.kind);
   model.sourceName = activity.sourceFile.empty()
                          ? std::string("(unknown)")
                          : toUtf8String(activity.sourceFile.filename());
   model.engineName = activity.processingEngine;
-  model.detail = activity.phase;
-  if (activity.progress) {
-    model.progress = std::clamp(*activity.progress, 0.0f, 1.0f);
-  }
+  model.detail = presentation.detail;
+  model.progress = presentation.progress;
   model.cancellable = activity.cancellable;
   model.cancelling = activity.cancelling;
   return model;

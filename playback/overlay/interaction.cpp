@@ -22,9 +22,9 @@ InteractionMap buildOverlayInteractionMap(
     const OverlayCellLayout& layout,
     const playback_video_edit::EditSnapshot* videoEdit,
     playback_video_edit::Prompt videoEditPrompt,
-    bool mediaTaskCancellationPrompt) {
+    bool mediaActionConfirmationPrompt) {
   InteractionMap map;
-  map.modal = mediaTaskCancellationPrompt ||
+  map.modal = mediaActionConfirmationPrompt ||
               videoEditPrompt != playback_video_edit::Prompt::None;
   for (const OverlayCellControlLayoutItem& item : layout.controls) {
     if (!item.enabled || item.width <= 0 || item.y < 0) continue;
@@ -37,7 +37,7 @@ InteractionMap buildOverlayInteractionMap(
 
   if (layout.progressBarX < 0 || layout.progressBarY < 0 ||
       layout.progressBarWidth <= 0 ||
-      mediaTaskCancellationPrompt ||
+      mediaActionConfirmationPrompt ||
       videoEditPrompt != playback_video_edit::Prompt::None) {
     return map;
   }

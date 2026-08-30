@@ -1173,6 +1173,7 @@ add_test(NAME ui_viewport_tests
 add_executable(media_task_panel_tests)
 target_sources(media_task_panel_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_media_task_panel_tests>
+  ${CMAKE_SOURCE_DIR}/playback/media_action_confirmation_content.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/media_task_panel.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/button_row.cpp
   $<TARGET_OBJECTS:radioify_text_grid_ui>
@@ -1238,18 +1239,21 @@ radioify_link_repo_target(ui_input_pump_tests)
 add_test(NAME ui_input_pump_tests
          COMMAND $<TARGET_FILE:ui_input_pump_tests>)
 
-add_executable(media_task_cancellation_tests)
-target_sources(media_task_cancellation_tests PRIVATE
-  $<TARGET_OBJECTS:radioify_tool_media_task_cancellation_tests>
+add_executable(media_action_confirmation_tests)
+target_sources(media_action_confirmation_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_media_action_confirmation_tests>
+  ${CMAKE_SOURCE_DIR}/playback/media_action_confirmation_content.cpp
+  ${CMAKE_SOURCE_DIR}/playback/media_action_context.cpp
+  ${CMAKE_SOURCE_DIR}/playback/media_processing_actions.cpp
   ${CMAKE_SOURCE_DIR}/playback/media_processing_cancellation.cpp
-  ${CMAKE_SOURCE_DIR}/playback/session/media_task_cancellation.cpp
+  ${CMAKE_SOURCE_DIR}/playback/session/media_action_confirmation.cpp
   ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
-radioify_link_repo_target(media_task_cancellation_tests)
-add_test(NAME media_task_cancellation_tests
-         COMMAND $<TARGET_FILE:media_task_cancellation_tests>)
+radioify_link_repo_target(media_action_confirmation_tests)
+add_test(NAME media_action_confirmation_tests
+         COMMAND $<TARGET_FILE:media_action_confirmation_tests>)
 
 add_executable(media_action_catalog_tests)
 target_sources(media_action_catalog_tests PRIVATE
@@ -1293,6 +1297,7 @@ target_sources(media_processing_coordinator_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/media_action_context.cpp
   ${CMAKE_SOURCE_DIR}/playback/media_processing_actions.cpp
   ${CMAKE_SOURCE_DIR}/playback/media_processing_cancellation.cpp
+  ${CMAKE_SOURCE_DIR}/playback/media_processing_presentation.cpp
   ${CMAKE_SOURCE_DIR}/playback/session/media_task_feedback.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/media_task_controller.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/media_task_presentation.cpp

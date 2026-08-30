@@ -10,6 +10,8 @@ std::optional<Operation> fixedCancellationOperation(
       return Operation::SubtitleGeneration;
     case playback_media_actions::Action::CancelMediaExport:
       return std::nullopt;
+    case playback_media_actions::Action::CancelAudioSeparationSetup:
+      return Operation::AudioSeparationSetup;
     case playback_media_actions::Action::CancelAudioSeparation:
       return Operation::AudioSeparation;
     case playback_media_actions::Action::Play:
@@ -18,6 +20,7 @@ std::optional<Operation> fixedCancellationOperation(
     case playback_media_actions::Action::GenerateSubtitles:
     case playback_media_actions::Action::ExportTranscriptText:
     case playback_media_actions::Action::ExportAudio:
+    case playback_media_actions::Action::SetUpAudioSeparation:
     case playback_media_actions::Action::SeparateAudio:
     case playback_media_actions::Action::AnalyzeAudio:
     case playback_media_actions::Action::SplitLoop:
@@ -31,16 +34,6 @@ std::optional<Operation> fixedCancellationOperation(
 bool isCancellationAction(playback_media_actions::Action action) {
   return action == playback_media_actions::Action::CancelMediaExport ||
          fixedCancellationOperation(action).has_value();
-}
-
-bool cancellationTargetsOperation(playback_media_actions::Action action,
-                                  Operation operation) {
-  if (action == playback_media_actions::Action::CancelMediaExport) {
-    return operation == Operation::AudioExport ||
-           operation == Operation::TranscriptTextExport;
-  }
-  const std::optional<Operation> target = fixedCancellationOperation(action);
-  return target && *target == operation;
 }
 
 std::optional<CancellationRequest> prepareCancellation(
@@ -64,12 +57,18 @@ std::optional<CancellationRequest> prepareCancellation(
         operation = Operation::AudioSeparation;
       }
       break;
+    case playback_media_actions::Action::CancelAudioSeparationSetup:
+      if (state.audioSeparationSetupRunning) {
+        operation = Operation::AudioSeparationSetup;
+      }
+      break;
     case playback_media_actions::Action::Play:
     case playback_media_actions::Action::BrowseTracks:
     case playback_media_actions::Action::EditVideo:
     case playback_media_actions::Action::GenerateSubtitles:
     case playback_media_actions::Action::ExportTranscriptText:
     case playback_media_actions::Action::ExportAudio:
+    case playback_media_actions::Action::SetUpAudioSeparation:
     case playback_media_actions::Action::SeparateAudio:
     case playback_media_actions::Action::AnalyzeAudio:
     case playback_media_actions::Action::SplitLoop:
@@ -80,8 +79,19 @@ std::optional<CancellationRequest> prepareCancellation(
       !*state.activeTaskId) {
     return std::nullopt;
   }
-  return CancellationRequest{*state.activeTaskId, action, *operation,
-                             sourceFile};
+  return CancellationRequest{*state.activeTaskId, *operation, sourceFile};
+}
+
+std::optional<AudioSeparationSetupRequest> prepareAudioSeparationSetup(
+    playback_media_actions::Action action,
+    const std::filesystem::path& sourceFile, const SourceState& state) {
+  if (action != playback_media_actions::Action::SetUpAudioSeparation ||
+      sourceFile.empty() || state.backgroundTaskRunning ||
+      state.audioSeparationAvailability !=
+          AudioSeparationAvailability::SetupRequired) {
+    return std::nullopt;
+  }
+  return AudioSeparationSetupRequest{sourceFile};
 }
 
 }  // namespace playback_media_processing

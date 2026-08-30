@@ -86,6 +86,23 @@ class FakeMediaProcessingService final
                              NotRunning);
   }
 
+  playback_media_processing::RequestResult requestAudioSeparationSetup(
+      const std::filesystem::path& sourceFile) override {
+    separationSetupRequested =
+        acceptRequests && sourceFile == "source.mp4";
+    return requestResult(separationSetupRequested,
+                         playback_media_processing::RequestFailure::
+                             BackendUnavailable);
+  }
+
+  playback_media_processing::RequestResult
+  requestAudioSeparationSetupCancellation() override {
+    separationSetupCancelled = acceptRequests;
+    return requestResult(separationSetupCancelled,
+                         playback_media_processing::RequestFailure::
+                             NotRunning);
+  }
+
   playback_media_processing::RequestResult requestAudioSeparation(
       const std::filesystem::path& sourceFile) override {
     separationRequested = acceptRequests && sourceFile == "source.mp4";
@@ -98,6 +115,15 @@ class FakeMediaProcessingService final
   requestAudioSeparationCancellation() override {
     separationCancelled = acceptRequests;
     return requestResult(separationCancelled,
+                         playback_media_processing::RequestFailure::
+                             NotRunning);
+  }
+
+  playback_media_processing::RequestResult requestTaskCancellation(
+      playback_media_processing::TaskId expectedTask) override {
+    identityBoundCancellationRequested =
+        acceptRequests && expectedTask == state.activeTaskId;
+    return requestResult(identityBoundCancellationRequested,
                          playback_media_processing::RequestFailure::
                              NotRunning);
   }
@@ -115,9 +141,12 @@ class FakeMediaProcessingService final
   bool subtitleCancelled = false;
   bool separationRequested = false;
   bool separationCancelled = false;
+  bool separationSetupRequested = false;
+  bool separationSetupCancelled = false;
   bool audioExportRequested = false;
   bool transcriptExportRequested = false;
   bool exportCancelled = false;
+  bool identityBoundCancellationRequested = false;
 };
 
 }  // namespace
@@ -143,7 +172,8 @@ int main() {
   actions::Context video;
   video.mediaKind = actions::MediaKind::Video;
   video.canGenerateSubtitles = true;
-  video.canSeparateAudio = true;
+  video.audioSeparationAvailability =
+      playback_media_processing::AudioSeparationAvailability::Ready;
   video.canExportAudio = true;
   const std::vector<actions::Item> browserVideo = actions::build(video);
   ok &= expect(browserVideo.size() == 5 &&
@@ -250,11 +280,31 @@ int main() {
                    separateAgain->label == "Separate audio again...",
                "an existing managed stem set must expose explicit replacement");
 
+  actions::Context setupVideo;
+  setupVideo.mediaKind = actions::MediaKind::Video;
+  setupVideo.audioSeparationAvailability =
+      playback_media_processing::AudioSeparationAvailability::SetupRequired;
+  const auto setupVideoActions = actions::build(setupVideo);
+  setupVideo.backgroundTaskRunning = true;
+  setupVideo.activeTaskCancellable = true;
+  setupVideo.audioSeparationSetupRunningForSource = true;
+  const auto settingUpVideoActions = actions::build(setupVideo);
+  ok &= expect(
+      hasAction(setupVideoActions,
+                actions::Action::SetUpAudioSeparation) &&
+          hasAction(settingUpVideoActions,
+                    actions::Action::CancelAudioSeparationSetup) &&
+          !hasAction(settingUpVideoActions,
+                     actions::Action::SetUpAudioSeparation),
+      "a missing optional provider must expose setup and its exact running "
+      "task must expose cancellation");
+
   actions::Context audio;
   audio.mediaKind = actions::MediaKind::Audio;
   audio.canBrowseTracks = true;
   audio.canAnalyzeAudio = true;
-  audio.canSeparateAudio = true;
+  audio.audioSeparationAvailability =
+      playback_media_processing::AudioSeparationAvailability::Ready;
   audio.canExportAudio = true;
   const std::vector<actions::Item> browserAudio = actions::build(audio);
   ok &= expect(browserAudio.size() == 6 &&
@@ -290,7 +340,8 @@ int main() {
   processingService.state.subtitleGenerationAvailable = true;
   processingService.state.subtitleGenerationRunning = true;
   processingService.state.hasGeneratedSubtitles = true;
-  processingService.state.audioSeparationAvailable = true;
+  processingService.state.audioSeparationAvailability =
+      playback_media_processing::AudioSeparationAvailability::Ready;
   processingService.state.audioSeparationRunning = true;
   processingService.state.separatedAudioExists = true;
   processingService.state.audioExportAvailable = true;
@@ -305,7 +356,9 @@ int main() {
                    projected.canGenerateSubtitles &&
                    projected.subtitleGenerationRunningForSource &&
                    projected.hasGeneratedSubtitles &&
-                   projected.canSeparateAudio &&
+                    projected.audioSeparationAvailability ==
+                        playback_media_processing::
+                            AudioSeparationAvailability::Ready &&
                    projected.audioSeparationRunningForSource &&
                    projected.hasSeparatedAudio && projected.canExportAudio &&
                    projected.audioExportRunningForSource &&
@@ -359,6 +412,25 @@ int main() {
           processingService.exportCancelled &&
           !surfaceAction,
       "browser and player must share processing dispatch and feedback");
+
+  FakeMediaProcessingService setupService;
+  setupService.state.audioSeparationAvailability =
+      playback_media_processing::AudioSeparationAvailability::SetupRequired;
+  playback_media_processing::Actions setupActions(setupService);
+  const auto setupRequest = setupActions.prepareAudioSeparationSetup(
+      actions::Action::SetUpAudioSeparation, "source.mp4");
+  const auto directSetup = setupActions.execute(
+      actions::Action::SetUpAudioSeparation, "source.mp4");
+  const auto confirmedSetup =
+      setupRequest
+          ? std::optional<playback_media_processing::ActionResult>(
+                setupActions.confirmAudioSeparationSetup(*setupRequest))
+          : std::nullopt;
+  ok &= expect(setupRequest && !directSetup && confirmedSetup &&
+                   confirmedSetup->accepted &&
+                   setupService.separationSetupRequested,
+               "provider setup must require a prepared, explicitly confirmed "
+               "intent instead of executing directly from the catalog");
   FakeMediaProcessingService rejectingService;
   rejectingService.acceptRequests = false;
   playback_media_processing::Actions unavailable(rejectingService);

@@ -70,6 +70,8 @@ std::optional<playback_media_processing::ActionResult> Actions::execute(
     case playback_media_actions::Action::ExportTranscriptText:
     case playback_media_actions::Action::ExportAudio:
     case playback_media_actions::Action::CancelMediaExport:
+    case playback_media_actions::Action::SetUpAudioSeparation:
+    case playback_media_actions::Action::CancelAudioSeparationSetup:
     case playback_media_actions::Action::SeparateAudio:
     case playback_media_actions::Action::CancelAudioSeparation:
       break;

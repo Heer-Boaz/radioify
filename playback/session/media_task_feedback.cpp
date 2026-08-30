@@ -1,67 +1,83 @@
 #include "media_task_feedback.h"
 
+#include <utility>
+
 #include "core/runtime_helpers.h"
 
 namespace playback_session {
 
 std::string mediaTaskFeedback(
-    const playback_media_processing::Completion& completion) {
+    const playback_media_processing::Completion& completion,
+    const std::filesystem::path& identifySource) {
   using Operation = playback_media_processing::Operation;
   using Outcome = playback_media_processing::Outcome;
+  const auto identify = [&](std::string message) {
+    if (identifySource.empty()) return message;
+    const std::filesystem::path filename = identifySource.filename();
+    const std::string source =
+        toUtf8String(filename.empty() ? identifySource : filename);
+    return source.empty() ? message : source + ": " + std::move(message);
+  };
   if (completion.outcome == Outcome::Cancelled) {
     switch (completion.operation) {
       case Operation::MelodyAnalysis:
-        return "Melody analysis cancelled.";
+        return identify("Melody analysis cancelled.");
       case Operation::LoopSplit:
-        return "Loop splitting cancelled.";
+        return identify("Loop splitting cancelled.");
       case Operation::SubtitleGeneration:
-        return "Subtitle generation cancelled.";
+        return identify("Subtitle generation cancelled.");
+      case Operation::AudioSeparationSetup:
+        return identify("Audio separation setup cancelled.");
       case Operation::AudioSeparation:
-        return "Audio separation cancelled.";
+        return identify("Audio separation cancelled.");
       case Operation::AudioExport:
-        return "Audio export cancelled.";
+        return identify("Audio export cancelled.");
       case Operation::TranscriptTextExport:
-        return "Transcript export cancelled.";
+        return identify("Transcript export cancelled.");
     }
   }
   if (completion.outcome == Outcome::Failed) {
-    if (!completion.detail.empty()) return completion.detail;
+    if (!completion.detail.empty()) return identify(completion.detail);
     switch (completion.operation) {
       case Operation::MelodyAnalysis:
-        return "Melody analysis failed.";
+        return identify("Melody analysis failed.");
       case Operation::LoopSplit:
-        return "Loop splitting failed.";
+        return identify("Loop splitting failed.");
       case Operation::SubtitleGeneration:
-        return "Subtitle generation failed.";
+        return identify("Subtitle generation failed.");
+      case Operation::AudioSeparationSetup:
+        return identify("Audio separation setup failed.");
       case Operation::AudioSeparation:
-        return "Audio separation failed.";
+        return identify("Audio separation failed.");
       case Operation::AudioExport:
-        return "Audio export failed.";
+        return identify("Audio export failed.");
       case Operation::TranscriptTextExport:
-        return "Transcript export failed.";
+        return identify("Transcript export failed.");
     }
   }
   if (completion.operation == Operation::AudioSeparation) {
-    return "Audio stems ready: dialogue, music and effects.";
+    return identify("Audio stems ready: dialogue, music and effects.");
   }
   const std::string filename =
       toUtf8String(completion.outputFile.filename());
   switch (completion.operation) {
     case Operation::MelodyAnalysis:
-      return filename.empty() ? "Melody analysis complete."
-                              : "Melody analysis ready: " + filename;
+      return identify(filename.empty() ? "Melody analysis complete."
+                                       : "Melody analysis ready: " + filename);
     case Operation::LoopSplit:
-      return filename.empty() ? "Loop split complete."
-                              : "Loop split ready: " + filename;
+      return identify(filename.empty() ? "Loop split complete."
+                                       : "Loop split ready: " + filename);
     case Operation::SubtitleGeneration:
-      return filename.empty() ? "Subtitles ready."
-                              : "Subtitles ready: " + filename;
+      return identify(filename.empty() ? "Subtitles ready."
+                                       : "Subtitles ready: " + filename);
+    case Operation::AudioSeparationSetup:
+      return identify("Audio separation is ready.");
     case Operation::AudioExport:
-      return filename.empty() ? "Audio export ready."
-                              : "Audio export ready: " + filename;
+      return identify(filename.empty() ? "Audio export ready."
+                                       : "Audio export ready: " + filename);
     case Operation::TranscriptTextExport:
-      return filename.empty() ? "Transcript export ready."
-                              : "Transcript export ready: " + filename;
+      return identify(filename.empty() ? "Transcript export ready."
+                                       : "Transcript export ready: " + filename);
     case Operation::AudioSeparation:
       break;
   }

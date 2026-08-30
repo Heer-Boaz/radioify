@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 
+#include "playback/audio_separation_availability.h"
 #include "playback/media_processing_task_id.h"
 
 namespace playback_media_processing {
@@ -13,6 +14,7 @@ enum class Operation {
   MelodyAnalysis,
   LoopSplit,
   SubtitleGeneration,
+  AudioSeparationSetup,
   AudioSeparation,
   AudioExport,
   TranscriptTextExport,
@@ -87,6 +89,41 @@ struct Completion {
   bool succeeded() const { return outcome == Outcome::Succeeded; }
 };
 
+enum class SchedulingState {
+  Running,
+  Suspending,
+  Suspended,
+};
+
+// Read-only application task state projected into playback surfaces. This is
+// deliberately a value protocol: playback never receives a worker, callback,
+// or application-coordinator pointer.
+struct Activity {
+  TaskId taskId;
+  Operation operation = Operation::SubtitleGeneration;
+  std::filesystem::path sourceFile;
+  std::string processingEngine;
+  std::optional<float> progress;
+  std::string phase;
+  bool cancelling = false;
+  bool cancellable = false;
+  SchedulingState scheduling = SchedulingState::Running;
+
+  friend bool operator==(const Activity& left, const Activity& right) {
+    return left.taskId == right.taskId &&
+           left.operation == right.operation &&
+           left.sourceFile == right.sourceFile &&
+           left.processingEngine == right.processingEngine &&
+           left.progress == right.progress && left.phase == right.phase &&
+           left.cancelling == right.cancelling &&
+           left.cancellable == right.cancellable &&
+           left.scheduling == right.scheduling;
+  }
+  friend bool operator!=(const Activity& left, const Activity& right) {
+    return !(left == right);
+  }
+};
+
 struct SourceState {
   bool backgroundTaskRunning = false;
   // Present only when this source owns the active application task. UI
@@ -97,7 +134,9 @@ struct SourceState {
   bool subtitleGenerationAvailable = false;
   bool subtitleGenerationRunning = false;
   bool hasGeneratedSubtitles = false;
-  bool audioSeparationAvailable = false;
+  AudioSeparationAvailability audioSeparationAvailability =
+      AudioSeparationAvailability::Unavailable;
+  bool audioSeparationSetupRunning = false;
   bool audioSeparationRunning = false;
   bool separatedAudioExists = false;
   bool audioExportAvailable = false;
@@ -123,9 +162,15 @@ class Service {
   virtual RequestResult requestTranscriptTextExport(
       const std::filesystem::path& sourceFile) = 0;
   virtual RequestResult requestMediaExportCancellation() = 0;
+  virtual RequestResult requestAudioSeparationSetup(
+      const std::filesystem::path& sourceFile) = 0;
+  virtual RequestResult requestAudioSeparationSetupCancellation() = 0;
   virtual RequestResult requestAudioSeparation(
       const std::filesystem::path& sourceFile) = 0;
   virtual RequestResult requestAudioSeparationCancellation() = 0;
+  // Identity-bound cancellation used after a confirmation dialog. A stale
+  // surface must never cancel whichever task happened to start next.
+  virtual RequestResult requestTaskCancellation(TaskId expectedTask) = 0;
 };
 
 }  // namespace playback_media_processing

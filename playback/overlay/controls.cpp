@@ -83,20 +83,22 @@ std::vector<OverlayCellControlInput> buildOverlayCellControlInputs(
 }
 
 std::vector<OverlayDialogButtonInput>
-buildMediaTaskCancellationDialogButtons(
-    const MediaTaskCancellationDialog& prompt,
+buildMediaActionConfirmationDialogButtons(
+    const MediaActionConfirmationDialog& prompt,
     int hoverControlToken) {
-  using Selection = MediaTaskCancellationSelection;
+  using Selection = MediaActionConfirmationSelection;
   return {
-      {OverlayControlId::MediaTaskCancel, "Cancel task", "Stop",
-       prompt.selected == Selection::CancelTask,
+      {OverlayControlId::MediaActionPrimary, prompt.primaryLabel,
+       prompt.primaryLabel,
+       prompt.selected == Selection::Primary,
        hoverControlToken ==
-           overlayControlToken(OverlayControlId::MediaTaskCancel),
+            overlayControlToken(OverlayControlId::MediaActionPrimary),
        true},
-      {OverlayControlId::MediaTaskKeepRunning, "Keep running", "Keep",
-       prompt.selected == Selection::KeepRunning,
+      {OverlayControlId::MediaActionSecondary, prompt.secondaryLabel,
+       prompt.secondaryLabel,
+       prompt.selected == Selection::Secondary,
        hoverControlToken ==
-           overlayControlToken(OverlayControlId::MediaTaskKeepRunning),
+            overlayControlToken(OverlayControlId::MediaActionSecondary),
        true},
   };
 }
@@ -160,9 +162,11 @@ OverlayControlIntent intentForOverlayControl(OverlayControlId id) {
     case OverlayControlId::EditCancelExit:
       return OverlayAction::CancelPendingExit;
     case OverlayControlId::MediaTaskCancel:
-      return OverlayAction::ConfirmMediaTaskCancellation;
-    case OverlayControlId::MediaTaskKeepRunning:
-      return OverlayAction::DismissMediaTaskCancellation;
+      return OverlayAction::CancelMediaTask;
+    case OverlayControlId::MediaActionPrimary:
+      return OverlayAction::ConfirmMediaAction;
+    case OverlayControlId::MediaActionSecondary:
+      return OverlayAction::DismissMediaAction;
   }
   throw std::invalid_argument("Unknown playback overlay control.");
 }
@@ -178,11 +182,17 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
   const auto finish = [&]() {
     finishControlSpecs(&out, hoverControlToken);
   };
+  const auto addMediaTaskCancellation = [&]() {
+    if (state.mediaTaskActivity && state.mediaTaskActivity->cancellable) {
+      add(OverlayControlId::MediaTaskCancel, "Cancel task", false,
+          !state.mediaTaskActivity->cancelling);
+    }
+  };
 
-  if (state.mediaTaskCancellationPrompt) {
+  if (state.mediaActionConfirmationPrompt) {
     for (const OverlayDialogButtonInput& button :
-         buildMediaTaskCancellationDialogButtons(
-             *state.mediaTaskCancellationPrompt, hoverControlToken)) {
+         buildMediaActionConfirmationDialogButtons(
+             *state.mediaActionConfirmationPrompt, hoverControlToken)) {
       add(button.id, button.label, button.selected, button.enabled);
     }
     finish();
@@ -246,6 +256,7 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
         options.includePictureInPicture &&
         state.pictureInPictureAvailable;
 
+    addMediaTaskCancellation();
     if (showPictureInPicture && state.pictureInPictureActive) {
       add(OverlayControlId::PictureInPicture, "Close PiP", true);
     }
@@ -316,6 +327,7 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     return out;
   }
 
+  addMediaTaskCancellation();
   if (state.canPlayPrevious) {
     add(OverlayControlId::Previous, "<<", false);
   }

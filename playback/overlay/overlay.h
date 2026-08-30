@@ -12,8 +12,9 @@
 #include "gpu_text_grid.h"
 #include "playback/overlay/context_menu.h"
 #include "playback/overlay/interaction.h"
-#include "playback/overlay/media_task_cancellation_presentation.h"
+#include "playback/overlay/media_action_confirmation_presentation.h"
 #include "playback/overlay/osd_state.h"
+#include "playback/media_processing_service.h"
 #include "playback/video/edit/command.h"
 #include "playback/video/subtitle/manager.h"
 #include "playback/video/framebuffer/window/window.h"
@@ -50,8 +51,9 @@ enum class OverlayAction : std::uint8_t {
   WaitForVideoEditExport,
   ConfirmPendingExit,
   CancelPendingExit,
-  ConfirmMediaTaskCancellation,
-  DismissMediaTaskCancellation,
+  CancelMediaTask,
+  ConfirmMediaAction,
+  DismissMediaAction,
 };
 
 using OverlayControlIntent =
@@ -185,8 +187,9 @@ struct PlaybackOverlayInputs {
   playback_video_edit::ExportProgress videoEditExport;
   playback_video_edit::Prompt videoEditPrompt =
       playback_video_edit::Prompt::None;
-  std::optional<MediaTaskCancellationDialog>
-      mediaTaskCancellationPrompt;
+  std::optional<MediaActionConfirmationDialog>
+      mediaActionConfirmationPrompt;
+  std::optional<playback_media_processing::Activity> mediaTaskActivity;
 };
 
 struct PlaybackOverlayState {
@@ -228,8 +231,9 @@ struct PlaybackOverlayState {
   playback_video_edit::ExportProgress videoEditExport;
   playback_video_edit::Prompt videoEditPrompt =
       playback_video_edit::Prompt::None;
-  std::optional<MediaTaskCancellationDialog>
-      mediaTaskCancellationPrompt;
+  std::optional<MediaActionConfirmationDialog>
+      mediaActionConfirmationPrompt;
+  std::optional<playback_media_processing::Activity> mediaTaskActivity;
 };
 
 PlaybackOverlayState buildPlaybackOverlayState(
@@ -260,8 +264,8 @@ OverlayControlSpec makeOverlayTextControlSpec(OverlayControlId id,
 std::vector<OverlayCellControlInput> buildOverlayCellControlInputs(
     const std::vector<OverlayControlSpec>& specs, int hoverControlToken);
 std::vector<OverlayDialogButtonInput>
-buildMediaTaskCancellationDialogButtons(
-    const MediaTaskCancellationDialog& prompt,
+buildMediaActionConfirmationDialogButtons(
+    const MediaActionConfirmationDialog& prompt,
     int hoverControlToken);
 OverlayControlIntent intentForOverlayControl(OverlayControlId id);
 
@@ -270,8 +274,8 @@ OverlayCellLayout layoutOverlayControlCells(
     const std::vector<OverlayCellControlInput>& controls, int width);
 OverlayCellLayout layoutOverlayDialogCells(
     const OverlayDialogLayoutInput& input);
-OverlayCellLayout layoutMediaTaskCancellationDialogCells(
-    const MediaTaskCancellationDialog& prompt, int width,
+OverlayCellLayout layoutMediaActionConfirmationDialogCells(
+    const MediaActionConfirmationDialog& prompt, int width,
     int height, int hoverControlToken = -1);
 OverlayCellLayout layoutPlaybackOverlayCells(
     const PlaybackOverlayState& state, int width, int height,
@@ -309,8 +313,8 @@ void renderOverlayToScreen(ConsoleScreen& screen,
                            const playback_video_edit::ExportProgress*
                                videoEditExport,
                            playback_video_edit::Prompt videoEditPrompt,
-                           const std::optional<MediaTaskCancellationDialog>&
-                               mediaTaskCancellationPrompt,
+                           const std::optional<MediaActionConfirmationDialog>&
+                               mediaActionConfirmationPrompt,
                            int minY,
                            int maxY);
 

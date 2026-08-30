@@ -41,6 +41,8 @@ class Controller {
       const playback_media_processing::CancellationRequest& request);
   bool confirmCancellation(
       const playback_media_processing::CancellationRequest& request);
+  playback_media_processing::ActionResult confirmAudioSeparationSetup(
+      const playback_media_processing::AudioSeparationSetupRequest& request);
   playback_media_actions::Context contextForSource(
       const std::filesystem::path& sourceFile) const;
 

@@ -30,8 +30,9 @@
 #include "playback/session/osd_timeline.h"
 #include "playback/session/shutdown_sequence.h"
 #include "playback/session/context_menu_controller.h"
-#include "playback/session/media_task_cancellation.h"
+#include "playback/session/media_action_confirmation.h"
 #include "playback/session/video_edit_workspace.h"
+#include "core/path_identity.h"
 #include "core/windows_console_window.h"
 #include "core/runtime_helpers.h"
 #include "core.h"
@@ -127,8 +128,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   playback_session::VideoEditWorkspace videoEditWorkspace;
   playback_session::ContextMenuController contextMenuController;
   playback_session_exit::ExitCoordinator exitCoordinator;
-  playback_session::MediaTaskCancellationPromptState
-      mediaTaskCancellationPrompt;
+  playback_session::MediaActionConfirmationState mediaActionConfirmation;
+  std::optional<playback_media_processing::Activity> mediaTaskActivity;
   std::deque<std::vector<std::filesystem::path>> deferredNativeFileDrops;
   // Session transitions run on the owner thread and are drained by the
   // coordinator before it can wait again. Cross-thread activity has separate
@@ -304,7 +305,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       playback_session_exit::Intent intent) {
     if (finished || exitCoordinator.pending()) return {};
 
-    mediaTaskCancellationPrompt.dismiss();
+    mediaActionConfirmation.dismiss();
 
     const bool confirmationRequired = exitNeedsConfirmation();
     if (confirmationRequired &&
@@ -397,7 +398,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     // A modal task decision owns this playback surface. External open requests
     // must wait instead of silently dismissing the decision and replacing the
     // media underneath it.
-    if (mediaTaskCancellationPrompt.snapshot()) return std::nullopt;
+    if (mediaActionConfirmation.snapshot()) return std::nullopt;
     const playback_session_exit::Transition transition =
         beginExit(playback_session_exit::ExternalHandoff{});
     return transition.handled ? transition.requestId : std::nullopt;
@@ -446,7 +447,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
                                   videoEditWorkspace.exportProgress(),
                                   std::move(sourceContext));
     if (videoEditPrompt() != playback_video_edit::Prompt::None ||
-        mediaTaskCancellationPrompt.snapshot()) {
+        mediaActionConfirmation.snapshot()) {
       contextMenuController.dismiss();
       timelinePreviewModel.hide(
           playback_video_timeline_preview::PresentationSurface::Terminal);
@@ -462,12 +463,20 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     output.requestWindowPresent();
   }
 
-  bool requestMediaTaskCancellation(
-      playback_media_actions::Action action) {
+  bool openMediaTaskCancellation(
+      playback_media_processing::CancellationRequest request) {
     if (videoEditPrompt() != playback_video_edit::Prompt::None ||
-        mediaTaskCancellationPrompt.snapshot()) {
+        mediaActionConfirmation.snapshot()) {
       return false;
     }
+    if (!mediaActionConfirmation.open(std::move(request))) return false;
+    overlayControlHover = -1;
+    syncOverlayPresentation();
+    return true;
+  }
+
+  bool requestMediaTaskCancellation(
+      playback_media_actions::Action action) {
     std::optional<playback_media_processing::CancellationRequest> request =
         mediaProcessingActions.prepareCancellation(action, file);
     if (!request) {
@@ -475,33 +484,60 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       showEditMessage("The background task is no longer running");
       return true;
     }
-    if (!mediaTaskCancellationPrompt.open(std::move(*request))) {
+    return openMediaTaskCancellation(std::move(*request));
+  }
+
+  bool requestAudioSeparationSetup() {
+    if (videoEditPrompt() != playback_video_edit::Prompt::None ||
+        mediaActionConfirmation.snapshot()) {
       return false;
     }
+    auto request = mediaProcessingActions.prepareAudioSeparationSetup(
+        playback_media_actions::Action::SetUpAudioSeparation, file);
+    if (!request) {
+      syncOverlayPresentation();
+      showEditMessage(
+          "Audio separation setup is no longer required or available");
+      return true;
+    }
+    if (!mediaActionConfirmation.open(std::move(*request))) return false;
     overlayControlHover = -1;
     syncOverlayPresentation();
     return true;
   }
 
-  bool resolveMediaTaskCancellation(
-      std::optional<playback_session::MediaTaskCancellationChoice> choice) {
-    std::optional<playback_session::MediaTaskCancellationActivation>
-        activation = choice ? mediaTaskCancellationPrompt.resolve(*choice)
-                            : mediaTaskCancellationPrompt.activate();
+  bool requestActiveMediaTaskCancellation() {
+    if (!mediaTaskActivity || !mediaTaskActivity->cancellable) return false;
+    std::optional<playback_media_processing::CancellationRequest> current =
+        mediaProcessingActions.prepareCancellation(*mediaTaskActivity);
+    if (!current) {
+      syncOverlayPresentation();
+      showEditMessage("The background task is no longer running");
+      return true;
+    }
+    return openMediaTaskCancellation(std::move(*current));
+  }
+
+  bool resolveMediaActionConfirmation(
+      std::optional<playback_session::MediaActionConfirmationChoice> choice) {
+    std::optional<playback_session::MediaActionConfirmationActivation>
+        activation = choice ? mediaActionConfirmation.resolve(*choice)
+                            : mediaActionConfirmation.activate();
     if (!activation) return false;
     overlayControlHover = -1;
     seekState.overlayControlPointer.reset();
-    if (activation->cancelTask) {
-      events.emplace_back(playback_session::MediaTaskCancellationRequested{
-          std::move(activation->request)});
+    if (const std::optional<playback_media_processing::ActionResult> result =
+            playback_session::executeConfirmedMediaAction(
+                mediaProcessingActions, *activation)) {
+      showEditMessage(result->feedback);
     }
     syncOverlayPresentation();
     resumeDeferredNativeFileDrop();
     return true;
   }
 
-  bool moveMediaTaskCancellationSelection(int direction) {
-    if (!mediaTaskCancellationPrompt.moveSelection(direction)) return false;
+  bool moveMediaActionConfirmationSelection(int direction) {
+    if (!mediaActionConfirmation.moveSelection(direction)) return false;
     overlayControlHover = -1;
     syncOverlayPresentation();
     return true;
@@ -593,6 +629,9 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   bool executeMediaAction(playback_media_actions::Action action) {
+    if (action == playback_media_actions::Action::SetUpAudioSeparation) {
+      return requestAudioSeparationSetup();
+    }
     if (playback_media_processing::isCancellationAction(action)) {
       return requestMediaTaskCancellation(action);
     }
@@ -617,6 +656,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       case playback_media_actions::Action::ExportTranscriptText:
       case playback_media_actions::Action::ExportAudio:
       case playback_media_actions::Action::CancelMediaExport:
+      case playback_media_actions::Action::SetUpAudioSeparation:
+      case playback_media_actions::Action::CancelAudioSeparationSetup:
       case playback_media_actions::Action::SeparateAudio:
       case playback_media_actions::Action::CancelAudioSeparation:
         return true;
@@ -659,7 +700,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     switch (request.kind) {
       case InputKind::Open: {
         if (videoEditPrompt() != playback_video_edit::Prompt::None ||
-            mediaTaskCancellationPrompt.snapshot()) {
+            mediaActionConfirmation.snapshot()) {
           return false;
         }
         if (videoEditWorkspace.active()) {
@@ -754,8 +795,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     state.pictureInPicture = output.window().IsPictureInPicture();
     state.videoEditorActive = videoEditWorkspace.active();
     state.videoEditPrompt = videoEditPrompt();
-    state.mediaTaskCancellationPrompt =
-        mediaTaskCancellationPrompt.snapshot().has_value();
+    state.mediaActionConfirmationPrompt =
+        mediaActionConfirmation.snapshot().has_value();
     state.contextMenuVisible = contextMenuController.visible();
     state.playbackControlsVisible = osd.controlsVisible();
     state.stopRequested = loopStopRequested;
@@ -870,18 +911,20 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         return completePendingExit();
       case Action::CancelPendingExit:
         return cancelPendingExit();
-      case Action::ConfirmMediaTaskCancellation:
-        return resolveMediaTaskCancellation(
-            playback_session::MediaTaskCancellationChoice::CancelTask);
-      case Action::DismissMediaTaskCancellation:
-        return resolveMediaTaskCancellation(
-            playback_session::MediaTaskCancellationChoice::KeepRunning);
-      case Action::ActivateSelectedMediaTaskCancellationAction:
-        return resolveMediaTaskCancellation(std::nullopt);
-      case Action::SelectPreviousMediaTaskCancellationAction:
-        return moveMediaTaskCancellationSelection(-1);
-      case Action::SelectNextMediaTaskCancellationAction:
-        return moveMediaTaskCancellationSelection(1);
+      case Action::CancelActiveMediaTask:
+        return requestActiveMediaTaskCancellation();
+      case Action::ConfirmMediaAction:
+        return resolveMediaActionConfirmation(
+            playback_session::MediaActionConfirmationChoice::Primary);
+      case Action::DismissMediaAction:
+        return resolveMediaActionConfirmation(
+            playback_session::MediaActionConfirmationChoice::Secondary);
+      case Action::ActivateSelectedMediaActionConfirmation:
+        return resolveMediaActionConfirmation(std::nullopt);
+      case Action::SelectPreviousMediaActionConfirmation:
+        return moveMediaActionConfirmationSelection(-1);
+      case Action::SelectNextMediaActionConfirmation:
+        return moveMediaActionConfirmationSelection(1);
     }
     return false;
   }
@@ -1162,8 +1205,9 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     projection.videoEdit = videoEditWorkspace.edit();
     projection.videoEditExport = videoEditWorkspace.exportProgress();
     projection.videoEditPrompt = videoEditPrompt();
-    projection.mediaTaskCancellationPrompt =
-        mediaTaskCancellationPrompt.snapshot();
+    projection.mediaActionConfirmationPrompt =
+        mediaActionConfirmation.snapshot();
+    projection.mediaTaskActivity = mediaTaskActivity;
     if (config.debugOverlay &&
         surface == playback_video_timeline_preview::
                        PresentationSurface::VideoWindow) {
@@ -1575,7 +1619,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   bool capturesBrowserInput() const {
-    return mediaTaskCancellationPrompt.snapshot().has_value() ||
+    return mediaActionConfirmation.snapshot().has_value() ||
            videoEditPrompt() != playback_video_edit::Prompt::None;
   }
 
@@ -1688,12 +1732,14 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
 
   void mediaTaskFinished(
       const playback_media_processing::Completion& completion) {
-    const bool promptClosed =
-        mediaTaskCancellationPrompt.synchronize(completion);
+    const bool promptClosed = mediaActionConfirmation.synchronize(completion);
     if (promptClosed) {
       seekState.overlayControlPointer.reset();
     }
-    if (completion.operation ==
+    const bool targetsCurrentSource =
+        samePath(completion.sourceFile, file);
+    if (targetsCurrentSource &&
+        completion.operation ==
             playback_media_processing::Operation::SubtitleGeneration &&
         completion.succeeded()) {
       syncOverlayPresentation();
@@ -1703,7 +1749,22 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     }
     syncOverlayPresentation();
     if (promptClosed) resumeDeferredNativeFileDrop();
-    showEditMessage(playback_session::mediaTaskFeedback(completion));
+    showEditMessage(playback_session::mediaTaskFeedback(
+        completion, targetsCurrentSource ? std::filesystem::path{}
+                                         : completion.sourceFile));
+  }
+
+  void mediaTaskActivityChanged(
+      std::optional<playback_media_processing::Activity> activity) {
+    const bool promptClosed = mediaActionConfirmation.synchronize(activity);
+    if (mediaTaskActivity == activity && !promptClosed) return;
+    mediaTaskActivity = std::move(activity);
+    overlayControlHover = -1;
+    if (promptClosed) {
+      seekState.overlayControlPointer.reset();
+    }
+    syncOverlayPresentation();
+    if (promptClosed) resumeDeferredNativeFileDrop();
   }
 
   std::optional<playback_session_exit::RequestId> requestHandoff() {
@@ -1820,6 +1881,11 @@ std::vector<playback_session::Event> PlaybackLoopRunner::drainEvents() {
 void PlaybackLoopRunner::mediaTaskFinished(
     const playback_media_processing::Completion& completion) {
   impl_->mediaTaskFinished(completion);
+}
+
+void PlaybackLoopRunner::mediaTaskActivityChanged(
+    std::optional<playback_media_processing::Activity> activity) {
+  impl_->mediaTaskActivityChanged(std::move(activity));
 }
 
 void PlaybackLoopRunner::subtitlesLoaded(bool available, bool reload,

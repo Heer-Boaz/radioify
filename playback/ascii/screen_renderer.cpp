@@ -417,7 +417,7 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
           playback_overlay::buildOverlayInteractionMap(
               overlayLayout, &overlayState.videoEdit,
               overlayState.videoEditPrompt,
-              overlayState.mediaTaskCancellationPrompt.has_value());
+              overlayState.mediaActionConfirmationPrompt.has_value());
     }
     if (showContextMenu && contextMenuLayout.drawable()) {
       frameOutput.overlayInteractions =
@@ -435,7 +435,7 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
           screen, overlayLayout, overlayStyles, ratio, &overlayState.videoEdit,
           &overlayState.videoEditExport,
           overlayState.videoEditPrompt,
-          overlayState.mediaTaskCancellationPrompt, artTop, height);
+          overlayState.mediaActionConfirmationPrompt, artTop, height);
     }
   }
 

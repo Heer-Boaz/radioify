@@ -66,8 +66,7 @@ class TuiMediaCoordinator {
                              AudioPlaybackFailed, VideoPlaybackFailed,
                              tui_media_activation::AudioFallbackRequest,
                              ShowImages, QuitRequested, PlaybackStateChanged,
-                             ActivateBrowserSurface, OpenBrowserDirectory,
-                             playback_session::MediaTaskCancellationRequested>;
+                             ActivateBrowserSurface, OpenBrowserDirectory>;
 
   struct PollResult {
     bool playbackChanged = false;

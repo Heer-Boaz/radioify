@@ -9,16 +9,20 @@
 
 namespace playback_session {
 
-playback_overlay::MediaTaskCancellationDialog
-projectMediaTaskCancellationDialog(
-    const MediaTaskCancellationPrompt& prompt) {
-  playback_overlay::MediaTaskCancellationDialog dialog;
-  dialog.title = mediaTaskCancellationTitle(prompt.request.operation);
-  dialog.sourceName = mediaTaskCancellationSourceName(prompt);
+playback_overlay::MediaActionConfirmationDialog
+projectMediaActionConfirmationDialog(
+    const MediaActionConfirmationPrompt& prompt) {
+  playback_overlay::MediaActionConfirmationDialog dialog;
+  playback_media_confirmation::Content content =
+      mediaActionConfirmationContent(prompt);
+  dialog.title = std::move(content.title);
+  dialog.text = std::move(content.text);
+  dialog.primaryLabel = std::move(content.primaryLabel);
+  dialog.secondaryLabel = std::move(content.secondaryLabel);
   dialog.selected =
-      prompt.selected == MediaTaskCancellationChoice::CancelTask
-          ? playback_overlay::MediaTaskCancellationSelection::CancelTask
-          : playback_overlay::MediaTaskCancellationSelection::KeepRunning;
+      prompt.selected == MediaActionConfirmationChoice::Primary
+          ? playback_overlay::MediaActionConfirmationSelection::Primary
+          : playback_overlay::MediaActionConfirmationSelection::Secondary;
   return dialog;
 }
 
@@ -116,9 +120,10 @@ playback_overlay::PlaybackOverlayState projectPlaybackOverlay(
   }
   inputs.videoEditExport = std::move(projection.videoEditExport);
   inputs.videoEditPrompt = projection.videoEditPrompt;
-  if (projection.mediaTaskCancellationPrompt) {
-    inputs.mediaTaskCancellationPrompt = projectMediaTaskCancellationDialog(
-        *projection.mediaTaskCancellationPrompt);
+  inputs.mediaTaskActivity = std::move(projection.mediaTaskActivity);
+  if (projection.mediaActionConfirmationPrompt) {
+    inputs.mediaActionConfirmationPrompt = projectMediaActionConfirmationDialog(
+        *projection.mediaActionConfirmationPrompt);
   }
   return playback_overlay::buildPlaybackOverlayState(inputs);
 }

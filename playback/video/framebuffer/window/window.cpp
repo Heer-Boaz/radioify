@@ -2718,7 +2718,7 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
                         : playback_overlay::buildOverlayInteractionMap(
                               windowOverlayLayout, &ui.videoEdit,
                               ui.videoEditPrompt,
-                              ui.mediaTaskCancellationPrompt.has_value());
+                              ui.mediaActionConfirmationPrompt.has_value());
                 if (outInteractions) {
                     *outInteractions =
                         playback_overlay::transformInteractionMap(

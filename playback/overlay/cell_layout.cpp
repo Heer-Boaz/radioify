@@ -140,7 +140,7 @@ std::string buildWindowOverlayProgressSuffix(
   // Edit mode owns the row above the timeline, including frame-accurate
   // timecode.  A modal prompt owns it exclusively.  Do not add a second,
   // rounded playback clock to either state.
-  if (state.mediaTaskCancellationPrompt || state.videoEdit.active ||
+  if (state.mediaActionConfirmationPrompt || state.videoEdit.active ||
       state.videoEditPrompt != playback_video_edit::Prompt::None) {
     return {};
   }

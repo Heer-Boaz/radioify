@@ -4,6 +4,7 @@
 #include "audio/audio_export.h"
 #include "audio/loopsplit/loopsplit.h"
 #include "audio/separation/operation.h"
+#include "audio/separation/provider_setup.h"
 #include "playback/video/transcript/text_export.h"
 
 namespace media_processing {
@@ -69,6 +70,10 @@ Coordinator::Coordinator(AudioPlaybackRuntime& audioPlayback)
 #if RADIOIFY_HAS_AUDIO_SEPARATION
         operations.separateAudio =
             audio_separation::resolveProductionOperation();
+        operations.setupAudioSeparation =
+            audio_separation::makeProductionProviderSetupOperation();
+        operations.resolveAudioSeparation =
+            audio_separation::resolveProductionOperation;
 #endif
         return operations;
       }()) {}

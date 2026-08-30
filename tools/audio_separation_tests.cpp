@@ -4,8 +4,10 @@
 #include "audio/separation/job.h"
 #include "audio/separation/inference_backend.h"
 #include "audio/separation/operation.h"
+#include "audio/separation/provider_setup.h"
 #include "audio/separation/spectral_transform.h"
 #include "audio/separation/windows_ml_backend.h"
+#include "audio/separation/windows_ml_backend_internal.h"
 #include "core/file_output.h"
 #include "audio/ffmpegaudio.h"
 
@@ -222,6 +224,32 @@ bool testInferenceBackendContracts() {
                  "an unusable Windows ML backend must explain its status");
   }
 
+  const separation::WindowsMlProviderSetupResult preCancelledSetup =
+      separation::setupNvidiaWindowsMlBackend({}, []() { return true; });
+  const separation::ProviderSetupResult preCancelledProductionSetup =
+      separation::makeProductionProviderSetupOperation()(
+          {}, []() { return true; });
+  ok &= expect(
+      preCancelledSetup.outcome ==
+              separation::WindowsMlProviderSetupOutcome::Cancelled &&
+          preCancelledProductionSetup.outcome ==
+              separation::ProviderSetupOutcome::Cancelled,
+      "provider setup must honor cancellation before catalog discovery or "
+      "machine mutation");
+
+  if (nvidia.ready()) {
+    float reportedProgress = 0.0f;
+    const separation::WindowsMlProviderSetupResult idempotentSetup =
+        separation::setupNvidiaWindowsMlBackend(
+            [&](float progress, std::string) {
+              reportedProgress = progress;
+            },
+            []() { return false; });
+    ok &= expect(idempotentSetup.ready() && reportedProgress == 1.0f,
+                 "setup must be idempotent when the certified provider is "
+                 "already ready");
+  }
+
   const separation::Job::Operation testOperation =
       [](const std::filesystem::path&,
          const separation::ArtifactPaths&,
@@ -257,6 +285,117 @@ bool testInferenceBackendContracts() {
                          !static_cast<bool>(production.operation()),
                "production discovery must return either one usable native "
                "backend or one actionable unavailability reason");
+  return ok;
+}
+
+bool testWindowsMlAsyncSetupBridge() {
+  namespace separation = audio_separation;
+  bool ok = true;
+
+  int failedStartCancelCalls = 0;
+  int failedStartStatusCalls = 0;
+  int failedStartCloseCalls = 0;
+  separation::detail::AsyncProviderSetupApi failedStartApi;
+  failedStartApi.start = [](WinMLAsyncBlock*) { return E_ACCESSDENIED; };
+  failedStartApi.cancel = [&](WinMLAsyncBlock*) {
+    ++failedStartCancelCalls;
+    return S_OK;
+  };
+  failedStartApi.getStatus = [&](WinMLAsyncBlock*, BOOL) {
+    ++failedStartStatusCalls;
+    return E_FAIL;
+  };
+  failedStartApi.close =
+      [&](WinMLAsyncBlock*) { ++failedStartCloseCalls; };
+  const separation::detail::AsyncProviderSetupExecution failedStart =
+      separation::detail::runAsyncProviderSetup(failedStartApi, {}, {});
+  ok &= expect(!failedStart.started() && failedStartCancelCalls == 0 &&
+                   failedStartStatusCalls == 0 &&
+                   failedStartCloseCalls == 1,
+               "a failed Windows ML async start must still close its ABI "
+               "state exactly once without cancelling an operation that "
+               "never started");
+
+  std::thread callbackWorker;
+  std::thread::id callbackThread;
+  std::thread::id reportThread;
+  float reportedFraction = -1.0f;
+  bool closed = false;
+  separation::detail::AsyncProviderSetupApi completionApi;
+  completionApi.start = [&](WinMLAsyncBlock* async) {
+    callbackWorker = std::thread([&, async]() {
+      callbackThread = std::this_thread::get_id();
+      async->progress(async, 8.0);
+      async->callback(async);
+    });
+    return S_OK;
+  };
+  completionApi.cancel = [](WinMLAsyncBlock*) { return S_OK; };
+  completionApi.getStatus = [](WinMLAsyncBlock*, BOOL) { return S_OK; };
+  completionApi.close = [&](WinMLAsyncBlock*) {
+    if (callbackWorker.joinable()) callbackWorker.join();
+    closed = true;
+  };
+
+  const std::thread::id ownerThread = std::this_thread::get_id();
+  const separation::detail::AsyncProviderSetupExecution completed =
+      separation::detail::runAsyncProviderSetup(
+          completionApi,
+          [&](float fraction, std::string) {
+            reportedFraction = fraction;
+            reportThread = std::this_thread::get_id();
+          },
+          []() { return false; });
+  ok &= expect(
+      completed.started() && SUCCEEDED(completed.statusResult) && closed &&
+          std::abs(reportedFraction - 0.08f) < 1.0e-6f &&
+          reportThread == ownerThread && callbackThread != ownerThread,
+      "the Windows ML bridge must normalize percentage progress and marshal "
+      "application callbacks onto the owning worker");
+
+  int cancelCalls = 0;
+  int cancellationStatusCalls = 0;
+  bool cancellationStatusWaited = false;
+  bool cancellationClosed = false;
+  std::atomic<bool> cancellationCallbackFired{false};
+  std::thread cancellationCallbackWorker;
+  separation::detail::AsyncProviderSetupApi cancellationApi;
+  cancellationApi.start = [](WinMLAsyncBlock*) { return S_OK; };
+  cancellationApi.cancel = [&](WinMLAsyncBlock* async) {
+    ++cancelCalls;
+    cancellationCallbackWorker = std::thread([&, async]() {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      cancellationCallbackFired.store(true, std::memory_order_release);
+      async->callback(async);
+    });
+    return S_OK;
+  };
+  cancellationApi.getStatus = [&](WinMLAsyncBlock*, BOOL wait) {
+    ++cancellationStatusCalls;
+    cancellationStatusWaited = wait == TRUE;
+    return cancellationCallbackFired.load(std::memory_order_acquire)
+               ? E_ABORT
+               : E_PENDING;
+  };
+  cancellationApi.close = [&](WinMLAsyncBlock*) {
+    if (cancellationCallbackWorker.joinable()) {
+      cancellationCallbackWorker.join();
+    }
+    cancellationClosed = true;
+  };
+  const separation::detail::AsyncProviderSetupExecution cancelled =
+      separation::detail::runAsyncProviderSetup(
+          cancellationApi, {}, []() { return true; });
+  ok &= expect(cancelled.started() && cancelled.cancellationIssued &&
+                   !cancelled.cancellationFailure &&
+                   FAILED(cancelled.statusResult) && cancelCalls == 1 &&
+                   cancellationStatusCalls == 1 &&
+                   cancellationStatusWaited &&
+                   cancellationCallbackFired.load(std::memory_order_acquire) &&
+                   cancellationClosed,
+               "the Windows ML bridge must keep callback state alive while "
+               "an asynchronous cancellation completes, then wait for "
+               "status and close exactly once");
   return ok;
 }
 
@@ -807,6 +946,7 @@ int main() {
   ok &= testArtifactContract(directory);
   ok &= testSpectralContract();
   ok &= testInferenceBackendContracts();
+  ok &= testWindowsMlAsyncSetupBridge();
   ok &= testGpuOnlyInferenceContract(directory);
   ok &= testFlacWriter(directory);
   ok &= testJobLifecycle(directory);

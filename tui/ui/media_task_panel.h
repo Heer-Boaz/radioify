@@ -9,6 +9,7 @@
 #include "tui/input_event.h"
 #include "tui/ui/button_row.h"
 #include "tui/ui/media_task_presentation.h"
+#include "playback/media_processing_actions.h"
 
 namespace tui_media_task_panel {
 
@@ -25,6 +26,8 @@ enum class ActivationSource {
 
 inline constexpr tui_dialog::ButtonId kCancelTaskButton = 2;
 inline constexpr tui_dialog::ButtonId kKeepRunningButton = 3;
+inline constexpr tui_dialog::ButtonId kSetUpAudioButton = 4;
+inline constexpr tui_dialog::ButtonId kNotNowButton = 5;
 
 struct Bounds {
   int width = 0;
@@ -78,11 +81,17 @@ struct RetryTask {
   playback_media_actions::Action action;
 };
 
-using DialogIntent = std::variant<CancelTask, RetryTask>;
+struct SetUpAudioSeparation {
+  playback_media_processing::AudioSeparationSetupRequest request;
+};
+
+using DialogIntent =
+    std::variant<CancelTask, RetryTask, SetUpAudioSeparation>;
 
 enum class DialogKind {
   Cancellation,
   Failure,
+  AudioSeparationSetup,
 };
 
 struct DialogContext {
@@ -176,6 +185,8 @@ std::string indicatorText(const MediaTaskCardModel& task);
 IndicatorLayout indicatorLayout(int availableWidth, int y,
                                 const MediaTaskCardModel& task);
 DialogRequest cancellationDialogRequest(const MediaTaskCardModel& task);
+DialogRequest audioSeparationSetupDialogRequest(
+    playback_media_processing::AudioSeparationSetupRequest request);
 DialogRequest failureDialogRequest(const MediaTaskFailureDialogModel& failure);
 
 }  // namespace tui_media_task_panel

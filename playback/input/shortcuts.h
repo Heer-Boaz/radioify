@@ -111,34 +111,34 @@ inline constexpr std::array<PlaybackShortcutBinding, 63>
          kPlaybackShortcutContextVideoEditExitConfirmation |
              kPlaybackShortcutContextVideoEditLeaveConfirmation |
              kPlaybackShortcutContextVideoEditDiscardConfirmation},
-        {PlaybackAction::DismissMediaTaskCancellation, VK_ESCAPE, 0, 0, 0,
+        {PlaybackAction::DismissMediaActionConfirmation, VK_ESCAPE, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
-         kPlaybackShortcutContextMediaTaskCancellationConfirmation},
-        {PlaybackAction::DismissMediaTaskCancellation, VK_BACK, 0, 0, 0,
+          kPlaybackShortcutContextMediaActionConfirmation},
+        {PlaybackAction::DismissMediaActionConfirmation, VK_BACK, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
-         kPlaybackShortcutContextMediaTaskCancellationConfirmation},
-        {PlaybackAction::SelectPreviousMediaTaskCancellationAction, VK_LEFT,
+          kPlaybackShortcutContextMediaActionConfirmation},
+        {PlaybackAction::SelectPreviousMediaActionConfirmation, VK_LEFT,
          0, 0, 0,
          kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
-         kPlaybackShortcutContextMediaTaskCancellationConfirmation},
-        {PlaybackAction::SelectNextMediaTaskCancellationAction, VK_RIGHT,
+          kPlaybackShortcutContextMediaActionConfirmation},
+        {PlaybackAction::SelectNextMediaActionConfirmation, VK_RIGHT,
          0, 0, 0,
          kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
-         kPlaybackShortcutContextMediaTaskCancellationConfirmation},
-        {PlaybackAction::SelectNextMediaTaskCancellationAction, VK_TAB,
+          kPlaybackShortcutContextMediaActionConfirmation},
+        {PlaybackAction::SelectNextMediaActionConfirmation, VK_TAB,
          0, 0, 0,
          kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
-         kPlaybackShortcutContextMediaTaskCancellationConfirmation},
-        {PlaybackAction::SelectPreviousMediaTaskCancellationAction, VK_TAB,
+          kPlaybackShortcutContextMediaActionConfirmation},
+        {PlaybackAction::SelectPreviousMediaActionConfirmation, VK_TAB,
          0, 0, kPlaybackShortcutShiftMask,
          kPlaybackShortcutTextForbiddenMask,
-         kPlaybackShortcutContextMediaTaskCancellationConfirmation},
-        {PlaybackAction::ActivateMediaTaskCancellationAction, VK_RETURN,
+          kPlaybackShortcutContextMediaActionConfirmation},
+        {PlaybackAction::ActivateMediaActionConfirmation, VK_RETURN,
          0, 0, 0, kPlaybackShortcutTextForbiddenMask,
-         kPlaybackShortcutContextMediaTaskCancellationConfirmation},
-        {PlaybackAction::ActivateMediaTaskCancellationAction, VK_SPACE,
+          kPlaybackShortcutContextMediaActionConfirmation},
+        {PlaybackAction::ActivateMediaActionConfirmation, VK_SPACE,
          ' ', ' ', 0, kPlaybackShortcutTextForbiddenMask,
-         kPlaybackShortcutContextMediaTaskCancellationConfirmation},
+          kPlaybackShortcutContextMediaActionConfirmation},
         {PlaybackAction::ConfirmVideoEditPrompt, VK_RETURN, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoEditLeaveConfirmation},
@@ -335,8 +335,8 @@ inline std::optional<PlaybackAction> resolvePlaybackAction(
   switch (action) {
     case InputAction::Back:
       if ((shortcutContexts &
-           kPlaybackShortcutContextMediaTaskCancellationConfirmation) != 0) {
-        return PlaybackAction::DismissMediaTaskCancellation;
+           kPlaybackShortcutContextMediaActionConfirmation) != 0) {
+        return PlaybackAction::DismissMediaActionConfirmation;
       }
       if ((shortcutContexts &
            kPlaybackShortcutContextVideoEditLeaveConfirmation) != 0 ||
@@ -440,10 +440,10 @@ resolveLiveBrowserVideoShortcut(const InputEvent& event) {
     case PlaybackAction::ExportVideoEdits:
     case PlaybackAction::DiscardVideoEditsAndExit:
     case PlaybackAction::CancelVideoEditPrompt:
-    case PlaybackAction::SelectPreviousMediaTaskCancellationAction:
-    case PlaybackAction::SelectNextMediaTaskCancellationAction:
-    case PlaybackAction::ActivateMediaTaskCancellationAction:
-    case PlaybackAction::DismissMediaTaskCancellation:
+    case PlaybackAction::SelectPreviousMediaActionConfirmation:
+    case PlaybackAction::SelectNextMediaActionConfirmation:
+    case PlaybackAction::ActivateMediaActionConfirmation:
+    case PlaybackAction::DismissMediaActionConfirmation:
     case PlaybackAction::DismissPictureInPicture:
     case PlaybackAction::CloseViewer:
       return std::nullopt;

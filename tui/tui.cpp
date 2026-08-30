@@ -561,8 +561,6 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   };
 
   std::string mediaCommandError;
-  std::vector<playback_media_processing::CancellationRequest>
-      confirmedPlaybackTaskCancellations;
 
   PlaybackSession::Dependencies mediaSessionDependencies{
       audioPlayback, gpu, screen, runtime.subtitleLoader(),
@@ -723,12 +721,6 @@ int runTui(Options o, ApplicationRuntime& runtime) {
               mediaCommandError.clear();
             }
             markDirty(UiDirtyFlags::Async);
-          } else if constexpr (
-              std::is_same_v<
-                  Event,
-                  playback_session::MediaTaskCancellationRequested>) {
-            confirmedPlaybackTaskCancellations.push_back(
-                std::move(value.request));
           }
         },
         event);
@@ -1091,10 +1083,10 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       case PlaybackAction::ExportVideoEdits:
       case PlaybackAction::DiscardVideoEditsAndExit:
       case PlaybackAction::CancelVideoEditPrompt:
-      case PlaybackAction::SelectPreviousMediaTaskCancellationAction:
-      case PlaybackAction::SelectNextMediaTaskCancellationAction:
-      case PlaybackAction::ActivateMediaTaskCancellationAction:
-      case PlaybackAction::DismissMediaTaskCancellation:
+      case PlaybackAction::SelectPreviousMediaActionConfirmation:
+      case PlaybackAction::SelectNextMediaActionConfirmation:
+      case PlaybackAction::ActivateMediaActionConfirmation:
+      case PlaybackAction::DismissMediaActionConfirmation:
       case PlaybackAction::ExitPlaybackSession:
       case PlaybackAction::CloseViewer:
         break;
@@ -1281,6 +1273,41 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     mediaTaskDialogs.opened(dialog, std::move(request.context));
   };
 
+  auto presentAudioSeparationSetup =
+      [&](const std::filesystem::path& sourceFile) {
+        const auto setup =
+            mediaProcessingActions.prepareAudioSeparationSetup(
+                playback_media_actions::Action::SetUpAudioSeparation,
+                sourceFile);
+        if (!setup) {
+          mediaCommandError =
+              "Audio separation setup is no longer required or available.";
+          const std::string sourceName =
+              toUtf8String(sourceFile.filename());
+          if (!sourceName.empty()) {
+            mediaCommandError += " Source: \"" + sourceName + "\".";
+          }
+        } else {
+          openMediaTaskDialog(
+              tui_media_task_panel::audioSeparationSetupDialogRequest(
+                  *setup));
+          mediaCommandError.clear();
+        }
+        markLayoutDirty();
+        return setup.has_value();
+      };
+
+  auto confirmAudioSeparationSetup =
+      [&](const playback_media_processing::AudioSeparationSetupRequest&
+              request) {
+        const auto result =
+            mediaTasks.confirmAudioSeparationSetup(request);
+        mediaCommandError = result.accepted ? std::string() : result.feedback;
+        if (result.accepted) markDirty(UiDirtyFlags::Async);
+        markLayoutDirty();
+        return result.accepted;
+      };
+
   auto applyApplicationExitTransition =
       [&](tui_application_exit::Transition transition) {
         for (;;) {
@@ -1386,6 +1413,11 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     const auto* track = entry.actionAs<browser_entry::PlayTrack>();
     const std::optional<int> trackIndex =
         track ? std::optional<int>(track->trackIndex) : std::nullopt;
+    if (action ==
+        playback_media_actions::Action::SetUpAudioSeparation) {
+      presentAudioSeparationSetup(entry.path);
+      return;
+    }
     if (playback_media_processing::isCancellationAction(action)) {
       const auto request = mediaProcessingActions.prepareCancellation(
           action, entry.path);
@@ -1442,6 +1474,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       case playback_media_actions::Action::ExportTranscriptText:
       case playback_media_actions::Action::ExportAudio:
       case playback_media_actions::Action::CancelMediaExport:
+      case playback_media_actions::Action::SetUpAudioSeparation:
+      case playback_media_actions::Action::CancelAudioSeparationSetup:
       case playback_media_actions::Action::SeparateAudio:
       case playback_media_actions::Action::CancelAudioSeparation:
         return;
@@ -1457,13 +1491,6 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       handleMediaCoordinatorEvent(std::move(event));
     }
     tui_media_tasks::Update taskUpdate = mediaTasks.poll();
-    for (const playback_media_processing::CancellationRequest& request :
-         confirmedPlaybackTaskCancellations) {
-      if (mediaTasks.confirmCancellation(request)) {
-        markDirty(UiDirtyFlags::Async);
-      }
-    }
-    confirmedPlaybackTaskCancellations.clear();
     const tui_media_tasks::Snapshot& taskSnapshot = mediaTasks.snapshot();
     mediaTaskPanel.synchronize(taskSnapshot.activeCard);
     if (const std::optional<tui_dialog::DialogId> obsoleteDialog =
@@ -1759,6 +1786,11 @@ int runTui(Options o, ApplicationRuntime& runtime) {
                 using Intent = std::decay_t<decltype(value)>;
                 if constexpr (std::is_same_v<Intent,
                                              tui_media_task_panel::RetryTask>) {
+                  if (value.action ==
+                      playback_media_actions::Action::SetUpAudioSeparation) {
+                    presentAudioSeparationSetup(value.sourceFile);
+                    return;
+                  }
                   const media_processing::ActionRequest request =
                       media_processing::captureActionRequest(
                           value.action, value.sourceFile, std::nullopt,
@@ -1773,8 +1805,13 @@ int runTui(Options o, ApplicationRuntime& runtime) {
                                          Intent,
                                          tui_media_task_panel::CancelTask>) {
                   if (mediaTasks.cancelActive(value.taskId)) {
-                    markDirty(UiDirtyFlags::Async);
-                  }
+                      markDirty(UiDirtyFlags::Async);
+                    }
+                } else if constexpr (std::is_same_v<
+                                         Intent,
+                                         tui_media_task_panel::
+                                             SetUpAudioSeparation>) {
+                  confirmAudioSeparationSetup(value.request);
                 }
               },
               *taskDialogIntent);

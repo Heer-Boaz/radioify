@@ -3,9 +3,11 @@ add_subdirectory(video)
 radioify_add_module_object_library(radioify_playback
   ${CMAKE_CURRENT_SOURCE_DIR}/control/session_command_mailbox.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_action_catalog.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/media_action_confirmation_content.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_action_context.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_processing_actions.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_processing_cancellation.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/media_processing_presentation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/target_kind.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/target_resolver.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media/artwork_catalog.cpp
@@ -24,7 +26,7 @@ radioify_add_module_object_library(radioify_playback
   ${CMAKE_CURRENT_SOURCE_DIR}/session/input.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/loop.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/log.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/session/media_task_cancellation.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/session/media_action_confirmation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/media_task_feedback.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/osd_timeline.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/overlay_control_pointer.cpp

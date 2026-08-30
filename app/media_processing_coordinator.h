@@ -10,6 +10,7 @@
 
 #include "audio/loopsplit/loopsplit.h"
 #include "audio/separation/operation_binding.h"
+#include "audio/separation/provider_setup.h"
 #include "app/media_processing_task_id.h"
 #include "core/native_wait_handle.h"
 #include "playback/media_processing_service.h"
@@ -71,6 +72,10 @@ struct PollResult {
 // playback completion.
 std::optional<playback_media_processing::Completion> completionForPlayback(
     const TaskCompletion& completion);
+playback_media_processing::Activity activityForPlayback(
+    const TaskActivity& activity);
+std::optional<playback_media_processing::Activity> activityForPlayback(
+    const std::optional<TaskActivity>& activity);
 
 struct InteractivePlaybackState;
 
@@ -123,12 +128,16 @@ class Coordinator final : public playback_media_processing::Service {
       const std::filesystem::path&, const std::filesystem::path&,
       const ProgressReporter&, const CancellationRequested&,
       const CommitStarted&, std::string*)>;
+  using AudioSeparationBindingResolver =
+      std::function<audio_separation::OperationBinding()>;
 
   struct Operations {
     MelodyOperation analyzeMelody;
     LoopSplitOperation splitLoop;
     playback_video_transcript::GenerationJob::Operation generateSubtitles;
     std::optional<audio_separation::OperationBinding> separateAudio;
+    audio_separation::ProviderSetupOperation setupAudioSeparation;
+    AudioSeparationBindingResolver resolveAudioSeparation;
     FileExportOperation exportAudio;
     FileExportOperation exportTranscriptText;
   };
@@ -169,14 +178,21 @@ class Coordinator final : public playback_media_processing::Service {
       const std::filesystem::path& sourceFile) override;
   playback_media_processing::RequestResult requestMediaExportCancellation()
       override;
+  playback_media_processing::RequestResult requestAudioSeparationSetup(
+      const std::filesystem::path& sourceFile) override;
+  playback_media_processing::RequestResult
+  requestAudioSeparationSetupCancellation() override;
   playback_media_processing::RequestResult requestAudioSeparation(
       const std::filesystem::path& sourceFile) override;
   playback_media_processing::RequestResult requestAudioSeparationCancellation()
       override;
+  playback_media_processing::RequestResult requestTaskCancellation(
+      TaskId expectedTask) override;
 
   bool subtitleGenerationRunningFor(
       const std::filesystem::path& sourceFile) const;
-  bool audioSeparationAvailableFor(
+  playback_media_processing::AudioSeparationAvailability
+  audioSeparationAvailabilityFor(
       const std::filesystem::path& sourceFile) const;
   bool audioSeparationRunningFor(
       const std::filesystem::path& sourceFile) const;
@@ -208,6 +224,8 @@ class Coordinator final : public playback_media_processing::Service {
     LoopSplitOperation splitLoop;
     playback_video_transcript::GenerationJob::Operation generateSubtitles;
     std::optional<audio_separation::OperationBinding> separateAudio;
+    audio_separation::ProviderSetupOperation setupAudioSeparation;
+    AudioSeparationBindingResolver resolveAudioSeparation;
     FileExportOperation exportAudio;
     FileExportOperation exportTranscriptText;
   };

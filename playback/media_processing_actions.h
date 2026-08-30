@@ -23,6 +23,8 @@ inline constexpr const char* operationDisplayName(Operation operation) {
       return "loop split";
     case Operation::SubtitleGeneration:
       return "subtitle generation";
+    case Operation::AudioSeparationSetup:
+      return "audio separation setup";
     case Operation::AudioSeparation:
       return "audio separation";
     case Operation::AudioExport:
@@ -38,16 +40,19 @@ inline constexpr const char* operationDisplayName(Operation operation) {
 // whether this exact task identity, operation and source are still active.
 struct CancellationRequest {
   TaskId taskId;
-  playback_media_actions::Action action =
-      playback_media_actions::Action::CancelMediaExport;
   Operation operation = Operation::AudioExport;
   std::filesystem::path sourceFile;
 };
 
+struct AudioSeparationSetupRequest {
+  std::filesystem::path sourceFile;
+};
+
 bool isCancellationAction(playback_media_actions::Action action);
-bool cancellationTargetsOperation(playback_media_actions::Action action,
-                                  Operation operation);
 std::optional<CancellationRequest> prepareCancellation(
+    playback_media_actions::Action action,
+    const std::filesystem::path& sourceFile, const SourceState& state);
+std::optional<AudioSeparationSetupRequest> prepareAudioSeparationSetup(
     playback_media_actions::Action action,
     const std::filesystem::path& sourceFile, const SourceState& state);
 
@@ -69,6 +74,15 @@ class Actions {
   std::optional<CancellationRequest> prepareCancellation(
       playback_media_actions::Action action,
       const std::filesystem::path& sourceFile) const;
+  std::optional<CancellationRequest> prepareCancellation(
+      const Activity& activity) const;
+  std::optional<AudioSeparationSetupRequest> prepareAudioSeparationSetup(
+      playback_media_actions::Action action,
+      const std::filesystem::path& sourceFile) const;
+  ActionResult confirmCancellation(
+      const CancellationRequest& request) const;
+  ActionResult confirmAudioSeparationSetup(
+      const AudioSeparationSetupRequest& request) const;
   playback_media_actions::Context contextForSource(
       const std::filesystem::path& sourceFile) const;
 

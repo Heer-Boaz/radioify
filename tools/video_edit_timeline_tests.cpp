@@ -1017,11 +1017,13 @@ int main() {
                    playbackSuffixState).empty(),
                "a modal editor prompt must own its chrome without an "
                "unrelated playback suffix");
-  playback_overlay::MediaTaskCancellationDialog mediaCancellationPrompt;
-  mediaCancellationPrompt.title = "Cancel audio separation?";
-  mediaCancellationPrompt.sourceName = "NTE.mp4";
+  playback_overlay::MediaActionConfirmationDialog mediaActionPrompt;
+  mediaActionPrompt.title = "Cancel audio separation?";
+  mediaActionPrompt.text = {"NTE.mp4", "Progress will be lost."};
+  mediaActionPrompt.primaryLabel = "Cancel task";
+  mediaActionPrompt.secondaryLabel = "Keep running";
   playbackSuffixState.videoEditPrompt = Prompt::None;
-  playbackSuffixState.mediaTaskCancellationPrompt = mediaCancellationPrompt;
+  playbackSuffixState.mediaActionConfirmationPrompt = mediaActionPrompt;
   ok &= expect(playback_overlay::buildWindowOverlayProgressSuffix(
                    playbackSuffixState).empty(),
                "a media-task decision must own its modal status row without "
@@ -1051,8 +1053,8 @@ int main() {
   ok &= expect(
       controlIds(mediaCancellationControls) ==
               std::vector<playback_overlay::OverlayControlId>{
-                  playback_overlay::OverlayControlId::MediaTaskCancel,
-                  playback_overlay::OverlayControlId::MediaTaskKeepRunning} &&
+                  playback_overlay::OverlayControlId::MediaActionPrimary,
+                  playback_overlay::OverlayControlId::MediaActionSecondary} &&
           !mediaCancellationControls[0].active &&
           mediaCancellationControls[1].active,
       "playback surfaces must expose the same destructive and safe choices "
@@ -1064,9 +1066,9 @@ int main() {
   mediaCancellationDialogInput.text = {
       "Progress on NTE.mp4 will be lost."};
   mediaCancellationDialogInput.buttons = {
-      {playback_overlay::OverlayControlId::MediaTaskCancel, "Cancel task",
+      {playback_overlay::OverlayControlId::MediaActionPrimary, "Cancel task",
        "Stop", false, false, true},
-      {playback_overlay::OverlayControlId::MediaTaskKeepRunning,
+      {playback_overlay::OverlayControlId::MediaActionSecondary,
        "Keep running", "Keep", true, false, true}};
   const auto mediaCancellationLayout =
       playback_overlay::layoutOverlayDialogCells(
@@ -1078,16 +1080,44 @@ int main() {
               (120 - mediaCancellationLayout.dialog->width) / 2 &&
           mediaCancellationLayout.dialog->y ==
               (40 - mediaCancellationLayout.dialog->height) / 2 &&
-          mediaCancellationLayout.dialog->title ==
-              "Cancel audio separation?" &&
           mediaCancellationLayout.dialog->contentLines.size() == 1 &&
-          mediaCancellationLayout.dialog->contentLines[0].text ==
-              "Progress on NTE.mp4 will be lost." &&
           mediaCancellationLayout.controls.size() == 2 &&
           mediaCancellationLayout.controls[1].active &&
           mediaCancellationLayout.progressBarY < 0,
       "playback decisions must use the shared centered dialog geometry with "
       "the safe action selected instead of looking like transport chrome");
+
+  playbackSuffixState.mediaActionConfirmationPrompt.reset();
+  playback_media_processing::Activity visibleTask;
+  visibleTask.taskId = playback_media_processing::TaskId{91};
+  visibleTask.operation =
+      playback_media_processing::Operation::AudioSeparationSetup;
+  visibleTask.sourceFile = "NTE.mp4";
+  visibleTask.progress = 0.42f;
+  visibleTask.cancellable = true;
+  playbackSuffixState.mediaTaskActivity = visibleTask;
+  const auto activeTaskControls =
+      playback_overlay::buildOverlayControlSpecs(playbackSuffixState, -1);
+  const auto cancelTaskControl = controlFor(
+      activeTaskControls,
+      playback_overlay::OverlayControlId::MediaTaskCancel);
+  ok &= expect(
+      cancelTaskControl != activeTaskControls.end() &&
+          cancelTaskControl->enabled &&
+          overlayActionForControl(
+              playback_overlay::OverlayControlId::MediaTaskCancel) ==
+              playback_overlay::OverlayAction::CancelMediaTask,
+      "a modeless playback task must expose identity-bound cancellation "
+      "through the normal overlay interaction pipeline");
+  playbackSuffixState.mediaTaskActivity->cancellable = false;
+  const auto committedTaskControls =
+      playback_overlay::buildOverlayControlSpecs(playbackSuffixState, -1);
+  ok &= expect(controlFor(committedTaskControls,
+                          playback_overlay::OverlayControlId::
+                              MediaTaskCancel) ==
+                   committedTaskControls.end(),
+               "a task past its cancellation barrier must remove the "
+               "playback cancellation control");
   mediaCancellationDialogInput.width = 20;
   mediaCancellationDialogInput.height = 4;
   const auto compactMediaCancellationLayout =

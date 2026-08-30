@@ -357,8 +357,8 @@ int main() {
       kPlaybackShortcutContextVideoEditLeaveConfirmation;
   const uint32_t videoEditDiscardContexts =
       kPlaybackShortcutContextVideoEditDiscardConfirmation;
-  const uint32_t mediaTaskCancellationContexts =
-      kPlaybackShortcutContextMediaTaskCancellationConfirmation;
+  const uint32_t mediaActionConfirmationContexts =
+      kPlaybackShortcutContextMediaActionConfirmation;
   ok &= expect(resolvePlaybackAction(makeKey('E'),
                                               videoPlaybackContexts)
                    .value() == PlaybackAction::OpenVideoEditor,
@@ -506,23 +506,23 @@ int main() {
                "Enter must choose the safe default in the playback-exit prompt");
   ok &= expect(
       resolvePlaybackAction(makeKey(VK_RETURN),
-                            mediaTaskCancellationContexts) ==
-              PlaybackAction::ActivateMediaTaskCancellationAction &&
+                             mediaActionConfirmationContexts) ==
+              PlaybackAction::ActivateMediaActionConfirmation &&
           resolvePlaybackAction(makeKey(VK_SPACE, ' '),
-                                mediaTaskCancellationContexts) ==
-              PlaybackAction::ActivateMediaTaskCancellationAction &&
+                                 mediaActionConfirmationContexts) ==
+              PlaybackAction::ActivateMediaActionConfirmation &&
           resolvePlaybackAction(makeKey(VK_RIGHT),
-                                mediaTaskCancellationContexts) ==
-              PlaybackAction::SelectNextMediaTaskCancellationAction &&
+                                 mediaActionConfirmationContexts) ==
+              PlaybackAction::SelectNextMediaActionConfirmation &&
           resolvePlaybackAction(makeKey(VK_TAB),
-                                mediaTaskCancellationContexts) ==
-              PlaybackAction::SelectNextMediaTaskCancellationAction &&
+                                 mediaActionConfirmationContexts) ==
+              PlaybackAction::SelectNextMediaActionConfirmation &&
           resolvePlaybackAction(makeKey(VK_TAB, 0, SHIFT_PRESSED),
-                                mediaTaskCancellationContexts) ==
-              PlaybackAction::SelectPreviousMediaTaskCancellationAction &&
+                                 mediaActionConfirmationContexts) ==
+              PlaybackAction::SelectPreviousMediaActionConfirmation &&
           resolvePlaybackAction(InputAction::Back,
-                                mediaTaskCancellationContexts) ==
-              PlaybackAction::DismissMediaTaskCancellation,
+                                 mediaActionConfirmationContexts) ==
+              PlaybackAction::DismissMediaActionConfirmation,
       "media-task confirmation must use standard dialog navigation and "
       "activation keys");
   ok &= expect(resolvePlaybackAction(

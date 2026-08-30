@@ -29,11 +29,12 @@ enum class CommandAction : std::uint8_t {
   NavigateBack,
   ConfirmPendingExit,
   CancelPendingExit,
-  ConfirmMediaTaskCancellation,
-  DismissMediaTaskCancellation,
-  ActivateSelectedMediaTaskCancellationAction,
-  SelectPreviousMediaTaskCancellationAction,
-  SelectNextMediaTaskCancellationAction,
+  CancelActiveMediaTask,
+  ConfirmMediaAction,
+  DismissMediaAction,
+  ActivateSelectedMediaActionConfirmation,
+  SelectPreviousMediaActionConfirmation,
+  SelectNextMediaActionConfirmation,
 };
 
 struct ShowPlaybackControls {
@@ -115,7 +116,7 @@ struct SessionSnapshot {
   bool videoEditorActive = false;
   playback_video_edit::Prompt videoEditPrompt =
       playback_video_edit::Prompt::None;
-  bool mediaTaskCancellationPrompt = false;
+  bool mediaActionConfirmationPrompt = false;
   bool contextMenuVisible = false;
   bool playbackControlsVisible = false;
   bool stopRequested = false;

@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 
 #include "tui/ui/media_task_panel.h"
@@ -44,6 +45,7 @@ int main() {
 
   MediaTaskCardModel task;
   task.taskId = media_processing::TaskId{42};
+  task.operation = playback_media_processing::Operation::AudioSeparation;
   task.title = "Separating audio";
   task.operationName = "audio separation";
   task.sourceName = "NTE.mp4";
@@ -278,8 +280,7 @@ int main() {
 
   const DialogRequest confirmation = cancellationDialogRequest(task);
   ok &= expect(
-      confirmation.content.title == "Cancel audio separation?" &&
-          confirmation.content.buttons.size() == 2 &&
+      confirmation.content.buttons.size() == 2 &&
           confirmation.content.buttons[0].id == kCancelTaskButton &&
           confirmation.content.initiallySelectedButton == kKeepRunningButton &&
           confirmation.context.taskId == task.taskId,
@@ -298,6 +299,29 @@ int main() {
                          : nullptr;
   ok &= expect(cancelTask && cancelTask->taskId == task.taskId,
                "a cancellation button must publish its bound task identity");
+
+  const std::filesystem::path setupSource = LR"(C:\Media\setup.mp4)";
+  const DialogRequest setupConfirmation =
+      audioSeparationSetupDialogRequest(
+          playback_media_processing::AudioSeparationSetupRequest{
+              setupSource});
+  const tui_dialog::DialogId setupDialogId{9};
+  dialogSession.opened(setupDialogId, setupConfirmation.context);
+  const auto declinedSetup =
+      dialogSession.handle({setupDialogId, kNotNowButton});
+  dialogSession.opened(setupDialogId, setupConfirmation.context);
+  const auto confirmedSetup =
+      dialogSession.handle({setupDialogId, kSetUpAudioButton});
+  const SetUpAudioSeparation* setupIntent =
+      confirmedSetup
+          ? std::get_if<SetUpAudioSeparation>(&*confirmedSetup)
+          : nullptr;
+  ok &= expect(
+      setupConfirmation.content.initiallySelectedButton == kNotNowButton &&
+          !declinedSetup && setupIntent &&
+          setupIntent->request.sourceFile == setupSource,
+      "the setup dialog must default to declining and publish its typed "
+      "request only after explicit confirmation");
 
   dialogSession.opened(cancellationDialogId, confirmation.context);
   MediaTaskCardModel differentTask = task;

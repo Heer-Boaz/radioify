@@ -7,6 +7,7 @@
 #include "app/media_processing_task_id.h"
 #include "dialog.h"
 #include "playback/media_action_catalog.h"
+#include "playback/media_processing_service.h"
 
 namespace media_processing {
 class Coordinator;
@@ -16,6 +17,8 @@ struct TaskCompletion;
 
 struct MediaTaskCardModel {
   media_processing::TaskId taskId;
+  playback_media_processing::Operation operation =
+      playback_media_processing::Operation::MelodyAnalysis;
   std::string title;
   std::string operationName;
   std::string sourceName;

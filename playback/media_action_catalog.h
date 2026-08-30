@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "playback/audio_separation_availability.h"
+
 namespace playback_media_actions {
 
 // Commands that act on a media source rather than on a particular UI surface.
@@ -18,6 +20,8 @@ enum class Action : uint8_t {
   ExportTranscriptText,
   ExportAudio,
   CancelMediaExport,
+  SetUpAudioSeparation,
+  CancelAudioSeparationSetup,
   SeparateAudio,
   CancelAudioSeparation,
   AnalyzeAudio,
@@ -37,7 +41,9 @@ struct Context {
   bool hasEdits = false;
   bool canBrowseTracks = false;
   bool canAnalyzeAudio = false;
-  bool canSeparateAudio = false;
+  playback_media_processing::AudioSeparationAvailability
+      audioSeparationAvailability =
+          playback_media_processing::AudioSeparationAvailability::Unavailable;
   bool canExportAudio = false;
   bool canExportTranscriptText = false;
   bool canGenerateSubtitles = false;
@@ -46,6 +52,7 @@ struct Context {
   bool hasGeneratedSubtitles = false;
   bool subtitleGenerationRunningForSource = false;
   bool hasSeparatedAudio = false;
+  bool audioSeparationSetupRunningForSource = false;
   bool audioSeparationRunningForSource = false;
   bool audioExportRunningForSource = false;
   bool transcriptTextExportRunningForSource = false;

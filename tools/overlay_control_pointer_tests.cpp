@@ -30,17 +30,18 @@ int main() {
 
   auto interaction =
       state.handle(pointer(MouseEventKind::Press, true), Surface::VideoWindow,
-                   Control::MediaTaskCancel);
+                   Control::MediaActionPrimary);
   ok &= expect(interaction.captured && !interaction.activated,
                "press must arm without activating a playback control");
   interaction = state.handle(pointer(MouseEventKind::Release, false),
-                             Surface::VideoWindow, Control::MediaTaskCancel);
+                             Surface::VideoWindow, Control::MediaActionPrimary);
   ok &= expect(
-      interaction.captured && interaction.activated == Control::MediaTaskCancel,
+      interaction.captured &&
+          interaction.activated == Control::MediaActionPrimary,
       "release over the same control and surface must activate");
 
   state.handle(pointer(MouseEventKind::Press, true), Surface::VideoWindow,
-               Control::MediaTaskCancel);
+               Control::MediaActionPrimary);
   interaction = state.handle(pointer(MouseEventKind::Release, false),
                              Surface::VideoWindow, std::nullopt);
   ok &= expect(interaction.captured && !interaction.activated,
@@ -59,11 +60,11 @@ int main() {
                "release without an armed press must be inert");
 
   state.handle(pointer(MouseEventKind::Press, true), Surface::VideoWindow,
-               Control::MediaTaskCancel);
+               Control::MediaActionPrimary);
   state.reset();
   interaction = state.handle(pointer(MouseEventKind::Release, false),
                              Surface::VideoWindow,
-                             Control::MediaTaskCancel);
+                             Control::MediaActionPrimary);
   ok &= expect(!interaction.captured && !interaction.activated,
                "resize-style pointer reset must prevent release activation");
 

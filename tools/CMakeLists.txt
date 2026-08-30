@@ -277,8 +277,8 @@ radioify_add_module_object_library(radioify_tool_subtitle_loader_tests
 )
 
 radioify_add_module_object_library(
-  radioify_tool_media_task_cancellation_tests
-  ${CMAKE_CURRENT_SOURCE_DIR}/media_task_cancellation_tests.cpp
+  radioify_tool_media_action_confirmation_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/media_action_confirmation_tests.cpp
 )
 
 radioify_add_module_object_library(

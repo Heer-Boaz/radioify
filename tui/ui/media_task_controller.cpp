@@ -37,10 +37,6 @@ std::optional<playback_media_processing::ActionResult> Controller::retry(
 
 std::optional<MediaTaskCardModel> Controller::cancellationTarget(
     const playback_media_processing::CancellationRequest& request) {
-  if (!playback_media_processing::isCancellationAction(request.action)) {
-    return std::nullopt;
-  }
-
   const std::optional<media_processing::TaskActivity> activity =
       coordinator_.activity();
   if (!request.taskId || !activity || activity->id != request.taskId ||
@@ -49,9 +45,7 @@ std::optional<MediaTaskCardModel> Controller::cancellationTarget(
     return std::nullopt;
   }
 
-  if (request.operation != activity->kind ||
-      !playback_media_processing::cancellationTargetsOperation(
-          request.action, request.operation)) {
+  if (request.operation != activity->kind) {
     return std::nullopt;
   }
 
@@ -66,8 +60,20 @@ bool Controller::confirmCancellation(
     const playback_media_processing::CancellationRequest& request) {
   const std::optional<MediaTaskCardModel> target =
       cancellationTarget(request);
-  return target && target->taskId == request.taskId &&
-         cancelActive(request.taskId);
+  if (!target || target->taskId != request.taskId) return false;
+  const playback_media_processing::ActionResult result =
+      actions_.playbackActions().confirmCancellation(request);
+  refreshSnapshot();
+  return result.accepted;
+}
+
+playback_media_processing::ActionResult
+Controller::confirmAudioSeparationSetup(
+    const playback_media_processing::AudioSeparationSetupRequest& request) {
+  playback_media_processing::ActionResult result =
+      actions_.playbackActions().confirmAudioSeparationSetup(request);
+  refreshSnapshot();
+  return result;
 }
 
 playback_media_actions::Context Controller::contextForSource(

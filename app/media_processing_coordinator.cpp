@@ -78,13 +78,20 @@ class WorkerTask {
   using Operation = std::function<TaskCompletion(
       const ProgressReporter&, const CancellationRequested&,
       const CommitStarted&)>;
+  enum class CompletionContract {
+    RequiresPublishedOutput,
+    NoPublishedOutput,
+  };
 
   explicit WorkerTask(WakeNotifier ownerWake = {})
       : ownerWake_(std::move(ownerWake)) {}
 
   ~WorkerTask() { cancelAndJoin(); }
 
-  bool tryStart(TaskActivity activity, Operation operation) {
+  bool tryStart(
+      TaskActivity activity, Operation operation,
+      CompletionContract completionContract =
+          CompletionContract::RequiresPublishedOutput) {
     joinFinished();
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -96,8 +103,9 @@ class WorkerTask {
       }
       activity_ = std::move(activity);
       try {
-        worker_ = std::thread([this, operation = std::move(operation)]() {
-          run(operation);
+        worker_ = std::thread([this, operation = std::move(operation),
+                               completionContract]() {
+          run(operation, completionContract);
         });
       } catch (const std::exception& exception) {
         TaskCompletion completion;
@@ -220,7 +228,8 @@ class WorkerTask {
     return true;
   }
 
-  void run(const Operation& operation) {
+  void run(const Operation& operation,
+           CompletionContract completionContract) {
     TaskCompletion completion;
     try {
       completion = operation(
@@ -259,7 +268,8 @@ class WorkerTask {
       std::lock_guard<std::mutex> lock(mutex_);
       commitWasStarted = commitStarted_;
     }
-    if (completion.succeeded() && !commitWasStarted) {
+    if (completion.succeeded() && !commitWasStarted &&
+        completionContract == CompletionContract::RequiresPublishedOutput) {
       completion.outcome = TaskOutcome::Failed;
       completion.detail =
           "The media backend completed without publishing its output "
@@ -315,6 +325,7 @@ std::optional<playback_media_processing::Completion> completionForPlayback(
     case TaskKind::LoopSplit:
       return std::nullopt;
     case TaskKind::SubtitleGeneration:
+    case TaskKind::AudioSeparationSetup:
     case TaskKind::AudioSeparation:
     case TaskKind::AudioExport:
     case TaskKind::TranscriptTextExport:
@@ -329,12 +340,48 @@ std::optional<playback_media_processing::Completion> completionForPlayback(
   return projected;
 }
 
+playback_media_processing::Activity activityForPlayback(
+    const TaskActivity& activity) {
+  playback_media_processing::Activity projected;
+  projected.taskId = activity.id;
+  projected.operation = activity.kind;
+  projected.sourceFile = activity.sourceFile;
+  projected.processingEngine = activity.processingEngine;
+  projected.progress = activity.progress;
+  projected.phase = activity.phase;
+  projected.cancelling = activity.cancelling;
+  projected.cancellable = activity.cancellable;
+  switch (activity.scheduling) {
+    case TaskSchedulingState::Running:
+      projected.scheduling =
+          playback_media_processing::SchedulingState::Running;
+      break;
+    case TaskSchedulingState::Suspending:
+      projected.scheduling =
+          playback_media_processing::SchedulingState::Suspending;
+      break;
+    case TaskSchedulingState::Suspended:
+      projected.scheduling =
+          playback_media_processing::SchedulingState::Suspended;
+      break;
+  }
+  return projected;
+}
+
+std::optional<playback_media_processing::Activity> activityForPlayback(
+    const std::optional<TaskActivity>& activity) {
+  return activity ? std::optional(activityForPlayback(*activity))
+                  : std::nullopt;
+}
+
 struct Coordinator::Impl {
   explicit Impl(Backends backends)
       : wakeEvent(),
         workerTask(wakeEvent.notifier()),
         analyzeMelody(std::move(backends.analyzeMelody)),
         splitLoop(std::move(backends.splitLoop)),
+        setupAudioSeparation(std::move(backends.setupAudioSeparation)),
+        resolveAudioSeparation(std::move(backends.resolveAudioSeparation)),
         exportAudio(std::move(backends.exportAudio)),
         exportTranscriptText(std::move(backends.exportTranscriptText)),
         subtitles(
@@ -354,6 +401,8 @@ struct Coordinator::Impl {
   WorkerTask workerTask;
   MelodyOperation analyzeMelody;
   LoopSplitOperation splitLoop;
+  audio_separation::ProviderSetupOperation setupAudioSeparation;
+  AudioSeparationBindingResolver resolveAudioSeparation;
   FileExportOperation exportAudio;
   FileExportOperation exportTranscriptText;
   std::unique_ptr<playback_video_transcript::GenerationJob> subtitles;
@@ -369,6 +418,40 @@ struct Coordinator::Impl {
 
   TaskId allocateTaskId() { return TaskId{nextTaskId++}; }
 
+  bool refreshAudioSeparationBinding(std::string* detail) {
+    if (!resolveAudioSeparation) {
+      if (detail) {
+        *detail = "The audio-separation capability resolver is not "
+                  "configured.";
+      }
+      return false;
+    }
+
+    audio_separation::OperationBinding refreshed = resolveAudioSeparation();
+    if (!refreshed.ready()) {
+      if (detail) {
+        *detail = refreshed.detail().empty()
+                      ? "Windows ML completed setup, but the NVIDIA provider "
+                        "is still unavailable."
+                      : refreshed.detail();
+      }
+      audioSeparationBinding = std::move(refreshed);
+      return false;
+    }
+
+    auto replacement = std::make_unique<audio_separation::Job>(
+        refreshed.operation(), wakeEvent.notifier());
+    std::unique_ptr<audio_separation::Job> previous;
+    {
+      std::lock_guard<std::mutex> lock(interactivePlayback->mutex);
+      previous = std::move(audioSeparation);
+      audioSeparation = std::move(replacement);
+      interactivePlayback->audioSeparation = audioSeparation.get();
+    }
+    audioSeparationBinding = std::move(refreshed);
+    return true;
+  }
+
   bool completionPending() const {
     return workerTask.hasPendingCompletion() || subtitleTask.has_value() ||
            audioSeparationTask.has_value();
@@ -383,6 +466,10 @@ Coordinator::Coordinator(Operations operations)
         backends.generateSubtitles =
             std::move(operations.generateSubtitles);
         backends.separateAudio = std::move(operations.separateAudio);
+        backends.setupAudioSeparation =
+            std::move(operations.setupAudioSeparation);
+        backends.resolveAudioSeparation =
+            std::move(operations.resolveAudioSeparation);
         backends.exportAudio = std::move(operations.exportAudio);
         backends.exportTranscriptText =
             std::move(operations.exportTranscriptText);
@@ -464,6 +551,27 @@ bool Coordinator::collectReadyCompletions() {
 
   if (std::optional<TaskCompletion> completion =
           impl_->workerTask.takeCompletion()) {
+    if (completion->kind == TaskKind::AudioSeparationSetup &&
+        completion->succeeded()) {
+      try {
+        std::string refreshDetail;
+        if (!impl_->refreshAudioSeparationBinding(&refreshDetail)) {
+          completion->outcome = TaskOutcome::Failed;
+          completion->detail = std::move(refreshDetail);
+        } else {
+          completion->detail = "Audio separation is ready.";
+        }
+      } catch (const std::exception& exception) {
+        completion->outcome = TaskOutcome::Failed;
+        completion->detail =
+            std::string("Could not refresh audio separation after setup: ") +
+            exception.what();
+      } catch (...) {
+        completion->outcome = TaskOutcome::Failed;
+        completion->detail =
+            "Could not refresh audio separation after setup.";
+      }
+    }
     impl_->latestCompletion = *completion;
     impl_->queuedCompletions.push_back(std::move(*completion));
     collected = true;
@@ -740,6 +848,8 @@ playback_media_processing::SourceState Coordinator::sourceStateFor(
     state.activeTaskCancellable = currentActivity->cancellable;
     state.subtitleGenerationRunning =
         currentActivity->kind == TaskKind::SubtitleGeneration;
+    state.audioSeparationSetupRunning =
+        currentActivity->kind == TaskKind::AudioSeparationSetup;
     state.audioSeparationRunning =
         currentActivity->kind == TaskKind::AudioSeparation;
     state.audioExportRunning =
@@ -747,8 +857,8 @@ playback_media_processing::SourceState Coordinator::sourceStateFor(
     state.transcriptTextExportRunning =
         currentActivity->kind == TaskKind::TranscriptTextExport;
   }
-  state.audioSeparationAvailable =
-      audioSeparationAvailableFor(sourceFile);
+  state.audioSeparationAvailability =
+      audioSeparationAvailabilityFor(sourceFile);
   state.separatedAudioExists = hasSeparatedAudioFor(sourceFile);
   state.audioExportAvailable = audioExportAvailableFor(sourceFile);
   state.transcriptTextExportAvailable =
@@ -821,6 +931,75 @@ RequestResult Coordinator::requestAudioSeparation(
   return RequestResult::accepted();
 }
 
+RequestResult Coordinator::requestAudioSeparationSetup(
+    const std::filesystem::path& sourceFile) {
+  if (!impl_ || !impl_->setupAudioSeparation ||
+      !impl_->resolveAudioSeparation) {
+    return rejected(RequestFailure::BackendUnavailable,
+                    "the Windows ML provider-setup backend is not configured");
+  }
+  if (sourceFile.empty()) return rejected(RequestFailure::InvalidSource);
+  if ((!isSupportedVideoExt(sourceFile) &&
+       !isSupportedAudioExt(sourceFile)) ||
+      audio_separation::isManagedArtifactPath(sourceFile)) {
+    return rejected(RequestFailure::UnsupportedSource);
+  }
+  if (!impl_->audioSeparationBinding ||
+      impl_->audioSeparationBinding->availability() !=
+          audio_separation::OperationAvailability::SetupRequired) {
+    return rejected(RequestFailure::BackendUnavailable,
+                    "audio separation setup is no longer required");
+  }
+  if (const auto conflict = startConflict()) return rejected(*conflict);
+
+  const audio_separation::ProviderSetupOperation operation =
+      impl_->setupAudioSeparation;
+  TaskActivity activity;
+  activity.id = impl_->allocateTaskId();
+  activity.kind = TaskKind::AudioSeparationSetup;
+  activity.sourceFile = sourceFile;
+  activity.processingEngine = "Windows ML";
+  activity.progress = 0.0f;
+  activity.phase = "Preparing the optional NVIDIA audio component";
+  activity.cancellable = true;
+  const bool started = impl_->workerTask.tryStart(
+      std::move(activity),
+      [operation, sourceFile](
+          const WorkerTask::ProgressReporter& reportProgress,
+          const WorkerTask::CancellationRequested& cancellationRequested,
+          const WorkerTask::CommitStarted&) {
+        const audio_separation::ProviderSetupResult setup =
+            operation(reportProgress, cancellationRequested);
+        TaskCompletion completion;
+        completion.kind = TaskKind::AudioSeparationSetup;
+        completion.sourceFile = sourceFile;
+        switch (setup.outcome) {
+          case audio_separation::ProviderSetupOutcome::Ready:
+            completion.outcome = TaskOutcome::Succeeded;
+            break;
+          case audio_separation::ProviderSetupOutcome::Cancelled:
+            completion.outcome = TaskOutcome::Cancelled;
+            break;
+          case audio_separation::ProviderSetupOutcome::Failed:
+            completion.outcome = TaskOutcome::Failed;
+            completion.detail =
+                setup.detail.empty()
+                    ? "Windows ML could not set up the optional NVIDIA audio "
+                      "component."
+                    : setup.detail;
+            break;
+        }
+        return completion;
+      },
+      WorkerTask::CompletionContract::NoPublishedOutput);
+  if (!started) {
+    return rejected(RequestFailure::InternalError,
+                    "the provider-setup worker rejected the request");
+  }
+  impl_->latestCompletion.reset();
+  return RequestResult::accepted();
+}
+
 RequestResult Coordinator::requestAudioExport(
     const std::filesystem::path& sourceFile) {
   if (!impl_ || !impl_->exportAudio) {
@@ -870,13 +1049,24 @@ bool Coordinator::subtitleGenerationRunningFor(
   return snapshot.running() && samePath(snapshot.sourceFile, sourceFile);
 }
 
-bool Coordinator::audioSeparationAvailableFor(
+playback_media_processing::AudioSeparationAvailability
+Coordinator::audioSeparationAvailabilityFor(
     const std::filesystem::path& sourceFile) const {
-  return impl_ && impl_->audioSeparationBinding &&
-         impl_->audioSeparationBinding->ready() &&
-         (isSupportedVideoExt(sourceFile) ||
-          isSupportedAudioExt(sourceFile)) &&
-         !audio_separation::isManagedArtifactPath(sourceFile);
+  using Availability =
+      playback_media_processing::AudioSeparationAvailability;
+  if (!impl_ || !impl_->audioSeparationBinding ||
+      (!isSupportedVideoExt(sourceFile) &&
+       !isSupportedAudioExt(sourceFile)) ||
+      audio_separation::isManagedArtifactPath(sourceFile)) {
+    return Availability::Unavailable;
+  }
+  if (impl_->audioSeparationBinding->ready()) return Availability::Ready;
+  if (impl_->audioSeparationBinding->availability() ==
+          audio_separation::OperationAvailability::SetupRequired &&
+      impl_->setupAudioSeparation && impl_->resolveAudioSeparation) {
+    return Availability::SetupRequired;
+  }
+  return Availability::Unavailable;
 }
 
 bool Coordinator::audioSeparationRunningFor(
@@ -937,6 +1127,23 @@ RequestResult Coordinator::requestAudioSeparationCancellation() {
                         "the audio-separation worker rejected cancellation");
 }
 
+RequestResult Coordinator::requestAudioSeparationSetupCancellation() {
+  if (!impl_ || !impl_->setupAudioSeparation) {
+    return rejected(RequestFailure::BackendUnavailable);
+  }
+  const std::optional<TaskActivity> current = impl_->workerTask.activity();
+  if (!current || current->kind != TaskKind::AudioSeparationSetup) {
+    return rejected(RequestFailure::NotRunning);
+  }
+  if (current->cancelling) {
+    return rejected(RequestFailure::AlreadyCancelling);
+  }
+  return impl_->workerTask.requestCancel()
+             ? RequestResult::accepted()
+             : rejected(RequestFailure::InternalError,
+                        "the provider-setup worker rejected cancellation");
+}
+
 RequestResult Coordinator::requestMediaExportCancellation() {
   if (!impl_) return rejected(RequestFailure::BackendUnavailable);
   const std::optional<TaskActivity> current =
@@ -966,6 +1173,7 @@ bool Coordinator::cancelActive(TaskId expectedTask) {
     case TaskKind::LoopSplit:
     case TaskKind::AudioExport:
     case TaskKind::TranscriptTextExport:
+    case TaskKind::AudioSeparationSetup:
       return impl_->workerTask.requestCancel();
     case TaskKind::SubtitleGeneration:
       return requestSubtitleCancellation().wasAccepted();
@@ -973,6 +1181,25 @@ bool Coordinator::cancelActive(TaskId expectedTask) {
       return requestAudioSeparationCancellation().wasAccepted();
   }
   return false;
+}
+
+RequestResult Coordinator::requestTaskCancellation(TaskId expectedTask) {
+  if (!expectedTask) return rejected(RequestFailure::NotRunning);
+  const std::optional<TaskActivity> current = activity();
+  if (!current || current->id != expectedTask) {
+    return rejected(RequestFailure::NotRunning);
+  }
+  if (current->cancelling) {
+    return rejected(RequestFailure::AlreadyCancelling);
+  }
+  if (!current->cancellable) {
+    return rejected(RequestFailure::CompletionPending);
+  }
+  return cancelActive(expectedTask)
+             ? RequestResult::accepted()
+             : rejected(RequestFailure::InternalError,
+                        "the active media-processing worker rejected "
+                        "identity-bound cancellation");
 }
 
 Coordinator::InteractivePlaybackLease

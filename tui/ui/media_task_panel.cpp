@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "core/unicode_display_width.h"
+#include "playback/media_action_confirmation_content.h"
 
 namespace tui_media_task_panel {
 namespace {
@@ -48,12 +49,20 @@ std::optional<tui_dialog::DialogId> DialogSession::synchronize(
     return std::nullopt;
   }
 
-  const bool current = context_->kind == DialogKind::Cancellation
-                           ? activeTask &&
-                                 activeTask->taskId == context_->taskId &&
-                                 activeTask->cancellable
-                           : !activeTask && latestFailure &&
-                                 latestFailure->taskId == context_->taskId;
+  bool current = false;
+  switch (context_->kind) {
+    case DialogKind::Cancellation:
+      current = activeTask && activeTask->taskId == context_->taskId &&
+                activeTask->cancellable;
+      break;
+    case DialogKind::Failure:
+      current = !activeTask && latestFailure &&
+                latestFailure->taskId == context_->taskId;
+      break;
+    case DialogKind::AudioSeparationSetup:
+      current = !activeTask;
+      break;
+  }
   if (current) {
     return std::nullopt;
   }
@@ -78,6 +87,12 @@ std::optional<DialogIntent> DialogSession::handle(
       activation.button == kMediaTaskDialogRetry && context.retryAction) {
     return DialogIntent{
         RetryTask{context.taskId, context.sourceFile, *context.retryAction}};
+  }
+  if (context.kind == DialogKind::AudioSeparationSetup &&
+      activation.button == kSetUpAudioButton) {
+    return DialogIntent{SetUpAudioSeparation{
+        playback_media_processing::AudioSeparationSetupRequest{
+            context.sourceFile}}};
   }
   return std::nullopt;
 }
@@ -465,15 +480,39 @@ DialogRequest cancellationDialogRequest(const MediaTaskCardModel& task) {
   DialogRequest request;
   request.context.kind = DialogKind::Cancellation;
   request.context.taskId = task.taskId;
-  request.content.title = "Cancel " + task.operationName + "?";
-  request.content.text.push_back(
-      {"Progress on " + task.sourceName + " will be lost.",
-       tui_dialog::TextTone::Normal});
+  const playback_media_confirmation::Content content =
+      playback_media_confirmation::cancellationContent(task.operation,
+                                                       task.sourceName);
+  request.content.title = content.title;
+  for (const std::string& line : content.text) {
+    request.content.text.push_back({line, tui_dialog::TextTone::Normal});
+  }
   request.content.buttons.push_back(
-      {kCancelTaskButton, "Cancel task", "Stop"});
+      {kCancelTaskButton, content.primaryLabel, "Stop"});
   request.content.buttons.push_back(
-      {kKeepRunningButton, "Keep running", "Keep"});
+      {kKeepRunningButton, content.secondaryLabel, "Keep"});
   request.content.initiallySelectedButton = kKeepRunningButton;
+  return request;
+}
+
+DialogRequest audioSeparationSetupDialogRequest(
+    playback_media_processing::AudioSeparationSetupRequest setup) {
+  DialogRequest request;
+  request.context.kind = DialogKind::AudioSeparationSetup;
+  request.context.sourceFile = std::move(setup.sourceFile);
+  const playback_media_confirmation::Content content =
+      playback_media_confirmation::audioSeparationSetupContent();
+  for (std::size_t index = 0; index < content.text.size(); ++index) {
+    request.content.text.push_back(
+        {content.text[index], index == 0 ? tui_dialog::TextTone::Normal
+                                        : tui_dialog::TextTone::Secondary});
+  }
+  request.content.title = content.title;
+  request.content.buttons.push_back(
+      {kSetUpAudioButton, content.primaryLabel, "Install"});
+  request.content.buttons.push_back(
+      {kNotNowButton, content.secondaryLabel, "Cancel"});
+  request.content.initiallySelectedButton = kNotNowButton;
   return request;
 }
 

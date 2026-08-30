@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "audioplayback.h"
+#include "core/path_identity.h"
 #include "playback/session/bootstrap_input.h"
 #include "playback/session/subtitle_loader.h"
 #include "playback/video/player.h"
@@ -566,12 +567,20 @@ void PlaybackSession::mediaTaskFinished(
   if (impl_->canControl()) {
     if (completion.operation ==
             playback_media_processing::Operation::SubtitleGeneration &&
-        completion.succeeded()) {
+        completion.succeeded() &&
+        samePath(completion.sourceFile, impl_->request.file)) {
       impl_->openingBackend.requestSubtitleReload(impl_->request.file,
                                                   completion.outputFile);
     }
     impl_->loop->mediaTaskFinished(completion);
     impl_->publishCompletedSubtitleLoad();
+  }
+}
+
+void PlaybackSession::mediaTaskActivityChanged(
+    std::optional<playback_media_processing::Activity> activity) {
+  if (impl_->canControl()) {
+    impl_->loop->mediaTaskActivityChanged(std::move(activity));
   }
 }
 

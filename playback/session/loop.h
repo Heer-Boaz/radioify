@@ -89,6 +89,8 @@ class PlaybackLoopRunner {
   std::vector<playback_session::Event> drainEvents();
   void mediaTaskFinished(
       const playback_media_processing::Completion& completion);
+  void mediaTaskActivityChanged(
+      std::optional<playback_media_processing::Activity> activity);
   void subtitlesLoaded(bool available, bool reload,
                        bool preferredTrackSelected);
   void requestStop();
