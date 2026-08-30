@@ -11,4 +11,5 @@ radioify_add_module_object_library(radioify_app
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_control_router.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_queue.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_route.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/video_session_host.cpp
 )

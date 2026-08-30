@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "app/media_processing_coordinator.h"
@@ -52,8 +53,16 @@ class RecordingAudioSession final : public audio_playback::Session {
   AudioPlaybackSnapshot snapshot_;
 };
 
+enum class VideoOpenPlan {
+  ReadyNow,
+  ReadyOnPump,
+  CancelNow,
+};
+
 struct VideoSessionRecord {
   std::filesystem::path file;
+  VideoOpenPlan openPlan = VideoOpenPlan::ReadyNow;
+  bool opening = false;
   bool ready = false;
   int windowToggleRequests = 0;
   std::vector<PlaybackControlCommand> controlCommands;
@@ -68,13 +77,25 @@ class RecordingVideoSession final : public playback_session::VideoSession {
       : record_(std::move(record)) {}
 
   std::optional<playback_session::OpenOutcome> startOpen() override {
+    switch (record_->openPlan) {
+      case VideoOpenPlan::ReadyNow:
+        record_->ready = true;
+        return playback_session::OpenReady{};
+      case VideoOpenPlan::ReadyOnPump:
+        record_->opening = true;
+        return std::nullopt;
+      case VideoOpenPlan::CancelNow:
+        return playback_session::OpenCancelled{};
+    }
+    std::abort();
+  }
+  std::optional<playback_session::OpenOutcome> pumpOpen() override {
+    if (!record_->opening) return std::nullopt;
+    record_->opening = false;
     record_->ready = true;
     return playback_session::OpenReady{};
   }
-  std::optional<playback_session::OpenOutcome> pumpOpen() override {
-    return std::nullopt;
-  }
-  bool opening() const override { return false; }
+  bool opening() const override { return record_->opening; }
   bool ready() const override { return record_->ready; }
   std::optional<playback_session::TransitionSnapshot> transitionSnapshot()
       const override {
@@ -182,10 +203,16 @@ int main() {
        }});
 
   std::vector<std::shared_ptr<VideoSessionRecord>> sessions;
+  bool rejectNextVideoSession = false;
+  VideoOpenPlan nextVideoOpenPlan = VideoOpenPlan::ReadyNow;
   playback_session::VideoSessionFactory createSession =
-      [&](playback_session::VideoSessionRequest request) {
+      [&](playback_session::VideoSessionRequest request)
+      -> std::unique_ptr<playback_session::VideoSession> {
+        if (std::exchange(rejectNextVideoSession, false)) return nullptr;
         auto record = std::make_shared<VideoSessionRecord>();
         record->file = request.file;
+        record->openPlan =
+            std::exchange(nextVideoOpenPlan, VideoOpenPlan::ReadyNow);
         sessions.push_back(record);
         return std::make_unique<RecordingVideoSession>(std::move(record));
       };
@@ -307,13 +334,58 @@ int main() {
       "stopping audio must retire its identity without accepting commands "
       "from the previous queue item");
 
+  const std::filesystem::path rejectedVideo = "rejected.mp4";
+  rejectNextVideoSession = true;
+  ok &= expect(
+      coordinator.startPlayback(
+          routeFor(rejectedVideo),
+          playback_queue::singleSource(playbackFileTarget(rejectedVideo))) &&
+          !coordinator.videoReady() &&
+          !coordinator.controlSessionId().valid(),
+      "a rejected video factory must leave no partial session or control "
+      "identity");
+  const TuiMediaCoordinator::PollResult rejectedVideoResult =
+      coordinator.poll();
+  const bool reportedRejectedVideo = std::any_of(
+      rejectedVideoResult.events.begin(), rejectedVideoResult.events.end(),
+      [&](const TuiMediaCoordinator::Event& event) {
+        const auto* failure =
+            std::get_if<TuiMediaCoordinator::VideoPlaybackFailed>(&event);
+        return failure && failure->file == rejectedVideo;
+      });
+  ok &= expect(reportedRejectedVideo,
+               "a rejected factory must publish a typed playback failure");
+
+  const std::filesystem::path cancelledVideo = "cancelled.mp4";
+  const std::filesystem::path uncommittedSuccessor = "not-activated.mp4";
+  nextVideoOpenPlan = VideoOpenPlan::CancelNow;
+  ok &= expect(
+      coordinator.startPlayback(
+          routeFor(cancelledVideo),
+          playback_queue::sourceFromFiles(
+              {cancelledVideo, uncommittedSuccessor})) &&
+          !coordinator.videoReady() &&
+          !coordinator.controlSessionId().valid() &&
+          !queue.prepareTransport(playback_queue::Direction::Next),
+      "a cancelled video open must discard the session and its prepared "
+      "queue activation");
+
   const std::filesystem::path thirdVideo = "third.mp4";
+  nextVideoOpenPlan = VideoOpenPlan::ReadyOnPump;
   ok &= expect(
       coordinator.startPlayback(routeFor(thirdVideo),
                                 playback_queue::singleSource(
                                     playbackFileTarget(thirdVideo))) &&
-          coordinator.videoReady() && sessions.size() == 3,
-      "video playback must remain activatable after an audio session stops");
+          !coordinator.videoReady() && sessions.size() == 4 &&
+          !coordinator.controlSessionId().valid(),
+      "an asynchronous video open must retain activation without publishing "
+      "control ownership early");
+
+  const TuiMediaCoordinator::PollResult thirdVideoOpen = coordinator.poll();
+  ok &= expect(thirdVideoOpen.playbackChanged && coordinator.videoReady() &&
+                   coordinator.controlSessionId().valid(),
+               "a completed asynchronous open must atomically activate the "
+               "video and its control identity");
 
   const PlaybackControlSessionId thirdVideoControlSession =
       coordinator.controlSessionId();
