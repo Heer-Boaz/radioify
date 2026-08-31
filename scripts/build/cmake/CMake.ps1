@@ -1,3 +1,5 @@
+. (Join-Path $PSScriptRoot "..\..\windows\RadioifyWindowsRuntimeContract.ps1")
+
 function New-CMakeConfigureInfo {
   param([pscustomobject]$Context)
 
@@ -391,10 +393,8 @@ function Publish-BuildArtifacts {
   $audioSeparationEnabled = $audioSeparationSetting -match "^(1|ON|TRUE|YES)$"
   if ($audioSeparationEnabled) {
     $runtimeSourceDir = Split-Path -Parent $builtExe
-    foreach ($runtimeName in @(
-        "onnxruntime.dll",
-        "Microsoft.Windows.AI.MachineLearning.dll"
-      )) {
+    $windowsMlRuntimeContract = Get-RadioifyWindowsMlRuntimeContract
+    foreach ($runtimeName in $windowsMlRuntimeContract.ProductionRuntimeFiles) {
       $runtimeSource = Join-Path $runtimeSourceDir $runtimeName
       if (-not (Test-Path -LiteralPath $runtimeSource)) {
         Fail-Build "Build completed without the required Windows ML runtime at $runtimeSource."
@@ -408,9 +408,11 @@ function Publish-BuildArtifacts {
     # production application uses only the certified native NVIDIA provider.
     # Reconcile an incremental dist directory so an older build cannot make
     # the production package appear to contain a fallback it will never use.
-    $obsoleteDirectMlDestination = Join-Path $Context.Paths.DistDir "DirectML.dll"
-    if (Test-Path -LiteralPath $obsoleteDirectMlDestination) {
-      Remove-Item -LiteralPath $obsoleteDirectMlDestination -Force
+    foreach ($diagnosticRuntimeName in $windowsMlRuntimeContract.DiagnosticOnlyRuntimeFiles) {
+      $diagnosticRuntimeDestination = Join-Path $Context.Paths.DistDir $diagnosticRuntimeName
+      if (Test-Path -LiteralPath $diagnosticRuntimeDestination) {
+        Remove-Item -LiteralPath $diagnosticRuntimeDestination -Force
+      }
     }
 
     $separationModelSource = Get-CMakeCacheValue `

@@ -10,6 +10,7 @@ $script:RadioifyWindowsBundleFiles = @(
     @{ Source = "scripts/windows/RadioifyWindowsBundleMsixInstall.ps1"; Destination = "scripts/windows/RadioifyWindowsBundleMsixInstall.ps1" },
     @{ Source = "scripts/windows/RadioifyWindowsMsixCommon.ps1"; Destination = "scripts/windows/RadioifyWindowsMsixCommon.ps1" },
     @{ Source = "scripts/windows/RadioifyWindowsMsixBuild.ps1"; Destination = "scripts/windows/RadioifyWindowsMsixBuild.ps1" },
+    @{ Source = "scripts/windows/RadioifyWindowsRuntimeContract.ps1"; Destination = "scripts/windows/RadioifyWindowsRuntimeContract.ps1" },
     @{ Source = "scripts/windows/RadioifyWindowsMsixInstall.ps1"; Destination = "scripts/windows/RadioifyWindowsMsixInstall.ps1" },
     @{ Source = "scripts/windows/install_radioify_windows_bundle.ps1"; Destination = "scripts/windows/install_radioify_windows_bundle.ps1" },
     @{ Source = "scripts/windows/uninstall_radioify_windows_bundle.ps1"; Destination = "scripts/windows/uninstall_radioify_windows_bundle.ps1" },
@@ -177,11 +178,8 @@ function New-RadioifyWindowsDistributionBundle {
         -Destination (Join-Path $modelStageDir "ggml-base-q5_1.bin") `
         -Force
 
-    foreach ($runtimeName in @(
-        "onnxruntime.dll",
-        "DirectML.dll",
-        "Microsoft.Windows.AI.MachineLearning.dll"
-    )) {
+    $windowsMlRuntimeContract = Get-RadioifyWindowsMlRuntimeContract
+    foreach ($runtimeName in $windowsMlRuntimeContract.ProductionRuntimeFiles) {
         $runtimeSource = Join-Path $resolvedRepoRoot "dist\$runtimeName"
         if (-not (Test-Path -LiteralPath $runtimeSource)) {
             throw "Audio-separation runtime not found at '$runtimeSource'. Run .\build.ps1 -Static first."

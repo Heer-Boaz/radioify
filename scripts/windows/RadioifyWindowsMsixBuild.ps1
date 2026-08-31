@@ -2,6 +2,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "RadioifyWindowsMsixCommon.ps1")
+. (Join-Path $PSScriptRoot "RadioifyWindowsRuntimeContract.ps1")
 
 function Resolve-RadioifyWindowsSdkExecutable {
     param([Parameter(Mandatory = $true)][string]$ToolName)
@@ -252,11 +253,8 @@ function Initialize-RadioifyMsixPackageLayout {
         -Destination (Join-Path $modelLayoutDir "ggml-base-q5_1.bin") `
         -Force
 
-    foreach ($runtimeName in @(
-        "onnxruntime.dll",
-        "DirectML.dll",
-        "Microsoft.Windows.AI.MachineLearning.dll"
-    )) {
+    $windowsMlRuntimeContract = Get-RadioifyWindowsMlRuntimeContract
+    foreach ($runtimeName in $windowsMlRuntimeContract.ProductionRuntimeFiles) {
         $runtimeSource = Join-Path $distRoot $runtimeName
         if (-not (Test-Path -LiteralPath $runtimeSource)) {
             throw "Audio-separation runtime not found at '$runtimeSource'."
