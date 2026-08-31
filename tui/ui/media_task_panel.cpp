@@ -44,7 +44,8 @@ void DialogSession::opened(tui_dialog::DialogId dialog, DialogContext context) {
 
 std::optional<tui_dialog::DialogId> DialogSession::synchronize(
     const std::optional<MediaTaskCardModel>& activeTask,
-    const std::optional<MediaTaskFailureDialogModel>& latestFailure) {
+    const std::optional<MediaTaskFailureDialogModel>& latestFailure,
+    const AudioSeparationSetupRequired& setupRequired) {
   if (!dialog_ || !context_) {
     return std::nullopt;
   }
@@ -60,7 +61,8 @@ std::optional<tui_dialog::DialogId> DialogSession::synchronize(
                 latestFailure->taskId == context_->taskId;
       break;
     case DialogKind::AudioSeparationSetup:
-      current = !activeTask;
+      current = !activeTask && setupRequired &&
+                setupRequired(context_->sourceFile);
       break;
   }
   if (current) {

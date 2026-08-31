@@ -58,9 +58,6 @@ struct VideoSessionHost::Impl {
     if (auto* activeState = std::get_if<Active>(&state)) {
       return std::ref(*activeState->session);
     }
-    if (auto* completedState = std::get_if<Completed>(&state)) {
-      return std::ref(*completedState->session);
-    }
     return std::nullopt;
   }
 
@@ -70,9 +67,6 @@ struct VideoSessionHost::Impl {
     }
     if (const auto* activeState = std::get_if<Active>(&state)) {
       return std::cref(*activeState->session);
-    }
-    if (const auto* completedState = std::get_if<Completed>(&state)) {
-      return std::cref(*completedState->session);
     }
     return std::nullopt;
   }

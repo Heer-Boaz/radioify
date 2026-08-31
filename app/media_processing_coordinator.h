@@ -209,7 +209,8 @@ class Coordinator final : public playback_media_processing::Service {
 
   // A lease makes foreground resource ownership follow the playback
   // lifecycle. ready() becomes true only after resource-intensive background
-  // work has reached a verified suspension point.
+  // work has reached a verified suspension or terminal boundary; new
+  // non-suspendable transcript work is rejected while a lease is active.
   InteractivePlaybackLease acquireInteractivePlayback();
 
   PollResult poll();

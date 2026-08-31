@@ -48,9 +48,11 @@ bool Host::resolveApplicationExitCancellation(
 
 bool Host::synchronizeMediaTask(
     const std::optional<MediaTaskCardModel>& activeTask,
-    const std::optional<MediaTaskFailureDialogModel>& latestFailure) {
+    const std::optional<MediaTaskFailureDialogModel>& latestFailure,
+    const tui_media_task_panel::AudioSeparationSetupRequired& setupRequired) {
   const std::optional<tui_dialog::DialogId> obsolete =
-      mediaTaskDialogs_.synchronize(activeTask, latestFailure);
+      mediaTaskDialogs_.synchronize(activeTask, latestFailure,
+                                    setupRequired);
   return obsolete && dismissDialog(*obsolete);
 }
 

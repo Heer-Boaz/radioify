@@ -570,8 +570,19 @@ int main() {
                    subtitleSourceState.subtitleGenerationRunning &&
                    !subtitleSourceState.audioSeparationRunning,
                "subtitle work must expose typed source and progress state");
+  auto playbackWaitingForSubtitles =
+      coordinator.acquireInteractivePlayback();
+  ok &= expect(!playbackWaitingForSubtitles.ready(),
+               "foreground playback must not enter the GPU while an active "
+               "transcript backend still owns it");
   releaseSubtitles.store(true, std::memory_order_release);
+  ok &= expect(waitUntil([&]() {
+                 return playbackWaitingForSubtitles.ready();
+               }),
+               "foreground playback must become ready after transcript GPU "
+               "work has completed");
   const auto subtitleCompletion = waitForCompletion(coordinator);
+  playbackWaitingForSubtitles.reset();
   const auto playbackSubtitleCompletion =
       subtitleCompletion
           ? processing::completionForPlayback(*subtitleCompletion)
@@ -593,6 +604,18 @@ int main() {
   auto secondPlaybackPriority = coordinator.acquireInteractivePlayback();
   const bool playbackPriorityReadyBeforeWork =
       playbackPriority.ready() && secondPlaybackPriority.ready();
+  const playback_media_processing::SourceState foregroundSubtitleState =
+      coordinator.sourceStateFor("other.mp4");
+  const playback_media_processing::RequestResult foregroundSubtitleRequest =
+      coordinator.requestSubtitles("other.mp4");
+  ok &= expect(
+      !foregroundSubtitleState.subtitleGenerationAvailable &&
+          !foregroundSubtitleRequest.wasAccepted() &&
+          foregroundSubtitleRequest.error() &&
+          foregroundSubtitleRequest.error()->failure ==
+              playback_media_processing::RequestFailure::Busy,
+      "an active foreground lease must disable and reject new transcript GPU "
+      "work at the same ownership boundary");
   const std::optional<playback_media_processing::ActionResult>
       separationStart =
       playbackActions.execute(playback_media_actions::Action::SeparateAudio,

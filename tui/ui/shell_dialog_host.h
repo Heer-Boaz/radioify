@@ -54,7 +54,9 @@ class Host {
 
   bool synchronizeMediaTask(
       const std::optional<MediaTaskCardModel>& activeTask,
-      const std::optional<MediaTaskFailureDialogModel>& latestFailure);
+      const std::optional<MediaTaskFailureDialogModel>& latestFailure,
+      const tui_media_task_panel::AudioSeparationSetupRequired&
+          setupRequired);
   bool revokeAudioFallback(
       application_playback::AudioFallbackDecisionId decision);
   bool dismissOverlays();

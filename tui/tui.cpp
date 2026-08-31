@@ -1504,8 +1504,14 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     tui_media_tasks::Update taskUpdate = mediaTasks.poll();
     const tui_media_tasks::Snapshot& taskSnapshot = mediaTasks.snapshot();
     mediaTaskPanel.synchronize(taskSnapshot.activeCard);
-    if (shellDialogs.synchronizeMediaTask(taskSnapshot.activeCard,
-                                         taskSnapshot.latestFailure)) {
+    if (shellDialogs.synchronizeMediaTask(
+            taskSnapshot.activeCard, taskSnapshot.latestFailure,
+            [&](const std::filesystem::path& sourceFile) {
+              return mediaProcessingActions.contextForSource(sourceFile)
+                         .audioSeparationAvailability ==
+                     playback_media_processing::AudioSeparationAvailability::
+                         SetupRequired;
+            })) {
       markDirty();
     }
     for (const media_processing::TaskCompletion& completion :

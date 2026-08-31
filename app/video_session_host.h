@@ -85,6 +85,8 @@ class VideoSessionHost final : public playback_session::HandoffEndpoint {
   [[nodiscard]] bool completionPending() const;
   [[nodiscard]] bool ready() const;
 
+  // Only Opening and Active expose a live endpoint. Completed retains the
+  // object for ordered destruction but is deliberately absent here.
   SessionRef session();
   ConstSessionRef session() const;
 

@@ -300,7 +300,7 @@ int main() {
   DialogSession dialogSession;
   const tui_dialog::DialogId cancellationDialogId{7};
   dialogSession.opened(cancellationDialogId, confirmation.context);
-  ok &= expect(!dialogSession.synchronize(task, std::nullopt),
+  ok &= expect(!dialogSession.synchronize(task, std::nullopt, {}),
                "a cancellation dialog must remain open for its exact active "
                "task");
   const std::optional<DialogIntent> cancellationIntent =
@@ -317,6 +317,21 @@ int main() {
           playback_media_processing::AudioSeparationSetupRequest{
               setupSource});
   const tui_dialog::DialogId setupDialogId{9};
+  dialogSession.opened(setupDialogId, setupConfirmation.context);
+  ok &= expect(
+      !dialogSession.synchronize(
+          std::nullopt, std::nullopt,
+          [&](const std::filesystem::path& source) {
+            return source == setupSource;
+          }),
+      "a setup dialog must remain open while its exact source still requires "
+      "setup");
+  ok &= expect(
+      dialogSession.synchronize(
+          std::nullopt, std::nullopt,
+          [](const std::filesystem::path&) { return false; }) == setupDialogId,
+      "a setup dialog must close as soon as current availability no longer "
+      "requires setup");
   dialogSession.opened(setupDialogId, setupConfirmation.context);
   const auto declinedSetup =
       dialogSession.handle({setupDialogId, kNotNowButton});
@@ -337,7 +352,7 @@ int main() {
   dialogSession.opened(cancellationDialogId, confirmation.context);
   MediaTaskCardModel differentTask = task;
   differentTask.taskId = media_processing::TaskId{99};
-  ok &= expect(dialogSession.synchronize(differentTask, std::nullopt) ==
+  ok &= expect(dialogSession.synchronize(differentTask, std::nullopt, {}) ==
                    cancellationDialogId,
                "a stale cancellation dialog must request only its own "
                "conditional dismissal");
@@ -351,7 +366,7 @@ int main() {
   const DialogRequest retryRequest = failureDialogRequest(failure);
   const tui_dialog::DialogId failureDialogId{8};
   dialogSession.opened(failureDialogId, retryRequest.context);
-  ok &= expect(!dialogSession.synchronize(std::nullopt, failure),
+  ok &= expect(!dialogSession.synchronize(std::nullopt, failure, {}),
                "a failure dialog must remain current only while its exact "
                "failure is the latest result");
   const std::optional<DialogIntent> retryIntent =
@@ -367,7 +382,7 @@ int main() {
   dialogSession.opened(failureDialogId, retryRequest.context);
   MediaTaskFailureDialogModel newerFailure = failure;
   newerFailure.taskId = media_processing::TaskId{101};
-  ok &= expect(dialogSession.synchronize(std::nullopt, newerFailure) ==
+  ok &= expect(dialogSession.synchronize(std::nullopt, newerFailure, {}) ==
                    failureDialogId,
                "a newer completion must invalidate an open stale failure "
                "dialog");

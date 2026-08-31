@@ -19,6 +19,7 @@ namespace media_processing {
 struct InteractivePlaybackState {
   std::mutex mutex;
   std::size_t leaseCount = 0;
+  playback_video_transcript::GenerationJob* subtitles = nullptr;
   audio_separation::Job* audioSeparation = nullptr;
 };
 
@@ -394,6 +395,7 @@ struct Coordinator::Impl {
                 : audio_separation::Job::Operation{},
             wakeEvent.notifier())),
         interactivePlayback(std::make_shared<InteractivePlaybackState>()) {
+    interactivePlayback->subtitles = subtitles.get();
     interactivePlayback->audioSeparation = audioSeparation.get();
   }
 
@@ -836,9 +838,14 @@ playback_media_processing::SourceState Coordinator::sourceStateFor(
   playback_media_processing::SourceState state;
   const std::optional<TaskActivity> currentActivity = activity();
   state.backgroundTaskRunning = currentActivity.has_value();
+  bool interactivePlaybackActive = false;
+  if (impl_) {
+    std::lock_guard<std::mutex> lock(impl_->interactivePlayback->mutex);
+    interactivePlaybackActive = impl_->interactivePlayback->leaseCount > 0;
+  }
   state.subtitleGenerationAvailable =
       impl_ && impl_->subtitles && impl_->subtitles->configured() &&
-      isSupportedVideoExt(sourceFile);
+      isSupportedVideoExt(sourceFile) && !interactivePlaybackActive;
   state.hasGeneratedSubtitles =
       !playback_video_transcript::activeTranscriptPathForVideo(sourceFile)
            .empty();
@@ -878,12 +885,21 @@ RequestResult Coordinator::requestSubtitles(
     return rejected(RequestFailure::UnsupportedSource);
   }
   if (const auto conflict = startConflict()) return rejected(*conflict);
-  const TaskId task = impl_->allocateTaskId();
-  impl_->subtitleTask = task;
-  if (!impl_->subtitles->tryStart(sourceFile)) {
-    impl_->subtitleTask.reset();
-    return rejected(RequestFailure::InternalError,
-                    "the subtitle-generation worker rejected the request");
+  {
+    std::lock_guard<std::mutex> lock(impl_->interactivePlayback->mutex);
+    if (impl_->interactivePlayback->leaseCount > 0) {
+      return rejected(
+          RequestFailure::Busy,
+          "video playback owns the GPU; generate the transcript after "
+          "video playback has stopped");
+    }
+    const TaskId task = impl_->allocateTaskId();
+    impl_->subtitleTask = task;
+    if (!impl_->subtitles->tryStart(sourceFile)) {
+      impl_->subtitleTask.reset();
+      return rejected(RequestFailure::InternalError,
+                      "the subtitle-generation worker rejected the request");
+    }
   }
   impl_->latestCompletion.reset();
   return RequestResult::accepted();
@@ -1247,6 +1263,7 @@ void Coordinator::shutdown() {
   if (!impl_) return;
   {
     std::lock_guard<std::mutex> lock(impl_->interactivePlayback->mutex);
+    impl_->interactivePlayback->subtitles = nullptr;
     impl_->interactivePlayback->audioSeparation = nullptr;
   }
   impl_->workerTask.cancelAndJoin();
@@ -1274,6 +1291,9 @@ Coordinator::InteractivePlaybackLease::operator=(
 bool Coordinator::InteractivePlaybackLease::ready() const {
   if (!state_) return true;
   std::lock_guard<std::mutex> lock(state_->mutex);
+  if (state_->subtitles && state_->subtitles->snapshot().running()) {
+    return false;
+  }
   if (!state_->audioSeparation) return true;
   const audio_separation::JobSnapshot snapshot =
       state_->audioSeparation->snapshot();

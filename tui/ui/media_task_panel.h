@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <string>
 #include <variant>
@@ -106,6 +107,9 @@ struct DialogRequest {
   DialogContext context;
 };
 
+using AudioSeparationSetupRequired =
+    std::function<bool(const std::filesystem::path&)>;
+
 // Correlates generic dialog sessions with media-task intent. Button IDs never
 // escape into the shell composition root, and a cancellation prompt is
 // invalidated as soon as its exact task is no longer cancellable.
@@ -114,7 +118,8 @@ class DialogSession {
   void opened(tui_dialog::DialogId dialog, DialogContext context);
   std::optional<tui_dialog::DialogId> synchronize(
       const std::optional<MediaTaskCardModel>& activeTask,
-      const std::optional<MediaTaskFailureDialogModel>& latestFailure);
+      const std::optional<MediaTaskFailureDialogModel>& latestFailure,
+      const AudioSeparationSetupRequired& setupRequired);
   std::optional<DialogIntent> handle(
       const tui_dialog::ButtonActivation& activation);
   void dismissed(tui_dialog::DialogId dialog);

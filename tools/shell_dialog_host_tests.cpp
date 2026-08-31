@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <variant>
 
@@ -177,10 +178,25 @@ int main() {
         tui_media_task_panel::cancellationDialogRequest(running));
     const MediaTaskCardModel replacement =
         activeCard(media_processing::TaskId{201});
-    ok &= expect(host.synchronizeMediaTask(replacement, std::nullopt) &&
+    ok &= expect(host.synchronizeMediaTask(replacement, std::nullopt, {}) &&
                      !overlays.active() && host.drainEvents().empty(),
                  "a task replacement must invalidate its predecessor's "
                  "confirmation without leaking a cancellation intent");
+
+    const std::filesystem::path setupSource = "setup-source.mp4";
+    host.showMediaTask(
+        tui_media_task_panel::audioSeparationSetupDialogRequest(
+            playback_media_processing::AudioSeparationSetupRequest{
+                setupSource}));
+    ok &= expect(
+        host.synchronizeMediaTask(
+            std::nullopt, std::nullopt,
+            [&](const std::filesystem::path& source) {
+              return source != setupSource;
+            }) &&
+            !overlays.active() && host.drainEvents().empty(),
+        "current availability must retire an obsolete setup dialog without "
+        "publishing setup intent");
   }
 
   {

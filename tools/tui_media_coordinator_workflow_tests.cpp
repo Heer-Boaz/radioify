@@ -12,9 +12,11 @@
 #include "app/playback_activation_controller.h"
 #include "app/playback_control_router.h"
 #include "app/playback_queue.h"
+#include "app/video_session_host.h"
 #include "audio/playback_session.h"
 #include "playback/session/video_session.h"
 #include "playback/target.h"
+#include "tui/input_event.h"
 #include "tui/media_coordinator.h"
 
 namespace {
@@ -98,6 +100,16 @@ struct VideoSessionRecord {
   PlaybackSessionExitIntent completionIntent =
       PlaybackSessionExitIntent::Stop;
   bool rejectNextHandoffResolution = false;
+  mutable int activityWaitHandleReads = 0;
+  mutable int wakeDeadlineReads = 0;
+  int externalModalUpdates = 0;
+  int inputEvents = 0;
+  int windowInputPolls = 0;
+  int windowInputEvents = 0;
+  int drainedEventBatches = 0;
+  int mediaTaskCompletions = 0;
+  int mediaTaskActivityUpdates = 0;
+  int quitRequests = 0;
 };
 
 class RecordingVideoSession final : public playback_session::VideoSession {
@@ -150,9 +162,11 @@ class RecordingVideoSession final : public playback_session::VideoSession {
     return presentation_.terminalRole();
   }
   std::vector<NativeWaitHandle> activityWaitHandles() const override {
+    ++record_->activityWaitHandleReads;
     return {};
   }
   wake_schedule::Deadline nextWakeDeadline() const override {
+    ++record_->wakeDeadlineReads;
     return std::nullopt;
   }
   std::optional<playback_session::ViewSnapshot> viewSnapshot()
@@ -164,10 +178,21 @@ class RecordingVideoSession final : public playback_session::VideoSession {
     return playback_session::ViewSnapshot{std::move(state), presentation_};
   }
   bool capturesBrowserInput() const override { return false; }
-  void setExternalInputModal(bool) override {}
-  bool handleInputEvent(const InputEvent&) override { return false; }
-  bool pollWindowInput(InputEvent&) override { return false; }
-  bool handleWindowInputEvent(const InputEvent&) override { return false; }
+  void setExternalInputModal(bool) override {
+    ++record_->externalModalUpdates;
+  }
+  bool handleInputEvent(const InputEvent&) override {
+    ++record_->inputEvents;
+    return false;
+  }
+  bool pollWindowInput(InputEvent&) override {
+    ++record_->windowInputPolls;
+    return false;
+  }
+  bool handleWindowInputEvent(const InputEvent&) override {
+    ++record_->windowInputEvents;
+    return false;
+  }
   bool handleControlCommand(PlaybackControlCommand command) override {
     record_->controlCommands.push_back(command);
     if (command == PlaybackControlCommand::Stop) {
@@ -215,19 +240,25 @@ class RecordingVideoSession final : public playback_session::VideoSession {
     return true;
   }
   std::vector<playback_session::Event> drainEvents() override {
+    ++record_->drainedEventBatches;
     std::vector<playback_session::Event> result;
     result.swap(events_);
     return result;
   }
   void mediaTaskFinished(
-      const playback_media_processing::Completion&) override {}
+      const playback_media_processing::Completion&) override {
+    ++record_->mediaTaskCompletions;
+  }
   void mediaTaskActivityChanged(
-      std::optional<playback_media_processing::Activity>) override {}
+      std::optional<playback_media_processing::Activity>) override {
+    ++record_->mediaTaskActivityUpdates;
+  }
   void requestStop() override {
     record_->completionIntent = PlaybackSessionExitIntent::Stop;
     record_->completeOnNextPump = true;
   }
   void requestQuit() override {
+    ++record_->quitRequests;
     record_->completionIntent = PlaybackSessionExitIntent::QuitApplication;
     record_->completeOnNextPump = true;
   }
@@ -372,6 +403,86 @@ int main() {
                          videoSuccessor,
                  "a consumed transaction must reject double commit without "
                  "mutating the committed queue or control identity");
+  }
+
+  // A completed host retains its session only to preserve destruction order.
+  // It must no longer expose that former endpoint to shell forwarding while
+  // the owner has not yet consumed the completion.
+  {
+    RecordingAudioSession endpoint;
+    media_processing::Coordinator processing(
+        media_processing::Coordinator::Operations{});
+    playback_media_processing::Actions processingActions(processing);
+    playback_queue::Queue queue(
+        {[](const std::filesystem::path& file) {
+           return std::optional<PlaybackTarget>(playbackFileTarget(file));
+         },
+         [](const PlaybackTarget& target) {
+           return routeFor(target);
+         }});
+    application_playback::PlaybackControlRouter control(endpoint);
+    application_playback::PlaybackActivationController activationOwner(
+        queue, endpoint, control, processing);
+
+    auto record = std::make_shared<VideoSessionRecord>();
+    application_playback::VideoSessionHost host(
+        [record](playback_session::VideoSessionRequest request) {
+          record->file = request.file;
+          return std::make_unique<RecordingVideoSession>(record);
+        });
+    const std::filesystem::path completedVideo = "completed-inert.mp4";
+    std::optional<application_playback::VideoActivationTransaction>
+        transaction = activationOwner.beginVideoActivation();
+    std::optional<playback_queue::Queue::PreparedActivation> candidate =
+        queue.prepareStart(
+            routeFor(completedVideo),
+            playback_queue::singleSource(playbackFileTarget(completedVideo)));
+    playback_session::VideoSessionRequest request(processingActions);
+    application_playback::VideoSessionHost::StartResult start = host.start(
+        std::move(request), std::move(*transaction), std::move(*candidate));
+    record->completeOnNextPump = true;
+    const bool completed =
+        std::holds_alternative<
+            application_playback::VideoSessionHost::OpenFinished>(start) &&
+        host.pumpPlayback() && host.completionPending();
+
+    InputEvent input;
+    playback_media_processing::Completion taskCompletion;
+    host.setExternalInputModal(true);
+    const bool inputHandled = host.handleInputEvent(input);
+    const bool windowInputPolled = host.pollWindowInput(input);
+    const bool windowInputHandled = host.handleWindowInputEvent(input);
+    const bool presentationToggled = host.toggleWindowPresentation();
+    const std::vector<playback_session::Event> events = host.drainEvents();
+    host.mediaTaskFinished(taskCompletion);
+    host.mediaTaskActivityChanged(std::nullopt);
+    const bool quitRequested = host.requestQuit();
+    const std::vector<NativeWaitHandle> waitHandles =
+        host.activityWaitHandles();
+    const wake_schedule::Deadline deadline = host.nextWakeDeadline();
+    const application_playback::VideoSessionHost& constHost = host;
+
+    ok &= expect(
+        completed && !host.session() && !constHost.session() &&
+            !inputHandled && !windowInputPolled && !windowInputHandled &&
+            !presentationToggled && events.empty() && !quitRequested &&
+            waitHandles.empty() && !deadline &&
+            record->externalModalUpdates == 0 && record->inputEvents == 0 &&
+            record->windowInputPolls == 0 &&
+            record->windowInputEvents == 0 &&
+            record->windowToggleRequests == 0 &&
+            record->drainedEventBatches == 0 &&
+            record->mediaTaskCompletions == 0 &&
+            record->mediaTaskActivityUpdates == 0 &&
+            record->quitRequests == 0 &&
+            record->activityWaitHandleReads == 0 &&
+            record->wakeDeadlineReads == 0,
+        "a completed video host must be inert until its completion is taken");
+
+    const auto finished = host.takeCompletion();
+    ok &= expect(finished && host.empty() &&
+                     playbackTargetFile(finished->target) == completedVideo,
+                 "taking the inert completion must atomically empty the host");
   }
 
   RecordingAudioSession audio;
