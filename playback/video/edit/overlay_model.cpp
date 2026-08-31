@@ -409,7 +409,7 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
       edit.sceneAnalysisStatus == SceneAnalysisStatus::Ready) {
     appendStatusPart(&model.status,
                      edit.sceneAnalysisUsedTranscript
-                         ? "VIDEO + SUBTITLES"
+                         ? "VIDEO + TRANSCRIPT"
                          : "VIDEO ONLY",
                      width);
   }

@@ -1543,7 +1543,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   )
   radioify_link_repo_target(audio_separation_tests)
   target_link_libraries(audio_separation_tests PRIVATE
-    WindowsML::Runtime)
+    WindowsML::Runtime bcrypt)
   radioify_deploy_windows_ml(audio_separation_tests WITH_DIRECTML)
   add_test(NAME audio_separation_tests
            COMMAND $<TARGET_FILE:audio_separation_tests>)
@@ -1562,7 +1562,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   )
   radioify_link_repo_target(audio_separation_smoke)
   target_link_libraries(audio_separation_smoke PRIVATE
-    WindowsML::Runtime)
+    WindowsML::Runtime bcrypt)
   radioify_deploy_windows_ml(audio_separation_smoke WITH_DIRECTML)
 
   add_executable(audio_separation_scheduler_smoke)
@@ -1579,7 +1579,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   )
   radioify_link_repo_target(audio_separation_scheduler_smoke)
   target_link_libraries(audio_separation_scheduler_smoke PRIVATE
-    WindowsML::Runtime)
+    WindowsML::Runtime bcrypt)
   radioify_deploy_windows_ml(audio_separation_scheduler_smoke WITH_DIRECTML)
 
   add_executable(audio_separation_model_stress)
@@ -2751,7 +2751,7 @@ foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
 if (WIN32)
-  target_link_libraries(radioify PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys comctl32)
+  target_link_libraries(radioify PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys comctl32 bcrypt)
   target_link_libraries(video_frame_step_smoke PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys)
   target_link_libraries(timeline_preview_tests PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
   target_link_libraries(scene_analysis_smoke PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32)

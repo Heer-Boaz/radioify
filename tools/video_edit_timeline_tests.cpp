@@ -1775,7 +1775,7 @@ int main() {
   ok &= expect(terminalMenu.visible && terminalMenu.items.size() == 2 &&
                    terminalMenu.items[0].label == "Edit video" &&
                    terminalMenu.items[1].label ==
-                       "Generate subtitles..." &&
+                       "Generate transcript..." &&
                    terminalMenu.items[0].token != 0 &&
                    terminalMenu.items[1].token != 0 &&
                    terminalMenu.items[0].token !=
@@ -1790,7 +1790,7 @@ int main() {
   ok &= expect(retainedMenu.items.size() == 4 &&
                    retainedMenu.items[0].label == "Resume editing" &&
                    retainedMenu.items[1].label ==
-                       "Generate subtitles..." &&
+                       "Generate transcript..." &&
                    retainedMenu.items[2].label == "Export edited copy" &&
                    retainedMenu.items[3].label == "Discard changes" &&
                    retainedMenu.items[0].token ==

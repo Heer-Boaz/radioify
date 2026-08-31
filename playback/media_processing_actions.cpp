@@ -19,11 +19,11 @@ ActionText actionText(playback_media_actions::Action action) {
   using Action = playback_media_actions::Action;
   switch (action) {
     case Action::GenerateSubtitles:
-      return {"Generating subtitles",
-              "Subtitle generation could not start"};
+      return {"Generating transcript",
+              "Transcript generation could not start"};
     case Action::CancelSubtitleGeneration:
-      return {"Cancelling subtitle generation",
-              "Subtitle generation could not be cancelled"};
+      return {"Cancelling transcript generation",
+              "Transcript generation could not be cancelled"};
     case Action::ExportAudio:
       return {"Exporting audio", "Audio export could not start"};
     case Action::ExportTranscriptText:
@@ -62,8 +62,8 @@ ActionText cancellationText(Operation operation) {
       return {"Cancelling loop split",
               "Loop splitting could not be cancelled"};
     case Operation::SubtitleGeneration:
-      return {"Cancelling subtitle generation",
-              "Subtitle generation could not be cancelled"};
+      return {"Cancelling transcript generation",
+              "Transcript generation could not be cancelled"};
     case Operation::AudioSeparationSetup:
       return {"Cancelling audio separation setup",
               "Audio separation setup could not be cancelled"};
@@ -122,7 +122,7 @@ std::string rejectionReason(const RequestError& error) {
       return "select the original media file instead of a generated audio "
              "stem";
     case RequestFailure::MissingTranscript:
-      return "generate subtitles for this video first";
+      return "generate a transcript for this video first";
     case RequestFailure::Busy:
       return "another media-processing task is already running";
     case RequestFailure::CompletionPending:

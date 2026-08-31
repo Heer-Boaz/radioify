@@ -53,7 +53,7 @@ bool exportTranscriptText(
   const std::filesystem::path transcriptPath =
       activeTranscriptPathForVideo(videoPath);
   if (transcriptPath.empty()) {
-    setError(error, "Generate subtitles before exporting a transcript.");
+    setError(error, "Generate a transcript before exporting it.");
     return false;
   }
   report(reportProgress, 0.05f, "Reading indexed transcript");

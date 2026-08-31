@@ -46,7 +46,7 @@ class ControlledAnalysis {
 
     reportProgress({invocation == 1 ? 0.4 : 0.2,
                     invocation == 1 ? "Sampling video"
-                                    : "Reading generated subtitles"});
+                                    : "Reading indexed transcript"});
     {
       std::unique_lock<std::mutex> lock(mutex_);
       reported_ = std::max(reported_, invocation);

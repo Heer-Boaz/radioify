@@ -888,7 +888,7 @@ RequestResult Coordinator::requestSubtitles(
     const std::filesystem::path& sourceFile) {
   if (!impl_ || !impl_->subtitles || !impl_->subtitles->configured()) {
     return rejected(RequestFailure::BackendUnavailable,
-                    "the Vulkan subtitle-generation backend is not "
+                    "the Vulkan transcript-generation backend is not "
                     "configured");
   }
   if (sourceFile.empty()) return rejected(RequestFailure::InvalidSource);
@@ -909,7 +909,7 @@ RequestResult Coordinator::requestSubtitles(
     if (!impl_->subtitles->tryStart(sourceFile)) {
       impl_->subtitleTask.reset();
       return rejected(RequestFailure::InternalError,
-                      "the subtitle-generation worker rejected the request");
+                      "the transcript-generation worker rejected the request");
     }
   }
   impl_->latestCompletion.reset();
@@ -1134,7 +1134,7 @@ RequestResult Coordinator::requestSubtitleCancellation() {
   return impl_->subtitles->requestCancel()
              ? RequestResult::accepted()
              : rejected(RequestFailure::InternalError,
-                        "the subtitle-generation worker rejected "
+                        "the transcript-generation worker rejected "
                         "cancellation");
 }
 

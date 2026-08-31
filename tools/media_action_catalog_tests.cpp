@@ -181,7 +181,7 @@ int main() {
                    browserVideo[1].action == actions::Action::EditVideo &&
                    browserVideo[2].action ==
                        actions::Action::GenerateSubtitles &&
-                   browserVideo[2].label == "Generate subtitles..." &&
+                   browserVideo[2].label == "Generate transcript..." &&
                    browserVideo[3].action == actions::Action::ExportAudio &&
                    browserVideo[3].label == "Export audio as FLAC" &&
                    browserVideo[4].action ==
@@ -220,11 +220,11 @@ int main() {
   const actions::Item* regenerateSubtitles = findAction(
       generatedSubtitleVideo, actions::Action::GenerateSubtitles);
   ok &= expect(regenerateSubtitles &&
-                   regenerateSubtitles->label == "Regenerate subtitles..." &&
+                   regenerateSubtitles->label == "Regenerate transcript..." &&
                    hasAction(generatedSubtitleVideo,
                              actions::Action::ExportTranscriptText),
-               "existing generated subtitles must be reflected in the shared "
-               "action");
+               "an existing generated transcript must be reflected in the "
+               "shared action");
   video.backgroundTaskRunning = true;
   video.activeTaskCancellable = true;
   ok &= expect(!hasAction(actions::build(video),
@@ -390,11 +390,11 @@ int main() {
   ok &= expect(
       generateSubtitles && generateSubtitles->accepted &&
           generateSubtitles->feedback ==
-              "Generating subtitles" &&
+              "Generating transcript" &&
           separateAudio && separateAudio->accepted &&
           separateAudio->feedback == "Separating audio" &&
           cancelSubtitles && cancelSubtitles->accepted &&
-          cancelSubtitles->feedback == "Cancelling subtitle generation" &&
+          cancelSubtitles->feedback == "Cancelling transcript generation" &&
           cancelSeparation && cancelSeparation->accepted &&
           cancelSeparation->feedback == "Cancelling audio separation" &&
           exportAudio && exportAudio->accepted &&
@@ -447,7 +447,7 @@ int main() {
                        playback_media_processing::RequestFailure::
                            BackendUnavailable &&
                    rejectedGeneration->feedback ==
-                       "Subtitle generation could not start: the required "
+                       "Transcript generation could not start: the required "
                        "processing backend is unavailable. Source: "
                        "\"source.mp4\"." &&
                    rejectedCancellation && !rejectedCancellation->accepted &&

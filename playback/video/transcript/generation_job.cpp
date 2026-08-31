@@ -49,7 +49,7 @@ struct GenerationJob::Impl {
         return false;
       }
       state.state = GenerationJobState::Publishing;
-      state.phase = "Publishing subtitles";
+      state.phase = "Publishing transcript";
     }
     notifyChanged();
     return true;
@@ -60,7 +60,7 @@ struct GenerationJob::Impl {
       std::lock_guard<std::mutex> lock(mutex);
       if (succeeded && state.state != GenerationJobState::Publishing) {
         succeeded = false;
-        error = "The subtitle backend completed without publishing through "
+        error = "The transcript backend completed without publishing through "
                 "the commit barrier.";
       }
       if (succeeded) {
@@ -75,8 +75,9 @@ struct GenerationJob::Impl {
       } else {
         state.state = GenerationJobState::Failed;
         state.diagnosticError.clear();
-        state.error = error.empty() ? "Subtitle generation failed unexpectedly."
-                                    : std::move(error);
+        state.error =
+            error.empty() ? "Transcript generation failed unexpectedly."
+                          : std::move(error);
       }
       state.phase.clear();
       completion = state;
@@ -96,9 +97,9 @@ struct GenerationJob::Impl {
           },
           &cancelRequested, [this]() { return beginCommit(); }, &error);
     } catch (const std::exception& exception) {
-      error = std::string("Subtitle generation failed: ") + exception.what();
+      error = std::string("Transcript generation failed: ") + exception.what();
     } catch (...) {
-      error = "Subtitle generation failed unexpectedly.";
+      error = "Transcript generation failed unexpectedly.";
     }
     finish(succeeded, std::move(error));
   }
@@ -138,7 +139,7 @@ bool GenerationJob::tryStart(const std::filesystem::path& videoPath) {
     impl_->cancelRequested.store(false, std::memory_order_relaxed);
     impl_->state = GenerationJobSnapshot{};
     impl_->state.state = GenerationJobState::Running;
-    impl_->state.phase = "Starting subtitle generation";
+    impl_->state.phase = "Starting transcript generation";
     impl_->state.sourceFile = videoPath;
     impl_->state.outputFile = outputPath;
 
@@ -151,13 +152,13 @@ bool GenerationJob::tryStart(const std::filesystem::path& videoPath) {
       impl_->state.state = GenerationJobState::Failed;
       impl_->state.phase.clear();
       impl_->state.error =
-          std::string("Could not start subtitle generation: ") +
+          std::string("Could not start transcript generation: ") +
           exception.what();
       impl_->completion = impl_->state;
     } catch (...) {
       impl_->state.state = GenerationJobState::Failed;
       impl_->state.phase.clear();
-      impl_->state.error = "Could not start subtitle generation.";
+      impl_->state.error = "Could not start transcript generation.";
       impl_->completion = impl_->state;
     }
   }
@@ -172,7 +173,7 @@ bool GenerationJob::requestCancel() {
     if (!impl_->state.cancellable()) return false;
     impl_->cancelRequested.store(true, std::memory_order_relaxed);
     impl_->state.state = GenerationJobState::Cancelling;
-    impl_->state.phase = "Cancelling subtitle generation";
+    impl_->state.phase = "Cancelling transcript generation";
   }
   impl_->notifyChanged();
   return true;

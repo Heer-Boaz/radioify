@@ -1,5 +1,6 @@
 #include "audio/separation/artifact.h"
 #include "audio/flac_writer.h"
+#include "audio/separation/compiled_model_integrity.h"
 #include "audio/separation/inference_session.h"
 #include "audio/separation/job.h"
 #include "audio/separation/inference_backend.h"
@@ -292,6 +293,55 @@ bool testInferenceBackendContracts() {
                          !static_cast<bool>(production.operation()),
                "production discovery must return either one usable native "
                "backend or one actionable unavailability reason");
+  return ok;
+}
+
+bool testCompiledModelIntegrity(const std::filesystem::path& directory) {
+  namespace separation = audio_separation;
+  const std::filesystem::path model = directory / "compiled-model.ep.onnx";
+  const std::filesystem::path manifest =
+      directory / "compiled-model.ep.integrity";
+  {
+    std::ofstream output(model, std::ios::binary | std::ios::trunc);
+    const std::vector<char> block(64 * 1024, static_cast<char>(0x5a));
+    for (int index = 0; index < 16; ++index) {
+      output.write(block.data(), static_cast<std::streamsize>(block.size()));
+    }
+  }
+
+  std::string error;
+  bool ok = true;
+  ok &= expect(
+      separation::writeCompiledModelIntegrityManifest(model, manifest,
+                                                       &error) &&
+          separation::verifyCompiledModelIntegrity(model, manifest, &error),
+      "a complete compiled model must match its published SHA-256 manifest");
+
+  {
+    std::fstream mutation(model,
+                          std::ios::binary | std::ios::in | std::ios::out);
+    mutation.seekp(512 * 1024);
+    mutation.put(static_cast<char>(0x33));
+  }
+  ok &= expect(
+      !separation::verifyCompiledModelIntegrity(model, manifest, &error) &&
+          error.find("does not match") != std::string::npos,
+      "same-size compiled-model corruption must invalidate the cache entry");
+
+  ok &= expect(
+      separation::writeCompiledModelIntegrityManifest(model, manifest,
+                                                       &error) &&
+          separation::verifyCompiledModelIntegrity(model, manifest, &error),
+      "repairing the integrity manifest must restore the exact cache pair");
+  {
+    std::ofstream corruptManifest(manifest,
+                                  std::ios::binary | std::ios::trunc);
+    corruptManifest << "invalid manifest\n";
+  }
+  ok &= expect(
+      !separation::verifyCompiledModelIntegrity(model, manifest, &error) &&
+          error.find("manifest") != std::string::npos,
+      "an unreadable integrity manifest must never count as a cache hit");
   return ok;
 }
 
@@ -964,6 +1014,7 @@ int main() {
   ok &= testArtifactContract(directory);
   ok &= testSpectralContract();
   ok &= testInferenceBackendContracts();
+  ok &= testCompiledModelIntegrity(directory);
   ok &= testWindowsMlAsyncSetupBridge();
   ok &= testGpuOnlyInferenceContract(directory);
   ok &= testFlacWriter(directory);

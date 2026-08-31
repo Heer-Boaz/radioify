@@ -221,9 +221,9 @@ struct VideoEditWorkspace::Impl {
           !playback_video_transcript::activeTranscriptPathForVideo(sourcePath)
                .empty();
       result.message = usesTranscript
-                           ? "Detecting segments using generated subtitles"
-                           : "Detecting segments from video; generate "
-                             "subtitles to improve dialogue detection";
+                           ? "Detecting segments using the indexed transcript"
+                           : "Detecting segments from video; generate a "
+                             "transcript to improve dialogue detection";
     } else if (sceneAnalysis.snapshot().running()) {
       result.message = "Segment detection is already running";
     } else {
@@ -874,7 +874,7 @@ VideoEditPollResult VideoEditWorkspace::poll() {
             std::to_string(completedAnalysis->suggestions.size()) +
             " suggestions";
         if (completedAnalysis->usedIndexedTranscript) {
-          message += " using generated subtitles";
+          message += " using the indexed transcript";
         }
         appendMessage(message);
         break;

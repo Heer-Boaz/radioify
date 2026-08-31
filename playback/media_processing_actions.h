@@ -22,7 +22,7 @@ inline constexpr const char* operationDisplayName(Operation operation) {
     case Operation::LoopSplit:
       return "loop split";
     case Operation::SubtitleGeneration:
-      return "subtitle generation";
+      return "transcript generation";
     case Operation::AudioSeparationSetup:
       return "audio separation setup";
     case Operation::AudioSeparation:

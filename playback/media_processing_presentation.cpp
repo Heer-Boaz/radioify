@@ -27,8 +27,8 @@ std::string activityTitle(const Activity& activity) {
       return activity.cancelling ? "Cancelling loop split"
                                  : "Splitting loop";
     case Operation::SubtitleGeneration:
-      return activity.cancelling ? "Cancelling subtitles"
-                                 : "Generating subtitles";
+      return activity.cancelling ? "Cancelling transcript"
+                                 : "Generating transcript";
     case Operation::AudioSeparationSetup:
       return activity.cancelling ? "Cancelling audio separation setup"
                                  : "Setting up audio separation";

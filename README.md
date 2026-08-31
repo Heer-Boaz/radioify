@@ -7,7 +7,7 @@ Console media browser/player with selectable period-radio receiver models.
 - CMake 3.16+
 - MSVC (Visual Studio Build Tools)
 - vcpkg (for `-InstallDeps`)
-- A Vulkan-capable GPU and current graphics driver (generated subtitles)
+- A Vulkan-capable GPU and current graphics driver (generated transcripts)
 
 ## Build
 For the repo-specific Windows build/run flow and common failure recovery, see
@@ -25,7 +25,7 @@ The binary is written to `dist/radioify.exe`.
 
 The default build enables whisper.cpp's Vulkan backend and downloads the
 SHA-256-verified multilingual Whisper base model used for offline,
-GPU-accelerated subtitle generation. Set
+GPU-accelerated transcript generation. Set
 `RADIOIFY_WHISPER_MODEL` to use another compatible whisper.cpp model at
 runtime. Custom models use ordinary token timestamps unless the matching
 official alignment-head preset is explicitly selected with
@@ -193,13 +193,13 @@ to the browser.
 
 - Mouse: select; click to play/open
 - Right-click a video in the browser or the active video and choose
-  `Generate subtitles...` to create its managed `video.transcript.srt`
-  sidecar. The active player picks it up as soon as generation completes.
-  `Regenerate subtitles...` atomically replaces that managed result instead of
-  accumulating competing subtitle tracks. While generation is running, use
-  the task panel's `Cancel` button or choose `Cancel subtitle generation` from
-  the video's context menu; Radioify asks for confirmation before stopping the
-  task.
+  `Generate transcript...` to create its managed `video.transcript.srt`
+  sidecar. The active player renders that indexed transcript as a subtitle
+  overlay as soon as generation completes. `Regenerate transcript...`
+  atomically replaces the managed transcript instead of accumulating
+  competing tracks. While generation is running, use the task panel's
+  `Cancel` button or choose `Cancel transcript generation` from the video's
+  context menu; Radioify asks for confirmation before stopping the task.
 - Long-running media jobs stay asynchronous and modeless: browsing and
   playback remain available while the task panel shows progress. `Tab` can
   focus its `Cancel` and `Hide` buttons; hiding the panel leaves a footer

@@ -171,7 +171,7 @@ int main() {
                "cancellation must be accepted exactly once");
   const transcript::GenerationJobSnapshot cancelling = job.snapshot();
   ok &= expect(cancelling.cancelling() && cancelling.running() &&
-                   cancelling.phase == "Cancelling subtitle generation",
+                   cancelling.phase == "Cancelling transcript generation",
                "cancellation must be an explicit running state");
   controlled.release(2);
   const auto cancelled = waitForCompletion(job);
@@ -223,10 +223,10 @@ int main() {
                    publishing.state ==
                        transcript::GenerationJobState::Publishing &&
                    publishing.running() && !publishing.cancellable() &&
-                   publishing.phase == "Publishing subtitles" &&
+                   publishing.phase == "Publishing transcript" &&
                    lateCancellationRejected && published &&
                    published->succeeded(),
-               "subtitle generation must remove Cancel at its linearized "
+               "transcript generation must remove Cancel at its linearized "
                "publication boundary");
 
   transcript::GenerationJob missingBarrier(

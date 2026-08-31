@@ -222,7 +222,8 @@ bool analyzeVideoScenes(const std::filesystem::path& videoPath,
   VideoDecoder decoder;
   std::string decoderError;
   DecoderInterruptContext interruptContext{cancelRequested};
-  if (!decoder.init(videoPath, &decoderError, true, true, nullptr,
+  if (!decoder.init(videoPath, &decoderError,
+                    kSceneAnalysisPreferHardwareDecode, true, nullptr,
                     videoStreamIndex, &interruptDecoder,
                     &interruptContext)) {
     setError(error, decoderError.empty() ? "Could not open the video stream."

@@ -17,7 +17,7 @@ std::string completionText(
   if (completion.outcome == Outcome::Cancelled) {
     switch (completion.kind) {
       case Kind::SubtitleGeneration:
-        return "Subtitle generation cancelled.";
+        return "Transcript generation cancelled.";
       case Kind::AudioSeparationSetup:
         return "Audio separation setup cancelled.";
       case Kind::AudioSeparation:
@@ -43,7 +43,7 @@ std::string completionText(
         text = "Loop split failed.";
         break;
       case Kind::SubtitleGeneration:
-        text = "Subtitle generation failed.";
+        text = "Transcript generation failed.";
         break;
       case Kind::AudioSeparationSetup:
         text = "Audio separation setup failed.";
@@ -76,8 +76,8 @@ std::string completionText(
     case Kind::SubtitleGeneration: {
       const std::string filename =
           toUtf8String(completion.outputFile.filename());
-      return filename.empty() ? "Subtitles ready."
-                              : "Subtitles ready: " + filename;
+      return filename.empty() ? "Transcript ready."
+                              : "Transcript ready: " + filename;
     }
     case Kind::AudioSeparationSetup:
       return "Audio separation is ready.";
@@ -107,7 +107,7 @@ std::string failureTitle(media_processing::TaskKind kind) {
     case Kind::LoopSplit:
       return "Loop split failed";
     case Kind::SubtitleGeneration:
-      return "Subtitle generation failed";
+      return "Transcript generation failed";
     case Kind::AudioSeparationSetup:
       return "Audio separation setup failed";
     case Kind::AudioSeparation:
@@ -128,7 +128,7 @@ std::string failureSummary(media_processing::TaskKind kind) {
     case Kind::LoopSplit:
       return "Radioify could not split the selected loop.";
     case Kind::SubtitleGeneration:
-      return "Radioify could not generate subtitles for this file.";
+      return "Radioify could not generate a transcript for this file.";
     case Kind::AudioSeparationSetup:
       return "Radioify could not set up the optional NVIDIA audio "
              "component.";

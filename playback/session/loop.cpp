@@ -1750,7 +1750,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
             playback_media_processing::Operation::SubtitleGeneration &&
         completion.succeeded()) {
       syncOverlayPresentation();
-      showEditMessage("Subtitles generated; loading...");
+      showEditMessage("Transcript generated; loading as subtitles...");
       if (promptClosed) resumeDeferredNativeFileDrop();
       return;
     }

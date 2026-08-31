@@ -566,7 +566,7 @@ int main() {
                      return subtitlesStarted.load(std::memory_order_acquire);
                    }) &&
                    coordinator.subtitleGenerationRunningFor("movie.mp4"),
-               "subtitle generation must retain source identity");
+               "transcript generation must retain source identity");
   const std::optional<processing::TaskActivity> subtitles =
       coordinator.activity();
   const playback_media_processing::SourceState subtitleSourceState =

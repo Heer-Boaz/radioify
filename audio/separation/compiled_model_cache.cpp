@@ -19,6 +19,7 @@
 #include <utility>
 #include <variant>
 
+#include "audio/separation/compiled_model_integrity.h"
 #include "audio/separation/inference_session.h"
 #include "core/file_output.h"
 #include "core/runtime_helpers.h"
@@ -30,8 +31,7 @@
 namespace audio_separation {
 namespace {
 
-constexpr unsigned int kCacheSchemaVersion = 2;
-constexpr std::uintmax_t kMinimumCompiledModelBytes = 1024 * 1024;
+constexpr unsigned int kCacheSchemaVersion = 3;
 
 void setError(std::string* error, std::string message) {
   if (error) *error = std::move(message);
@@ -49,13 +49,6 @@ std::string safePathComponent(std::string_view value) {
     }
   }
   return result;
-}
-
-bool usableCompiledModel(const std::filesystem::path& path) {
-  std::error_code error;
-  if (!std::filesystem::is_regular_file(path, error) || error) return false;
-  const std::uintmax_t size = std::filesystem::file_size(path, error);
-  return !error && size >= kMinimumCompiledModelBytes;
 }
 
 class CompilationMutex {
@@ -170,14 +163,30 @@ bool prepareBundledModel(
 
   const std::filesystem::path compiledModelPath =
       cacheDirectory / "bandit-v2-tensorrt-rtx.ep.onnx";
+  const std::filesystem::path integrityManifestPath =
+      cacheDirectory / "bandit-v2-tensorrt-rtx.ep.integrity";
+  const auto cacheEntryExists = [&]() {
+    std::error_code filesystemError;
+    const bool modelExists =
+        std::filesystem::exists(compiledModelPath, filesystemError) &&
+        !filesystemError;
+    filesystemError.clear();
+    const bool manifestExists =
+        std::filesystem::exists(integrityManifestPath, filesystemError) &&
+        !filesystemError;
+    return modelExists || manifestExists;
+  };
   bool resumingCompilation = false;
+  bool invalidCacheObserved = false;
+  bool invalidCacheReported = false;
   for (;;) {
     if (!control.checkpoint()) {
       setError(error, "Audio separation cancelled.");
       return false;
     }
     if (mode == ModelPreparationMode::ReuseOrCreate &&
-        usableCompiledModel(compiledModelPath)) {
+        verifyCompiledModelIntegrity(compiledModelPath,
+                                     integrityManifestPath)) {
       reportDiagnostic(diagnostics, DiagnosticLevel::Info, "model-cache",
                        "Using compiled NVIDIA model: " +
                            toUtf8String(compiledModelPath));
@@ -198,8 +207,11 @@ bool prepareBundledModel(
     std::unique_ptr<CompilationMutex> lock = CompilationMutex::acquire(
         mutexName(backend.providerVersion), control, error);
     if (!lock) return false;
+    std::string integrityError;
     if (mode == ModelPreparationMode::ReuseOrCreate &&
-        usableCompiledModel(compiledModelPath)) {
+        verifyCompiledModelIntegrity(compiledModelPath,
+                                     integrityManifestPath,
+                                     &integrityError)) {
       reportDiagnostic(diagnostics, DiagnosticLevel::Info, "model-cache",
                        "Using compiled NVIDIA model created by another "
                        "Radioify process.");
@@ -208,6 +220,19 @@ bool prepareBundledModel(
       prepared->compiled = true;
       prepared->cacheHit = true;
       return true;
+    }
+    if (mode == ModelPreparationMode::ReuseOrCreate &&
+        cacheEntryExists()) {
+      invalidCacheObserved = true;
+      if (!invalidCacheReported) {
+        reportDiagnostic(
+            diagnostics, DiagnosticLevel::Warning, "model-cache",
+            "Ignoring an invalid compiled NVIDIA model cache entry: " +
+                (integrityError.empty()
+                     ? std::string("integrity verification failed.")
+                     : std::move(integrityError)));
+        invalidCacheReported = true;
+      }
     }
 
     bool lockYielded = false;
@@ -224,13 +249,14 @@ bool prepareBundledModel(
     }
 
     reportDiagnostic(diagnostics, DiagnosticLevel::Info, "model-cache",
-                     mode == ModelPreparationMode::Rebuild
+                     mode == ModelPreparationMode::Rebuild ||
+                             invalidCacheObserved
                          ? "Rebuilding the compiled NVIDIA separation model."
                          : "Compiling the NVIDIA separation model for first "
                            "use.");
     if (reportPreparation) {
       std::string phase;
-      if (mode == ModelPreparationMode::Rebuild) {
+      if (mode == ModelPreparationMode::Rebuild || invalidCacheObserved) {
         phase = "Repairing the NVIDIA separation model cache";
       } else if (resumingCompilation) {
         phase = "Resuming NVIDIA model optimization (first use)";
@@ -239,9 +265,11 @@ bool prepareBundledModel(
       }
       reportPreparation(std::move(phase));
     }
-    std::optional<file_output::Transaction> transaction =
-        file_output::Transaction::begin(
-            compiledModelPath, file_output::PublishMode::ReplaceExisting,
+    std::optional<file_output::TransactionGroup> transaction =
+        file_output::TransactionGroup::begin(
+            {{compiledModelPath, file_output::PublishMode::ReplaceExisting},
+             {integrityManifestPath,
+              file_output::PublishMode::ReplaceExisting}},
             error);
     if (!transaction) return false;
 
@@ -249,7 +277,7 @@ bool prepareBundledModel(
         InferenceSessionFactory::create(backend, diagnostics, error);
     if (!compiler) return false;
     const ControlledOperationResult compilation = compiler->compileModel(
-        sourceModelPath, transaction->temporaryPath(), control);
+        sourceModelPath, transaction->temporaryPath(0), control);
     if (std::holds_alternative<OperationInterrupted>(compilation)) {
       if (control.cancellationRequested()) {
         setError(error, "Audio separation cancelled.");
@@ -287,6 +315,11 @@ bool prepareBundledModel(
     if (publicationLockYielded) {
       resumingCompilation = true;
       continue;
+    }
+    if (!writeCompiledModelIntegrityManifest(
+            transaction->temporaryPath(0), transaction->temporaryPath(1),
+            error)) {
+      return false;
     }
     if (!transaction->publish(error)) return false;
     reportDiagnostic(diagnostics, DiagnosticLevel::Info, "model-cache",

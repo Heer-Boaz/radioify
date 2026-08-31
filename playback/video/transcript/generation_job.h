@@ -53,7 +53,7 @@ struct GenerationJobSnapshot {
   }
 };
 
-// Owns the complete lifecycle of one background subtitle-generation job.
+// Owns the complete lifecycle of one background transcript-generation job.
 // Consumers observe immutable state, receive each completion exactly once,
 // and can wait on the change handle instead of polling worker internals.
 class GenerationJob {

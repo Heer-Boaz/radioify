@@ -56,7 +56,7 @@ BrowserEntry mediaEntry(const char* name) {
 std::vector<playback_media_actions::Item> mediaActions() {
   using Action = playback_media_actions::Action;
   return {{Action::Play, "Play"},
-          {Action::GenerateSubtitles, "Generate subtitles..."}};
+          {Action::GenerateSubtitles, "Generate transcript..."}};
 }
 
 }  // namespace

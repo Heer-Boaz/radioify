@@ -45,13 +45,13 @@ std::vector<Item> build(const Context& context) {
     if (context.subtitleGenerationRunningForSource &&
         context.activeTaskCancellable) {
       items.push_back(
-          {Action::CancelSubtitleGeneration, "Cancel subtitle generation"});
+          {Action::CancelSubtitleGeneration, "Cancel transcript generation"});
     } else if (!context.backgroundTaskRunning &&
                context.canGenerateSubtitles) {
       items.push_back(
           {Action::GenerateSubtitles,
-           context.hasGeneratedSubtitles ? "Regenerate subtitles..."
-                                         : "Generate subtitles..."});
+           context.hasGeneratedSubtitles ? "Regenerate transcript..."
+                                         : "Generate transcript..."});
     }
     if (context.transcriptTextExportRunningForSource &&
         context.activeTaskCancellable) {

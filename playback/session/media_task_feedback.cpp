@@ -25,7 +25,7 @@ std::string mediaTaskFeedback(
       case Operation::LoopSplit:
         return identify("Loop splitting cancelled.");
       case Operation::SubtitleGeneration:
-        return identify("Subtitle generation cancelled.");
+        return identify("Transcript generation cancelled.");
       case Operation::AudioSeparationSetup:
         return identify("Audio separation setup cancelled.");
       case Operation::AudioSeparation:
@@ -44,7 +44,7 @@ std::string mediaTaskFeedback(
       case Operation::LoopSplit:
         return identify("Loop splitting failed.");
       case Operation::SubtitleGeneration:
-        return identify("Subtitle generation failed.");
+        return identify("Transcript generation failed.");
       case Operation::AudioSeparationSetup:
         return identify("Audio separation setup failed.");
       case Operation::AudioSeparation:
@@ -68,8 +68,8 @@ std::string mediaTaskFeedback(
       return identify(filename.empty() ? "Loop split complete."
                                        : "Loop split ready: " + filename);
     case Operation::SubtitleGeneration:
-      return identify(filename.empty() ? "Subtitles ready."
-                                       : "Subtitles ready: " + filename);
+      return identify(filename.empty() ? "Transcript ready."
+                                       : "Transcript ready: " + filename);
     case Operation::AudioSeparationSetup:
       return identify("Audio separation is ready.");
     case Operation::AudioExport:
