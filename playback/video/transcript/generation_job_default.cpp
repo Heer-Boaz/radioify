@@ -20,6 +20,10 @@ GenerationJob::Operation GenerationJob::productionOperation() {
   };
 }
 
+const char* GenerationJob::productionEngineName() {
+  return "Whisper (Vulkan GPU)";
+}
+
 GenerationJob::GenerationJob() : GenerationJob(productionOperation()) {}
 
 }  // namespace playback_video_transcript

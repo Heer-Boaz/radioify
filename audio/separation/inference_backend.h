@@ -7,6 +7,7 @@
 namespace audio_separation {
 
 enum class InferenceBackendKind {
+  Unspecified,
   DirectMl,
   WindowsMlNvidiaTensorRtRtx,
 };
@@ -20,7 +21,9 @@ struct InferenceProviderOption {
 // product policy live outside the model adapter so that loading a model never
 // installs software or silently chooses a different backend.
 struct InferenceBackend {
-  InferenceBackendKind kind = InferenceBackendKind::DirectMl;
+  // A default-constructed descriptor is deliberately unusable. Diagnostics
+  // and production policy must both name their execution provider explicitly.
+  InferenceBackendKind kind = InferenceBackendKind::Unspecified;
   std::string providerName;
   std::string displayName;
   std::string diagnosticComponent;

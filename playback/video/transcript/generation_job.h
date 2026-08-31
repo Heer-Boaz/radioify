@@ -28,6 +28,7 @@ struct GenerationJobSnapshot {
   float progress = 0.0f;
   std::string phase;
   std::string error;
+  std::string diagnosticError;
   std::filesystem::path sourceFile;
   std::filesystem::path outputFile;
 
@@ -67,6 +68,7 @@ class GenerationJob {
   // Uses Radioify's configured Whisper/Vulkan transcription operation.
   GenerationJob();
   static Operation productionOperation();
+  static const char* productionEngineName();
   // The operation boundary also permits another transcription backend without
   // changing lifecycle, cancellation, or UI coordination code.
   explicit GenerationJob(Operation operation);

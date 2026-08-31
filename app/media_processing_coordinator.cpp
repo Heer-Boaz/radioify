@@ -279,6 +279,9 @@ class WorkerTask {
 
     if (cancelRequested_.load(std::memory_order_acquire) &&
         !completion.succeeded()) {
+      if (completion.diagnosticDetail.empty()) {
+        completion.diagnosticDetail = completion.detail;
+      }
       completion.outcome = TaskOutcome::Cancelled;
       completion.detail.clear();
     }
@@ -337,6 +340,7 @@ std::optional<playback_media_processing::Completion> completionForPlayback(
   projected.sourceFile = completion.sourceFile;
   projected.outputFile = completion.outputFile;
   projected.diagnosticLog = completion.diagnosticLog;
+  projected.diagnosticDetail = completion.diagnosticDetail;
   projected.detail = completion.detail;
   return projected;
 }
@@ -381,6 +385,7 @@ struct Coordinator::Impl {
         workerTask(wakeEvent.notifier()),
         analyzeMelody(std::move(backends.analyzeMelody)),
         splitLoop(std::move(backends.splitLoop)),
+        subtitleEngineName(std::move(backends.subtitleEngineName)),
         setupAudioSeparation(std::move(backends.setupAudioSeparation)),
         resolveAudioSeparation(std::move(backends.resolveAudioSeparation)),
         exportAudio(std::move(backends.exportAudio)),
@@ -403,6 +408,7 @@ struct Coordinator::Impl {
   WorkerTask workerTask;
   MelodyOperation analyzeMelody;
   LoopSplitOperation splitLoop;
+  std::string subtitleEngineName;
   audio_separation::ProviderSetupOperation setupAudioSeparation;
   AudioSeparationBindingResolver resolveAudioSeparation;
   FileExportOperation exportAudio;
@@ -465,6 +471,8 @@ Coordinator::Coordinator(Operations operations)
         Backends backends;
         backends.analyzeMelody = std::move(operations.analyzeMelody);
         backends.splitLoop = std::move(operations.splitLoop);
+        backends.subtitleEngineName =
+            std::move(operations.subtitleEngineName);
         backends.generateSubtitles =
             std::move(operations.generateSubtitles);
         backends.separateAudio = std::move(operations.separateAudio);
@@ -503,6 +511,7 @@ std::optional<TaskActivity> Coordinator::activity() const {
       activity.id = impl_->subtitleTask.value_or(TaskId{});
       activity.kind = TaskKind::SubtitleGeneration;
       activity.sourceFile = snapshot.sourceFile;
+      activity.processingEngine = impl_->subtitleEngineName;
       activity.progress = std::clamp(snapshot.progress, 0.0f, 1.0f);
       activity.phase = snapshot.phase;
       activity.cancelling = snapshot.cancelling();
@@ -587,6 +596,7 @@ bool Coordinator::collectReadyCompletions() {
       taskCompletion.outcome = outcomeFor(*completion);
       taskCompletion.sourceFile = completion->sourceFile;
       taskCompletion.outputFile = completion->outputFile;
+      taskCompletion.diagnosticDetail = completion->diagnosticError;
       taskCompletion.detail = completion->error;
       impl_->subtitleTask.reset();
       impl_->latestCompletion = taskCompletion;
@@ -605,6 +615,7 @@ bool Coordinator::collectReadyCompletions() {
       taskCompletion.sourceFile = completion->sourceFile;
       taskCompletion.outputFile = completion->outputFiles.front();
       taskCompletion.diagnosticLog = completion->diagnosticLog;
+      taskCompletion.diagnosticDetail = completion->diagnosticError;
       taskCompletion.detail = completion->error;
       impl_->audioSeparationTask.reset();
       impl_->latestCompletion = taskCompletion;

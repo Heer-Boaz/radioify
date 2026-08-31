@@ -67,6 +67,8 @@ Coordinator::Coordinator(AudioPlaybackRuntime& audioPlayback)
             };
         operations.generateSubtitles =
             playback_video_transcript::GenerationJob::productionOperation();
+        operations.subtitleEngineName =
+            playback_video_transcript::GenerationJob::productionEngineName();
 #if RADIOIFY_HAS_AUDIO_SEPARATION
         operations.separateAudio =
             audio_separation::resolveProductionOperation();

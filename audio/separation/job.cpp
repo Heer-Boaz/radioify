@@ -109,6 +109,8 @@ struct Job::Impl {
 
   void finish(bool succeeded, std::string error,
               const std::shared_ptr<DiagnosticLog>& diagnosticLog) {
+    bool cancelledOutcome = false;
+    std::string outcomeError;
     {
       std::lock_guard<std::mutex> lock(mutex);
       if (succeeded && state.state != JobState::Publishing) {
@@ -116,40 +118,46 @@ struct Job::Impl {
         error = "The audio-separation backend completed without publishing "
                 "through the commit barrier.";
       }
-    }
-    if (diagnosticLog) {
-      if (succeeded) {
-        diagnosticLog->append(DiagnosticLevel::Info, "job",
-                              "Audio separation completed successfully.");
-      } else if (cancelRequested.load(std::memory_order_relaxed)) {
-        diagnosticLog->append(DiagnosticLevel::Info, "job",
-                              "Audio separation was cancelled.");
-      } else {
-        diagnosticLog->append(
-            DiagnosticLevel::Error, "job",
-            error.empty() ? "Audio separation failed unexpectedly." : error);
-      }
-    }
-    {
-      std::lock_guard<std::mutex> lock(mutex);
       if (succeeded) {
         state.state = JobState::Succeeded;
         state.progress = 1.0f;
         state.error.clear();
+        state.diagnosticError.clear();
       } else if (cancelRequested.load(std::memory_order_relaxed)) {
+        cancelledOutcome = true;
+        outcomeError = error;
         state.state = JobState::Cancelled;
+        state.diagnosticError = std::move(error);
         state.error.clear();
       } else {
         state.state = JobState::Failed;
+        state.diagnosticError.clear();
         state.error = error.empty()
                           ? "Audio separation failed unexpectedly."
                           : std::move(error);
+        outcomeError = state.error;
       }
       state.phase.clear();
       state.scheduling = JobSchedulingState::Running;
       suspensionRequested.store(false, std::memory_order_relaxed);
       completion = state;
       activeDiagnosticLog.reset();
+    }
+    if (diagnosticLog) {
+      if (succeeded) {
+        diagnosticLog->append(DiagnosticLevel::Info, "job",
+                              "Audio separation completed successfully.");
+      } else if (cancelledOutcome) {
+        if (!outcomeError.empty()) {
+          diagnosticLog->append(
+              DiagnosticLevel::Warning, "backend",
+              "Backend stopped during cancellation: " + outcomeError);
+        }
+        diagnosticLog->append(DiagnosticLevel::Info, "job",
+                              "Audio separation was cancelled.");
+      } else {
+        diagnosticLog->append(DiagnosticLevel::Error, "job", outcomeError);
+      }
     }
     notifyChanged();
   }

@@ -189,6 +189,13 @@ bool testSpectralContract() {
 bool testInferenceBackendContracts() {
   namespace separation = audio_separation;
   bool ok = true;
+  const separation::InferenceBackend unspecified;
+  ok &= expect(
+      !unspecified.valid() &&
+          unspecified.kind ==
+              separation::InferenceBackendKind::Unspecified,
+      "a default backend descriptor must never imply a production or "
+      "diagnostic provider");
   separation::InferenceBackend directMl =
       separation::directMlInferenceBackend();
   ok &= expect(directMl.valid() &&
@@ -612,7 +619,8 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
   const std::filesystem::path missingModel =
       directory / "missing-explicit-model.onnx";
   const separation::Job::Operation explicitModelOperation =
-      separation::makeModelOperation(missingModel);
+      separation::makeModelOperation(
+          missingModel, separation::directMlInferenceBackend());
   std::atomic<bool> notCancelled{false};
   const separation::ExecutionControl explicitModelControl(&notCancelled);
   std::string explicitModelError;
@@ -663,9 +671,19 @@ bool testJobLifecycle(const std::filesystem::path& directory) {
   }
   ok &= expect(cancelled && cancelled->state == separation::JobState::Cancelled &&
                    cancelled->error.empty() &&
+                   cancelled->diagnosticError == "Controlled cancellation." &&
                    !cancelled->diagnosticLog.empty(),
-               "cancelled work must publish typed state without backend noise");
+               "cancelled work must publish typed state without losing the "
+               "backend diagnostic");
   if (cancelled && !cancelled->diagnosticLog.empty()) {
+    const std::string diagnostics = readText(cancelled->diagnosticLog);
+    ok &= expect(
+        diagnostics.find("Backend stopped during cancellation: Controlled "
+                         "cancellation.") != std::string::npos &&
+            diagnostics.find("Audio separation was cancelled.") !=
+                std::string::npos,
+        "cancellation logs must retain both the backend termination detail "
+        "and the user-requested outcome");
     std::error_code ignored;
     std::filesystem::remove(cancelled->diagnosticLog, ignored);
   }

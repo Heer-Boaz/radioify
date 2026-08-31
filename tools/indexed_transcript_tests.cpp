@@ -1,3 +1,4 @@
+#include "playback/video/analysis/scene_transcript_evidence.h"
 #include "playback/video/transcript/document.h"
 #include "playback/video/transcript/artifact.h"
 #include "playback/video/transcript/cue_semantics.h"
@@ -44,6 +45,17 @@ int main() {
                        transcript::WhisperAlignmentPreset::None &&
                    !transcript::parseWhisperAlignmentPreset("my-base-model"),
                "DTW presets must be explicit values, never filename guesses");
+  const auto automaticLanguage =
+      transcript::normalizeWhisperLanguageOverride(" auto ");
+  const auto dutchLanguage =
+      transcript::normalizeWhisperLanguageOverride(" NL ");
+  ok &= expect(
+      automaticLanguage && automaticLanguage->empty() && dutchLanguage &&
+          *dutchLanguage == "nl" &&
+          !transcript::normalizeWhisperLanguageOverride("dutch") &&
+          !transcript::normalizeWhisperLanguageOverride("n1"),
+      "Whisper language overrides must normalize ISO-style codes and reject "
+      "ambiguous configuration");
   ok &= expect(transcript::isTranscriptSoundAnnotation(" [thunder] ") &&
                    !transcript::isTranscriptSoundAnnotation(
                        "(Welcome honored guests)") &&
@@ -244,6 +256,30 @@ int main() {
                    parsedSegments[1].text == "tweede regel",
                "indexed transcript readers must recover normalized SRT timing "
                "and text");
+  std::vector<transcript::Segment> sceneTranscriptEvidence;
+  ok &= expect(
+      playback_video_analysis::loadSceneTranscriptEvidence(
+          {}, &sceneTranscriptEvidence, &error) &&
+          sceneTranscriptEvidence.empty() && error.empty() &&
+          playback_video_analysis::loadSceneTranscriptEvidence(
+              output, &sceneTranscriptEvidence, &error) &&
+          sceneTranscriptEvidence.size() == parsedSegments.size(),
+      "scene analysis must distinguish an absent transcript from readable "
+      "indexed evidence");
+  const std::filesystem::path corruptTranscript =
+      testDir / "corrupt.transcript.srt";
+  {
+    std::ofstream corrupt(corruptTranscript, std::ios::binary);
+    corrupt << "this is not an indexed transcript\r\n";
+  }
+  ok &= expect(
+      !playback_video_analysis::loadSceneTranscriptEvidence(
+          corruptTranscript, &sceneTranscriptEvidence, &error) &&
+          sceneTranscriptEvidence.empty() &&
+          error.find("Scene analysis cannot use the indexed transcript") !=
+              std::string::npos,
+      "an existing unreadable transcript must fail scene analysis instead of "
+      "silently removing speech evidence");
   ok &= expect(transcript::activeTranscriptPathForVideo(
                    testDir / "film.mkv") == output,
                "readers must select the canonical active transcript");

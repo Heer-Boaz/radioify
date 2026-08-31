@@ -178,8 +178,10 @@ int main() {
   ok &= expect(cancelled &&
                    cancelled->state ==
                        transcript::GenerationJobState::Cancelled &&
-                   cancelled->error.empty(),
-               "cancelled work must not surface a backend failure");
+                   cancelled->error.empty() &&
+                   cancelled->diagnosticError == "Controlled cancellation.",
+               "cancelled work must hide backend noise from the user while "
+               "retaining it for diagnostics");
 
   ok &= expect(job.tryStart("failure.mp4") &&
                    controlled.waitUntilReported(3),

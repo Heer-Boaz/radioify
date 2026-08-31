@@ -46,6 +46,7 @@ class WhisperEngine {
 
   bool initialize(const std::filesystem::path& modelPath,
                   WhisperAlignmentPreset alignmentPreset,
+                  std::string sourceLanguage,
                   std::string* deviceDescription, std::string* error);
   bool transcribe(const float* samples, size_t sampleCount,
                   const ProgressCallback& onProgress,

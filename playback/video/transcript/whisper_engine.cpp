@@ -182,6 +182,7 @@ WhisperEngine::~WhisperEngine() = default;
 
 bool WhisperEngine::initialize(const std::filesystem::path& modelPath,
                                WhisperAlignmentPreset alignmentPreset,
+                               std::string sourceLanguage,
                                std::string* deviceDescription,
                                std::string* error) {
   impl_.reset();
@@ -190,6 +191,17 @@ bool WhisperEngine::initialize(const std::filesystem::path& modelPath,
   if (modelPath.empty()) {
     setError(error, "Whisper model path is empty.");
     return false;
+  }
+  if (!sourceLanguage.empty()) {
+    const int languageId = whisper_lang_id(sourceLanguage.c_str());
+    const char* canonicalLanguage =
+        languageId >= 0 ? whisper_lang_str(languageId) : nullptr;
+    if (!canonicalLanguage) {
+      setError(error, "Whisper does not support source language '" +
+                          sourceLanguage + "'.");
+      return false;
+    }
+    sourceLanguage = canonicalLanguage;
   }
 
   configureWhisperLogging();
@@ -223,6 +235,7 @@ bool WhisperEngine::initialize(const std::filesystem::path& modelPath,
 
   auto impl = std::make_unique<Impl>();
   impl->context = std::move(context);
+  impl->sourceLanguage = std::move(sourceLanguage);
   std::string selectedDescription =
       device.description.empty() ? device.name : device.description;
   if (selectedDescription.empty()) selectedDescription = "Vulkan GPU";

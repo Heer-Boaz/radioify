@@ -232,7 +232,9 @@ int main(int argc, char** argv) {
 
   audio_separation::Job::Operation operation;
   if (commandLine.model) {
-    operation = audio_separation::makeModelOperation(*commandLine.model);
+    operation = audio_separation::makeModelOperation(
+        *commandLine.model,
+        audio_separation::directMlInferenceBackend());
   } else {
     const audio_separation::OperationBinding production =
         audio_separation::resolveProductionOperation();

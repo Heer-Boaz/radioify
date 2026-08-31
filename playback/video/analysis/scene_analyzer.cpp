@@ -8,7 +8,7 @@
 
 #include "playback/video/decoder.h"
 #include "playback/video/analysis/scene_analysis_cache.h"
-#include "playback/video/transcript/document.h"
+#include "playback/video/analysis/scene_transcript_evidence.h"
 #include "playback/video/transcript/artifact.h"
 
 namespace playback_video_analysis {
@@ -203,6 +203,14 @@ bool analyzeVideoScenes(const std::filesystem::path& videoPath,
 
   const std::filesystem::path transcriptPath =
       playback_video_transcript::activeTranscriptPathForVideo(videoPath);
+  std::vector<playback_video_transcript::Segment> transcriptSegments;
+  std::string transcriptError;
+  report(onProgress, 0.005, "Reading transcript evidence");
+  if (!loadSceneTranscriptEvidence(transcriptPath, &transcriptSegments,
+                                   &transcriptError)) {
+    setError(error, std::move(transcriptError));
+    return false;
+  }
   if (allowCachedResult && expectedDurationUs > 0 &&
       loadCachedSceneAnalysis(videoPath, videoStreamIndex,
                               expectedDurationUs, transcriptPath, result)) {
@@ -294,15 +302,7 @@ bool analyzeVideoScenes(const std::filesystem::path& videoPath,
     return false;
   }
 
-  report(onProgress, 0.92, "Reading transcript evidence");
-  std::vector<playback_video_transcript::Segment> transcriptSegments;
-  if (!transcriptPath.empty()) {
-    std::string transcriptError;
-    if (!playback_video_transcript::readIndexedTranscript(
-            transcriptPath, &transcriptSegments, &transcriptError)) {
-      transcriptSegments.clear();
-    }
-  }
+  report(onProgress, 0.92, "Applying transcript evidence");
   const std::vector<SpeechActivity> speech =
       buildSpeechActivity(transcriptSegments);
   report(onProgress, 0.96, "Grouping detected segments");

@@ -19,7 +19,6 @@ Job::Operation makeBundledModelOperation(InferenceBackend backend);
 
 // Alternate models are an explicit diagnostic dependency and never ambient
 // process configuration inherited by the application.
-Job::Operation makeModelOperation(std::filesystem::path modelPath);
 Job::Operation makeModelOperation(std::filesystem::path modelPath,
                                   InferenceBackend backend);
 

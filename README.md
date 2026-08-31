@@ -31,7 +31,11 @@ runtime. Custom models use ordinary token timestamps unless the matching
 official alignment-head preset is explicitly selected with
 `RADIOIFY_WHISPER_DTW_PRESET` (for example `base.en`, `small`, or
 `large.v3.turbo`; use `none` to disable DTW). Invalid explicit configuration
-is reported instead of silently falling back. Transcript creation fails with
+is reported instead of silently falling back. Automatic language detection is
+kept stable after the first chunk with recognized speech; set
+`RADIOIFY_WHISPER_LANGUAGE` to `auto` or an explicit two-letter source code
+such as `en`, `nl`, `de`, or `fr` when the opening speech is not representative.
+Transcript creation fails with
 a clear error if the selected Vulkan device cannot initialize; it never
 silently falls back to CPU. The normal static build keeps the static MSVC
 runtime; it does not require a Visual C++ redistributable install on another

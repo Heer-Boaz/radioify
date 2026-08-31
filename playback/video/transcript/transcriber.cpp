@@ -31,6 +31,7 @@ constexpr const char* kDefaultModelName = "ggml-base-q5_1.bin";
 struct WhisperModelSelection {
   std::filesystem::path path;
   WhisperAlignmentPreset alignmentPreset = WhisperAlignmentPreset::None;
+  std::string sourceLanguage;
 };
 
 void setError(std::string* error, std::string message) {
@@ -143,6 +144,18 @@ bool resolveWhisperModel(WhisperModelSelection* selection,
     }
     selection->alignmentPreset = *preset;
   }
+  if (const auto configuredLanguage =
+          getEnvString("RADIOIFY_WHISPER_LANGUAGE")) {
+    const auto language =
+        normalizeWhisperLanguageOverride(*configuredLanguage);
+    if (!language) {
+      setError(error,
+               "RADIOIFY_WHISPER_LANGUAGE is invalid. Use auto or a "
+               "two-letter source-language code such as en, nl, de, or fr.");
+      return false;
+    }
+    selection->sourceLanguage = *language;
+  }
   return true;
 }
 
@@ -172,8 +185,8 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
   report(onProgress, 0.01f, "Loading Vulkan speech model");
   WhisperEngine whisper;
   std::string vulkanDevice;
-  if (!whisper.initialize(model.path, model.alignmentPreset, &vulkanDevice,
-                          error)) {
+  if (!whisper.initialize(model.path, model.alignmentPreset,
+                          model.sourceLanguage, &vulkanDevice, error)) {
     return false;
   }
   report(onProgress, 0.02f, "Vulkan ready on " + vulkanDevice);

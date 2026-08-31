@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace playback_video_transcript {
@@ -28,6 +29,11 @@ enum class WhisperAlignmentPreset : uint8_t {
 // Parses whisper.cpp's documented DTW preset names. std::nullopt means the
 // configuration value is invalid; "none" deliberately disables DTW.
 std::optional<WhisperAlignmentPreset> parseWhisperAlignmentPreset(
+    std::string_view value);
+
+// Normalizes an explicit source-language override. A present empty string
+// means automatic detection; nullopt means invalid configuration.
+std::optional<std::string> normalizeWhisperLanguageOverride(
     std::string_view value);
 
 }  // namespace playback_video_transcript

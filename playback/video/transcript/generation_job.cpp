@@ -67,11 +67,14 @@ struct GenerationJob::Impl {
         state.state = GenerationJobState::Succeeded;
         state.progress = 1.0f;
         state.error.clear();
+        state.diagnosticError.clear();
       } else if (cancelRequested.load(std::memory_order_relaxed)) {
         state.state = GenerationJobState::Cancelled;
+        state.diagnosticError = std::move(error);
         state.error.clear();
       } else {
         state.state = GenerationJobState::Failed;
+        state.diagnosticError.clear();
         state.error = error.empty() ? "Subtitle generation failed unexpectedly."
                                     : std::move(error);
       }

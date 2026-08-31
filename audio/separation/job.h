@@ -37,6 +37,7 @@ struct JobSnapshot {
   float progress = 0.0f;
   std::string phase;
   std::string error;
+  std::string diagnosticError;
   std::filesystem::path sourceFile;
   std::filesystem::path diagnosticLog;
   ArtifactPaths outputFiles{};

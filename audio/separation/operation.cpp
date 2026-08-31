@@ -77,11 +77,6 @@ Job::Operation makeModelOperation(std::filesystem::path modelPath,
   };
 }
 
-Job::Operation makeModelOperation(std::filesystem::path modelPath) {
-  return makeModelOperation(std::move(modelPath),
-                            directMlInferenceBackend());
-}
-
 Job::Operation makeBundledModelOperation(InferenceBackend backend) {
   return [backend = std::move(backend)](
             const std::filesystem::path& mediaPath,

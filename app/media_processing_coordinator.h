@@ -57,6 +57,9 @@ struct TaskCompletion {
   std::filesystem::path sourceFile;
   std::filesystem::path outputFile;
   std::filesystem::path diagnosticLog;
+  // Backend detail masked by a user-visible Cancelled outcome. Presentation
+  // deliberately ignores this field; diagnostics and tests retain it.
+  std::string diagnosticDetail;
   std::string detail;
 
   bool succeeded() const { return outcome == TaskOutcome::Succeeded; }
@@ -134,6 +137,7 @@ class Coordinator final : public playback_media_processing::Service {
   struct Operations {
     MelodyOperation analyzeMelody;
     LoopSplitOperation splitLoop;
+    std::string subtitleEngineName;
     playback_video_transcript::GenerationJob::Operation generateSubtitles;
     std::optional<audio_separation::OperationBinding> separateAudio;
     audio_separation::ProviderSetupOperation setupAudioSeparation;
@@ -223,6 +227,7 @@ class Coordinator final : public playback_media_processing::Service {
   struct Backends {
     MelodyOperation analyzeMelody;
     LoopSplitOperation splitLoop;
+    std::string subtitleEngineName;
     playback_video_transcript::GenerationJob::Operation generateSubtitles;
     std::optional<audio_separation::OperationBinding> separateAudio;
     audio_separation::ProviderSetupOperation setupAudioSeparation;

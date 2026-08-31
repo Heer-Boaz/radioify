@@ -87,6 +87,7 @@ radioify_add_module_object_library(radioify_scene_analysis
   ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_analyzer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_analysis_job.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_analysis_job_default.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_transcript_evidence.cpp
 )
 
 radioify_add_module_object_library(radioify_video

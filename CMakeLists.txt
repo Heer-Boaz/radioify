@@ -1222,6 +1222,7 @@ target_sources(indexed_transcript_tests PRIVATE
   $<TARGET_OBJECTS:radioify_transcript_document>
   $<TARGET_OBJECTS:radioify_transcript_cue_semantics>
   $<TARGET_OBJECTS:radioify_transcript_device_policy>
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/scene_transcript_evidence.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/transcript/subtitle_cues.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/transcript/whisper_model_config.cpp
   ${CMAKE_SOURCE_DIR}/core/file_output.cpp

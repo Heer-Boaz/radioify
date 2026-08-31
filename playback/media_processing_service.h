@@ -84,6 +84,7 @@ struct Completion {
   std::filesystem::path sourceFile;
   std::filesystem::path outputFile;
   std::filesystem::path diagnosticLog;
+  std::string diagnosticDetail;
   std::string detail;
 
   bool succeeded() const { return outcome == Outcome::Succeeded; }

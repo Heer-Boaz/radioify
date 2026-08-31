@@ -27,7 +27,9 @@ int main(int argc, char** argv) {
   audio_separation::Job::Operation operation;
   if (argc == 3) {
     operation =
-        audio_separation::makeModelOperation(pathFromUtf8String(argv[2]));
+        audio_separation::makeModelOperation(
+            pathFromUtf8String(argv[2]),
+            audio_separation::directMlInferenceBackend());
   } else {
     const audio_separation::OperationBinding production =
         audio_separation::resolveProductionOperation();

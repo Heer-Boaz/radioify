@@ -48,4 +48,29 @@ std::optional<WhisperAlignmentPreset> parseWhisperAlignmentPreset(
   return std::nullopt;
 }
 
+std::optional<std::string> normalizeWhisperLanguageOverride(
+    std::string_view value) {
+  while (!value.empty() &&
+         std::isspace(static_cast<unsigned char>(value.front()))) {
+    value.remove_prefix(1);
+  }
+  while (!value.empty() &&
+         std::isspace(static_cast<unsigned char>(value.back()))) {
+    value.remove_suffix(1);
+  }
+  std::string normalized(value);
+  std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                 [](unsigned char byte) {
+                   return static_cast<char>(std::tolower(byte));
+                 });
+  if (normalized.empty() || normalized == "auto") return std::string{};
+  if (normalized.size() != 2 ||
+      std::any_of(normalized.begin(), normalized.end(), [](char byte) {
+        return byte < 'a' || byte > 'z';
+      })) {
+    return std::nullopt;
+  }
+  return normalized;
+}
+
 }  // namespace playback_video_transcript

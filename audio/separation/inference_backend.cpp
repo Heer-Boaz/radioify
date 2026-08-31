@@ -5,7 +5,8 @@
 namespace audio_separation {
 
 bool InferenceBackend::valid() const {
-  return !providerName.empty() && !displayName.empty() &&
+  return kind != InferenceBackendKind::Unspecified &&
+         !providerName.empty() && !displayName.empty() &&
          !diagnosticComponent.empty();
 }
 

@@ -131,7 +131,7 @@ int main() {
           const processing::Coordinator::ProgressReporter&,
           const processing::Coordinator::CancellationRequested& cancellation,
           const processing::Coordinator::CommitStarted& beginCommit,
-          std::string*) {
+          std::string* error) {
         observedLoopTrackIndex = config.trackIndex;
         observedStingerOutput = stingerOutput;
         observedLoopOutput = loopOutput;
@@ -141,7 +141,10 @@ int main() {
                !cancellation()) {
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        if (cancellation()) return false;
+        if (cancellation()) {
+          if (error) *error = "Controlled loop cancellation.";
+          return false;
+        }
         if (result) result->hasStinger = true;
         return beginCommit();
       };
@@ -160,6 +163,7 @@ int main() {
         }
         return beginCommit();
       };
+  operations.subtitleEngineName = "Controlled Vulkan transcript";
   operations.separateAudio = audio_separation::OperationBinding::ready(
       [&](const std::filesystem::path&,
           const audio_separation::ArtifactPaths&,
@@ -204,7 +208,7 @@ int main() {
           const processing::Coordinator::ProgressReporter& progress,
           const processing::Coordinator::CancellationRequested& cancellation,
           const processing::Coordinator::CommitStarted&,
-          std::string*) {
+          std::string* error) {
         observedTranscriptExportOutput = outputFile;
         progress(0.6f, "Writing plain-text transcript");
         transcriptExportStarted.store(true, std::memory_order_release);
@@ -213,6 +217,7 @@ int main() {
         }
         transcriptExportCancellationObserved.store(
             true, std::memory_order_release);
+        if (error) *error = "Controlled transcript export cancellation.";
         return false;
       };
   processing::Coordinator coordinator(std::move(operations));
@@ -532,8 +537,12 @@ int main() {
   ok &= expect(cancelledLoopCompletion &&
                    cancelledLoopCompletion->id == loopActivity->id &&
                    cancelledLoopCompletion->outcome ==
-                       processing::TaskOutcome::Cancelled,
-               "a cancelled generic worker must publish a cancelled result");
+                       processing::TaskOutcome::Cancelled &&
+                   cancelledLoopCompletion->detail.empty() &&
+                   cancelledLoopCompletion->diagnosticDetail ==
+                       "Controlled loop cancellation.",
+               "a cancelled generic worker must separate its user outcome "
+               "from backend diagnostics");
 
   loopStarted.store(false, std::memory_order_release);
   releaseLoop.store(true, std::memory_order_release);
@@ -566,6 +575,8 @@ int main() {
                    subtitles->kind ==
                        processing::TaskKind::SubtitleGeneration &&
                    subtitles->sourceFile == "movie.mp4" &&
+                   subtitles->processingEngine ==
+                       "Controlled Vulkan transcript" &&
                    subtitleSourceState.backgroundTaskRunning &&
                    subtitleSourceState.subtitleGenerationRunning &&
                    !subtitleSourceState.audioSeparationRunning,
@@ -695,8 +706,13 @@ int main() {
                    playbackSeparationCompletion->outcome ==
                        playback_media_processing::Outcome::Cancelled &&
                    separationCompletion->detail.empty() &&
-                   playbackSeparationCompletion->detail.empty(),
-               "cancelled separation must not leak backend error text");
+                   playbackSeparationCompletion->detail.empty() &&
+                   separationCompletion->diagnosticDetail ==
+                       "Controlled cancellation." &&
+                   playbackSeparationCompletion->diagnosticDetail ==
+                       separationCompletion->diagnosticDetail,
+               "cancelled separation must hide backend error text while "
+               "retaining it as diagnostic state");
 
   const auto exportStamp =
       std::chrono::steady_clock::now().time_since_epoch().count();
@@ -756,6 +772,10 @@ int main() {
         std::memory_order_acquire);
   });
   const auto transcriptExportCompletion = waitForCompletion(coordinator);
+  const auto playbackTranscriptExportCompletion =
+      transcriptExportCompletion
+          ? processing::completionForPlayback(*transcriptExportCompletion)
+          : std::nullopt;
   ok &= expect(
       transcriptExportStart && transcriptExportStart->accepted &&
           transcriptExportRunning && transcriptExportActivity &&
@@ -768,8 +788,15 @@ int main() {
           cancelTranscriptExport && cancelTranscriptExport->accepted &&
           transcriptCancellationReachedWorker && transcriptExportCompletion &&
           transcriptExportCompletion->outcome ==
-              processing::TaskOutcome::Cancelled,
-      "text export cancellation must use the shared asynchronous task owner");
+              processing::TaskOutcome::Cancelled &&
+          transcriptExportCompletion->detail.empty() &&
+          transcriptExportCompletion->diagnosticDetail ==
+              "Controlled transcript export cancellation." &&
+          playbackTranscriptExportCompletion &&
+          playbackTranscriptExportCompletion->diagnosticDetail ==
+              transcriptExportCompletion->diagnosticDetail,
+      "text export cancellation must use the shared asynchronous task owner "
+      "without discarding backend diagnostics");
 
   std::error_code exportCleanupError;
   std::filesystem::remove_all(exportDirectory, exportCleanupError);
