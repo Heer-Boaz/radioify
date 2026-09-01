@@ -19,6 +19,7 @@
 #include "playback/video/subtitle/manager.h"
 #include "playback/video/framebuffer/window/window.h"
 #include "playback/video/edit/view.h"
+#include "playback/video/chapter/chapter.h"
 
 namespace playback_overlay {
 
@@ -54,6 +55,9 @@ enum class OverlayAction : std::uint8_t {
   CancelMediaTask,
   ConfirmMediaAction,
   DismissMediaAction,
+  ToggleChapterOverview,
+  InstallChapterModel,
+  CancelChapterOperation,
 };
 
 using OverlayControlIntent =
@@ -190,6 +194,8 @@ struct PlaybackOverlayInputs {
   std::optional<MediaActionConfirmationDialog>
       mediaActionConfirmationPrompt;
   std::optional<playback_media_processing::Activity> mediaTaskActivity;
+  playback_video_chapters::Snapshot chapters;
+  bool chapterOverviewOpen = false;
 };
 
 struct PlaybackOverlayState {
@@ -234,6 +240,8 @@ struct PlaybackOverlayState {
   std::optional<MediaActionConfirmationDialog>
       mediaActionConfirmationPrompt;
   std::optional<playback_media_processing::Activity> mediaTaskActivity;
+  playback_video_chapters::Snapshot chapters;
+  bool chapterOverviewOpen = false;
 };
 
 PlaybackOverlayState buildPlaybackOverlayState(
@@ -315,6 +323,8 @@ void renderOverlayToScreen(ConsoleScreen& screen,
                            playback_video_edit::Prompt videoEditPrompt,
                            const std::optional<MediaActionConfirmationDialog>&
                                mediaActionConfirmationPrompt,
+                           const playback_video_chapters::Snapshot* chapters,
+                           bool chapterOverviewOpen,
                            int minY,
                            int maxY);
 

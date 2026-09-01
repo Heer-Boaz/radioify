@@ -29,6 +29,10 @@ bool isAsciiAlpha(wchar_t ch) {
 }
 
 bool isLanguageQualifier(std::wstring_view value) {
+  if (value == L"english" || value == L"dutch" ||
+      value == L"japanese") {
+    return true;
+  }
   if (value.size() == 2 || value.size() == 3) {
     return std::all_of(value.begin(), value.end(), isAsciiAlpha);
   }

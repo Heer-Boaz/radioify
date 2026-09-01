@@ -7,7 +7,8 @@ Console media browser/player with selectable period-radio receiver models.
 - CMake 3.16+
 - MSVC (Visual Studio Build Tools)
 - vcpkg (for `-InstallDeps`)
-- A Vulkan-capable GPU and current graphics driver (generated transcripts)
+- A Vulkan-capable GPU and current graphics driver (generated transcripts and
+  automatic video chapters)
 
 ## Build
 For the repo-specific Windows build/run flow and common failure recovery, see
@@ -40,6 +41,29 @@ a clear error if the selected Vulkan device cannot initialize; it never
 silently falls back to CPU. The normal static build keeps the static MSVC
 runtime; it does not require a Visual C++ redistributable install on another
 PC.
+
+For each active video, Radioify also starts asynchronous chapter analysis after
+subtitle discovery completes. This feature is deliberately GPU-only: source
+frames must decode through D3D11VA and the pinned SmolVLM2 2.2B Q8 model and
+multimodal projector must run through Vulkan. Playback remains the foreground
+GPU owner; analysis yields and releases its helper process whenever playback
+buffers, seeks, or starves. There is no CPU fallback. Open `Chapters` in the
+playback controls to install the fixed, SHA-256-verified 2.52 GB model once.
+The model is stored in the per-user Radioify data directory and is never
+downloaded by the build or bundled in a release. English text subtitle tracks
+are used as optional dialogue evidence independently of the subtitle selected
+for presentation; visual analysis still works without them.
+
+The packaged inference adapter is the vcpkg-baseline-pinned official
+`llama-mtmd-cli`, renamed as a Radioify resource and supervised out of process.
+This boundary is intentional because llama.cpp documents both its multimodal
+CLI and `libmtmd` API as experimental: Radioify depends on a fixed executable
+protocol, terminates it when playback reclaims the GPU, and validates its JSON
+and full-offload diagnostics before publishing chapters. The model and
+projector come directly from the Apache-2.0-licensed
+[ggml-org SmolVLM2 repository](https://huggingface.co/ggml-org/SmolVLM2-2.2B-Instruct-GGUF)
+at a fixed revision and are accepted only at their compiled-in sizes and
+SHA-256 hashes.
 
 ## Windows Package
 Build a distributable Windows x64 bundle and zip:
@@ -205,6 +229,12 @@ to the browser.
   focus its `Cancel` and `Hide` buttons; hiding the panel leaves a footer
   indicator that can restore it. Task failures open a separate detailed dialog
   with `Retry` when that operation supports retrying.
+- `Chapters` opens a responsive high-level video overview. Once analysis is
+  ready, chapter boundaries appear on the shared timeline in both ASCII and
+  framebuffer presentation. Hovering anywhere on that timeline keeps the
+  existing preview frame and adds the chapter title, time range, and summary;
+  setup or analysis progress appears in that popover and overview, never next
+  to the progress bar.
 - Enter: open folder / play file
 - Backspace: up
 - Arrows: move selection

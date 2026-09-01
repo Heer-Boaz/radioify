@@ -101,11 +101,26 @@ void renderTimelinePreview(
     const playback_overlay::OverlayRenderStyles& styles) {
   if (!snapshot.hoverActive || !layout.drawable()) return;
 
+  if (!snapshot.metadataLines.empty()) {
+    for (int y = layout.outerY;
+         y < layout.outerY + layout.outerHeight; ++y) {
+      for (int x = layout.outerX;
+           x < layout.outerX + layout.outerWidth; ++x) {
+        screen.writeChar(x, y, L' ', styles.baseStyle);
+      }
+    }
+  }
+
   if (!snapshot.hasImage() ||
       !updateTimelinePreviewArt(*snapshot.image, layout.imageWidth,
                                 layout.imageHeight, cache)) {
-    playback_overlay::renderTimelinePreviewTimestampToScreen(screen, layout,
-                                                              styles);
+    if (snapshot.metadataLines.empty()) {
+      playback_overlay::renderTimelinePreviewTimestampToScreen(screen, layout,
+                                                                styles);
+    } else {
+      playback_overlay::renderTimelinePreviewChromeToScreen(screen, layout,
+                                                             styles);
+    }
     return;
   }
 
@@ -435,7 +450,8 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
           screen, overlayLayout, overlayStyles, ratio, &overlayState.videoEdit,
           &overlayState.videoEditExport,
           overlayState.videoEditPrompt,
-          overlayState.mediaActionConfirmationPrompt, artTop, height);
+          overlayState.mediaActionConfirmationPrompt, &overlayState.chapters,
+          overlayState.chapterOverviewOpen, artTop, height);
     }
   }
 
@@ -463,7 +479,8 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
             model.timelinePreview.anchorRatio, previewSourceWidth,
             previewSourceHeight, cellPixelWidth, cellPixelHeight,
             playback_video_timeline_preview::formatTimestamp(
-                model.timelinePreview.targetUs));
+                model.timelinePreview.targetUs),
+            model.timelinePreview.metadataLines);
     playback_overlay::OverlayRenderStyles previewStyles;
     previewStyles.baseStyle = baseStyle;
     previewStyles.accentStyle = accentStyle;

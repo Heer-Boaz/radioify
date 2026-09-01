@@ -95,6 +95,14 @@ radioify_add_module_object_library(radioify_tool_timeline_preview_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/timeline_preview_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_chapter_analysis_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/chapter_analysis_tests.cpp
+)
+
+radioify_add_module_object_library(radioify_tool_chapter_service_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/chapter_service_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_video_edit_timeline_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/video_edit_timeline_tests.cpp
 )

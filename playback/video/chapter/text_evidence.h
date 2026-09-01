@@ -1,0 +1,44 @@
+#pragma once
+
+#include <cstdint>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <vector>
+
+class SubtitleManager;
+struct SubtitleTrack;
+
+namespace playback_video_chapters {
+
+struct TextCue {
+  std::int64_t startUs = 0;
+  std::int64_t endUs = 0;
+  std::string text;
+};
+
+struct TextEvidence {
+  std::string language;
+  std::string label;
+  // Stable cache input describing the exact sidecar or embedded stream and
+  // its containing media identity. It deliberately does not depend on the
+  // currently selected presentation track.
+  std::string identity;
+  std::vector<TextCue> cues;
+};
+
+// Selects the best complete English text track. Full dialogue is preferred
+// over forced/signs/songs/commentary tracks; SDH remains a valid fallback.
+// No language is guessed from dialogue text.
+std::optional<TextEvidence> selectEnglishTextEvidence(
+    const SubtitleManager& subtitles,
+    const std::filesystem::path& videoPath);
+std::optional<TextEvidence> selectEnglishTextEvidence(
+    const std::vector<SubtitleTrack>& tracks,
+    const std::filesystem::path& videoPath);
+
+// Returns bounded dialogue around a sampled time for the VLM prompt.
+std::string textNear(const TextEvidence& evidence, std::int64_t centerUs,
+                     std::int64_t radiusUs, std::size_t maxBytes);
+
+}  // namespace playback_video_chapters

@@ -58,6 +58,14 @@ int main(int argc, char** argv) {
   ok &= expect(subtitle::isAutomaticSubtitleSidecar(
                    "episode.mp4", "episode.en-US.forced.ass"),
                "language and role qualifiers must be accepted");
+  ok &= expect(subtitle::isAutomaticSubtitleSidecar(
+                   "episode.mp4", "episode.english.srt") &&
+                   subtitle::isAutomaticSubtitleSidecar(
+                       "episode.mp4", "episode.dutch.srt") &&
+                   subtitle::isAutomaticSubtitleSidecar(
+                       "episode.mp4", "episode.japanese.srt"),
+               "declared English, Dutch, and Japanese word qualifiers must "
+               "be accepted");
   ok &= expect(!subtitle::isAutomaticSubtitleSidecar(
                    "episode.mp4", "episode2.srt") &&
                    !subtitle::isAutomaticSubtitleSidecar(

@@ -39,6 +39,8 @@ struct OverlayProjection {
       playback_video_edit::Prompt::None;
   std::optional<MediaActionConfirmationPrompt> mediaActionConfirmationPrompt;
   std::optional<playback_media_processing::Activity> mediaTaskActivity;
+  playback_video_chapters::Snapshot chapters;
+  bool chapterOverviewOpen = false;
 };
 
 playback_overlay::PlaybackOverlayState projectPlaybackOverlay(

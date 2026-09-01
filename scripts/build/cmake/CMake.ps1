@@ -374,6 +374,21 @@ function Publish-BuildArtifacts {
     Write-Host " - $publishedExe"
   }
 
+  $chapterEngineSource = Join-Path (Split-Path -Parent $builtExe) "radioify-chapter-engine.exe"
+  if (-not (Test-Path -LiteralPath $chapterEngineSource)) {
+    Fail-Build "Build completed without the required GPU chapter engine at $chapterEngineSource."
+  }
+  $chapterEngineDestination = Join-Path $Context.Paths.DistDir "radioify-chapter-engine.exe"
+  Copy-Item -LiteralPath $chapterEngineSource -Destination $chapterEngineDestination -Force
+  Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $chapterEngineDestination
+  $chapterEngineLicenseSource = Join-Path (Split-Path -Parent $builtExe) "llama-cpp-LICENSE.txt"
+  if (-not (Test-Path -LiteralPath $chapterEngineLicenseSource)) {
+    Fail-Build "Build completed without the required llama.cpp license at $chapterEngineLicenseSource."
+  }
+  $chapterEngineLicenseDestination = Join-Path $Context.Paths.DistDir "llama-cpp-LICENSE.txt"
+  Copy-Item -LiteralPath $chapterEngineLicenseSource -Destination $chapterEngineLicenseDestination -Force
+  Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $chapterEngineLicenseDestination
+
   $whisperModelSource = Join-Path $Context.Paths.Root "models\ggml-base-q5_1.bin"
   if (-not (Test-Path -LiteralPath $whisperModelSource)) {
     Fail-Build "Build completed without the indexed-transcript model at $whisperModelSource."

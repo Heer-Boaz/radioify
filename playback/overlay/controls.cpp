@@ -119,6 +119,12 @@ OverlayControlIntent intentForOverlayControl(OverlayControlId id) {
       return OverlayAction::CycleAudioTrack;
     case OverlayControlId::Subtitles:
       return OverlayAction::ToggleSubtitles;
+    case OverlayControlId::Chapters:
+      return OverlayAction::ToggleChapterOverview;
+    case OverlayControlId::ChapterInstall:
+      return OverlayAction::InstallChapterModel;
+    case OverlayControlId::ChapterCancel:
+      return OverlayAction::CancelChapterOperation;
     case OverlayControlId::PictureInPicture:
       return OverlayAction::TogglePictureInPicture;
     case OverlayControlId::EditMarkIn:
@@ -373,6 +379,22 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
       }
     }
     add(OverlayControlId::Subtitles, subtitleLabel, subtitlesActive);
+  }
+
+  std::string chaptersLabel = "Chapters";
+  if (state.chapters.ready()) {
+    chaptersLabel += " " + std::to_string(state.chapters.chapters.size());
+  }
+  add(OverlayControlId::Chapters, chaptersLabel,
+      state.chapterOverviewOpen);
+  if (state.chapterOverviewOpen &&
+      state.chapters.state ==
+          playback_video_chapters::AnalysisState::SetupRequired) {
+    add(OverlayControlId::ChapterInstall, "Install model (2.52 GB)", false);
+  } else if (state.chapterOverviewOpen &&
+             state.chapters.state ==
+                 playback_video_chapters::AnalysisState::Installing) {
+    add(OverlayControlId::ChapterCancel, "Cancel install", false);
   }
 
   if (options.includePictureInPicture && state.pictureInPictureAvailable) {

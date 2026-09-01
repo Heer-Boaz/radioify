@@ -1611,6 +1611,55 @@ std::string subtitleLabelFromPath(const std::filesystem::path& path,
   return label;
 }
 
+std::string normalizedSubtitleLanguage(std::string value) {
+  value = toLowerAscii(std::move(value));
+  const size_t separator = value.find_first_of("-_ .");
+  if (separator != std::string::npos) value.resize(separator);
+  if (value == "eng" || value == "english") return "en";
+  if (value == "nld" || value == "dut" || value == "dutch") return "nl";
+  if (value == "jpn" || value == "japanese") return "ja";
+  return value.size() == 2 ? value : std::string{};
+}
+
+std::vector<std::string> subtitlePathQualifiers(
+    const std::filesystem::path& path, const std::string& baseStem) {
+  std::string stem = toLowerAscii(toUtf8String(path.stem()));
+  const std::string prefix = toLowerAscii(baseStem) + ".";
+  if (stem.rfind(prefix, 0) != 0 || stem.size() <= prefix.size()) return {};
+  stem.erase(0, prefix.size());
+  std::vector<std::string> parts;
+  size_t offset = 0;
+  while (offset < stem.size()) {
+    const size_t separator = stem.find('.', offset);
+    parts.push_back(stem.substr(offset, separator - offset));
+    if (separator == std::string::npos) break;
+    offset = separator + 1;
+  }
+  return parts;
+}
+
+void applySidecarMetadata(const std::filesystem::path& path,
+                          const std::string& baseStem,
+                          SubtitleTrack* track) {
+  if (!track) return;
+  track->sourceKind = SubtitleTrack::SourceKind::Sidecar;
+  const std::vector<std::string> parts =
+      subtitlePathQualifiers(path, baseStem);
+  for (const std::string& part : parts) {
+    if (track->language.empty()) {
+      track->language = normalizedSubtitleLanguage(part);
+    }
+    track->forced = track->forced || part == "forced";
+    track->hearingImpaired = track->hearingImpaired || part == "sdh" ||
+                             part == "cc" || part == "hi";
+    track->commentary = track->commentary || part == "commentary";
+    track->signsOrSongs = track->signsOrSongs || part == "signs" ||
+                          part == "songs";
+    track->defaultDisposition =
+        track->defaultDisposition || part == "default";
+  }
+}
+
 std::string subtitleStreamMetadata(const AVStream* stream, const char* key) {
   if (!stream || !stream->metadata || !key) return {};
   const AVDictionaryEntry* entry =
@@ -2001,6 +2050,26 @@ bool loadEmbeddedSubtitleTracks(
       parseAssScriptContext(info.assScript, &info.assContext);
     }
     info.track.label = subtitleLabelFromStream(stream, refs.size());
+    info.track.sourceKind = SubtitleTrack::SourceKind::Embedded;
+    info.track.embeddedStreamIndex = info.streamIndex;
+    info.track.language = normalizedSubtitleLanguage(
+        subtitleStreamMetadata(stream, "language"));
+    info.track.textTrack = isTextSubtitleCodec(info.codecId);
+    info.track.forced = (stream->disposition & AV_DISPOSITION_FORCED) != 0;
+    info.track.hearingImpaired =
+        (stream->disposition & AV_DISPOSITION_HEARING_IMPAIRED) != 0;
+    info.track.commentary =
+        (stream->disposition & AV_DISPOSITION_COMMENT) != 0;
+    info.track.defaultDisposition =
+        (stream->disposition & AV_DISPOSITION_DEFAULT) != 0;
+    const std::string embeddedTitle = toLowerAscii(
+        subtitleStreamMetadata(stream, "title"));
+    info.track.signsOrSongs =
+        embeddedTitle.find("sign") != std::string::npos ||
+        embeddedTitle.find("song") != std::string::npos;
+    info.track.commentary =
+        info.track.commentary ||
+        embeddedTitle.find("commentary") != std::string::npos;
     refs.push_back(std::move(info));
   }
 
@@ -2123,6 +2192,7 @@ void SubtitleManager::loadForVideo(
     SubtitleTrack track;
     track.label = subtitleLabelFromPath(subtitleFile, baseStem);
     track.sourcePath = subtitleFile;
+    applySidecarMetadata(subtitleFile, baseStem, &track);
     if (!loadSubtitleTrackFile(subtitleFile, &track, cancellation)) {
       continue;
     }

@@ -2610,7 +2610,8 @@ void VideoWindow::DrawOverlay(ID3D11Device* device,
                 ui.timelinePreview.anchorRatio, sourceWidth, sourceHeight,
                 cellWidth, cellHeight,
                 playback_video_timeline_preview::formatTimestamp(
-                    ui.timelinePreview.targetUs));
+                    ui.timelinePreview.targetUs),
+                ui.timelinePreview.metadataLines);
         if (previewSurface && previewLayout.drawable()) {
             if (m_timelinePreviewImageId != ui.timelinePreview.image->id &&
                 playback_video_image::validate(*previewSurface) &&

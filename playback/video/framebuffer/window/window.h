@@ -28,6 +28,7 @@
 #include "playback/video/subtitle/font_attachments.h"
 #include "playback/video/timeline_preview_types.h"
 #include "playback/video/edit/view.h"
+#include "playback/video/chapter/chapter.h"
 #include "display_lifecycle.h"
 #include "input_controller.h"
 #include "present.h"
@@ -114,6 +115,8 @@ struct WindowUiState {
     std::vector<std::string> debugLines;
     playback_overlay::ContextMenuSnapshot contextMenu;
     playback_video_timeline_preview::Snapshot timelinePreview;
+    playback_video_chapters::Snapshot chapters;
+    bool chapterOverviewOpen = false;
     playback_video_edit::EditSnapshot videoEdit;
     playback_video_edit::ExportProgress videoEditExport;
     playback_video_edit::Prompt videoEditPrompt =

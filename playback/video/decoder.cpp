@@ -543,6 +543,15 @@ static enum AVPixelFormat get_hw_format(AVCodecContext* ctx,
   }
   return avcodec_default_get_format(ctx, pix_fmts);
 }
+
+static enum AVPixelFormat get_required_hw_format(
+    AVCodecContext*, const enum AVPixelFormat* pix_fmts) {
+  for (const enum AVPixelFormat* format = pix_fmts;
+       *format != AV_PIX_FMT_NONE; ++format) {
+    if (*format == AV_PIX_FMT_D3D11) return *format;
+  }
+  return AV_PIX_FMT_NONE;
+}
 }  // namespace
 
 struct VideoDecoder::Impl {
@@ -807,7 +816,8 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
                         int requestedStreamIndex,
                         VideoDecoderInterruptCallback interruptCallback,
                         void* interruptOpaque,
-                        VideoCpuOutputPrecision outputPrecision) {
+                        VideoCpuOutputPrecision outputPrecision,
+                        VideoHardwareDecodePolicy hardwarePolicy) {
   uninit();
 
   AVFormatContext* fmt = nullptr;
@@ -875,9 +885,20 @@ bool VideoDecoder::init(const std::filesystem::path& path, std::string* error,
     if (av_hwdevice_ctx_create(&hw_device_ctx, AV_HWDEVICE_TYPE_D3D11VA,
                                nullptr, nullptr, 0) >= 0) {
       ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
-      ctx->get_format = get_hw_format;
+      ctx->get_format =
+          hardwarePolicy == VideoHardwareDecodePolicy::RequireD3D11
+              ? get_required_hw_format
+              : get_hw_format;
       ctx->extra_hw_frames = 32;
     }
+  }
+
+  if (hardwarePolicy == VideoHardwareDecodePolicy::RequireD3D11 &&
+      !hw_device_ctx) {
+    avcodec_free_context(&ctx);
+    avformat_close_input(&fmt);
+    setError(error, "D3D11 hardware video decoding is unavailable.");
+    return false;
   }
 
   if (avcodec_open2(ctx, codec, nullptr) < 0) {

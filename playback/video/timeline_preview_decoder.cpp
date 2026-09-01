@@ -23,8 +23,8 @@ int64_t steadyNowUs() {
       .count();
 }
 
-bool convertToSurface(const VideoFrame& frame,
-                      playback_video_image::RgbaImage* surface) {
+bool convertToSurfaceImpl(const VideoFrame& frame,
+                          playback_video_image::RgbaImage* surface) {
   if (!surface || frame.width <= 0 || frame.height <= 0 ||
       frame.rotationQuarterTurns != 0 || frame.width > kDecodeMaxWidth ||
       frame.height > kDecodeMaxHeight ||
@@ -154,6 +154,11 @@ bool convertToSurface(const VideoFrame& frame,
 }
 
 }  // namespace
+
+bool convertFrameToRgba(const VideoFrame& frame,
+                        playback_video_image::RgbaImage* surface) {
+  return convertToSurfaceImpl(frame, surface);
+}
 
 struct Decoder::Impl {
   Source source;
@@ -296,7 +301,7 @@ DecodeResult Decoder::decode(int64_t targetUs, uint64_t requestId) {
 
   VideoFrame selected;
   if (!impl_->decoder.redecodeLastFrame(selected) ||
-      !convertToSurface(selected, &result.surface) ||
+      !convertFrameToRgba(selected, &result.surface) ||
       impl_->cancelled(requestId) || impl_->deadlineExpired()) {
     const bool wasCancelled = impl_->cancelled(requestId);
     impl_->closeDecoder();

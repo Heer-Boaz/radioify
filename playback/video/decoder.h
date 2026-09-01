@@ -112,6 +112,11 @@ enum class VideoCpuOutputPrecision : uint8_t {
   PreserveSource,
 };
 
+enum class VideoHardwareDecodePolicy : uint8_t {
+  AllowSoftwareFallback,
+  RequireD3D11,
+};
+
 class VideoDecoder {
  public:
   ~VideoDecoder();
@@ -122,7 +127,9 @@ class VideoDecoder {
             VideoDecoderInterruptCallback interruptCallback = nullptr,
             void* interruptOpaque = nullptr,
             VideoCpuOutputPrecision outputPrecision =
-                VideoCpuOutputPrecision::EightBit);
+                VideoCpuOutputPrecision::EightBit,
+            VideoHardwareDecodePolicy hardwarePolicy =
+                VideoHardwareDecodePolicy::AllowSoftwareFallback);
   
   // Initialize with an external D3D11 device (for device sharing / zero-copy)
   // key: An optional mutex for synchronizing access to the device context

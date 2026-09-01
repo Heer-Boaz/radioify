@@ -1048,6 +1048,51 @@ int main() {
     return std::find_if(specs.begin(), specs.end(),
                         [&](const auto& spec) { return spec.id == id; });
   };
+  playback_overlay::PlaybackOverlayState chapterControlState;
+  chapterControlState.chapters.state =
+      playback_video_chapters::AnalysisState::Analyzing;
+  chapterControlState.chapters.progress = 0.37;
+  const auto analyzingChapterControls =
+      playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
+  const auto chaptersControl = controlFor(
+      analyzingChapterControls,
+      playback_overlay::OverlayControlId::Chapters);
+  ok &= expect(
+      chaptersControl != analyzingChapterControls.end() &&
+          chaptersControl->normalText.find("37%") == std::string::npos &&
+          overlayActionForControl(
+              playback_overlay::OverlayControlId::Chapters) ==
+              playback_overlay::OverlayAction::ToggleChapterOverview,
+      "chapter analysis progress must stay out of the timeline toolbar while "
+      "the overview remains directly reachable");
+  chapterControlState.chapterOverviewOpen = true;
+  chapterControlState.chapters.state =
+      playback_video_chapters::AnalysisState::SetupRequired;
+  const auto chapterSetupControls =
+      playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
+  const auto installChapterModel = controlFor(
+      chapterSetupControls,
+      playback_overlay::OverlayControlId::ChapterInstall);
+  ok &= expect(
+      installChapterModel != chapterSetupControls.end() &&
+          installChapterModel->normalText.find("2.52 GB") !=
+              std::string::npos &&
+          overlayActionForControl(
+              playback_overlay::OverlayControlId::ChapterInstall) ==
+              playback_overlay::OverlayAction::InstallChapterModel,
+      "model setup must remain an explicit size-labelled chapter action");
+  chapterControlState.chapters.state =
+      playback_video_chapters::AnalysisState::Installing;
+  const auto chapterInstallingControls =
+      playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
+  ok &= expect(
+      controlFor(chapterInstallingControls,
+                 playback_overlay::OverlayControlId::ChapterCancel) !=
+              chapterInstallingControls.end() &&
+          overlayActionForControl(
+              playback_overlay::OverlayControlId::ChapterCancel) ==
+              playback_overlay::OverlayAction::CancelChapterOperation,
+      "an explicit chapter-model install must remain cancellable");
   const auto mediaCancellationControls =
       playback_overlay::buildOverlayControlSpecs(playbackSuffixState, -1);
   ok &= expect(

@@ -8,6 +8,7 @@
 #include "core/utf8.h"
 #include "playback/video/edit/overlay_model.h"
 #include "playback/media_processing_presentation.h"
+#include "playback/video/chapter/presentation.h"
 #include "playback/video/image.h"
 #include "subtitle_effects.h"
 #include "ui_helpers.h"
@@ -122,9 +123,12 @@ PlaybackOverlayState buildPlaybackOverlayState(
   state.videoEditPrompt = inputs.videoEditPrompt;
   state.mediaActionConfirmationPrompt = inputs.mediaActionConfirmationPrompt;
   state.mediaTaskActivity = inputs.mediaTaskActivity;
+  state.chapters = inputs.chapters;
+  state.chapterOverviewOpen = inputs.chapterOverviewOpen;
   state.chromeVisible = state.overlayVisible || !state.debugLines.empty() ||
                         state.mediaActionConfirmationPrompt.has_value() ||
                         state.mediaTaskActivity.has_value() ||
+                        state.chapterOverviewOpen ||
                         playback_video_edit::needsOverlayPresentation(
                             state.videoEdit, state.videoEditExport,
                             state.videoEditPrompt);
@@ -409,6 +413,8 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
   ui.videoEditExport = state.videoEditExport;
   ui.videoEditPrompt = state.videoEditPrompt;
   ui.mediaActionConfirmationPrompt = state.mediaActionConfirmationPrompt;
+  ui.chapters = state.chapters;
+  ui.chapterOverviewOpen = state.chapterOverviewOpen;
   return ui;
 }
 
@@ -451,6 +457,20 @@ class ScreenOverlayTarget {
   void writeChar(int x, int y, wchar_t ch, const Style& style) {
     if (!rowVisible(y) || x < 0 || x >= width_) return;
     screen_.writeChar(x, y, ch, style);
+  }
+
+  void clearRect(int x, int y, int width, int height,
+                 const Style& style) {
+    const int left = std::clamp(x, 0, width_);
+    const int top = std::clamp(y, firstY_, lastY_);
+    const int right = std::clamp(x + std::max(0, width), 0, width_);
+    const int bottom =
+        std::clamp(y + std::max(0, height), firstY_, lastY_);
+    for (int row = top; row < bottom; ++row) {
+      for (int column = left; column < right; ++column) {
+        screen_.writeChar(column, row, L' ', style);
+      }
+    }
   }
 
  private:
@@ -537,6 +557,21 @@ class GpuTextGridOverlayTarget {
     }
   }
 
+  void clearRect(int x, int y, int width, int height,
+                 const Style& style) {
+    const int left = std::clamp(x, 0, frame_.cols);
+    const int top = std::clamp(y, 0, frame_.rows);
+    const int right = std::clamp(x + std::max(0, width), 0, frame_.cols);
+    const int bottom = std::clamp(y + std::max(0, height), 0, frame_.rows);
+    const GpuTextGridCell opaqueSpace = overlayGpuCell(L' ', style);
+    for (int row = top; row < bottom; ++row) {
+      for (int column = left; column < right; ++column) {
+        frame_.cells[static_cast<size_t>(row * frame_.cols + column)] =
+            opaqueSpace;
+      }
+    }
+  }
+
  private:
   GpuTextGridFrame& frame_;
   GpuTextGridCell transparentSpace_;
@@ -558,6 +593,29 @@ OverlayCellTextLine layoutTransientMessageLine(const std::string& message,
                         utf8DisplayWidth(line.text));
   line.y = std::min(1, std::max(0, height - 1));
   return line;
+}
+
+template <typename Target>
+void renderChapterMarkersToTarget(
+    Target& target, const OverlayCellLayout& layout,
+    const OverlayRenderStyles& styles,
+    const playback_video_chapters::Snapshot* chapters) {
+  if (!chapters || !chapters->ready() || layout.progressBarY < 0 ||
+      layout.progressBarWidth <= 0 ||
+      !target.rowVisible(layout.progressBarY)) {
+    return;
+  }
+  const playback_video_chapters::MarkerProjection projection =
+      playback_video_chapters::projectMarkers(*chapters,
+                                               layout.progressBarWidth);
+  const Style markerStyle{{177, 143, 255}, styles.progressEmptyStyle.bg};
+  for (const int cell : projection.boundaryCells) {
+    const bool collision =
+        std::binary_search(projection.collisionCells.begin(),
+                           projection.collisionCells.end(), cell);
+    target.writeChar(layout.progressBarX + cell, layout.progressBarY,
+                     collision ? L'╫' : L'┊', markerStyle);
+  }
 }
 
 template <typename Target>
@@ -756,6 +814,50 @@ void renderDialogToTarget(Target& target,
 }
 
 template <typename Target>
+void renderChapterOverviewToTarget(
+    Target& target, const OverlayCellLayout& overlayLayout,
+    const OverlayRenderStyles& styles,
+    const playback_video_chapters::Snapshot* chapters,
+    bool chapterOverviewOpen) {
+  if (!chapters || !chapterOverviewOpen || !target.isDrawable()) return;
+  const playback_video_chapters::OverviewPanelLayout panel =
+      playback_video_chapters::layoutOverviewPanel(
+          *chapters, target.width(), target.height(),
+          overlayLayout.progressBarY);
+  if (!panel.drawable()) return;
+
+  target.clearRect(panel.x, panel.y, panel.width, panel.height,
+                   styles.baseStyle);
+  const int left = panel.x;
+  const int right = panel.x + panel.width - 1;
+  const int top = panel.y;
+  const int bottom = panel.y + panel.height - 1;
+  for (int x = left + 1; x < right; ++x) {
+    target.writeChar(x, top, L'─', styles.accentStyle);
+    target.writeChar(x, bottom, L'─', styles.accentStyle);
+  }
+  for (int y = top + 1; y < bottom; ++y) {
+    target.writeChar(left, y, L'│', styles.accentStyle);
+    target.writeChar(right, y, L'│', styles.accentStyle);
+  }
+  target.writeChar(left, top, L'┌', styles.accentStyle);
+  target.writeChar(right, top, L'┐', styles.accentStyle);
+  target.writeChar(left, bottom, L'└', styles.accentStyle);
+  target.writeChar(right, bottom, L'┘', styles.accentStyle);
+
+  const int contentWidth = std::max(1, panel.width - 4);
+  const int lineCount = std::min<int>(
+      panel.height - 2, static_cast<int>(panel.lines.size()));
+  for (int index = 0; index < lineCount; ++index) {
+    target.writeText(panel.x + 2, panel.y + 1 + index,
+                     utf8TakeDisplayWidth(
+                         panel.lines[static_cast<std::size_t>(index)],
+                         contentWidth),
+                     index <= 1 ? styles.accentStyle : styles.baseStyle);
+  }
+}
+
+template <typename Target>
 void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
                            const OverlayRenderStyles& styles,
                            double progress,
@@ -764,7 +866,9 @@ void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
                                videoEditExport,
                            playback_video_edit::Prompt videoEditPrompt,
                            const std::optional<MediaActionConfirmationDialog>&
-                               mediaActionConfirmationPrompt) {
+                               mediaActionConfirmationPrompt,
+                           const playback_video_chapters::Snapshot* chapters,
+                           bool chapterOverviewOpen) {
   if (!target.isDrawable()) return;
 
   const bool modalDialog = layout.dialog && layout.dialog->valid();
@@ -809,6 +913,8 @@ void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
                      styles.progressFrameStyle);
   }
 
+  renderChapterMarkersToTarget(target, layout, styles, chapters);
+
   if (videoEdit) {
     renderVideoEditTimelineToTarget(target, layout, styles, progress,
                                     *videoEdit, videoEditExport,
@@ -818,6 +924,9 @@ void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
 
   target.writeText(layout.suffixX, layout.suffixY, layout.suffixText,
                    styles.baseStyle);
+
+  renderChapterOverviewToTarget(target, layout, styles, chapters,
+                                chapterOverviewOpen);
 }
 
 template <typename Target>
@@ -834,6 +943,27 @@ void renderTimelinePreviewTimestampToTarget(
   const int labelX =
       layout.outerX + std::max(2, (layout.outerWidth - labelWidth) / 2);
   target.writeText(labelX, layout.labelY, label, styles.accentStyle);
+}
+
+template <typename Target>
+void renderTimelinePreviewMetadataToTarget(
+    Target& target,
+    const playback_video_timeline_preview::CellLayout& layout,
+    const OverlayRenderStyles& styles) {
+  if (!target.isDrawable() || !layout.drawable() ||
+      layout.metadataWidth <= 0 || layout.metadataHeight <= 0) {
+    return;
+  }
+  const int lineCount = std::min<int>(
+      layout.metadataHeight,
+      static_cast<int>(layout.metadataLines.size()));
+  for (int index = 0; index < lineCount; ++index) {
+    const std::string text = utf8TakeDisplayWidth(
+        layout.metadataLines[static_cast<std::size_t>(index)],
+        layout.metadataWidth);
+    target.writeText(layout.metadataX, layout.metadataY + index, text,
+                     index == 0 ? styles.accentStyle : styles.baseStyle);
+  }
 }
 
 template <typename Target>
@@ -861,6 +991,7 @@ void renderTimelinePreviewChromeToTarget(
   target.writeChar(right, bottom, L'┘', styles.accentStyle);
 
   renderTimelinePreviewTimestampToTarget(target, layout, styles);
+  renderTimelinePreviewMetadataToTarget(target, layout, styles);
 }
 
 }  // namespace
@@ -875,12 +1006,15 @@ void renderOverlayToScreen(ConsoleScreen& screen,
                            playback_video_edit::Prompt videoEditPrompt,
     const std::optional<MediaActionConfirmationDialog>&
         mediaActionConfirmationPrompt,
+                           const playback_video_chapters::Snapshot* chapters,
+                           bool chapterOverviewOpen,
                            int minY,
                            int maxY) {
   ScreenOverlayTarget target(screen, minY, maxY);
   renderOverlayToTarget(target, layout, styles, progress, videoEdit,
                         videoEditExport, videoEditPrompt,
-                                    mediaActionConfirmationPrompt);
+                        mediaActionConfirmationPrompt, chapters,
+                        chapterOverviewOpen);
 }
 
 void renderTransientMessageToScreen(ConsoleScreen& screen,
@@ -926,7 +1060,8 @@ bool renderWindowUiToGpuTextGrid(const WindowUiState& ui,
     renderOverlayToTarget(target, overlayLayout, styles, ui.progress,
                           &ui.videoEdit, &ui.videoEditExport,
                           ui.videoEditPrompt,
-                          ui.mediaActionConfirmationPrompt);
+                          ui.mediaActionConfirmationPrompt, &ui.chapters,
+                          ui.chapterOverviewOpen);
     rendered = true;
   }
   if (ui.timelinePreview.hoverActive) {
@@ -948,8 +1083,9 @@ bool renderWindowUiToGpuTextGrid(const WindowUiState& ui,
         overlayLayout.progressBarWidth, ui.timelinePreview.anchorRatio,
         sourceWidth, sourceHeight, cellPixelWidth, cellPixelHeight,
         playback_video_timeline_preview::formatTimestamp(
-            ui.timelinePreview.targetUs));
-    if (imageReady) {
+            ui.timelinePreview.targetUs),
+        ui.timelinePreview.metadataLines);
+    if (imageReady || !ui.timelinePreview.metadataLines.empty()) {
       target.clearRect(previewLayout.outerX, previewLayout.outerY,
                        previewLayout.outerWidth, previewLayout.outerHeight);
       renderTimelinePreviewChromeToTarget(target, previewLayout, styles);

@@ -108,8 +108,24 @@ struct SubtitleCue {
 };
 
 struct SubtitleTrack {
+  enum class SourceKind : uint8_t {
+    Sidecar,
+    Embedded,
+  };
+
   std::string label;
   std::filesystem::path sourcePath;
+  SourceKind sourceKind = SourceKind::Sidecar;
+  // Normalized lower-case primary language subtag when the container or
+  // sidecar name declares one (for example "en" for en-US or eng).
+  std::string language;
+  int embeddedStreamIndex = -1;
+  bool textTrack = true;
+  bool forced = false;
+  bool hearingImpaired = false;
+  bool commentary = false;
+  bool signsOrSongs = false;
+  bool defaultDisposition = false;
   std::vector<SubtitleCue> cues;
   std::shared_ptr<const std::string> assScript;
   std::shared_ptr<const SubtitleFontAttachmentList> assFonts;
@@ -133,6 +149,7 @@ class SubtitleManager {
   bool selectTrackForFile(const std::filesystem::path& sourcePath);
   size_t activeTrackIndex() const;
   const SubtitleTrack* activeTrack() const;
+  const std::vector<SubtitleTrack>& tracks() const { return tracks_; }
   std::string activeTrackLabel() const;
   bool isActiveLastCueTrack() const;
   bool cycleLanguage();

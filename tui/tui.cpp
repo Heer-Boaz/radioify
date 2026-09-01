@@ -567,6 +567,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
 
   PlaybackSession::Dependencies mediaSessionDependencies{
       audioPlayback, gpu, screen, runtime.subtitleLoader(),
+      runtime.chapterAnalysis(),
       theme.playbackSessionAppearance()};
   playback_session::VideoSessionFactory createVideoSession =
       [mediaSessionDependencies](

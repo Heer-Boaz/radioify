@@ -22,6 +22,9 @@
 #include "playback/video/state/machine.h"
 #include "playback/video/timeline_preview.h"
 #include "playback/video/timeline_preview_model.h"
+#include "playback/video/chapter/presentation.h"
+#include "playback/video/chapter/service.h"
+#include "playback/video/chapter/text_evidence.h"
 #include "playback/ascii/frame_output.h"
 #include "playback/ascii/screen_renderer.h"
 #include "playback/framebuffer/presenter.h"
@@ -89,6 +92,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   GpuRuntime& gpu;
   const VideoPlaybackConfig config;
   SubtitleManager& subtitleManager;
+  playback_video_chapters::Service& chapterAnalysis;
   PerfLog& perfLog;
   const Style& baseStyle;
   const Style& accentStyle;
@@ -109,6 +113,13 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   bool quitApplicationRequested = false;
   const bool enableAudio;
   bool hasSubtitles;
+  bool chapterOverviewOpen = false;
+  std::optional<playback_video_chapters::Service::RequestId>
+      chapterRequestId;
+  playback_video_chapters::Snapshot chapterSnapshot;
+  std::chrono::steady_clock::time_point chapterPlaybackHealthySince =
+      std::chrono::steady_clock::time_point::min();
+  bool chapterGpuAllowed = false;
   int overlayControlHover = -1;
 
   PlaybackPresentationController presentationController;
@@ -160,6 +171,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         gpu(args.gpu),
         config(std::move(args.config)),
         subtitleManager(args.subtitleManager),
+        chapterAnalysis(args.chapterAnalysis),
         perfLog(args.perfLog),
         baseStyle(args.baseStyle),
         accentStyle(args.accentStyle),
@@ -245,6 +257,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
                                previewSource.sourceHeight);
     timelinePreviewStarted = timelinePreviewProvider.start(previewSource);
     if (!timelinePreviewStarted) timelinePreviewModel.stop();
+    if (args.subtitleDiscoveryComplete) startChapterAnalysis();
     syncOverlayPresentation(false);
     if (sessionIntent == PlaybackSessionIntent::EditVideo) {
       executeVideoEditCommand(playback_video_edit::Command::Open, false);
@@ -252,7 +265,36 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     applyPresenterSync(syncPresentation());
   }
 
-  ~Impl() = default;
+  ~Impl() {
+    if (chapterRequestId) chapterAnalysis.cancel(*chapterRequestId);
+  }
+
+  void startChapterAnalysis() {
+    if (chapterRequestId) chapterAnalysis.cancel(*chapterRequestId);
+    playback_video_chapters::AnalysisRequest request;
+    request.file = file;
+    request.videoStreamIndex = core.player().videoStreamIndex();
+    request.durationUs = core.player().durationUs();
+    request.sourceWidth = core.player().sourceWidth();
+    request.sourceHeight = core.player().sourceHeight();
+    request.englishText =
+        playback_video_chapters::selectEnglishTextEvidence(subtitleManager,
+                                                            file);
+    chapterRequestId = chapterAnalysis.start(std::move(request));
+    chapterSnapshot = chapterAnalysis.snapshot(*chapterRequestId);
+    chapterPlaybackHealthySince =
+        std::chrono::steady_clock::time_point::min();
+    chapterGpuAllowed = false;
+  }
+
+  void cancelChapterAnalysis() {
+    if (!chapterRequestId) return;
+    chapterAnalysis.cancel(*chapterRequestId);
+    chapterRequestId.reset();
+    chapterGpuAllowed = false;
+    chapterPlaybackHealthySince =
+        std::chrono::steady_clock::time_point::min();
+  }
 
   void showEditMessage(const std::string& message) {
     osd.showMessage(message,
@@ -877,6 +919,19 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         return core.cycleAudioTrack();
       case Action::ToggleSubtitles:
         return toggleSubtitles();
+      case Action::ToggleChapterOverview:
+        chapterOverviewOpen = !chapterOverviewOpen;
+        redraw = true;
+        forceRefreshArt = true;
+        publishWindowUiState();
+        output.requestWindowPresent();
+        return true;
+      case Action::InstallChapterModel:
+        return chapterRequestId &&
+               chapterAnalysis.requestInstallation(*chapterRequestId);
+      case Action::CancelChapterOperation:
+        return chapterRequestId &&
+               chapterAnalysis.cancelInstallation(*chapterRequestId);
       case Action::ToggleWindowPresentation: {
         const bool changed = presentationController.toggleWindow();
         redraw = redraw || changed;
@@ -1129,6 +1184,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     perfLogFlush(&perfLog);
     timelinePreviewModel.stop();
     timelinePreviewStarted = false;
+    cancelChapterAnalysis();
     (void)shutdownSequence.requestStop();
   }
 
@@ -1180,6 +1236,61 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     }
   }
 
+  void refreshChapterSnapshot() {
+    if (!chapterRequestId) return;
+    const playback_video_chapters::Snapshot next =
+        chapterAnalysis.snapshot(*chapterRequestId);
+    if (next.revision == chapterSnapshot.revision) return;
+    chapterSnapshot = next;
+    redraw = true;
+    forceRefreshArt = true;
+    publishWindowUiState();
+    output.requestWindowPresent();
+  }
+
+  void updateChapterGpuPriority() {
+    if (!chapterRequestId) return;
+    const auto now = std::chrono::steady_clock::now();
+    const PlaybackSessionState playbackState = core.playbackState();
+    bool allow = playbackState == PlaybackSessionState::Paused ||
+                 playbackState == PlaybackSessionState::Ended;
+    if (playbackState == PlaybackSessionState::Active) {
+      const PlayerDebugInfo debug = core.player().debugInfo();
+      const bool playbackHealthy =
+          !core.player().seekPending() && !core.player().isBuffering() &&
+          !debug.audioStarved &&
+          (!debug.hasVideoFrame || debug.videoQueueDepth >= 2);
+      if (!playbackHealthy) {
+        chapterPlaybackHealthySince =
+            std::chrono::steady_clock::time_point::min();
+      } else {
+        if (chapterPlaybackHealthySince ==
+            std::chrono::steady_clock::time_point::min()) {
+          chapterPlaybackHealthySince = now;
+        }
+        allow = now - chapterPlaybackHealthySince >=
+                std::chrono::milliseconds(1500);
+      }
+    } else if (!allow) {
+      chapterPlaybackHealthySince =
+          std::chrono::steady_clock::time_point::min();
+    }
+    if (allow == chapterGpuAllowed) return;
+    chapterGpuAllowed = allow;
+    chapterAnalysis.setBackgroundGpuAllowed(*chapterRequestId, allow);
+  }
+
+  playback_video_timeline_preview::Snapshot timelinePreviewSnapshot(
+      playback_video_timeline_preview::PresentationSurface surface) const {
+    playback_video_timeline_preview::Snapshot snapshot =
+        timelinePreviewModel.snapshotFor(surface);
+    if (snapshot.hoverActive) {
+      snapshot.metadataLines = playback_video_chapters::previewMetadata(
+          chapterSnapshot, snapshot.targetUs);
+    }
+    return snapshot;
+  }
+
   playback_screen_renderer::PlaybackMediaPresentation
   captureMediaPresentation() const {
     const Player& player = core.player();
@@ -1219,6 +1330,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     projection.mediaActionConfirmationPrompt =
         mediaActionConfirmation.snapshot();
     projection.mediaTaskActivity = mediaTaskActivity;
+    projection.chapters = chapterSnapshot;
+    projection.chapterOverviewOpen = chapterOverviewOpen;
     if (config.debugOverlay &&
         surface == playback_video_timeline_preview::
                        PresentationSurface::VideoWindow) {
@@ -1239,7 +1352,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     model.nativeWindowActive = output.windowOpen();
     model.allowAsciiCpuFallback = false;
     model.media = captureMediaPresentation();
-    model.timelinePreview = timelinePreviewModel.snapshotFor(
+    model.timelinePreview = timelinePreviewSnapshot(
         playback_video_timeline_preview::PresentationSurface::Terminal);
     const PlaybackSessionPresentationSnapshot corePresentation =
         core.presentationSnapshot(model.nativeWindowActive);
@@ -1266,7 +1379,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       const playback_screen_renderer::PlaybackScreenModel& model) {
     playback_session::PresentationModel::Revision revision;
     revision.textGrid = model;
-    revision.textGrid.timelinePreview = timelinePreviewModel.snapshotFor(
+    revision.textGrid.timelinePreview = timelinePreviewSnapshot(
         playback_video_timeline_preview::PresentationSurface::VideoWindow);
     revision.textGrid.overlay = buildOverlayState(
         model.media, model.playbackState,
@@ -1537,6 +1650,10 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     }
 
     PlaybackLoopState loopState = PlaybackLoopState::Running;
+    if (chapterRequestId && chapterAnalysis.consumeChanged()) {
+      refreshChapterSnapshot();
+    }
+    updateChapterGpuPriority();
     pollVideoEditExport();
     pollVideoEditBoundaryCommit();
     if (std::optional<playback_video_timeline_preview::Result> result =
@@ -1568,6 +1685,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       handlePendingResize();
 
       const RefreshState refresh = refreshState();
+      updateChapterGpuPriority();
       if (shouldRenderPlaybackFrame(redraw, refresh.presented,
                                     refresh.debugRefreshDue,
                                     core.playbackState())) {
@@ -1607,6 +1725,9 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     if (timelinePreviewStarted) {
       append(timelinePreviewProvider.changedWaitHandle());
     }
+    if (chapterRequestId) {
+      append(chapterAnalysis.changedWaitHandle());
+    }
     for (const NativeWaitHandle handle :
          videoEditWorkspace.activityWaitHandles()) {
       append(handle);
@@ -1618,7 +1739,15 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     if (loopStopRequested || redraw) return wake_schedule::Clock::now();
     RefreshState state;
     state.nativeWindowActive = output.windowOpen();
-    return computeWakeDeadline(state);
+    wake_schedule::Deadline deadline = computeWakeDeadline(state);
+    if (chapterRequestId && !chapterGpuAllowed &&
+        chapterPlaybackHealthySince !=
+            std::chrono::steady_clock::time_point::min()) {
+      wake_schedule::include(
+          deadline,
+          chapterPlaybackHealthySince + std::chrono::milliseconds(1500));
+    }
+    return deadline;
   }
 
   playback_session::ViewSnapshot viewSnapshot() const {
@@ -1727,6 +1856,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     redraw = true;
     forceRefreshArt = true;
     copiedFrameNeedsRender = true;
+    startChapterAnalysis();
     if (initialized) syncOverlayPresentation();
     if (reload) {
       showEditMessage(

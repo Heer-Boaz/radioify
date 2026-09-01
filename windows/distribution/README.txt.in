@@ -19,3 +19,7 @@ Notes:
 - The extracted bundle contains the signed .msix and its certificate at the
   bundle root. Manifest inputs stay under win11-explorer-integration.
 - PSF2 playback still needs hebios.bin supplied separately
+- Automatic video chapters require compatible D3D11VA and Vulkan hardware.
+  Open Chapters during playback to explicitly install the verified 2.52 GB
+  SmolVLM2 model; the bundle does not contain or silently download that model.
+  Model source and license: https://huggingface.co/ggml-org/SmolVLM2-2.2B-Instruct-GGUF

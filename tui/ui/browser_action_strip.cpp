@@ -26,6 +26,9 @@ std::optional<ActionStripItem> actionForControl(
       return ActionStripItem::PictureInPicture;
     case playback_overlay::OverlayControlId::AudioTrack:
     case playback_overlay::OverlayControlId::Subtitles:
+    case playback_overlay::OverlayControlId::Chapters:
+    case playback_overlay::OverlayControlId::ChapterInstall:
+    case playback_overlay::OverlayControlId::ChapterCancel:
     case playback_overlay::OverlayControlId::EditMarkIn:
     case playback_overlay::OverlayControlId::EditMarkOut:
     case playback_overlay::OverlayControlId::EditClearSelection:

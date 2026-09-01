@@ -243,6 +243,21 @@ function Initialize-RadioifyMsixPackageLayout {
         -Destination (Join-Path $layoutDir "radioify.exe") `
         -Force
 
+    $chapterEngineSource = Join-Path $distRoot "radioify-chapter-engine.exe"
+    if (-not (Test-Path -LiteralPath $chapterEngineSource)) {
+        throw "GPU chapter engine not found at '$chapterEngineSource'."
+    }
+    Copy-Item -LiteralPath $chapterEngineSource `
+        -Destination (Join-Path $layoutDir "radioify-chapter-engine.exe") `
+        -Force
+    $chapterEngineLicenseSource = Join-Path $distRoot "llama-cpp-LICENSE.txt"
+    if (-not (Test-Path -LiteralPath $chapterEngineLicenseSource)) {
+        throw "llama.cpp license not found at '$chapterEngineLicenseSource'."
+    }
+    Copy-Item -LiteralPath $chapterEngineLicenseSource `
+        -Destination (Join-Path $layoutDir "llama-cpp-LICENSE.txt") `
+        -Force
+
     $whisperModelSource = Join-Path $distRoot "models\ggml-base-q5_1.bin"
     if (-not (Test-Path -LiteralPath $whisperModelSource)) {
         throw "Indexed-transcript model not found at '$whisperModelSource'."

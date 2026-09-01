@@ -126,7 +126,8 @@ CellLayout layoutCells(int columns, int rows, int progressBarY,
                        int progressBarX, int progressBarWidth,
                        double anchorRatio, int sourceWidth, int sourceHeight,
                        double cellPixelWidth, double cellPixelHeight,
-                       const std::string& label) {
+                       const std::string& label,
+                       const std::vector<std::string>& metadataLines) {
   CellLayout out;
   if (columns < 10 || rows < 6) return out;
 
@@ -141,9 +142,27 @@ CellLayout layoutCells(int columns, int rows, int progressBarY,
           ? static_cast<double>(sourceWidth) / sourceHeight
           : 16.0 / 9.0;
 
+  const bool placeMetadataBeside =
+      !metadataLines.empty() && columns >= 72 && availableRows >= 7;
+  const int reservedMetadataColumns =
+      placeMetadataBeside ? std::clamp(columns / 3, 24, 38) + 1 : 0;
+  const int requestedMetadataRows = metadataLines.empty()
+                                        ? 0
+                                        : std::min({4,
+                                                    static_cast<int>(
+                                                        metadataLines.size()),
+                                                    std::max(
+                                                        0,
+                                                        availableRows - 4)});
+  const int reservedMetadataRows =
+      !metadataLines.empty() && !placeMetadataBeside
+          ? requestedMetadataRows
+          : 0;
   const int maxImageColumns = std::max(
-      6, std::min({40, columns - 2, std::max(12, columns / 3)}));
-  const int maxImageRows = std::max(2, std::min(12, availableRows - 2));
+      6, std::min({40, columns - 2 - reservedMetadataColumns,
+                   std::max(12, columns / 3)}));
+  const int maxImageRows = std::max(
+      2, std::min(12, availableRows - 2 - reservedMetadataRows));
   int imageColumns = maxImageColumns;
   int imageRows = std::max(
       2, static_cast<int>(std::lround(
@@ -156,8 +175,22 @@ CellLayout layoutCells(int columns, int rows, int progressBarY,
     imageColumns = std::min(imageColumns, maxImageColumns);
   }
 
-  out.outerWidth = imageColumns + 2;
-  out.outerHeight = imageRows + 2;
+  if (placeMetadataBeside) {
+    out.metadataPlacement = CellLayout::MetadataPlacement::BesideImage;
+    out.metadataWidth = reservedMetadataColumns - 1;
+    out.metadataHeight = std::min(requestedMetadataRows, imageRows);
+    out.outerWidth = imageColumns + 1 + out.metadataWidth + 2;
+    out.outerHeight = std::max(imageRows, out.metadataHeight) + 2;
+  } else if (!metadataLines.empty()) {
+    out.metadataPlacement = CellLayout::MetadataPlacement::BelowImage;
+    out.metadataWidth = imageColumns;
+    out.metadataHeight = requestedMetadataRows;
+    out.outerWidth = imageColumns + 2;
+    out.outerHeight = imageRows + out.metadataHeight + 2;
+  } else {
+    out.outerWidth = imageColumns + 2;
+    out.outerHeight = imageRows + 2;
+  }
   if (out.outerWidth > columns || out.outerHeight > availableRows) {
     return CellLayout{};
   }
@@ -178,6 +211,21 @@ CellLayout layoutCells(int columns, int rows, int progressBarY,
   out.imageY = out.outerY + 1;
   out.imageWidth = imageColumns;
   out.imageHeight = imageRows;
+  if (out.metadataPlacement ==
+      CellLayout::MetadataPlacement::BesideImage) {
+    out.metadataX = out.imageX + out.imageWidth + 1;
+    out.metadataY = out.imageY;
+  } else if (out.metadataPlacement ==
+             CellLayout::MetadataPlacement::BelowImage) {
+    out.metadataX = out.imageX;
+    out.metadataY = out.imageY + out.imageHeight;
+  }
+  out.metadataLines.assign(
+      metadataLines.begin(),
+      metadataLines.begin() +
+          std::min<std::size_t>(metadataLines.size(),
+                                static_cast<std::size_t>(
+                                    out.metadataHeight)));
   out.label = label;
   const int labelWidth = static_cast<int>(out.label.size());
   out.labelX = out.outerX + std::max(1, (out.outerWidth - labelWidth) / 2);

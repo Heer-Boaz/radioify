@@ -73,6 +73,10 @@ struct Snapshot {
   int sourceHeight = 0;
   uint64_t revision = 0;
   std::shared_ptr<const Image> image;
+  // Session-owned semantic context for the hovered timeline position. The
+  // preview provider owns only images; chapter/status text is projected by
+  // the session so image decoding never depends on analysis lifecycle.
+  std::vector<std::string> metadataLines;
 
   bool hasImage() const {
     return image && playback_video_image::validate(image->surface);
@@ -80,6 +84,12 @@ struct Snapshot {
 };
 
 struct CellLayout {
+  enum class MetadataPlacement : uint8_t {
+    None,
+    BesideImage,
+    BelowImage,
+  };
+
   int outerX = 0;
   int outerY = 0;
   int outerWidth = 0;
@@ -91,6 +101,12 @@ struct CellLayout {
   int labelX = 0;
   int labelY = 0;
   std::string label;
+  MetadataPlacement metadataPlacement = MetadataPlacement::None;
+  int metadataX = 0;
+  int metadataY = 0;
+  int metadataWidth = 0;
+  int metadataHeight = 0;
+  std::vector<std::string> metadataLines;
 
   bool drawable() const {
     return outerWidth >= 4 && outerHeight >= 3 && imageWidth > 0 &&
@@ -112,6 +128,7 @@ CellLayout layoutCells(int columns, int rows, int progressBarY,
                        int progressBarX, int progressBarWidth,
                        double anchorRatio, int sourceWidth, int sourceHeight,
                        double cellPixelWidth, double cellPixelHeight,
-                       const std::string& label);
+                       const std::string& label,
+                       const std::vector<std::string>& metadataLines = {});
 
 }  // namespace playback_video_timeline_preview

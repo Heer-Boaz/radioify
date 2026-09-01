@@ -350,6 +350,31 @@ add_subdirectory(playback)
 add_subdirectory(tools)
 add_subdirectory(tui)
 
+find_package(nlohmann_json CONFIG REQUIRED)
+target_link_libraries(radioify_video_chapters PRIVATE
+  nlohmann_json::nlohmann_json)
+
+find_program(RADIOIFY_LLAMA_MTMD_CLI
+  NAMES llama-mtmd-cli.exe llama-mtmd-cli
+  HINTS
+    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/llama-cpp"
+    "${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/tools/llama-cpp"
+  NO_DEFAULT_PATH)
+if (NOT RADIOIFY_LLAMA_MTMD_CLI)
+  message(FATAL_ERROR
+    "llama-mtmd-cli was not found. Run .\\build.ps1 -Static -InstallDeps "
+    "to install the pinned GPU chapter-engine dependency.")
+endif()
+find_file(RADIOIFY_LLAMA_CPP_LICENSE
+  NAMES copyright
+  HINTS
+    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/llama-cpp"
+    "${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/share/llama-cpp"
+  NO_DEFAULT_PATH)
+if (NOT RADIOIFY_LLAMA_CPP_LICENSE)
+  message(FATAL_ERROR "The llama.cpp third-party license file was not found.")
+endif()
+
 if (RADIOIFY_HAS_AUDIO_SEPARATION)
   find_package(radioify-windows-ml CONFIG REQUIRED)
   target_link_libraries(radioify_audio_separation PRIVATE
@@ -428,6 +453,7 @@ target_sources(radioify PRIVATE
   $<TARGET_OBJECTS:radioify_transcript_job>
   $<TARGET_OBJECTS:radioify_transcript_engine>
   $<TARGET_OBJECTS:radioify_scene_analysis>
+  $<TARGET_OBJECTS:radioify_video_chapters>
   $<TARGET_OBJECTS:radioify_image_codec>
   $<TARGET_OBJECTS:radioify_video>
   $<TARGET_OBJECTS:radioify_audio>
@@ -448,6 +474,15 @@ if (MSVC)
   target_link_options(radioify PRIVATE /MANIFEST:NO)
 endif()
 radioify_link_repo_target(radioify)
+add_custom_command(TARGET radioify POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${RADIOIFY_LLAMA_MTMD_CLI}"
+          "$<TARGET_FILE_DIR:radioify>/radioify-chapter-engine.exe"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${RADIOIFY_LLAMA_CPP_LICENSE}"
+          "$<TARGET_FILE_DIR:radioify>/llama-cpp-LICENSE.txt"
+  COMMENT "Publishing the pinned GPU chapter analysis helper"
+  VERBATIM)
 if (RADIOIFY_HAS_AUDIO_SEPARATION)
   target_link_libraries(radioify PRIVATE WindowsML::Runtime)
   radioify_deploy_windows_ml(radioify)
@@ -770,6 +805,35 @@ target_sources(timeline_preview_tests PRIVATE
 radioify_link_repo_target(timeline_preview_tests)
 add_test(NAME timeline_preview_tests
          COMMAND $<TARGET_FILE:timeline_preview_tests>)
+
+add_executable(chapter_analysis_tests)
+target_sources(chapter_analysis_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_chapter_analysis_tests>
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/helper_protocol.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/presentation.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/text_evidence.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/timeline_preview_policy.cpp
+  ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/core/utf8.cpp
+  ${CMAKE_SOURCE_DIR}/core/unicode_display_width.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+)
+radioify_link_repo_target(chapter_analysis_tests)
+add_test(NAME chapter_analysis_tests
+         COMMAND $<TARGET_FILE:chapter_analysis_tests>)
+
+add_executable(chapter_service_tests)
+target_sources(chapter_service_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_chapter_service_tests>
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/service.cpp
+  ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
+)
+radioify_link_repo_target(chapter_service_tests)
+add_test(NAME chapter_service_tests
+         COMMAND $<TARGET_FILE:chapter_service_tests>)
 
 add_executable(video_edit_timeline_tests)
 target_sources(video_edit_timeline_tests PRIVATE
@@ -2751,7 +2815,7 @@ foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
 if (WIN32)
-  target_link_libraries(radioify PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys comctl32 bcrypt)
+  target_link_libraries(radioify PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys comctl32 bcrypt winhttp)
   target_link_libraries(video_frame_step_smoke PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys)
   target_link_libraries(timeline_preview_tests PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
   target_link_libraries(scene_analysis_smoke PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32)

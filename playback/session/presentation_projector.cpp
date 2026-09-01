@@ -121,6 +121,8 @@ playback_overlay::PlaybackOverlayState projectPlaybackOverlay(
   inputs.videoEditExport = std::move(projection.videoEditExport);
   inputs.videoEditPrompt = projection.videoEditPrompt;
   inputs.mediaTaskActivity = std::move(projection.mediaTaskActivity);
+  inputs.chapters = std::move(projection.chapters);
+  inputs.chapterOverviewOpen = projection.chapterOverviewOpen;
   if (projection.mediaActionConfirmationPrompt) {
     inputs.mediaActionConfirmationPrompt = projectMediaActionConfirmationDialog(
         *projection.mediaActionConfirmationPrompt);

@@ -19,6 +19,19 @@
     },
     "libass",
     {
+      "name": "ggml",
+      "features": [
+        "vulkan"
+      ]
+    },
+    {
+      "name": "llama-cpp",
+      "features": [
+        "tools"
+      ]
+    },
+    "nlohmann-json",
+    {
       "name": "whisper-cpp",
       "features": [
         "vulkan"
