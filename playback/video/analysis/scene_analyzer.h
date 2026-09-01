@@ -26,14 +26,15 @@ struct AnalysisResult {
   std::vector<SceneSuggestion> suggestions;
 };
 
-// Scene analysis runs inside an active interactive video session. Keep its
-// sparse background decoder on the CPU so the foreground D3D11 decoder and
-// renderer remain the sole GPU owner.
-inline constexpr bool kSceneAnalysisPreferHardwareDecode = false;
+// Scene analysis can scan long sources, so decoding throughput is part of the
+// product contract even though sampling is sparse. Prefer hardware decode;
+// the analysis job remains background-priority and cancellable.
+inline constexpr bool kSceneAnalysisPreferHardwareDecode = true;
 
 // Decodes a sparse, downscaled visual stream and combines it with bounded
-// speech activity from Radioify's newest indexed transcript. Decoding and
-// classification deliberately stay on the low-priority CPU worker.
+// speech activity from Radioify's newest indexed transcript. Video decoding
+// prefers hardware acceleration; classification remains a small,
+// deterministic CPU projection over the sampled signatures.
 bool analyzeVideoScenes(const std::filesystem::path& videoPath,
                         int videoStreamIndex, int64_t expectedDurationUs,
                         const AnalysisProgressCallback& onProgress,

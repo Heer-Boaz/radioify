@@ -35,9 +35,9 @@ int main() {
   namespace analysis = playback_video_analysis;
   bool ok = true;
 
-  ok &= expect(!analysis::kSceneAnalysisPreferHardwareDecode,
-               "scene analysis inside interactive playback must keep its "
-               "background decoder off the GPU");
+  ok &= expect(analysis::kSceneAnalysisPreferHardwareDecode,
+               "scene analysis must prefer GPU decode so long sources remain "
+               "responsive");
 
   analysis::VisualSample black;
   analysis::VisualSample white;
