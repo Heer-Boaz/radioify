@@ -99,6 +99,10 @@ radioify_add_module_object_library(radioify_tool_chapter_analysis_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter_analysis_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_chapter_inference_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/chapter_inference_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_chapter_service_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter_service_tests.cpp
 )

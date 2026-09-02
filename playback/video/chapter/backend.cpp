@@ -13,9 +13,8 @@
 #include "core/utf8.h"
 #include "playback/video/chapter/cache.h"
 #include "playback/video/chapter/contact_sheet.h"
-#include "playback/video/chapter/helper_protocol.h"
+#include "playback/video/chapter/inference.h"
 #include "playback/video/chapter/model.h"
-#include "playback/video/chapter/process.h"
 #include "playback/video/timeline_preview_types.h"
 
 namespace playback_video_chapters {
@@ -43,15 +42,6 @@ std::string singleLine(std::string value, std::size_t maximumBytes) {
     while (!value.empty() && !isValidUtf8(value)) value.pop_back();
   }
   return value;
-}
-
-std::string failureExcerpt(const ProcessResult& process) {
-  std::string output = trim(process.output);
-  constexpr std::size_t kMaximum = 700;
-  if (output.size() > kMaximum) {
-    output.erase(0, output.size() - kMaximum);
-  }
-  return process.detail + (output.empty() ? std::string{} : " " + output);
 }
 
 std::string buildPrompt(const AnalysisRequest& request,
@@ -88,40 +78,13 @@ std::string buildPrompt(const AnalysisRequest& request,
   return prompt.str();
 }
 
-std::optional<nlohmann::json> extractJson(const std::string& output) {
-  for (std::size_t start = output.find('{'); start != std::string::npos;
-       start = output.find('{', start + 1)) {
-    int depth = 0;
-    bool inString = false;
-    bool escaped = false;
-    for (std::size_t index = start; index < output.size(); ++index) {
-      const char ch = output[index];
-      if (inString) {
-        if (escaped) {
-          escaped = false;
-        } else if (ch == '\\') {
-          escaped = true;
-        } else if (ch == '"') {
-          inString = false;
-        }
-        continue;
-      }
-      if (ch == '"') {
-        inString = true;
-      } else if (ch == '{') {
-        ++depth;
-      } else if (ch == '}' && --depth == 0) {
-        try {
-          nlohmann::json candidate = nlohmann::json::parse(
-              output.substr(start, index - start + 1));
-          if (candidate.is_object() && candidate.contains("chapters")) {
-            return candidate;
-          }
-        } catch (const nlohmann::json::exception&) {
-        }
-        break;
-      }
+std::optional<nlohmann::json> parseGeneratedJson(const std::string& output) {
+  try {
+    nlohmann::json document = nlohmann::json::parse(trim(output));
+    if (document.is_object() && document.contains("chapters")) {
+      return document;
     }
+  } catch (const nlohmann::json::exception&) {
   }
   return std::nullopt;
 }
@@ -217,16 +180,6 @@ AnalysisResult parseAnalysis(const nlohmann::json& document,
   }
 }
 
-class ContactSheetGuard {
- public:
-  explicit ContactSheetGuard(std::filesystem::path path)
-      : path_(std::move(path)) {}
-  ~ContactSheetGuard() { removeContactSheet(path_); }
-
- private:
-  std::filesystem::path path_;
-};
-
 class DefaultBackend final : public Backend {
  public:
   std::optional<AnalysisResult> cached(
@@ -237,7 +190,7 @@ class DefaultBackend final : public Backend {
   CapabilityResult inspect(const AnalysisRequest& request,
                            const OperationControl& control) override {
     paths_ = resolveModelPaths();
-    const CapabilityResult gpu = ensureGpuDevice(control);
+    const CapabilityResult gpu = inference_.inspect(control);
     if (gpu.state != CapabilityState::Ready) return gpu;
     std::string decodeDetail;
     const OperationStatus decode =
@@ -266,7 +219,6 @@ class DefaultBackend final : public Backend {
     InstallResult result = installModelArtifacts(paths_, control);
     if (result.status == OperationStatus::Succeeded) {
       artifactsVerified_ = true;
-      gpuDevice_.reset();
     }
     return result;
   }
@@ -276,8 +228,8 @@ class DefaultBackend final : public Backend {
     if (std::optional<AnalysisResult> found = loadCachedAnalysis(request)) {
       return *found;
     }
-    if (paths_.engine.empty()) paths_ = resolveModelPaths();
-    const CapabilityResult gpu = ensureGpuDevice(control);
+    if (paths_.model.empty()) paths_ = resolveModelPaths();
+    const CapabilityResult gpu = inference_.inspect(control);
     if (gpu.state != CapabilityState::Ready) {
       const OperationStatus status =
           gpu.state == CapabilityState::Yielded
@@ -292,48 +244,20 @@ class DefaultBackend final : public Backend {
     if (sheet.status != OperationStatus::Succeeded) {
       return {sheet.status, std::move(sheet.detail), {}, {}};
     }
-    ContactSheetGuard cleanup(sheet.pngPath);
     if (control.progress) control.progress(0.58, "Loading SmolVLM2 on Vulkan");
 
     const std::string prompt = buildPrompt(request, sheet);
-    const std::vector<std::wstring> arguments = {
-        L"-m",
-        paths_.model.wstring(),
-        L"--mmproj",
-        paths_.projector.wstring(),
-        L"--image",
-        sheet.pngPath.wstring(),
-        L"-p",
-        utf8ToWideLossy(prompt),
-        L"--device",
-        utf8ToWideLossy(*gpuDevice_),
-        L"-ngl",
-        L"999",
-        L"-sm",
-        L"none",
-        L"-c",
-        L"8192",
-        L"-n",
-        L"2048",
-        L"--temp",
-        L"0.2",
-    };
-    if (control.progress) control.progress(0.62, "Generating video chapters");
-    const ProcessResult inference =
-        runHiddenProcess(paths_.engine, arguments, control, true);
+    const InferenceRequest inferenceRequest{
+        paths_.model, paths_.projector, sheet.width, sheet.height, &sheet.rgb,
+        prompt};
+    const InferenceResult inference =
+        inference_.run(inferenceRequest, control);
     if (inference.status != OperationStatus::Succeeded) {
-      return {inference.status, failureExcerpt(inference), {}, {}};
-    }
-    if (!confirmsGpuOnlyInference(inference.output)) {
-      return {OperationStatus::Unsupported,
-              "The chapter engine did not confirm both Vulkan projector "
-              "execution and full model-layer offload; CPU fallback is "
-              "disabled.",
-              {}, {}};
+      return {inference.status, inference.detail, {}, {}};
     }
     if (control.progress) control.progress(0.96, "Validating chapter output");
     const std::optional<nlohmann::json> document =
-        extractJson(inference.output);
+        parseGeneratedJson(inference.json);
     if (!document) {
       return {OperationStatus::Failed,
               "The chapter engine did not return valid JSON.", {}, {}};
@@ -355,30 +279,8 @@ class DefaultBackend final : public Backend {
   }
 
  private:
-  CapabilityResult ensureGpuDevice(const OperationControl& control) {
-    if (gpuDevice_) return {CapabilityState::Ready, {}};
-    const ProcessResult devices =
-        runHiddenProcess(paths_.engine, {L"--list-devices"}, control, true,
-                         256u * 1024u);
-    if (devices.status == OperationStatus::Yielded) {
-      return {CapabilityState::Yielded, "Playback reclaimed the GPU."};
-    }
-    if (devices.status == OperationStatus::Cancelled) {
-      return {CapabilityState::Cancelled, {}};
-    }
-    if (devices.status != OperationStatus::Succeeded) {
-      return {CapabilityState::Unsupported, failureExcerpt(devices)};
-    }
-    gpuDevice_ = parseVulkanDeviceList(devices.output);
-    if (!gpuDevice_) {
-      return {CapabilityState::Unsupported,
-              "No Vulkan device is available for GPU-only chapter analysis."};
-    }
-    return {CapabilityState::Ready, {}};
-  }
-
   ModelPaths paths_;
-  std::optional<std::string> gpuDevice_;
+  InferenceEngine inference_;
   bool artifactsVerified_ = false;
 };
 

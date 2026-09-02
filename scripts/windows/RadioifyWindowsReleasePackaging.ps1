@@ -163,18 +163,11 @@ function New-RadioifyWindowsDistributionBundle {
 
     Copy-Item -LiteralPath $resolvedExecutablePath -Destination (Join-Path $stageDir "radioify.exe") -Force
 
-    $chapterEnginePath = Join-Path $resolvedRepoRoot "dist\radioify-chapter-engine.exe"
-    if (-not (Test-Path -LiteralPath $chapterEnginePath)) {
-        throw "GPU chapter engine not found at '$chapterEnginePath'. Run .\build.ps1 -Static first."
+    $llamaLicensePath = Join-Path $resolvedRepoRoot "dist\llama-cpp-LICENSE.txt"
+    if (-not (Test-Path -LiteralPath $llamaLicensePath)) {
+        throw "llama.cpp license not found at '$llamaLicensePath'. Run .\build.ps1 -Static first."
     }
-    Copy-Item -LiteralPath $chapterEnginePath `
-        -Destination (Join-Path $stageDir "radioify-chapter-engine.exe") `
-        -Force
-    $chapterEngineLicensePath = Join-Path $resolvedRepoRoot "dist\llama-cpp-LICENSE.txt"
-    if (-not (Test-Path -LiteralPath $chapterEngineLicensePath)) {
-        throw "llama.cpp license not found at '$chapterEngineLicensePath'. Run .\build.ps1 -Static first."
-    }
-    Copy-Item -LiteralPath $chapterEngineLicensePath `
+    Copy-Item -LiteralPath $llamaLicensePath `
         -Destination (Join-Path $stageDir "llama-cpp-LICENSE.txt") `
         -Force
 

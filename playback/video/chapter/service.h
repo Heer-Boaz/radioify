@@ -10,7 +10,8 @@ namespace playback_video_chapters {
 
 // Process-wide owner for the one active video's automatic chapter analysis.
 // Sessions own request identities and immutable presentation snapshots; the
-// worker, model installation and helper process never belong to a renderer.
+// worker, model installation and native inference lifecycle never belong to a
+// renderer.
 class Service {
  public:
   using RequestId = std::uint64_t;

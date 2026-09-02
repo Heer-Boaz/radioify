@@ -95,11 +95,10 @@ radioify_add_module_object_library(radioify_video_chapters
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/cache.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/chapter.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/contact_sheet.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/helper_protocol.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/inference.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/integrity.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/model.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/presentation.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/process.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/service.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/text_evidence.cpp
 )

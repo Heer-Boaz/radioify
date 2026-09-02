@@ -12,7 +12,6 @@ struct ModelPaths {
   std::filesystem::path directory;
   std::filesystem::path model;
   std::filesystem::path projector;
-  std::filesystem::path engine;
 };
 
 ModelPaths resolveModelPaths();

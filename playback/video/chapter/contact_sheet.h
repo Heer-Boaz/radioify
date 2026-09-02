@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -12,7 +11,9 @@ namespace playback_video_chapters {
 struct ContactSheetResult {
   OperationStatus status = OperationStatus::Failed;
   std::string detail;
-  std::filesystem::path pngPath;
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  std::vector<std::uint8_t> rgb;
   std::vector<std::int64_t> sampleTimesUs;
 };
 
@@ -21,6 +22,5 @@ OperationStatus probeHardwareVideoDecode(const AnalysisRequest& request,
                                          std::string* detail = nullptr);
 ContactSheetResult buildContactSheet(const AnalysisRequest& request,
                                      const OperationControl& control);
-void removeContactSheet(const std::filesystem::path& path);
 
 }  // namespace playback_video_chapters

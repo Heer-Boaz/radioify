@@ -1,24 +1,13 @@
 #include "playback/video/chapter/contact_sheet.h"
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-
 #include <algorithm>
 #include <chrono>
-#include <fstream>
 #include <limits>
 #include <new>
 #include <utility>
 
-#include "core/runtime_helpers.h"
 #include "playback/video/decoder.h"
 #include "playback/video/image.h"
-#include "playback/video/image_wic.h"
 #include "playback/video/timeline_preview_decoder.h"
 
 namespace playback_video_chapters {
@@ -158,8 +147,8 @@ bool sampleFrame(VideoDecoder* decoder, InterruptContext* interrupt,
 }
 
 bool copyTile(const playback_video_image::RgbaImage& tile, int column,
-              int row, playback_video_image::RgbaImage* sheet) {
-  if (!sheet || !playback_video_image::validate(tile) ||
+              int row, ContactSheetResult* sheet) {
+  if (!sheet || !playback_video_image::validate(tile) || sheet->rgb.empty() ||
       tile.width > kTileWidth || tile.height > kTileHeight) {
     return false;
   }
@@ -169,26 +158,18 @@ bool copyTile(const playback_video_image::RgbaImage& tile, int column,
     const std::uint8_t* source =
         tile.pixels.data() + static_cast<std::size_t>(y) * tile.strideBytes;
     std::uint8_t* destination =
-        sheet->pixels.data() +
+        sheet->rgb.data() +
         static_cast<std::size_t>(row * kTileHeight + insetY +
                                  static_cast<int>(y)) *
-            sheet->strideBytes +
-        static_cast<std::size_t>(column * kTileWidth + insetX) * 4u;
-    std::copy_n(source, static_cast<std::size_t>(tile.width) * 4u,
-                destination);
+            static_cast<std::size_t>(sheet->width) * 3u +
+        static_cast<std::size_t>(column * kTileWidth + insetX) * 3u;
+    for (std::uint32_t x = 0; x < tile.width; ++x) {
+      destination[x * 3u + 0u] = source[x * 4u + 0u];
+      destination[x * 3u + 1u] = source[x * 4u + 1u];
+      destination[x * 3u + 2u] = source[x * 4u + 2u];
+    }
   }
   return true;
-}
-
-std::filesystem::path temporaryContactSheetPath() {
-  std::filesystem::path directory =
-      radioifyWritableDataDir() / "cache" / "video-chapters" / "staging";
-  std::error_code error;
-  std::filesystem::create_directories(directory, error);
-  if (error) return {};
-  return directory /
-         ("contact-" + std::to_string(GetCurrentProcessId()) + "-" +
-          std::to_string(nowUs()) + ".png");
 }
 
 }  // namespace
@@ -255,18 +236,17 @@ ContactSheetResult buildContactSheet(const AnalysisRequest& request,
       request, control, &interrupt, &decoder, &result.detail);
   if (result.status != OperationStatus::Succeeded) return result;
 
-  playback_video_image::RgbaImage sheet;
-  sheet.width = kSheetColumns * kTileWidth;
-  sheet.height = kSheetRows * kTileHeight;
-  sheet.strideBytes = sheet.width * 4u;
-  std::size_t sheetBytes = 0;
-  if (!playback_video_image::requiredBytes(
-          sheet.width, sheet.height, sheet.strideBytes, &sheetBytes)) {
+  result.width = kSheetColumns * kTileWidth;
+  result.height = kSheetRows * kTileHeight;
+  if (result.width >
+      (std::numeric_limits<std::size_t>::max)() / result.height / 3u) {
     result.detail = "The chapter contact sheet is too large.";
     return result;
   }
   try {
-    sheet.pixels.assign(sheetBytes, 0u);
+    result.rgb.assign(static_cast<std::size_t>(result.width) * result.height *
+                          3u,
+                      0u);
   } catch (const std::bad_alloc&) {
     result.detail = "Could not allocate the chapter contact sheet.";
     return result;
@@ -292,7 +272,7 @@ ContactSheetResult buildContactSheet(const AnalysisRequest& request,
     playback_video_image::RgbaImage tile;
     if (!sampleFrame(&decoder, &interrupt, targetUs, &tile) ||
         !copyTile(tile, index % kSheetColumns, index / kSheetColumns,
-                  &sheet)) {
+                  &result)) {
       result.status = interruptionStatus(control);
       if (result.status == OperationStatus::Yielded) {
         result.detail = "Playback reclaimed the GPU.";
@@ -313,41 +293,8 @@ ContactSheetResult buildContactSheet(const AnalysisRequest& request,
     }
   }
   decoder.uninit();
-
-  playback_video_image::WicCodec codec;
-  std::string imageError;
-  std::vector<std::uint8_t> png;
-  if (!codec.open(&imageError) ||
-      !codec.encodePng(playback_video_image::view(sheet), &png,
-                       &imageError)) {
-    result.detail = imageError.empty() ? "Could not encode the contact sheet."
-                                       : imageError;
-    return result;
-  }
-  result.pngPath = temporaryContactSheetPath();
-  std::ofstream output(result.pngPath, std::ios::binary | std::ios::trunc);
-  if (result.pngPath.empty() || !output) {
-    result.detail = "Could not create the chapter contact sheet.";
-    result.pngPath.clear();
-    return result;
-  }
-  output.write(reinterpret_cast<const char*>(png.data()),
-               static_cast<std::streamsize>(png.size()));
-  output.flush();
-  if (!output) {
-    removeContactSheet(result.pngPath);
-    result.detail = "Could not finish the chapter contact sheet.";
-    result.pngPath.clear();
-    return result;
-  }
   result.status = OperationStatus::Succeeded;
   return result;
-}
-
-void removeContactSheet(const std::filesystem::path& path) {
-  if (path.empty()) return;
-  std::error_code error;
-  std::filesystem::remove(path, error);
 }
 
 }  // namespace playback_video_chapters

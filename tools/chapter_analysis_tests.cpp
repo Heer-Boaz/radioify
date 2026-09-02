@@ -1,5 +1,4 @@
 #include "playback/video/chapter/chapter.h"
-#include "playback/video/chapter/helper_protocol.h"
 #include "playback/video/chapter/presentation.h"
 #include "playback/video/chapter/text_evidence.h"
 #include "playback/video/subtitle/manager.h"
@@ -166,36 +165,9 @@ bool runTextEvidenceTests() {
   return ok;
 }
 
-bool runHelperProtocolTests() {
-  using namespace playback_video_chapters;
-  const std::string devices =
-      "ggml_vulkan: Found 1 Vulkan devices:\n"
-      "ggml_vulkan: 0 = Example GPU\n"
-      "Available devices:\n"
-      "  Vulkan0: Integrated GPU (2048 MiB, 1500 MiB free)\n"
-      "  Vulkan1: Discrete GPU (12288 MiB, 11000 MiB free)\n";
-  const auto selected = parseVulkanDeviceList(devices);
-  bool ok = expect(selected && *selected == "Vulkan1",
-                   "device selection must ignore diagnostics and prefer the "
-                   "GPU with the most reported free memory");
-  ok &= expect(confirmsGpuOnlyInference(
-                   "clip_init: CLIP using Vulkan0 backend\n"
-                   "load_tensors: offloaded 25/25 layers to GPU\n"),
-               "complete Vulkan projector and model offload must be accepted");
-  ok &= expect(!confirmsGpuOnlyInference(
-                    "clip_init: CLIP using CPU backend\n"
-                    "load_tensors: offloaded 25/25 layers to GPU\n") &&
-                   !confirmsGpuOnlyInference(
-                       "clip_init: CLIP using Vulkan0 backend\n"
-                       "load_tensors: offloaded 24/25 layers to GPU\n"),
-               "CPU projector or partial layer offload must be rejected");
-  return ok;
-}
-
 }  // namespace
 
 int main() {
-  const bool ok = runChapterDomainTests() && runTextEvidenceTests() &&
-                  runHelperProtocolTests();
+  const bool ok = runChapterDomainTests() && runTextEvidenceTests();
   return ok ? 0 : 1;
 }

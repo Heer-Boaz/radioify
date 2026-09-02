@@ -75,18 +75,6 @@ bool exactFile(const std::filesystem::path& path, std::uintmax_t expected,
   return actualSize == expected && actualDigest == digest;
 }
 
-std::filesystem::path findEngine() {
-  for (const std::filesystem::path& root : radioifyResourceSearchRoots()) {
-    const std::filesystem::path candidate =
-        root / "radioify-chapter-engine.exe";
-    std::error_code error;
-    if (std::filesystem::is_regular_file(candidate, error) && !error) {
-      return candidate;
-    }
-  }
-  return {};
-}
-
 std::wstring objectPath(const wchar_t* file) {
   return std::wstring(kRepository) + kPinnedRevision + L"/" + file +
          L"?download=true";
@@ -323,16 +311,11 @@ ModelPaths resolveModelPaths() {
                     "smolvlm2-2.2b-instruct-q8";
   paths.model = paths.directory / kModelFile;
   paths.projector = paths.directory / kProjectorFile;
-  paths.engine = findEngine();
   return paths;
 }
 
 CapabilityResult inspectModelArtifacts(const ModelPaths& paths,
                                        const OperationControl& control) {
-  if (paths.engine.empty()) {
-    return {CapabilityState::Unsupported,
-            "The GPU chapter engine is not installed beside Radioify."};
-  }
   if (control.progress) {
     control.progress(std::nullopt, "Verifying SmolVLM2 model");
   }

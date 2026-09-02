@@ -46,21 +46,22 @@ For each active video, Radioify also starts asynchronous chapter analysis after
 subtitle discovery completes. This feature is deliberately GPU-only: source
 frames must decode through D3D11VA and the pinned SmolVLM2 2.2B Q8 model and
 multimodal projector must run through Vulkan. Playback remains the foreground
-GPU owner; analysis yields and releases its helper process whenever playback
-buffers, seeks, or starves. There is no CPU fallback. Open `Chapters` in the
+GPU owner; analysis yields whenever playback buffers, seeks, or starves. There
+is no CPU fallback. Open `Chapters` in the
 playback controls to install the fixed, SHA-256-verified 2.52 GB model once.
 The model is stored in the per-user Radioify data directory and is never
 downloaded by the build or bundled in a release. English text subtitle tracks
 are used as optional dialogue evidence independently of the subtitle selected
 for presentation; visual analysis still works without them.
 
-The packaged inference adapter is the vcpkg-baseline-pinned official
-`llama-mtmd-cli`, renamed as a Radioify resource and supervised out of process.
-This boundary is intentional because llama.cpp documents both its multimodal
-CLI and `libmtmd` API as experimental: Radioify depends on a fixed executable
-protocol, terminates it when playback reclaims the GPU, and validates its JSON
-and full-offload diagnostics before publishing chapters. The model and
-projector come directly from the Apache-2.0-licensed
+The inference backend links the vcpkg-baseline-pinned `llama` and `libmtmd`
+libraries directly. Their native objects live behind one RAII-owned Radioify
+adapter; the D3D11-decoded RGB contact sheet stays in memory, and generation is
+constrained with llama.cpp's JSON grammar before Radioify validates the typed
+chapter domain object. No CLI executable, command-line protocol, temporary PNG,
+or diagnostic-log parsing participates in inference. Because llama.cpp marks
+`libmtmd` experimental, its version is pinned at the build boundary rather than
+allowed to drift at runtime. The model and projector come directly from the Apache-2.0-licensed
 [ggml-org SmolVLM2 repository](https://huggingface.co/ggml-org/SmolVLM2-2.2B-Instruct-GGUF)
 at a fixed revision and are accepted only at their compiled-in sizes and
 SHA-256 hashes.

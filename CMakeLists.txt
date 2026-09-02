@@ -351,20 +351,32 @@ add_subdirectory(tools)
 add_subdirectory(tui)
 
 find_package(nlohmann_json CONFIG REQUIRED)
-target_link_libraries(radioify_video_chapters PRIVATE
-  nlohmann_json::nlohmann_json)
-
-find_program(RADIOIFY_LLAMA_MTMD_CLI
-  NAMES llama-mtmd-cli.exe llama-mtmd-cli
+find_package(llama CONFIG REQUIRED)
+find_path(RADIOIFY_MTMD_INCLUDE_DIR
+  NAMES mtmd.h
   HINTS
-    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/llama-cpp"
-    "${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/tools/llama-cpp"
+    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
+    "${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/include"
   NO_DEFAULT_PATH)
-if (NOT RADIOIFY_LLAMA_MTMD_CLI)
+find_library(RADIOIFY_MTMD_LIBRARY
+  NAMES mtmd
+  HINTS
+    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib"
+    "${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib"
+  NO_DEFAULT_PATH)
+if (NOT RADIOIFY_MTMD_INCLUDE_DIR OR NOT RADIOIFY_MTMD_LIBRARY)
   message(FATAL_ERROR
-    "llama-mtmd-cli was not found. Run .\\build.ps1 -Static -InstallDeps "
-    "to install the pinned GPU chapter-engine dependency.")
+    "libmtmd was not found. Run .\\build.ps1 -Static -InstallDeps to "
+    "install the pinned llama.cpp multimodal library.")
 endif()
+add_library(radioify_mtmd STATIC IMPORTED)
+set_target_properties(radioify_mtmd PROPERTIES
+  IMPORTED_LOCATION "${RADIOIFY_MTMD_LIBRARY}"
+  INTERFACE_INCLUDE_DIRECTORIES "${RADIOIFY_MTMD_INCLUDE_DIR}"
+  INTERFACE_LINK_LIBRARIES "llama")
+target_link_libraries(radioify_video_chapters PRIVATE
+  nlohmann_json::nlohmann_json
+  radioify_mtmd)
 find_file(RADIOIFY_LLAMA_CPP_LICENSE
   NAMES copyright
   HINTS
@@ -474,14 +486,14 @@ if (MSVC)
   target_link_options(radioify PRIVATE /MANIFEST:NO)
 endif()
 radioify_link_repo_target(radioify)
+target_link_libraries(radioify PRIVATE radioify_mtmd)
 add_custom_command(TARGET radioify POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-          "${RADIOIFY_LLAMA_MTMD_CLI}"
+  COMMAND ${CMAKE_COMMAND} -E rm -f
           "$<TARGET_FILE_DIR:radioify>/radioify-chapter-engine.exe"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${RADIOIFY_LLAMA_CPP_LICENSE}"
           "$<TARGET_FILE_DIR:radioify>/llama-cpp-LICENSE.txt"
-  COMMENT "Publishing the pinned GPU chapter analysis helper"
+  COMMENT "Publishing the pinned in-process llama.cpp license"
   VERBATIM)
 if (RADIOIFY_HAS_AUDIO_SEPARATION)
   target_link_libraries(radioify PRIVATE WindowsML::Runtime)
@@ -810,7 +822,6 @@ add_executable(chapter_analysis_tests)
 target_sources(chapter_analysis_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_chapter_analysis_tests>
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/helper_protocol.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/presentation.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/text_evidence.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/timeline_preview_policy.cpp
@@ -823,6 +834,17 @@ target_sources(chapter_analysis_tests PRIVATE
 radioify_link_repo_target(chapter_analysis_tests)
 add_test(NAME chapter_analysis_tests
          COMMAND $<TARGET_FILE:chapter_analysis_tests>)
+
+add_executable(chapter_inference_tests)
+target_sources(chapter_inference_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_chapter_inference_tests>
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference.cpp
+  ${CMAKE_SOURCE_DIR}/core/utf8.cpp
+)
+radioify_link_repo_target(chapter_inference_tests)
+target_link_libraries(chapter_inference_tests PRIVATE radioify_mtmd)
+add_test(NAME chapter_inference_tests
+         COMMAND $<TARGET_FILE:chapter_inference_tests>)
 
 add_executable(chapter_service_tests)
 target_sources(chapter_service_tests PRIVATE
