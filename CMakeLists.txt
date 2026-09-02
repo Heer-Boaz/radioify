@@ -352,31 +352,15 @@ add_subdirectory(tui)
 
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(llama CONFIG REQUIRED)
-find_path(RADIOIFY_MTMD_INCLUDE_DIR
-  NAMES mtmd.h
-  HINTS
-    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
-    "${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/include"
-  NO_DEFAULT_PATH)
-find_library(RADIOIFY_MTMD_LIBRARY
-  NAMES mtmd
-  HINTS
-    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib"
-    "${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib"
-  NO_DEFAULT_PATH)
-if (NOT RADIOIFY_MTMD_INCLUDE_DIR OR NOT RADIOIFY_MTMD_LIBRARY)
+if (NOT TARGET llama::mtmd)
   message(FATAL_ERROR
-    "libmtmd was not found. Run .\\build.ps1 -Static -InstallDeps to "
-    "install the pinned llama.cpp multimodal library.")
+    "The llama-cpp package does not publish its mtmd target. Run "
+    ".\\build.ps1 -Static -InstallDeps to install Radioify's pinned "
+    "llama-cpp overlay.")
 endif()
-add_library(radioify_mtmd STATIC IMPORTED)
-set_target_properties(radioify_mtmd PROPERTIES
-  IMPORTED_LOCATION "${RADIOIFY_MTMD_LIBRARY}"
-  INTERFACE_INCLUDE_DIRECTORIES "${RADIOIFY_MTMD_INCLUDE_DIR}"
-  INTERFACE_LINK_LIBRARIES "llama")
 target_link_libraries(radioify_video_chapters PRIVATE
   nlohmann_json::nlohmann_json
-  radioify_mtmd)
+  llama::mtmd)
 find_file(RADIOIFY_LLAMA_CPP_LICENSE
   NAMES copyright
   HINTS
@@ -486,7 +470,7 @@ if (MSVC)
   target_link_options(radioify PRIVATE /MANIFEST:NO)
 endif()
 radioify_link_repo_target(radioify)
-target_link_libraries(radioify PRIVATE radioify_mtmd)
+target_link_libraries(radioify PRIVATE llama::mtmd)
 add_custom_command(TARGET radioify POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E rm -f
           "$<TARGET_FILE_DIR:radioify>/radioify-chapter-engine.exe"
@@ -842,7 +826,7 @@ target_sources(chapter_inference_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
 )
 radioify_link_repo_target(chapter_inference_tests)
-target_link_libraries(chapter_inference_tests PRIVATE radioify_mtmd)
+target_link_libraries(chapter_inference_tests PRIVATE llama::mtmd)
 add_test(NAME chapter_inference_tests
          COMMAND $<TARGET_FILE:chapter_inference_tests>)
 
