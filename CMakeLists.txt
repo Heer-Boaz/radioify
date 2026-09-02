@@ -351,6 +351,17 @@ add_subdirectory(tools)
 add_subdirectory(tui)
 
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(miniaudio CONFIG REQUIRED)
+if (NOT TARGET miniaudio::miniaudio)
+  message(FATAL_ERROR
+    "The miniaudio package does not publish its compiled library target. Run "
+    ".\\build.ps1 -Static -InstallDeps to install Radioify's pinned "
+    "miniaudio overlay.")
+endif()
+target_link_libraries(radioify_audio PRIVATE miniaudio::miniaudio)
+target_link_libraries(radioify_loopsplit PRIVATE miniaudio::miniaudio)
+target_link_libraries(radioify_tui PRIVATE miniaudio::miniaudio)
+
 find_package(llama CONFIG REQUIRED)
 if (NOT TARGET llama::mtmd)
   message(FATAL_ERROR
@@ -470,7 +481,9 @@ if (MSVC)
   target_link_options(radioify PRIVATE /MANIFEST:NO)
 endif()
 radioify_link_repo_target(radioify)
-target_link_libraries(radioify PRIVATE llama::mtmd)
+target_link_libraries(radioify PRIVATE
+  llama::mtmd
+  miniaudio::miniaudio)
 add_custom_command(TARGET radioify POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E rm -f
           "$<TARGET_FILE_DIR:radioify>/radioify-chapter-engine.exe"
@@ -772,6 +785,7 @@ target_sources(video_frame_step_smoke PRIVATE
   ${CMAKE_SOURCE_DIR}/core/pumpable_worker_thread.cpp
 )
 radioify_configure_repo_target(video_frame_step_smoke)
+target_link_libraries(video_frame_step_smoke PRIVATE miniaudio::miniaudio)
 
 add_executable(frame_step_snapshot_tests)
 target_sources(frame_step_snapshot_tests PRIVATE

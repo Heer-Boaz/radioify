@@ -33,10 +33,6 @@
 #pragma warning(push)
 #pragma warning(disable : 4100 4189 4244 4245 4267 4456 4458 4996)
 #endif
-#define MINIAUDIO_IMPLEMENTATION
-#define MA_ENABLE_WAV
-#define MA_ENABLE_MP3
-#define MA_ENABLE_FLAC
 #include "miniaudio.h"
 #ifdef _MSC_VER
 #pragma warning(pop)

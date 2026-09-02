@@ -1,0 +1,72 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d2e5f0b..8020fe8 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -507,11 +507,15 @@ add_library(miniaudio
+     miniaudio.h
+ )
+-
++add_library(miniaudio::miniaudio ALIAS miniaudio)
++
+ list(APPEND LIBS_TO_INSTALL miniaudio)
+ if(MINIAUDIO_INSTALL)
+     install(FILES miniaudio.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/miniaudio)
+ endif()
+-
++
+-target_include_directories(miniaudio PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR})
++target_include_directories(miniaudio PUBLIC
++    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>"
++    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/miniaudio>"
++)
+ target_compile_options    (miniaudio PRIVATE ${COMPILE_OPTIONS})
+ target_compile_definitions(miniaudio PRIVATE ${COMPILE_DEFINES})
+@@ -866,13 +870,36 @@ string(JOIN " " MINIAUDIO_PC_CFLAGS ${COMPILE_DEFINES})
+-
++
+ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/miniaudio.pc.in" "${CMAKE_CURRENT_BINARY_DIR}/miniaudio.pc" @ONLY)
+-
++
+ if(MINIAUDIO_INSTALL)
++    include(CMakePackageConfigHelpers)
++    configure_package_config_file(
++        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/miniaudio-config.cmake.in"
++        "${CMAKE_CURRENT_BINARY_DIR}/miniaudio-config.cmake"
++        INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/miniaudio"
++    )
++    write_basic_package_version_file(
++        "${CMAKE_CURRENT_BINARY_DIR}/miniaudio-config-version.cmake"
++        VERSION "${PROJECT_VERSION}"
++        COMPATIBILITY SameMajorVersion
++    )
++
+     install(FILES "${CMAKE_CURRENT_BINARY_DIR}/miniaudio.pc" DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
++    install(FILES
++        "${CMAKE_CURRENT_BINARY_DIR}/miniaudio-config.cmake"
++        "${CMAKE_CURRENT_BINARY_DIR}/miniaudio-config-version.cmake"
++        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/miniaudio"
++    )
+-
++
+     message(STATUS "Library list: ${LIBS_TO_INSTALL}")
+     install(TARGETS ${LIBS_TO_INSTALL}
++        EXPORT miniaudioTargets
+         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+     )
++
++    install(EXPORT miniaudioTargets
++        NAMESPACE miniaudio::
++        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/miniaudio"
++    )
+ endif()
+diff --git a/cmake/miniaudio-config.cmake.in b/cmake/miniaudio-config.cmake.in
+new file mode 100644
+index 0000000..cb85215
+--- /dev/null
++++ b/cmake/miniaudio-config.cmake.in
+@@ -0,0 +1,3 @@
++@PACKAGE_INIT@
++
++include("${CMAKE_CURRENT_LIST_DIR}/miniaudioTargets.cmake")

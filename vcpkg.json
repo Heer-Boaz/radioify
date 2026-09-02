@@ -30,6 +30,7 @@
         "tools"
       ]
     },
+    "miniaudio",
     "nlohmann-json",
     {
       "name": "whisper-cpp",

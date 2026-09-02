@@ -7,7 +7,7 @@ vcpkg_from_github(
     PATCHES
         cmake-config.diff
         pkgconfig.diff
-        miniaudio-private-lock.diff
+        external-miniaudio.diff
 )
 file(REMOVE_RECURSE "${SOURCE_PATH}/ggml/include" "${SOURCE_PATH}/ggml/src")
 

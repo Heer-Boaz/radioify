@@ -1,0 +1,66 @@
+diff --git a/tools/mtmd/CMakeLists.txt b/tools/mtmd/CMakeLists.txt
+index 2a10339..225ab94 100644
+--- a/tools/mtmd/CMakeLists.txt
++++ b/tools/mtmd/CMakeLists.txt
+@@ -1,7 +1,8 @@
+ # mtmd
+-
++
+ find_package(Threads REQUIRED)
++find_package(miniaudio CONFIG REQUIRED)
+-
++
+ add_library(mtmd
+             mtmd.cpp
+             mtmd-audio.cpp
+@@ -14,10 +15,10 @@ add_library(mtmd
+ set_target_properties(mtmd PROPERTIES
+     VERSION ${LLAMA_INSTALL_VERSION}
+     SOVERSION 0
+ )
+-
++
+ target_link_libraries     (mtmd PUBLIC ggml llama)
+-target_link_libraries     (mtmd PRIVATE Threads::Threads)
++target_link_libraries     (mtmd PRIVATE Threads::Threads miniaudio::miniaudio)
+ target_include_directories(mtmd PUBLIC  .)
+ target_include_directories(mtmd PRIVATE ../..)
+ target_include_directories(mtmd PRIVATE ../../vendor)
+@@ -41,8 +42,8 @@ set_target_properties(mtmd
+ install(TARGETS mtmd LIBRARY PUBLIC_HEADER)
+-
++
+ if (NOT MSVC)
+-    # for stb_image.h and miniaudio.h
++    # for stb_image.h
+     target_compile_options(mtmd PRIVATE -Wno-cast-qual)
+ endif()
+-
++
+ if (TARGET BUILD_INFO)
+diff --git a/tools/mtmd/mtmd-helper.cpp b/tools/mtmd/mtmd-helper.cpp
+index 6e977a4..597996b 100644
+--- a/tools/mtmd/mtmd-helper.cpp
++++ b/tools/mtmd/mtmd-helper.cpp
+@@ -16,18 +16,6 @@
+ #include <vector>
+-
+-//#define MTMD_AUDIO_DEBUG
+-
+-#define MINIAUDIO_IMPLEMENTATION
+-#ifndef MTMD_AUDIO_DEBUG
+-#   define MA_NO_ENCODING
+-#endif
+-#define MA_NO_DEVICE_IO
+-#define MA_NO_RESOURCE_MANAGER
+-#define MA_NO_NODE_GRAPH
+-#define MA_NO_ENGINE
+-#define MA_NO_GENERATION
+-#define MA_API static
+-#include "miniaudio/miniaudio.h"
+-
++
++#include <miniaudio.h>
++
+ #define STB_IMAGE_IMPLEMENTATION
+ #include "stb/stb_image.h"

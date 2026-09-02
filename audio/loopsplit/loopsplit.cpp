@@ -20,9 +20,6 @@
 #include "psfaudio.h"
 #include "vgmaudio.h"
 
-#define MA_ENABLE_WAV
-#define MA_ENABLE_MP3
-#define MA_ENABLE_FLAC
 #include "miniaudio.h"
 #include "miniaudio_file_path.h"
 
