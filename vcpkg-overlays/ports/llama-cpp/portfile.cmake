@@ -5,9 +5,8 @@ vcpkg_from_github(
     SHA512 879490cdeeef9397b9843730399bd55c7ef57de7e421cfcbaa15bd95416e028e4a0864f237218895a8a1244b7a4dbef9eacda49aa9697628e29774d0fc90d04b
     HEAD_REF master
     PATCHES
-        cmake-config.diff
+        cmake-package.diff
         pkgconfig.diff
-        external-miniaudio.diff
 )
 file(REMOVE_RECURSE "${SOURCE_PATH}/ggml/include" "${SOURCE_PATH}/ggml/src")
 
