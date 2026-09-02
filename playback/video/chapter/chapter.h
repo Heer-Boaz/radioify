@@ -1,11 +1,26 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace playback_video_chapters {
+
+inline constexpr std::size_t kMinimumAutomaticChapterCount = 3;
+inline constexpr std::size_t kMaximumAutomaticChapterCount = 12;
+inline constexpr std::int64_t kMinimumAutomaticChapterDurationUs = 10'000'000;
+inline constexpr std::int64_t kMinimumAutomaticChapterVideoDurationUs =
+    static_cast<std::int64_t>(kMinimumAutomaticChapterCount) *
+    kMinimumAutomaticChapterDurationUs;
+inline constexpr std::size_t kMaximumAutomaticTitleBytes = 160;
+inline constexpr std::size_t kMaximumAutomaticSummaryBytes = 600;
+inline constexpr std::size_t kMaximumAutomaticOverviewBytes = 1200;
+inline constexpr std::size_t kMaximumAutomaticTitleWords = 8;
+inline constexpr std::size_t kMaximumAutomaticSummaryWords = 40;
+inline constexpr std::size_t kMaximumAutomaticOverviewWords = 50;
 
 enum class AnalysisState : std::uint8_t {
   CheckingSupport,
@@ -55,6 +70,29 @@ struct Snapshot {
 bool validatePartition(std::int64_t durationUs,
                        const std::vector<Chapter>& chapters,
                        std::string* error = nullptr);
+
+// Product policy for generated timeline markers. It follows the established
+// chapter-player floor of three sections of at least ten seconds and caps the
+// result at the twelve chronological visual samples provided to the model.
+bool validateAutomaticPartition(std::int64_t durationUs,
+                                const std::vector<Chapter>& chapters,
+                                std::string* error = nullptr);
+
+// Validates the complete publishable automatic-analysis artifact. Unlike the
+// timeline-only partition contract, this also rejects missing metadata and a
+// degenerate model response that repeats one complete label for every section.
+// Individual titles may repeat because professional chapter formats do not
+// require title uniqueness.
+bool validateAutomaticAnalysis(std::int64_t durationUs,
+                               std::string_view overview,
+                               const std::vector<Chapter>& chapters,
+                               std::string* error = nullptr);
+
+// Produces authoritative visual-evidence times that are also valid automatic
+// chapter starts. Any ordered subset containing the first sample and at least
+// three samples still satisfies the minimum chapter duration; timestamps are
+// never invented by the language model.
+std::vector<std::int64_t> automaticChapterSampleTimes(std::int64_t durationUs);
 
 const Chapter* chapterAt(const Snapshot& snapshot, std::int64_t positionUs);
 

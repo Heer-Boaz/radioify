@@ -22,10 +22,13 @@ bool expect(bool condition, const char* message) {
 AnalysisResult validResult(std::int64_t durationUs) {
   AnalysisResult result;
   result.status = OperationStatus::Succeeded;
-  result.overview = "Overview";
+  result.overview = "The video has three sections.";
   result.chapters = {
-      {1, 0, durationUs / 2, "Opening", "Introduction"},
-      {2, durationUs / 2, durationUs, "Conclusion", "Result"},
+      {1, 0, durationUs / 3, "Opening", "The introduction begins."},
+      {2, durationUs / 3, 2 * durationUs / 3, "Middle",
+       "The subject develops."},
+      {3, 2 * durationUs / 3, durationUs, "Conclusion",
+       "The result concludes."},
   };
   return result;
 }
@@ -119,6 +122,27 @@ class YieldBackend final : public Backend {
 
   std::atomic<int> attempts{0};
   std::atomic<bool> firstAttemptEntered{false};
+};
+
+class FailOnceBackend final : public Backend {
+ public:
+  std::optional<AnalysisResult> cached(const AnalysisRequest&) override {
+    return std::nullopt;
+  }
+  CapabilityResult inspect(const AnalysisRequest&,
+                           const OperationControl&) override {
+    return {CapabilityState::Ready, {}};
+  }
+  InstallResult install(const OperationControl&) override { return {}; }
+  AnalysisResult analyze(const AnalysisRequest& request,
+                         const OperationControl&) override {
+    if (++attempts == 1) {
+      return {OperationStatus::Failed, "invalid structured output", {}, {}};
+    }
+    return validResult(request.durationUs);
+  }
+
+  std::atomic<int> attempts{0};
 };
 
 class CancellableInstallBackend final : public Backend {
@@ -230,6 +254,26 @@ bool runPlaybackYieldTest() {
   return ok;
 }
 
+bool runExplicitRetryTest() {
+  auto backend = std::make_unique<FailOnceBackend>();
+  FailOnceBackend* observed = backend.get();
+  Service service(std::move(backend));
+  const Service::RequestId id = service.start(request());
+  service.setBackgroundGpuAllowed(id, true);
+  bool ok = expect(waitUntil([&]() {
+                     return service.snapshot(id).state == AnalysisState::Failed;
+                   }) &&
+                       observed->attempts.load() == 1,
+                   "a failed automatic analysis must publish a durable "
+                   "terminal state");
+  ok &= expect(service.retry(id),
+               "the active failed request must expose an explicit retry");
+  ok &= expect(waitUntil([&]() { return service.snapshot(id).ready(); }) &&
+                   observed->attempts.load() == 2 && !service.retry(id),
+               "retry must restart the same owner-bound request exactly once");
+  return ok;
+}
+
 bool runRequestOwnedInstallTest() {
   auto backend = std::make_unique<CancellableInstallBackend>();
   CancellableInstallBackend* observed = backend.get();
@@ -256,8 +300,8 @@ bool runRequestOwnedInstallTest() {
 
 int main() {
   return runCachedResultTest() && runInvalidSourceTest() &&
-                 runExplicitSetupTest() &&
-                 runPlaybackYieldTest() && runRequestOwnedInstallTest()
+                 runExplicitSetupTest() && runPlaybackYieldTest() &&
+                 runExplicitRetryTest() && runRequestOwnedInstallTest()
              ? 0
              : 1;
 }

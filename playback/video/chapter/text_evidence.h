@@ -41,4 +41,10 @@ std::optional<TextEvidence> selectEnglishTextEvidence(
 std::string textNear(const TextEvidence& evidence, std::int64_t centerUs,
                      std::int64_t radiusUs, std::size_t maxBytes);
 
+// Assigns each cue by its midpoint to one half-open timeline interval. This is
+// used for sampled video evidence so adjacent samples never receive the same
+// broad transcript window.
+std::string textInInterval(const TextEvidence& evidence, std::int64_t startUs,
+                           std::int64_t endUs, std::size_t maxBytes);
+
 }  // namespace playback_video_chapters

@@ -6,8 +6,6 @@
 
 #include "playback/video/timeline_preview_types.h"
 
-struct VideoFrame;
-
 namespace playback_video_timeline_preview {
 
 enum class DecodeStatus : uint8_t {
@@ -21,11 +19,6 @@ struct DecodeResult {
   int64_t decodedFrameUs = 0;
   playback_video_image::RgbaImage surface;
 };
-
-// Canonical CPU conversion shared by hover thumbnails and offline chapter
-// contact sheets after their decoder-specific scheduling has selected a frame.
-bool convertFrameToRgba(const VideoFrame& frame,
-                        playback_video_image::RgbaImage* surface);
 
 // Worker-owned precise-seek decoder.  It has no cache, hover, scheduling, or
 // presentation responsibilities.

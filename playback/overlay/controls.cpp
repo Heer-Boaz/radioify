@@ -125,6 +125,8 @@ OverlayControlIntent intentForOverlayControl(OverlayControlId id) {
       return OverlayAction::InstallChapterModel;
     case OverlayControlId::ChapterCancel:
       return OverlayAction::CancelChapterOperation;
+    case OverlayControlId::ChapterRetry:
+      return OverlayAction::RetryChapterAnalysis;
     case OverlayControlId::PictureInPicture:
       return OverlayAction::TogglePictureInPicture;
     case OverlayControlId::EditMarkIn:
@@ -381,20 +383,24 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     add(OverlayControlId::Subtitles, subtitleLabel, subtitlesActive);
   }
 
-  std::string chaptersLabel = "Chapters";
   if (state.chapters.ready()) {
-    chaptersLabel += " " + std::to_string(state.chapters.chapters.size());
-  }
-  add(OverlayControlId::Chapters, chaptersLabel,
-      state.chapterOverviewOpen);
-  if (state.chapterOverviewOpen &&
-      state.chapters.state ==
-          playback_video_chapters::AnalysisState::SetupRequired) {
-    add(OverlayControlId::ChapterInstall, "Install model (2.52 GB)", false);
-  } else if (state.chapterOverviewOpen &&
-             state.chapters.state ==
-                 playback_video_chapters::AnalysisState::Installing) {
+    add(OverlayControlId::Chapters,
+        "Chapters " + std::to_string(state.chapters.chapters.size()),
+        state.chapterOverviewOpen);
+  } else if (state.chapters.state ==
+             playback_video_chapters::AnalysisState::SetupRequired) {
+    add(OverlayControlId::ChapterInstall, "Install model (5.54 GB)", false);
+  } else if (state.chapters.state ==
+             playback_video_chapters::AnalysisState::Installing) {
     add(OverlayControlId::ChapterCancel, "Cancel install", false);
+  } else if (state.chapters.state ==
+             playback_video_chapters::AnalysisState::Failed) {
+    add(OverlayControlId::ChapterRetry, "Retry chapters", false);
+  } else if (state.chapters.state ==
+             playback_video_chapters::AnalysisState::Unsupported) {
+    add(OverlayControlId::Chapters, "Chapters unavailable", false, false);
+  } else {
+    add(OverlayControlId::Chapters, "Chapters…", false, false);
   }
 
   if (options.includePictureInPicture && state.pictureInPictureAvailable) {

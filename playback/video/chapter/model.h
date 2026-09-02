@@ -20,13 +20,13 @@ CapabilityResult inspectModelArtifacts(const ModelPaths& paths,
 InstallResult installModelArtifacts(const ModelPaths& paths,
                                     const OperationControl& control);
 
-inline constexpr std::uintmax_t kModelBytes = 1927933984ull;
-inline constexpr std::uintmax_t kProjectorBytes = 592523200ull;
+inline constexpr std::uintmax_t kModelBytes = 4683072032ull;
+inline constexpr std::uintmax_t kProjectorBytes = 853119712ull;
 inline constexpr std::uintmax_t kModelDownloadBytes =
     kModelBytes + kProjectorBytes;
 inline constexpr const char* kModelSha256 =
-    "c850ffa51b0708be8911766e1d35e8e71365e987c8efb2513a7f237baade074f";
+    "9258bf05b12686d097ff3b6b18d968ab393649780aa2b3cd67fec43d50554392";
 inline constexpr const char* kProjectorSha256 =
-    "ae07ea1facd07dd3230c4483b63e8cda96c6944ad2481f33d531f79e892dd024";
+    "2ddb555391bae966e412deab9e07b58afa18bcc06930ba0f1c78a3695ab9e506";
 
 }  // namespace playback_video_chapters

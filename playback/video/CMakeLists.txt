@@ -32,6 +32,7 @@ radioify_add_module_object_library(radioify_video_playback
   ${CMAKE_CURRENT_SOURCE_DIR}/frame_step_snapshot.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/frame_step_source_cache.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/frame_step_seek.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/frame_conversion.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/sequence.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/decoder.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/player.cpp
@@ -94,7 +95,8 @@ radioify_add_module_object_library(radioify_video_chapters
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/backend.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/cache.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/chapter.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/contact_sheet.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/generated_document.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/sampled_evidence.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/inference.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/integrity.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/model.cpp

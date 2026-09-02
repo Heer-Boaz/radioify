@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstdio>
 #include <cstdint>
+#include <cstdio>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -16,38 +16,39 @@
 #include "asciiart.h"
 #include "asciiart_gpu.h"
 #include "audioplayback.h"
-#include "playback/video/gpu/gpu_runtime.h"
-#include "playback/video/player.h"
-#include "playback/video/edit/overlay_model.h"
-#include "playback/video/state/machine.h"
-#include "playback/video/timeline_preview.h"
-#include "playback/video/timeline_preview_model.h"
+#include "core.h"
+#include "core/path_identity.h"
+#include "core/runtime_helpers.h"
+#include "core/windows_console_window.h"
+#include "input.h"
+#include "media_task_feedback.h"
+#include "mouse_double_click_tracker.h"
+#include "output.h"
+#include "playback/ascii/frame_output.h"
+#include "playback/ascii/screen_renderer.h"
+#include "playback/debug/lines.h"
+#include "playback/framebuffer/presenter.h"
+#include "playback/overlay/overlay.h"
+#include "playback/session/background_gpu_admission.h"
+#include "playback/session/context_menu_controller.h"
+#include "playback/session/media_action_confirmation.h"
+#include "playback/session/osd_timeline.h"
+#include "playback/session/shutdown_sequence.h"
+#include "playback/session/video_edit_workspace.h"
 #include "playback/video/chapter/presentation.h"
 #include "playback/video/chapter/service.h"
 #include "playback/video/chapter/text_evidence.h"
-#include "playback/ascii/frame_output.h"
-#include "playback/ascii/screen_renderer.h"
-#include "playback/framebuffer/presenter.h"
-#include "playback/debug/lines.h"
-#include "playback/overlay/overlay.h"
-#include "playback/session/osd_timeline.h"
-#include "playback/session/shutdown_sequence.h"
-#include "playback/session/context_menu_controller.h"
-#include "playback/session/media_action_confirmation.h"
-#include "playback/session/video_edit_workspace.h"
-#include "core/path_identity.h"
-#include "core/windows_console_window.h"
-#include "core/runtime_helpers.h"
-#include "core.h"
-#include "input.h"
-#include "media_task_feedback.h"
-#include "output.h"
+#include "playback/video/edit/overlay_model.h"
+#include "playback/video/gpu/gpu_runtime.h"
+#include "playback/video/player.h"
+#include "playback/video/state/machine.h"
+#include "playback/video/subtitle/manager.h"
+#include "playback/video/timeline_preview.h"
+#include "playback/video/timeline_preview_model.h"
 #include "presentation_controller.h"
 #include "presentation_model.h"
 #include "presentation_projector.h"
 #include "state.h"
-#include "mouse_double_click_tracker.h"
-#include "playback/video/subtitle/manager.h"
 
 namespace {
 
@@ -86,6 +87,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   static constexpr auto kFrameCopyMessageDuration =
       std::chrono::milliseconds(1500);
   static constexpr auto kEditMessageDuration = std::chrono::milliseconds(2200);
+  static constexpr auto kAnalysisMessageDuration =
+      std::chrono::milliseconds(6000);
 
   ConsoleScreen& screen;
   AudioPlaybackRuntime& audioPlayback;
@@ -117,9 +120,9 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   std::optional<playback_video_chapters::Service::RequestId>
       chapterRequestId;
   playback_video_chapters::Snapshot chapterSnapshot;
-  std::chrono::steady_clock::time_point chapterPlaybackHealthySince =
+  playback_session::BackgroundGpuAdmissionPolicy chapterGpuAdmission;
+  std::chrono::steady_clock::time_point lastChapterGpuHeartbeat =
       std::chrono::steady_clock::time_point::min();
-  bool chapterGpuAllowed = false;
   int overlayControlHover = -1;
 
   PlaybackPresentationController presentationController;
@@ -282,18 +285,16 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
                                                             file);
     chapterRequestId = chapterAnalysis.start(std::move(request));
     chapterSnapshot = chapterAnalysis.snapshot(*chapterRequestId);
-    chapterPlaybackHealthySince =
-        std::chrono::steady_clock::time_point::min();
-    chapterGpuAllowed = false;
+    chapterGpuAdmission.reset();
+    lastChapterGpuHeartbeat = std::chrono::steady_clock::time_point::min();
   }
 
   void cancelChapterAnalysis() {
     if (!chapterRequestId) return;
     chapterAnalysis.cancel(*chapterRequestId);
     chapterRequestId.reset();
-    chapterGpuAllowed = false;
-    chapterPlaybackHealthySince =
-        std::chrono::steady_clock::time_point::min();
+    chapterGpuAdmission.reset();
+    lastChapterGpuHeartbeat = std::chrono::steady_clock::time_point::min();
   }
 
   void showEditMessage(const std::string& message) {
@@ -920,6 +921,20 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       case Action::ToggleSubtitles:
         return toggleSubtitles();
       case Action::ToggleChapterOverview:
+        if (!chapterSnapshot.ready()) {
+          std::string message = playback_video_chapters::analysisStateLabel(
+              chapterSnapshot.state);
+          if (!chapterSnapshot.detail.empty()) {
+            message += ": " + chapterSnapshot.detail;
+          }
+          osd.showMessage(std::move(message),
+                          playback_session::PlaybackOsdTimeline::Clock::now(),
+                          kAnalysisMessageDuration);
+          redraw = true;
+          publishWindowUiState();
+          output.requestWindowPresent();
+          return true;
+        }
         chapterOverviewOpen = !chapterOverviewOpen;
         redraw = true;
         forceRefreshArt = true;
@@ -932,6 +947,13 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       case Action::CancelChapterOperation:
         return chapterRequestId &&
                chapterAnalysis.cancelInstallation(*chapterRequestId);
+      case Action::RetryChapterAnalysis:
+        if (!chapterRequestId || !chapterAnalysis.retry(*chapterRequestId)) {
+          return false;
+        }
+        chapterOverviewOpen = false;
+        showEditMessage("Retrying chapter analysis");
+        return true;
       case Action::ToggleWindowPresentation: {
         const bool changed = presentationController.toggleWindow();
         redraw = redraw || changed;
@@ -1252,7 +1274,34 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     const playback_video_chapters::Snapshot next =
         chapterAnalysis.snapshot(*chapterRequestId);
     if (next.revision == chapterSnapshot.revision) return;
+    const bool logMilestone = next.state != chapterSnapshot.state ||
+                              next.phase != chapterSnapshot.phase ||
+                              next.detail != chapterSnapshot.detail;
     chapterSnapshot = next;
+    if (perfLog.enabled && logMilestone) {
+      perfLogAppendf(
+          &perfLog,
+          "chapter_analysis_state revision=%llu state=%s progress=%.3f "
+          "phase=%s detail=%s",
+          static_cast<unsigned long long>(chapterSnapshot.revision),
+          playback_video_chapters::analysisStateLabel(chapterSnapshot.state),
+          chapterSnapshot.progress.value_or(-1.0),
+          chapterSnapshot.phase.c_str(), chapterSnapshot.detail.c_str());
+    }
+    if (!chapterSnapshot.ready()) chapterOverviewOpen = false;
+    if (chapterSnapshot.state ==
+            playback_video_chapters::AnalysisState::Unsupported ||
+        chapterSnapshot.state ==
+            playback_video_chapters::AnalysisState::Failed) {
+      std::string message =
+          playback_video_chapters::analysisStateLabel(chapterSnapshot.state);
+      if (!chapterSnapshot.detail.empty()) {
+        message += ": " + chapterSnapshot.detail;
+      }
+      osd.showMessage(std::move(message),
+                      playback_session::PlaybackOsdTimeline::Clock::now(),
+                      kAnalysisMessageDuration);
+    }
     redraw = true;
     forceRefreshArt = true;
     publishWindowUiState();
@@ -1261,34 +1310,66 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
 
   void updateChapterGpuPriority() {
     if (!chapterRequestId) return;
+    if (!chapterSnapshot.running() &&
+        chapterSnapshot.state !=
+            playback_video_chapters::AnalysisState::CheckingSupport) {
+      const bool wasAllowed = chapterGpuAdmission.allowed();
+      chapterGpuAdmission.reset();
+      if (wasAllowed) {
+        chapterAnalysis.setBackgroundGpuAllowed(*chapterRequestId, false);
+      }
+      return;
+    }
+
     const auto now = std::chrono::steady_clock::now();
     const PlaybackSessionState playbackState = core.playbackState();
-    bool allow = playbackState == PlaybackSessionState::Paused ||
-                 playbackState == PlaybackSessionState::Ended;
-    if (playbackState == PlaybackSessionState::Active) {
-      const PlayerDebugInfo debug = core.player().debugInfo();
-      const bool playbackHealthy =
-          !core.player().seekPending() && !core.player().isBuffering() &&
-          !debug.audioStarved &&
-          (!debug.hasVideoFrame || debug.videoQueueDepth >= 2);
-      if (!playbackHealthy) {
-        chapterPlaybackHealthySince =
-            std::chrono::steady_clock::time_point::min();
-      } else {
-        if (chapterPlaybackHealthySince ==
-            std::chrono::steady_clock::time_point::min()) {
-          chapterPlaybackHealthySince = now;
-        }
-        allow = now - chapterPlaybackHealthySince >=
-                std::chrono::milliseconds(1500);
-      }
-    } else if (!allow) {
-      chapterPlaybackHealthySince =
-          std::chrono::steady_clock::time_point::min();
+    playback_session::BackgroundGpuSignals signals;
+    if (playbackState == PlaybackSessionState::Paused ||
+        playbackState == PlaybackSessionState::Ended) {
+      signals.foreground =
+          playback_session::ForegroundPlaybackActivity::Inactive;
+    } else if (playbackState == PlaybackSessionState::Active) {
+      signals.foreground = playback_session::ForegroundPlaybackActivity::Active;
     }
-    if (allow == chapterGpuAllowed) return;
-    chapterGpuAllowed = allow;
-    chapterAnalysis.setBackgroundGpuAllowed(*chapterRequestId, allow);
+
+    PlayerDebugInfo debug;
+    if (playbackState == PlaybackSessionState::Active) {
+      debug = core.player().debugInfo();
+      signals.seekPending = core.player().seekPending();
+      signals.buffering = core.player().isBuffering();
+      signals.audioStarved = debug.audioStarved;
+      signals.hasVideoFrame = debug.hasVideoFrame;
+      signals.videoQueueDepth = debug.videoQueueDepth;
+      signals.lastPresentedDurationUs = debug.lastPresentedDurationUs;
+    }
+    const playback_session::BackgroundGpuDecision decision =
+        chapterGpuAdmission.update(signals, now);
+
+    if (playbackState == PlaybackSessionState::Active) {
+      if (perfLog.enabled &&
+          (lastChapterGpuHeartbeat ==
+               std::chrono::steady_clock::time_point::min() ||
+           now - lastChapterGpuHeartbeat >= kTimingLogHeartbeatInterval)) {
+        const auto healthyMs =
+            decision.healthyFor.value_or(std::chrono::milliseconds{-1});
+        perfLogAppendf(
+            &perfLog,
+            "chapter_gpu_scheduler allowed=%d changed=%d stable=%d seek=%d "
+            "buffering=%d audio_starved=%d headroom=%d qv=%zu frame_us=%lld "
+            "healthy_ms=%lld",
+            decision.allowed ? 1 : 0, decision.changed ? 1 : 0,
+            decision.foregroundStable ? 1 : 0, signals.seekPending ? 1 : 0,
+            signals.buffering ? 1 : 0, signals.audioStarved ? 1 : 0,
+            decision.queueHasHeadroom ? 1 : 0, debug.videoQueueDepth,
+            static_cast<long long>(debug.lastPresentedDurationUs),
+            static_cast<long long>(healthyMs.count()));
+        lastChapterGpuHeartbeat = now;
+      }
+    }
+    if (decision.changed) {
+      chapterAnalysis.setBackgroundGpuAllowed(*chapterRequestId,
+                                              decision.allowed);
+    }
   }
 
   playback_video_timeline_preview::Snapshot timelinePreviewSnapshot(
@@ -1751,12 +1832,11 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     RefreshState state;
     state.nativeWindowActive = output.windowOpen();
     wake_schedule::Deadline deadline = computeWakeDeadline(state);
-    if (chapterRequestId && !chapterGpuAllowed &&
-        chapterPlaybackHealthySince !=
-            std::chrono::steady_clock::time_point::min()) {
-      wake_schedule::include(
-          deadline,
-          chapterPlaybackHealthySince + std::chrono::milliseconds(1500));
+    if (chapterRequestId) {
+      if (const auto admissionDeadline =
+              chapterGpuAdmission.nextEvaluationDeadline()) {
+        wake_schedule::include(deadline, *admissionDeadline);
+      }
     }
     return deadline;
   }

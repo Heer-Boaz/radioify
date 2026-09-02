@@ -1,4 +1,4 @@
-#include "playback/video/chapter/contact_sheet.h"
+#include "playback/video/chapter/sampled_evidence.h"
 
 #include <algorithm>
 #include <chrono>
@@ -7,17 +7,14 @@
 #include <utility>
 
 #include "playback/video/decoder.h"
+#include "playback/video/frame_conversion.h"
 #include "playback/video/image.h"
-#include "playback/video/timeline_preview_decoder.h"
 
 namespace playback_video_chapters {
 namespace {
 
-constexpr int kSampleCount = 12;
-constexpr int kSheetColumns = 4;
-constexpr int kSheetRows = 3;
-constexpr int kTileWidth = 384;
-constexpr int kTileHeight = 216;
+constexpr int kSampleWidth = 384;
+constexpr int kSampleHeight = 216;
 constexpr int kMaximumDecodeFrames = 2048;
 constexpr auto kSampleDeadline = std::chrono::seconds(8);
 
@@ -57,16 +54,16 @@ OperationStatus interruptionStatus(const OperationControl& control) {
   return OperationStatus::Failed;
 }
 
-OperationStatus initializeHardwareDecoder(
-    const AnalysisRequest& request, const OperationControl& control,
-    InterruptContext* interrupt, VideoDecoder* decoder,
-    std::string* detail) {
+OperationStatus initializeHardwareDecoder(const AnalysisRequest& request,
+                                          const OperationControl& control,
+                                          InterruptContext* interrupt,
+                                          VideoDecoder* decoder,
+                                          std::string* detail) {
   if (!interrupt || !decoder) return OperationStatus::Failed;
   std::string decoderError;
   if (!decoder->init(request.file, &decoderError, true, true, nullptr,
-                     request.videoStreamIndex,
-                     &InterruptContext::callback, interrupt,
-                     VideoCpuOutputPrecision::EightBit,
+                     request.videoStreamIndex, &InterruptContext::callback,
+                     interrupt, VideoCpuOutputPrecision::EightBit,
                      VideoHardwareDecodePolicy::RequireD3D11)) {
     const OperationStatus interrupted = interruptionStatus(control);
     if (interrupted == OperationStatus::Cancelled) {
@@ -89,9 +86,9 @@ OperationStatus initializeHardwareDecoder(
       2, decoder->width() > 0 ? decoder->width() : request.sourceWidth);
   const int sourceHeight = std::max(
       2, decoder->height() > 0 ? decoder->height() : request.sourceHeight);
-  const double scale = std::min(
-      static_cast<double>(kTileWidth) / sourceWidth,
-      static_cast<double>(kTileHeight) / sourceHeight);
+  const double scale =
+      std::min(static_cast<double>(kSampleWidth) / sourceWidth,
+               static_cast<double>(kSampleHeight) / sourceHeight);
   int decodeWidth = std::max(2, static_cast<int>(sourceWidth * scale));
   int decodeHeight = std::max(2, static_cast<int>(sourceHeight * scale));
   decodeWidth &= ~1;
@@ -126,8 +123,8 @@ bool sampleFrame(VideoDecoder* decoder, InterruptContext* interrupt,
     if (InterruptContext::callback(interrupt)) return false;
     VideoFrame frame;
     if (!decoder->readFrame(frame, nullptr, false)) break;
-    const std::int64_t ptsUs = std::max<std::int64_t>(0,
-                                                       frame.timestamp100ns / 10);
+    const std::int64_t ptsUs =
+        std::max<std::int64_t>(0, frame.timestamp100ns / 10);
     std::int64_t durationUs = frame.duration100ns / 10;
     if (durationUs <= 0) durationUs = 33333;
     haveCandidate = true;
@@ -138,32 +135,30 @@ bool sampleFrame(VideoDecoder* decoder, InterruptContext* interrupt,
     }
   }
   VideoFrame selected;
-  return haveCandidate &&
-         (reachedTarget || decoder->reachedEndOfStream()) &&
+  return haveCandidate && (reachedTarget || decoder->reachedEndOfStream()) &&
          !InterruptContext::callback(interrupt) &&
          decoder->redecodeLastFrame(selected) &&
-         playback_video_timeline_preview::convertFrameToRgba(selected,
-                                                              image);
+         playback_video_frame_conversion::toRgba(selected, image);
 }
 
-bool copyTile(const playback_video_image::RgbaImage& tile, int column,
-              int row, ContactSheetResult* sheet) {
-  if (!sheet || !playback_video_image::validate(tile) || sheet->rgb.empty() ||
-      tile.width > kTileWidth || tile.height > kTileHeight) {
+bool copySample(const playback_video_image::RgbaImage& image,
+                std::int64_t timeUs, SampledFrame* sample) {
+  if (!sample || timeUs < 0 || !playback_video_image::validate(image) ||
+      image.width == 0 || image.height == 0 ||
+      image.width >
+          (std::numeric_limits<std::size_t>::max)() / image.height / 3u) {
     return false;
   }
-  const int insetX = (kTileWidth - static_cast<int>(tile.width)) / 2;
-  const int insetY = (kTileHeight - static_cast<int>(tile.height)) / 2;
-  for (std::uint32_t y = 0; y < tile.height; ++y) {
+  sample->timeUs = timeUs;
+  sample->width = image.width;
+  sample->height = image.height;
+  sample->rgb.resize(static_cast<std::size_t>(image.width) * image.height * 3u);
+  for (std::uint32_t y = 0; y < image.height; ++y) {
     const std::uint8_t* source =
-        tile.pixels.data() + static_cast<std::size_t>(y) * tile.strideBytes;
+        image.pixels.data() + static_cast<std::size_t>(y) * image.strideBytes;
     std::uint8_t* destination =
-        sheet->rgb.data() +
-        static_cast<std::size_t>(row * kTileHeight + insetY +
-                                 static_cast<int>(y)) *
-            static_cast<std::size_t>(sheet->width) * 3u +
-        static_cast<std::size_t>(column * kTileWidth + insetX) * 3u;
-    for (std::uint32_t x = 0; x < tile.width; ++x) {
+        sample->rgb.data() + static_cast<std::size_t>(y) * image.width * 3u;
+    for (std::uint32_t x = 0; x < image.width; ++x) {
       destination[x * 3u + 0u] = source[x * 4u + 0u];
       destination[x * 3u + 1u] = source[x * 4u + 1u];
       destination[x * 3u + 2u] = source[x * 4u + 2u];
@@ -194,8 +189,8 @@ OperationStatus probeHardwareVideoDecode(const AnalysisRequest& request,
   }
   InterruptContext interrupt{&control, 0};
   VideoDecoder decoder;
-  OperationStatus status = initializeHardwareDecoder(
-      request, control, &interrupt, &decoder, detail);
+  OperationStatus status =
+      initializeHardwareDecoder(request, control, &interrupt, &decoder, detail);
   if (status != OperationStatus::Succeeded) return status;
   playback_video_image::RgbaImage sample;
   if (sampleFrame(&decoder, &interrupt, 0, &sample)) {
@@ -216,9 +211,9 @@ OperationStatus probeHardwareVideoDecode(const AnalysisRequest& request,
   return OperationStatus::Unsupported;
 }
 
-ContactSheetResult buildContactSheet(const AnalysisRequest& request,
-                                     const OperationControl& control) {
-  ContactSheetResult result;
+SampledEvidenceResult sampleVideoEvidence(const AnalysisRequest& request,
+                                          const OperationControl& control) {
+  SampledEvidenceResult result;
   if (request.file.empty() || request.videoStreamIndex < 0 ||
       request.durationUs <= 0) {
     result.detail = "The video cannot be sampled for chapter analysis.";
@@ -232,47 +227,48 @@ ContactSheetResult buildContactSheet(const AnalysisRequest& request,
 
   InterruptContext interrupt{&control, 0};
   VideoDecoder decoder;
-  result.status = initializeHardwareDecoder(
-      request, control, &interrupt, &decoder, &result.detail);
+  result.status = initializeHardwareDecoder(request, control, &interrupt,
+                                            &decoder, &result.detail);
   if (result.status != OperationStatus::Succeeded) return result;
 
-  result.width = kSheetColumns * kTileWidth;
-  result.height = kSheetRows * kTileHeight;
-  if (result.width >
-      (std::numeric_limits<std::size_t>::max)() / result.height / 3u) {
-    result.detail = "The chapter contact sheet is too large.";
+  const std::vector<std::int64_t> sampleTimes =
+      automaticChapterSampleTimes(request.durationUs);
+  if (sampleTimes.size() < kMinimumAutomaticChapterCount) {
+    result.status = OperationStatus::Unsupported;
+    result.detail =
+        "Automatic chapters require a video of at least 30 seconds.";
     return result;
   }
   try {
-    result.rgb.assign(static_cast<std::size_t>(result.width) * result.height *
-                          3u,
-                      0u);
+    result.frames.reserve(sampleTimes.size());
   } catch (const std::bad_alloc&) {
-    result.detail = "Could not allocate the chapter contact sheet.";
+    result.detail = "Could not allocate the chapter video samples.";
     return result;
   }
 
-  result.sampleTimesUs.reserve(kSampleCount);
-  for (int index = 0; index < kSampleCount; ++index) {
+  for (std::size_t index = 0; index < sampleTimes.size(); ++index) {
     if ((control.cancelled && control.cancelled()) ||
-        (control.backgroundGpuAllowed &&
-         !control.backgroundGpuAllowed())) {
+        (control.backgroundGpuAllowed && !control.backgroundGpuAllowed())) {
       result.status = interruptionStatus(control);
       result.detail = result.status == OperationStatus::Yielded
                           ? "Playback reclaimed the GPU."
                           : "Chapter analysis cancelled.";
       return result;
     }
-    const std::int64_t targetUs =
-        index == kSampleCount - 1
-            ? request.durationUs - 1
-            : static_cast<std::int64_t>(
-                  (static_cast<long double>(request.durationUs - 1) * index) /
-                  (kSampleCount - 1));
-    playback_video_image::RgbaImage tile;
-    if (!sampleFrame(&decoder, &interrupt, targetUs, &tile) ||
-        !copyTile(tile, index % kSheetColumns, index / kSheetColumns,
-                  &result)) {
+    const std::int64_t targetUs = sampleTimes[index];
+    playback_video_image::RgbaImage image;
+    SampledFrame sample;
+    bool sampled = sampleFrame(&decoder, &interrupt, targetUs, &image);
+    if (sampled) {
+      try {
+        sampled = copySample(image, targetUs, &sample);
+      } catch (const std::bad_alloc&) {
+        result.status = OperationStatus::Failed;
+        result.detail = "Could not allocate a chapter video sample.";
+        return result;
+      }
+    }
+    if (!sampled) {
       result.status = interruptionStatus(control);
       if (result.status == OperationStatus::Yielded) {
         result.detail = "Playback reclaimed the GPU.";
@@ -284,12 +280,11 @@ ContactSheetResult buildContactSheet(const AnalysisRequest& request,
       }
       return result;
     }
-    result.sampleTimesUs.push_back(targetUs);
+    result.frames.push_back(std::move(sample));
     if (control.progress) {
-      control.progress(0.05 + 0.50 *
-                                  static_cast<double>(index + 1) /
-                                  kSampleCount,
-                       "Sampling video on D3D11");
+      control.progress(
+          0.05 + 0.50 * static_cast<double>(index + 1) / sampleTimes.size(),
+          "Sampling video on D3D11");
     }
   }
   decoder.uninit();

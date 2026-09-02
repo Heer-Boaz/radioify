@@ -231,14 +231,16 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
                   static_cast<double>(layoutSourceH)
             : 0.0;
     char buf2[256];
-    std::snprintf(
-        buf2, sizeof(buf2),
-        "DBG ascii src=%dx%d(%s) frame=%dx%d r=%d art=%dx%d phys=%.0fx%.0f asp=%.3f srcasp=%.3f path=%s",
-        layoutSourceW, layoutSourceH, layoutSourceKind, frameDisplayW,
-        frameDisplayH, frame ? frame->rotationQuarterTurns : 0, plannedArtW,
-        plannedArtH, physW, physH, physAspect, sourceAspect,
-        frameOutput.lastRenderPath.empty() ? "none"
-                                           : frameOutput.lastRenderPath.c_str());
+    std::snprintf(buf2, sizeof(buf2),
+                  "DBG ascii src=%dx%d(%s) frame=%dx%d r=%d art=%dx%d "
+                  "phys=%.0fx%.0f asp=%.3f srcasp=%.3f path=%s",
+                  layoutSourceW, layoutSourceH, layoutSourceKind, frameDisplayW,
+                  frameDisplayH, frame ? frame->rotationQuarterTurns : 0,
+                  plannedArtW, plannedArtH, physW, physH, physAspect,
+                  sourceAspect,
+                  frameOutput.lastRenderPath.empty()
+                      ? "none"
+                      : frameOutput.lastRenderPath.c_str());
     debugLines.emplace_back(buf2);
   }
 #if RADIOIFY_ENABLE_TIMING_LOG
@@ -249,19 +251,22 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
     double masterSec = static_cast<double>(dbg.masterClockUs) / 1000000.0;
     double diffMs = static_cast<double>(dbg.lastDiffUs) / 1000.0;
     double delayMs = static_cast<double>(dbg.lastDelayUs) / 1000.0;
+    double durationMs =
+        static_cast<double>(dbg.lastPresentedDurationUs) / 1000.0;
     std::snprintf(
         buf1, sizeof(buf1),
-        "DBG state=%s serial=%d seek=%d qv=%zu master=%s %.3fs diff=%.1fms delay=%.1fms",
+        "DBG state=%s serial=%d seek=%d qv=%zu dur=%.1fms master=%s %.3fs "
+        "diff=%.1fms delay=%.1fms",
         playerStateLabel(dbg.state), dbg.currentSerial, dbg.pendingSeekSerial,
-        dbg.videoQueueDepth, clockSourceLabel(dbg.masterSource), masterSec,
-        diffMs, delayMs);
-    std::snprintf(
-        buf2, sizeof(buf2),
-        "DBG audio ok=%d ready=%d fresh=%d starved=%d buf=%zuf rate=%u clock=%.3fs",
-        dbg.audioOk ? 1 : 0, dbg.audioClockReady ? 1 : 0,
-        dbg.audioClockFresh ? 1 : 0, dbg.audioStarved ? 1 : 0,
-        dbg.audioBufferedFrames, dbg.audioSampleRate,
-        static_cast<double>(dbg.audioClockUs) / 1000000.0);
+        dbg.videoQueueDepth, durationMs, clockSourceLabel(dbg.masterSource),
+        masterSec, diffMs, delayMs);
+    std::snprintf(buf2, sizeof(buf2),
+                  "DBG audio ok=%d ready=%d fresh=%d starved=%d buf=%zuf "
+                  "rate=%u clock=%.3fs",
+                  dbg.audioOk ? 1 : 0, dbg.audioClockReady ? 1 : 0,
+                  dbg.audioClockFresh ? 1 : 0, dbg.audioStarved ? 1 : 0,
+                  dbg.audioBufferedFrames, dbg.audioSampleRate,
+                  static_cast<double>(dbg.audioClockUs) / 1000000.0);
     debugLines.emplace_back(buf1);
     debugLines.emplace_back(buf2);
   }

@@ -1,13 +1,14 @@
+#include <iostream>
+#include <string>
+#include <vector>
+
+#include "core/utf8.h"
 #include "playback/video/chapter/chapter.h"
+#include "playback/video/chapter/generated_document.h"
 #include "playback/video/chapter/presentation.h"
 #include "playback/video/chapter/text_evidence.h"
 #include "playback/video/subtitle/manager.h"
 #include "playback/video/timeline_preview_types.h"
-#include "core/utf8.h"
-
-#include <iostream>
-#include <string>
-#include <vector>
 
 namespace {
 
@@ -42,6 +43,187 @@ bool runChapterDomainTests() {
   std::string error;
   ok &= expect(validatePartition(60'000'000, chapters, &error),
                "a complete ordered partition must be accepted");
+  ok &= expect(validateAutomaticPartition(60'000'000, chapters, &error),
+               "three sufficiently long chapters must satisfy automatic "
+               "chapter policy");
+  ok &= expect(validateAutomaticAnalysis(
+                   60'000'000, "The video moves through three sections.",
+                   chapters, &error),
+               "a complete bounded analysis must be publishable");
+  std::vector<Chapter> multilineMetadata = chapters;
+  multilineMetadata[1].summary = "A line.\nInjected layout text.";
+  ok &= expect(!validateAutomaticAnalysis(
+                   60'000'000, "The video moves through three sections.",
+                   multilineMetadata, &error),
+               "persisted model metadata must not inject multiline UI text");
+
+  const std::vector<Chapter> singleChapter = {
+      {1, 0, 60'000'000, "Entire video", "One undivided section."}};
+  ok &= expect(
+      validatePartition(60'000'000, singleChapter, &error) &&
+          !validateAutomaticPartition(60'000'000, singleChapter, &error),
+      "a structural partition must remain distinct from automatic marker "
+      "policy");
+
+  const std::vector<Chapter> shortAutomaticChapter = {
+      {1, 0, 9'000'000, "Opening", {}},
+      {2, 9'000'000, 30'000'000, "Middle", {}},
+      {3, 30'000'000, 60'000'000, "Ending", {}}};
+  ok &= expect(
+      !validateAutomaticPartition(60'000'000, shortAutomaticChapter, &error),
+      "automatic chapters shorter than ten seconds must be "
+      "rejected");
+
+  ok &= expect(automaticChapterSampleTimes(29'999'999).empty(),
+               "videos below the minimum chapterable duration must not be "
+               "sampled");
+  ok &= expect(automaticChapterSampleTimes(30'000'000) ==
+                   std::vector<std::int64_t>({0, 10'000'000, 20'000'000}),
+               "the minimum-duration source must expose exactly three valid "
+               "chapter starts");
+  const std::int64_t sampledDuration = 192'928'511;
+  const std::vector<std::int64_t> sampleTimes =
+      automaticChapterSampleTimes(sampledDuration);
+  bool validSpacing = sampleTimes.size() == kMaximumAutomaticChapterCount &&
+                      sampleTimes.front() == 0;
+  for (std::size_t index = 1; index < sampleTimes.size(); ++index) {
+    validSpacing =
+        validSpacing && sampleTimes[index] - sampleTimes[index - 1] >=
+                            kMinimumAutomaticChapterDurationUs;
+  }
+  validSpacing = validSpacing && sampledDuration - sampleTimes.back() >=
+                                     kMinimumAutomaticChapterDurationUs;
+  ok &= expect(validSpacing,
+               "every sampled frame identity must be a valid chapter start");
+
+  std::string observation;
+  ok &= expect(parseGeneratedObservation(
+                   R"({"observation":"  A person enters the store.  "})",
+                   &observation, &error) &&
+                   observation == "A person enters the store.",
+               "frame observations must be parsed and normalized in "
+               "isolation");
+  ok &= expect(
+      !parseGeneratedObservation(R"({"observation":"Valid","extra":true})",
+                                 &observation, &error),
+      "an observation with protocol drift must be rejected");
+
+  GeneratedSegmentationPlan plan;
+  ok &= expect(
+      parseGeneratedSegmentationPlan(
+          R"({"progression":"Arrival, demonstration, and conclusion.","chapter_count":3})",
+          6, &plan, &error) &&
+          plan.chapterCount == 3,
+      "global timeline reasoning must precede the bounded chapter "
+      "count");
+  ok &= expect(!parseGeneratedSegmentationPlan(
+                   R"({"progression":"Too many sections.","chapter_count":7})",
+                   6, &plan, &error),
+               "the generated chapter count must remain inside sampled "
+               "evidence");
+  GeneratedChangePointScore changePointScore;
+  ok &= expect(parseGeneratedChangePointScore(R"({"score":85})",
+                                              &changePointScore, &error) &&
+                   changePointScore.score == 85,
+               "each candidate gap must produce a typed confidence score");
+  ok &= expect(!parseGeneratedChangePointScore(R"({"score":"high"})",
+                                               &changePointScore, &error),
+               "change-point protocol drift must be rejected");
+  std::vector<GeneratedChangePointScore> scores = {
+      {10}, {90}, {20}, {80}, {30}};
+  std::vector<std::size_t> selectedFrames;
+  ok &= expect(selectGeneratedBoundaries(scores, 3, &selectedFrames, &error) &&
+                   selectedFrames == std::vector<std::size_t>({1, 3, 5}),
+               "the strongest scored gaps must map to chronological sampled "
+               "frame identities");
+  scores[4].score = 80;
+  ok &= expect(selectGeneratedBoundaries(scores, 3, &selectedFrames, &error) &&
+                   selectedFrames == std::vector<std::size_t>({1, 3, 5}),
+               "equal semantic scores must use balanced timeline coverage "
+               "instead of chronological bias");
+  const std::vector<GeneratedChangePointScore> noEvidence(5);
+  ok &=
+      expect(!selectGeneratedBoundaries(noEvidence, 3, &selectedFrames, &error),
+             "a plan cannot manufacture boundaries without semantic "
+             "evidence");
+
+  GeneratedChapterMetadata metadata;
+  ok &= expect(
+      parseGeneratedChapterMetadata(
+          R"({"title":"Store Arrival","summary":"A visitor enters the shop."})",
+          &metadata, &error) &&
+          metadata.title == "Store Arrival" &&
+          metadata.summary == "A visitor enters the shop.",
+      "chapter metadata must be parsed independently from boundary "
+      "selection");
+  ok &= expect(
+      parseGeneratedChapterMetadata(
+          R"({"title":"Arrival","summary":"A visitor enters the shop."})",
+          &metadata, &error) &&
+          metadata.title == "Arrival",
+      "a concise one-word chapter title must be valid");
+  std::string overview;
+  ok &= expect(
+      parseGeneratedOverview(
+          R"({"overview":"A demonstration moves from setup to result."})",
+          &overview, &error) &&
+          overview == "A demonstration moves from setup to result.",
+      "the overview must be parsed as a separate completed stage");
+
+  GeneratedDocument generated;
+  generated.overview = "A demo.";
+  generated.chapters = {
+      {1, {"Opening", "The demo starts."}},
+      {2, {"Middle", "The work continues."}},
+      {3, {"Ending", "The demo ends."}},
+  };
+  const AnalysisResult parsed = materializeGeneratedDocument(
+      generated, 60'000'000, {0, 20'000'000, 40'000'000});
+  ok &=
+      expect(parsed.status == OperationStatus::Succeeded &&
+                 parsed.overview == "A demo." && parsed.chapters.size() == 3 &&
+                 parsed.chapters[1].startUs == 20'000'000 &&
+                 parsed.chapters.back().endUs == 60'000'000,
+             "generated frame identities must map to authoritative sample "
+             "timestamps");
+  GeneratedDocument repeatedTitle = generated;
+  for (GeneratedChapter& chapter : repeatedTitle.chapters) {
+    chapter.metadata.title = "Gameplay";
+  }
+  ok &= expect(materializeGeneratedDocument(repeatedTitle, 60'000'000,
+                                            {0, 20'000'000, 40'000'000})
+                       .status == OperationStatus::Succeeded,
+               "a repeated concise title with distinct grounded summaries "
+               "must remain valid");
+  GeneratedDocument repeated = generated;
+  for (GeneratedChapter& chapter : repeated.chapters) {
+    chapter.metadata.title = "Same scene";
+    chapter.metadata.summary = "The same activity.";
+  }
+  ok &= expect(materializeGeneratedDocument(repeated, 60'000'000,
+                                            {0, 20'000'000, 40'000'000})
+                       .status == OperationStatus::Failed,
+               "constant chapter metadata must be rejected before publication");
+  GeneratedDocument duplicate = generated;
+  duplicate.chapters[1].startFrame = 1;
+  ok &= expect(materializeGeneratedDocument(duplicate, 60'000'000,
+                                            {0, 20'000'000, 40'000'000})
+                       .status == OperationStatus::Failed,
+               "duplicate model-selected frame identities must be rejected, "
+               "not silently deduplicated");
+  const std::string planGrammar = generatedSegmentationPlanGrammar(6);
+  const std::string changePointGrammar = generatedChangePointScoreGrammar();
+  ok &= expect(
+      !planGrammar.empty() &&
+          planGrammar.find("chapter_count") != std::string::npos &&
+          !changePointGrammar.empty() &&
+          changePointGrammar.find("score") != std::string::npos &&
+          changePointGrammar.find("start_seconds") == std::string::npos &&
+          !generatedObservationGrammar().empty() &&
+          !generatedChapterMetadataGrammar().empty() &&
+          !generatedOverviewGrammar().empty(),
+      "the constrained grammar must enumerate only valid sampled "
+      "frame identities and keep every inference stage typed");
 
   std::vector<Chapter> gap = chapters;
   gap[1].startUs += 1;
@@ -96,9 +278,10 @@ bool runChapterDomainTests() {
   snapshot.phase = "Generating video chapters";
   const std::vector<std::string> progressMetadata =
       previewMetadata(snapshot, 10'000'000);
-  ok &= expect(!progressMetadata.empty() &&
-                   progressMetadata.front().find("37%") != std::string::npos,
-               "analysis progress must project into the hover popover");
+  ok &= expect(progressMetadata.empty() &&
+                   !layoutOverviewPanel(snapshot, 120, 30, 25).drawable(),
+               "in-progress analysis must not create chapter hover metadata "
+               "or an empty overview surface");
 
   snapshot.state = AnalysisState::Unsupported;
   snapshot.progress.reset();
@@ -107,6 +290,8 @@ bool runChapterDomainTests() {
   ok &= expect(previewMetadata(snapshot, 10'000'000).empty(),
                "unsupported analysis must preserve the frame-only hover "
                "preview without an empty metadata panel");
+  ok &= expect(!layoutOverviewPanel(snapshot, 120, 30, 25).drawable(),
+               "unsupported analysis must not create an overview surface");
   const auto unsupportedPreview =
       playback_video_timeline_preview::layoutCells(
           120, 30, 25, 1, 118, 0.5, 1920, 1080, 9.0, 21.0,
@@ -181,6 +366,11 @@ bool runTextEvidenceTests() {
                  "VLM text evidence must retain bounded nearby dialogue");
     ok &= expect(textNear(*evidence, 3'000'000, 2'000'000, 10).size() == 10,
                  "prompt evidence must obey its byte budget");
+    ok &= expect(textInInterval(*evidence, 0, 2'000'000, 64) == "Welcome" &&
+                     textInInterval(*evidence, 2'000'000, 10'000'000, 64) ==
+                         "This is the main dialogue",
+                 "adjacent sampled intervals must own disjoint subtitle "
+                 "evidence");
   }
 
   TextEvidence unicodeEvidence;

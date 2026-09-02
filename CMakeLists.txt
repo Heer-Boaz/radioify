@@ -726,6 +726,15 @@ radioify_link_repo_target(osd_timeline_tests)
 add_test(NAME osd_timeline_tests
          COMMAND $<TARGET_FILE:osd_timeline_tests>)
 
+add_executable(background_gpu_admission_tests)
+target_sources(background_gpu_admission_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_background_gpu_admission_tests>
+  ${CMAKE_SOURCE_DIR}/playback/session/background_gpu_admission.cpp
+)
+radioify_link_repo_target(background_gpu_admission_tests)
+add_test(NAME background_gpu_admission_tests
+         COMMAND $<TARGET_FILE:background_gpu_admission_tests>)
+
 add_executable(presentation_policy_tests)
 target_sources(presentation_policy_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_presentation_policy_tests>
@@ -804,6 +813,7 @@ target_sources(timeline_preview_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_timeline_preview_tests>
   $<TARGET_OBJECTS:radioify_timeline_preview>
   $<TARGET_OBJECTS:radioify_image_codec>
+  ${CMAKE_SOURCE_DIR}/playback/video/frame_conversion.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/decoder.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/sequence.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/timing/timeline.cpp
@@ -820,6 +830,7 @@ add_executable(chapter_analysis_tests)
 target_sources(chapter_analysis_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_chapter_analysis_tests>
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/generated_document.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/presentation.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/text_evidence.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/timeline_preview_policy.cpp
@@ -836,6 +847,8 @@ add_test(NAME chapter_analysis_tests
 add_executable(chapter_inference_tests)
 target_sources(chapter_inference_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_chapter_inference_tests>
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/generated_document.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference.cpp
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
 )
@@ -844,11 +857,34 @@ target_link_libraries(chapter_inference_tests PRIVATE llama::mtmd)
 add_test(NAME chapter_inference_tests
          COMMAND $<TARGET_FILE:chapter_inference_tests>)
 
+# Explicit opt-in hardware/model integration harness. It is intentionally not
+# registered with CTest because model artifacts and a Vulkan GPU are optional
+# developer-machine capabilities.
+add_executable(chapter_inference_probe)
+target_sources(chapter_inference_probe PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_chapter_inference_probe>
+  $<TARGET_OBJECTS:radioify_image_codec>
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/generated_document.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/sampled_evidence.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/frame_conversion.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/decoder.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/sequence.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/timing/timeline.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/core/utf8.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+)
+radioify_link_repo_target(chapter_inference_probe)
+target_link_libraries(chapter_inference_probe PRIVATE llama::mtmd)
+
 add_executable(chapter_service_tests)
 target_sources(chapter_service_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_chapter_service_tests>
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/service.cpp
+  ${CMAKE_SOURCE_DIR}/core/utf8.cpp
   ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
 )
 radioify_link_repo_target(chapter_service_tests)
@@ -2339,6 +2375,7 @@ if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
+  target_link_directories(chapter_inference_probe PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_edit_export_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_edit_timeline_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(indexed_transcript_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
@@ -2362,6 +2399,7 @@ target_link_libraries(audio_export_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARIES})
+target_link_libraries(chapter_inference_probe PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_edit_export_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_edit_timeline_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(indexed_transcript_smoke PRIVATE ${FFMPEG_LIBRARIES})
@@ -2838,6 +2876,7 @@ if (WIN32)
   target_link_libraries(radioify PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys comctl32 bcrypt winhttp)
   target_link_libraries(video_frame_step_smoke PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys)
   target_link_libraries(timeline_preview_tests PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
+  target_link_libraries(chapter_inference_probe PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
   target_link_libraries(scene_analysis_smoke PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32)
   target_link_libraries(video_edit_export_smoke PRIVATE mfplat mfreadwrite mfuuid ole32 bcrypt ws2_32)
 endif()

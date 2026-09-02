@@ -159,4 +159,25 @@ std::string textNear(const TextEvidence& evidence, std::int64_t centerUs,
   return out;
 }
 
+std::string textInInterval(const TextEvidence& evidence, std::int64_t startUs,
+                           std::int64_t endUs, std::size_t maxBytes) {
+  if (maxBytes == 0 || evidence.cues.empty() || startUs < 0 ||
+      endUs <= startUs) {
+    return {};
+  }
+  std::string out;
+  for (const TextCue& cue : evidence.cues) {
+    if (cue.endUs <= cue.startUs) continue;
+    const std::int64_t midpointUs = cue.startUs + (cue.endUs - cue.startUs) / 2;
+    if (midpointUs < startUs) continue;
+    if (midpointUs >= endUs) break;
+    if (!out.empty()) out.push_back(' ');
+    const std::size_t available = maxBytes - std::min(maxBytes, out.size());
+    if (available == 0) break;
+    out += utf8Prefix(cue.text, available);
+    if (out.size() >= maxBytes) break;
+  }
+  return out;
+}
+
 }  // namespace playback_video_chapters

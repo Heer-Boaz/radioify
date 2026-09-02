@@ -23,7 +23,7 @@
 namespace playback_video_chapters {
 namespace {
 
-constexpr int kSchema = 1;
+constexpr int kSchema = 7;
 
 void setError(std::string* error, std::string value) {
   if (error) *error = std::move(value);
@@ -55,7 +55,7 @@ std::string sourceIdentity(const AnalysisRequest& request) {
 }
 
 std::filesystem::path cachePath(const AnalysisRequest& request) {
-  const std::string hash = sha256Text(sourceIdentity(request));
+  const std::string hash = analysisSourceKey(request);
   if (hash.empty()) return {};
   return radioifyWritableDataDir() / "cache" / "video-chapters" /
          (hash + ".json");
@@ -83,12 +83,19 @@ bool decode(const nlohmann::json& document, std::int64_t durationUs,
     chapter.summary = item.value("summary", std::string{});
     decoded.chapters.push_back(std::move(chapter));
   }
-  if (!validatePartition(durationUs, decoded.chapters)) return false;
+  if (!validateAutomaticAnalysis(durationUs, decoded.overview,
+                                 decoded.chapters)) {
+    return false;
+  }
   *result = std::move(decoded);
   return true;
 }
 
 }  // namespace
+
+std::string analysisSourceKey(const AnalysisRequest& request) {
+  return sha256Text(sourceIdentity(request));
+}
 
 std::optional<AnalysisResult> loadCachedAnalysis(
     const AnalysisRequest& request) {
@@ -113,7 +120,8 @@ bool storeCachedAnalysis(const AnalysisRequest& request,
                          std::string* error) {
   if (error) error->clear();
   if (result.status != OperationStatus::Succeeded ||
-      !validatePartition(request.durationUs, result.chapters, error)) {
+      !validateAutomaticAnalysis(request.durationUs, result.overview,
+                                 result.chapters, error)) {
     return false;
   }
   const std::filesystem::path path = cachePath(request);

@@ -1,4 +1,5 @@
 #include "playback/video/decoder.h"
+#include "playback/video/frame_conversion.h"
 #include "playback/video/timeline_preview.h"
 #include "playback/video/timeline_preview_model.h"
 
@@ -126,6 +127,35 @@ bool runPolicyTests() {
                             "0:00")
                     .drawable(),
                "tiny surfaces must decline an unusable preview");
+  return ok;
+}
+
+bool runFrameConversionTests() {
+  constexpr int width = 384;
+  constexpr int height = 216;
+  VideoFrame frame;
+  frame.width = width;
+  frame.height = height;
+  frame.format = VideoPixelFormat::NV12;
+  frame.stride = width;
+  frame.planeHeight = height;
+  frame.fullRange = true;
+  frame.yuv.assign(static_cast<size_t>(width) * height * 3u / 2u, 128u);
+
+  playback_video_image::RgbaImage image;
+  bool ok = true;
+  ok &= expect(playback_video_frame_conversion::toRgba(frame, &image),
+               "canonical frame conversion must not inherit hover-preview "
+               "dimensions");
+  ok &= expect(image.width == width && image.height == height &&
+                   image.strideBytes == width * 4u &&
+                   playback_video_image::validate(image),
+               "chapter-sized NV12 frames must produce a complete RGBA8 "
+               "image");
+
+  frame.yuv.pop_back();
+  ok &= expect(!playback_video_frame_conversion::toRgba(frame, &image),
+               "incomplete decoder planes must be rejected");
   return ok;
 }
 
@@ -531,6 +561,7 @@ bool runMediaSmoke(const std::filesystem::path& path) {
 
 int main(int argc, char** argv) {
   bool ok = runPolicyTests();
+  ok &= runFrameConversionTests();
   ok &= runModelTests();
   ok &= runCacheTests(std::filesystem::path(argv[0]));
   if (argc >= 2) ok &= runMediaSmoke(std::filesystem::path(argv[1]));

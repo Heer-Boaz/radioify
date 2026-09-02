@@ -250,6 +250,8 @@ bool executeOverlayControl(SessionPort& session,
       return session.dispatch(CommandAction::InstallChapterModel);
     case Action::CancelChapterOperation:
       return session.dispatch(CommandAction::CancelChapterOperation);
+    case Action::RetryChapterAnalysis:
+      return session.dispatch(CommandAction::RetryChapterAnalysis);
     case Action::TogglePictureInPicture:
       return togglePictureInPicture(session);
     case Action::WaitForVideoEditExport:

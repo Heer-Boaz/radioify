@@ -235,8 +235,9 @@ struct Service::Impl {
               backend->cached(request.request)) {
         std::string validationError;
         if (cached->status == OperationStatus::Succeeded &&
-            validatePartition(request.request.durationUs, cached->chapters,
-                              &validationError)) {
+            validateAutomaticAnalysis(request.request.durationUs,
+                                      cached->overview, cached->chapters,
+                                      &validationError)) {
           Snapshot ready;
           ready.state = AnalysisState::Ready;
           ready.overview = std::move(cached->overview);
@@ -323,8 +324,9 @@ struct Service::Impl {
       }
 
       std::string validationError;
-      if (!validatePartition(request.request.durationUs, result.chapters,
-                             &validationError)) {
+      if (!validateAutomaticAnalysis(request.request.durationUs,
+                                     result.overview, result.chapters,
+                                     &validationError)) {
         publishTerminal(expectedGeneration, AnalysisState::Failed,
                         validationError);
         return;
@@ -432,6 +434,23 @@ bool Service::cancelInstallation(RequestId requestId) {
   }
   impl_->installCancelled.store(true, std::memory_order_release);
   impl_->condition.notify_all();
+  return true;
+}
+
+bool Service::retry(RequestId requestId) {
+  {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (!impl_->active || impl_->active->id != requestId ||
+        impl_->published.state != AnalysisState::Failed ||
+        impl_->installInProgress) {
+      return false;
+    }
+    impl_->published = initialSnapshot(impl_->active->request);
+    impl_->published.revision = impl_->nextRevision++;
+    impl_->generation.fetch_add(1, std::memory_order_acq_rel);
+  }
+  impl_->condition.notify_all();
+  impl_->changed.signal();
   return true;
 }
 

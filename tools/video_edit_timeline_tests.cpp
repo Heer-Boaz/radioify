@@ -1059,13 +1059,13 @@ int main() {
       playback_overlay::OverlayControlId::Chapters);
   ok &= expect(
       chaptersControl != analyzingChapterControls.end() &&
+          !chaptersControl->enabled &&
           chaptersControl->normalText.find("37%") == std::string::npos &&
           overlayActionForControl(
               playback_overlay::OverlayControlId::Chapters) ==
               playback_overlay::OverlayAction::ToggleChapterOverview,
       "chapter analysis progress must stay out of the timeline toolbar while "
-      "the overview remains directly reachable");
-  chapterControlState.chapterOverviewOpen = true;
+      "the content-only overview remains unavailable");
   chapterControlState.chapters.state =
       playback_video_chapters::AnalysisState::SetupRequired;
   const auto chapterSetupControls =
@@ -1073,14 +1073,11 @@ int main() {
   const auto installChapterModel = controlFor(
       chapterSetupControls,
       playback_overlay::OverlayControlId::ChapterInstall);
-  ok &= expect(
-      installChapterModel != chapterSetupControls.end() &&
-          installChapterModel->normalText.find("2.52 GB") !=
-              std::string::npos &&
-          overlayActionForControl(
-              playback_overlay::OverlayControlId::ChapterInstall) ==
-              playback_overlay::OverlayAction::InstallChapterModel,
-      "model setup must remain an explicit size-labelled chapter action");
+  ok &= expect(installChapterModel != chapterSetupControls.end() &&
+                   overlayActionForControl(
+                       playback_overlay::OverlayControlId::ChapterInstall) ==
+                       playback_overlay::OverlayAction::InstallChapterModel,
+               "model setup must remain an explicit chapter action");
   chapterControlState.chapters.state =
       playback_video_chapters::AnalysisState::Installing;
   const auto chapterInstallingControls =
@@ -1093,6 +1090,19 @@ int main() {
               playback_overlay::OverlayControlId::ChapterCancel) ==
               playback_overlay::OverlayAction::CancelChapterOperation,
       "an explicit chapter-model install must remain cancellable");
+  chapterControlState.chapters.state =
+      playback_video_chapters::AnalysisState::Failed;
+  const auto chapterFailedControls =
+      playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
+  const auto retryChapterAnalysis = controlFor(
+      chapterFailedControls, playback_overlay::OverlayControlId::ChapterRetry);
+  ok &= expect(retryChapterAnalysis != chapterFailedControls.end() &&
+                   retryChapterAnalysis->enabled &&
+                   overlayActionForControl(
+                       playback_overlay::OverlayControlId::ChapterRetry) ==
+                       playback_overlay::OverlayAction::RetryChapterAnalysis,
+               "a failed background analysis must remain visible and retryable "
+               "without opening an empty content panel");
   const auto mediaCancellationControls =
       playback_overlay::buildOverlayControlSpecs(playbackSuffixState, -1);
   ok &= expect(

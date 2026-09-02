@@ -58,6 +58,7 @@ enum class OverlayAction : std::uint8_t {
   ToggleChapterOverview,
   InstallChapterModel,
   CancelChapterOperation,
+  RetryChapterAnalysis,
 };
 
 using OverlayControlIntent =

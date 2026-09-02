@@ -28,10 +28,12 @@ class Service {
   Snapshot snapshot(RequestId requestId) const;
   bool requestInstallation(RequestId requestId);
   bool cancelInstallation(RequestId requestId);
+  bool retry(RequestId requestId);
 
   // Playback is the foreground GPU owner. False interrupts sparse decode and
-  // aborts native VLM inference; analysis later restarts from its durable
-  // cache.
+  // aborts native VLM inference. Native GPU allocations are released while
+  // validated, request-bound inference stages remain resumable in private
+  // backend state.
   void setBackgroundGpuAllowed(RequestId requestId, bool allowed);
 
   NativeWaitHandle changedWaitHandle() const;

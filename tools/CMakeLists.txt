@@ -67,6 +67,10 @@ radioify_add_module_object_library(radioify_tool_osd_timeline_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/osd_timeline_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_background_gpu_admission_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/background_gpu_admission_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_presentation_policy_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/presentation_policy_tests.cpp
 )
@@ -101,6 +105,10 @@ radioify_add_module_object_library(radioify_tool_chapter_analysis_tests
 
 radioify_add_module_object_library(radioify_tool_chapter_inference_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter_inference_tests.cpp
+)
+
+radioify_add_module_object_library(radioify_tool_chapter_inference_probe
+  ${CMAKE_CURRENT_SOURCE_DIR}/chapter_inference_probe.cpp
 )
 
 radioify_add_module_object_library(radioify_tool_chapter_service_tests

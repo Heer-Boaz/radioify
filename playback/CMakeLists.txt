@@ -17,6 +17,7 @@ radioify_add_module_object_library(radioify_playback
   ${CMAKE_CURRENT_SOURCE_DIR}/system_media_transport/host_window.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/system_media_transport/controls.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/session.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/session/background_gpu_admission.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/bootstrap.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/shutdown_sequence.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/session/context_menu_controller.cpp

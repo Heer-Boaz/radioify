@@ -78,33 +78,26 @@ std::string stateStatusLine(const Snapshot& snapshot) {
 
 std::vector<std::string> previewMetadata(const Snapshot& snapshot,
                                          std::int64_t targetUs) {
-  // Unsupported is a terminal capability result, not useful hover metadata.
-  // Returning no metadata lets the shared preview layout collapse to the
-  // existing frame-only popover instead of reserving an empty text column.
-  if (snapshot.state == AnalysisState::Unsupported) return {};
+  // A timeline hover exists to explain a generated marker. Capability,
+  // progress and failure states have no marker metadata and must preserve the
+  // existing frame-only preview geometry.
+  if (!snapshot.ready()) return {};
 
-  if (snapshot.ready()) {
-    const Chapter* chapter = chapterAt(snapshot, targetUs);
-    if (!chapter) return {};
-    const auto found = std::find_if(
-        snapshot.chapters.begin(), snapshot.chapters.end(),
-        [&](const Chapter& item) { return item.id == chapter->id; });
-    const std::size_t index =
-        found == snapshot.chapters.end()
-            ? 0
-            : static_cast<std::size_t>(
-                  std::distance(snapshot.chapters.begin(), found));
-    std::vector<std::string> lines;
-    lines.push_back("Chapter " + std::to_string(index + 1) + " of " +
-                    std::to_string(snapshot.chapters.size()) + " · " +
-                    chapter->title);
-    lines.push_back(rangeLabel(*chapter));
-    if (!chapter->summary.empty()) lines.push_back(chapter->summary);
-    return lines;
-  }
-
-  std::vector<std::string> lines{stateStatusLine(snapshot)};
-  if (!snapshot.detail.empty()) lines.push_back(snapshot.detail);
+  const Chapter* chapter = chapterAt(snapshot, targetUs);
+  if (!chapter) return {};
+  const auto found =
+      std::find_if(snapshot.chapters.begin(), snapshot.chapters.end(),
+                   [&](const Chapter& item) { return item.id == chapter->id; });
+  const std::size_t index = found == snapshot.chapters.end()
+                                ? 0
+                                : static_cast<std::size_t>(std::distance(
+                                      snapshot.chapters.begin(), found));
+  std::vector<std::string> lines;
+  lines.push_back("Chapter " + std::to_string(index + 1) + " of " +
+                  std::to_string(snapshot.chapters.size()) + " · " +
+                  chapter->title);
+  lines.push_back(rangeLabel(*chapter));
+  if (!chapter->summary.empty()) lines.push_back(chapter->summary);
   return lines;
 }
 
@@ -112,6 +105,8 @@ OverviewPanelLayout layoutOverviewPanel(const Snapshot& snapshot,
                                         int columns, int rows,
                                         int progressBarY) {
   OverviewPanelLayout out;
+  // The overview is a content surface, not an operation-status surface.
+  if (!snapshot.ready()) return out;
   const int availableBottom =
       std::clamp(progressBarY > 0 ? progressBarY - 1 : rows - 2, 3,
                  std::max(3, rows - 1));
@@ -135,9 +130,6 @@ OverviewPanelLayout layoutOverviewPanel(const Snapshot& snapshot,
   const int contentWidth = std::max(1, out.width - 4);
   out.lines.push_back("Video overview");
   out.lines.push_back(stateStatusLine(snapshot));
-  if (!snapshot.detail.empty() && !snapshot.ready()) {
-    appendWrapped(&out.lines, snapshot.detail, contentWidth, 2);
-  }
   if (!snapshot.overview.empty()) {
     out.lines.push_back({});
     appendWrapped(&out.lines, snapshot.overview, contentWidth,

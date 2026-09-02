@@ -23,14 +23,13 @@ namespace playback_video_chapters {
 namespace {
 
 constexpr const wchar_t* kPinnedRevision =
-    L"1bc3c9f74ceafd4c8d4411cc9cf188bba3798f91";
+    L"508edd0afaa66bb9e9f40587acc2184f02daf1f6";
 constexpr const wchar_t* kHost = L"huggingface.co";
 constexpr const wchar_t* kRepository =
-    L"/ggml-org/SmolVLM2-2.2B-Instruct-GGUF/resolve/";
-constexpr const wchar_t* kModelFile =
-    L"SmolVLM2-2.2B-Instruct-Q8_0.gguf";
+    L"/ggml-org/Qwen2.5-VL-7B-Instruct-GGUF/resolve/";
+constexpr const wchar_t* kModelFile = L"Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf";
 constexpr const wchar_t* kProjectorFile =
-    L"mmproj-SmolVLM2-2.2B-Instruct-Q8_0.gguf";
+    L"mmproj-Qwen2.5-VL-7B-Instruct-Q8_0.gguf";
 
 struct InternetHandle {
   HINTERNET value = nullptr;
@@ -246,7 +245,7 @@ InstallResult downloadOne(const std::filesystem::path& destination,
             static_cast<double>(completedBefore +
                                 std::min(received, expectedBytes)) /
             static_cast<double>(kModelDownloadBytes);
-        control.progress(progress, "Downloading SmolVLM2 2.2B Q8");
+        control.progress(progress, "Downloading Qwen2.5-VL 7B");
       }
       if (received > expectedBytes) {
         result.detail = "The chapter-model download exceeded its fixed size.";
@@ -307,8 +306,8 @@ InstallResult downloadOne(const std::filesystem::path& destination,
 
 ModelPaths resolveModelPaths() {
   ModelPaths paths;
-  paths.directory = radioifyWritableDataDir() / "models" /
-                    "smolvlm2-2.2b-instruct-q8";
+  paths.directory =
+      radioifyWritableDataDir() / "models" / "qwen2.5-vl-7b-instruct-q4-k-m";
   paths.model = paths.directory / kModelFile;
   paths.projector = paths.directory / kProjectorFile;
   return paths;
@@ -317,7 +316,7 @@ ModelPaths resolveModelPaths() {
 CapabilityResult inspectModelArtifacts(const ModelPaths& paths,
                                        const OperationControl& control) {
   if (control.progress) {
-    control.progress(std::nullopt, "Verifying SmolVLM2 model");
+    control.progress(std::nullopt, "Verifying Qwen2.5-VL model");
   }
   std::string error;
   const bool modelReady =
@@ -334,7 +333,7 @@ CapabilityResult inspectModelArtifacts(const ModelPaths& paths,
   if (gpuRevoked(control)) return {CapabilityState::Yielded, {}};
   if (!modelReady || !projectorReady) {
     return {CapabilityState::SetupRequired,
-            "Install the verified 2.52 GB SmolVLM2 model to enable automatic "
+            "Install the verified 5.54 GB Qwen2.5-VL model to enable automatic "
             "video chapters."};
   }
   return {CapabilityState::Ready, {}};
