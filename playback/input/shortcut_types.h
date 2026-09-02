@@ -64,6 +64,8 @@ enum class PlaybackAction : uint8_t {
   Stop,
   Previous,
   Next,
+  PreviousChapter,
+  NextChapter,
   ToggleWindow,
   ToggleFullscreen,
   ToggleRadio,

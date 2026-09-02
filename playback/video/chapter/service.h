@@ -30,7 +30,8 @@ class Service {
   bool cancelInstallation(RequestId requestId);
 
   // Playback is the foreground GPU owner. False interrupts sparse decode and
-  // terminates the VLM helper; analysis later restarts from its durable cache.
+  // aborts native VLM inference; analysis later restarts from its durable
+  // cache.
   void setBackgroundGpuAllowed(RequestId requestId, bool allowed);
 
   NativeWaitHandle changedWaitHandle() const;

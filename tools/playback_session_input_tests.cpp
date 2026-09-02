@@ -110,6 +110,16 @@ int main() {
                "independent from transport state");
 
   session.clear();
+  playback_session_input::handlePlaybackInputEvent(
+      session, seekState, keyEvent(VK_RIGHT, 0, LEFT_CTRL_PRESSED));
+  ok &= expect(
+      session.containsType<
+          playback_session_input::ChapterNavigationRequest>() &&
+          !session.containsType<playback_session_input::TransportRequest>(),
+      "Ctrl+Right must request chapter navigation without falling back to "
+      "playlist transport");
+
+  session.clear();
   session.state.pictureInPicture = true;
   playback_session_input::handlePlaybackInputEvent(
       session, seekState, keyEvent('P', 'p'));

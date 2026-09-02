@@ -33,11 +33,17 @@
 #pragma warning(push)
 #pragma warning(disable : 4100 4189 4244 4245 4267 4456 4458 4996)
 #endif
+// miniaudio's implementation-only fallback lock has external linkage even
+// when another consumer embeds miniaudio with MA_API=static. Namespace the
+// Radioify instance so independently packaged libraries cannot violate the
+// one-definition rule when linked into the same executable.
+#define ma_atomic_global_lock radioify_miniaudio_atomic_global_lock
 #define MINIAUDIO_IMPLEMENTATION
 #define MA_ENABLE_WAV
 #define MA_ENABLE_MP3
 #define MA_ENABLE_FLAC
 #include "miniaudio.h"
+#undef ma_atomic_global_lock
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif

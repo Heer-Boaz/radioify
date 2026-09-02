@@ -1039,6 +1039,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         break;
       case PlaybackAction::ToggleSubtitles:
       case PlaybackAction::ToggleAudioTrack:
+      case PlaybackAction::PreviousChapter:
+      case PlaybackAction::NextChapter:
       case PlaybackAction::PreviousFrame:
       case PlaybackAction::NextFrame:
       case PlaybackAction::CopyVideoFrame:

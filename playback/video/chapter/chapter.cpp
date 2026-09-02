@@ -67,6 +67,26 @@ const Chapter* chapterAt(const Snapshot& snapshot, std::int64_t positionUs) {
   return positionUs < chapter.endUs ? &chapter : nullptr;
 }
 
+std::optional<std::int64_t> navigationTarget(
+    const Snapshot& snapshot, std::int64_t positionUs,
+    NavigationDirection direction) {
+  const Chapter* current = chapterAt(snapshot, positionUs);
+  if (!current) return std::nullopt;
+  auto found = std::find_if(
+      snapshot.chapters.begin(), snapshot.chapters.end(),
+      [&](const Chapter& chapter) { return chapter.id == current->id; });
+  if (found == snapshot.chapters.end()) return std::nullopt;
+  if (direction == NavigationDirection::Previous) {
+    return found == snapshot.chapters.begin()
+               ? std::nullopt
+               : std::optional<std::int64_t>((found - 1)->startUs);
+  }
+  ++found;
+  return found == snapshot.chapters.end()
+             ? std::nullopt
+             : std::optional<std::int64_t>(found->startUs);
+}
+
 MarkerProjection projectMarkers(const Snapshot& snapshot, int units) {
   MarkerProjection projection;
   if (!snapshot.ready() || snapshot.durationUs <= 0 || units <= 0) {

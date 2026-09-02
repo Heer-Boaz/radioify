@@ -359,20 +359,33 @@ int main() {
                        kPlaybackShortcutContextImageViewer)
                    .value() == PlaybackAction::SeekForward,
                "Image viewer must inherit the shared bare-arrow seek layer");
+  ok &= expect(!resolvePlaybackAction(
+                   makeKey(VK_LEFT, 0, kPlaybackShortcutCtrlMask),
+                   kPlaybackShortcutContextGlobal |
+                       kPlaybackShortcutContextShared |
+                       kPlaybackShortcutContextImageViewer) &&
+                   !resolvePlaybackAction(
+                       makeKey(VK_RIGHT, 0, kPlaybackShortcutCtrlMask),
+                       kPlaybackShortcutContextGlobal |
+                           kPlaybackShortcutContextShared |
+                           kPlaybackShortcutContextImageViewer),
+               "chapter navigation must not leak into the image viewer");
   ok &= expect(resolvePlaybackAction(
                    makeKey(VK_LEFT, 0, kPlaybackShortcutCtrlMask),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared |
-                       kPlaybackShortcutContextImageViewer)
-                   .value() == PlaybackAction::Previous,
-               "Ctrl+VK_LEFT must navigate to the previous item");
-  ok &= expect(resolvePlaybackAction(
-                   makeKey(VK_RIGHT, 0, kPlaybackShortcutCtrlMask),
-                   kPlaybackShortcutContextGlobal |
-                       kPlaybackShortcutContextShared |
-                       kPlaybackShortcutContextImageViewer)
-                   .value() == PlaybackAction::Next,
-               "Ctrl+VK_RIGHT must navigate to the next item");
+                       kPlaybackShortcutContextPlaybackSession |
+                       kPlaybackShortcutContextVideoPlayback)
+                   .value() == PlaybackAction::PreviousChapter &&
+                   resolvePlaybackAction(
+                       makeKey(VK_RIGHT, 0, kPlaybackShortcutCtrlMask),
+                       kPlaybackShortcutContextGlobal |
+                           kPlaybackShortcutContextShared |
+                           kPlaybackShortcutContextPlaybackSession |
+                           kPlaybackShortcutContextVideoPlayback)
+                           .value() == PlaybackAction::NextChapter,
+               "Ctrl+Left/Right must match YouTube chapter navigation in "
+               "video playback");
   ok &= expect(!resolvePlaybackAction(
                    makeKey(VK_OEM_PERIOD, '.'),
                    kPlaybackShortcutContextGlobal |

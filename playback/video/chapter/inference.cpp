@@ -18,6 +18,7 @@
 #include <ggml-backend.h>
 #include <llama.h>
 #include <mtmd.h>
+#include <mtmd-helper.h>
 
 #include "core/utf8.h"
 
@@ -171,7 +172,7 @@ class ProcessRuntime final {
  public:
   ProcessRuntime() {
     llama_log_set(&discardLog, nullptr);
-    mtmd_log_set(&discardLog, nullptr);
+    mtmd_helper_log_set(&discardLog, nullptr);
     llama_backend_init();
   }
 
@@ -194,22 +195,6 @@ using ChunksPtr =
     std::unique_ptr<mtmd_input_chunks, decltype(&mtmd_input_chunks_free)>;
 using SamplerPtr =
     std::unique_ptr<llama_sampler, decltype(&llama_sampler_free)>;
-
-class Batch final {
- public:
-  explicit Batch(int32_t capacity)
-      : value_(llama_batch_init(capacity, 0, 1)) {}
-  ~Batch() { llama_batch_free(value_); }
-
-  Batch(const Batch&) = delete;
-  Batch& operator=(const Batch&) = delete;
-
-  llama_batch* operator->() { return &value_; }
-  llama_batch& get() { return value_; }
-
- private:
-  llama_batch value_{};
-};
 
 std::string pathUtf8(const std::filesystem::path& path) {
 #if defined(_WIN32)
@@ -269,170 +254,6 @@ std::optional<std::string> tokenPiece(const llama_vocab* vocab,
   return std::string(expanded.data(), static_cast<std::size_t>(length));
 }
 
-std::size_t totalChunkTokens(const mtmd_input_chunks* chunks) {
-  std::size_t total = 0;
-  if (!chunks) return total;
-  for (std::size_t index = 0; index < mtmd_input_chunks_size(chunks);
-       ++index) {
-    const mtmd_input_chunk* chunk = mtmd_input_chunks_get(chunks, index);
-    const std::size_t count = chunk ? mtmd_input_chunk_get_n_tokens(chunk) : 0;
-    if (count > (std::numeric_limits<std::size_t>::max)() - total) return 0;
-    total += count;
-  }
-  return total;
-}
-
-std::size_t totalChunkPositions(const mtmd_input_chunks* chunks) {
-  std::size_t total = 0;
-  if (!chunks) return total;
-  for (std::size_t index = 0; index < mtmd_input_chunks_size(chunks);
-       ++index) {
-    const mtmd_input_chunk* chunk = mtmd_input_chunks_get(chunks, index);
-    const llama_pos count = chunk ? mtmd_input_chunk_get_n_pos(chunk) : 0;
-    if (count <= 0 || static_cast<std::size_t>(count) >
-                          (std::numeric_limits<std::size_t>::max)() - total) {
-      return 0;
-    }
-    total += static_cast<std::size_t>(count);
-  }
-  return total;
-}
-
-int32_t evaluateTextChunk(llama_context* context,
-                          const mtmd_input_chunk* chunk, llama_pos* nPast,
-                          bool logitsLast, int32_t nBatch,
-                          const OperationControl& control) {
-  if (!context || !chunk || !nPast || nBatch <= 0) return -1;
-  std::size_t tokenCount = 0;
-  const llama_token* tokens =
-      mtmd_input_chunk_get_tokens_text(chunk, &tokenCount);
-  if (!tokens || tokenCount == 0) return -1;
-  Batch batch(nBatch);
-  if (!batch->token || !batch->pos || !batch->n_seq_id ||
-      !batch->seq_id || !batch->logits) {
-    return -1;
-  }
-  std::size_t offset = 0;
-  while (offset < tokenCount) {
-    if (!continueOperation(control)) return 2;
-    batch->n_tokens = 0;
-    while (offset < tokenCount && batch->n_tokens < nBatch) {
-      const int32_t index = batch->n_tokens++;
-      batch->token[index] = tokens[offset++];
-      batch->pos[index] = (*nPast)++;
-      batch->n_seq_id[index] = 1;
-      batch->seq_id[index][0] = 0;
-      batch->logits[index] = 0;
-    }
-    if (logitsLast && offset == tokenCount) {
-      batch->logits[batch->n_tokens - 1] = 1;
-    }
-    const int32_t decoded = llama_decode(context, batch.get());
-    if (decoded != 0) return decoded;
-  }
-  return 0;
-}
-
-int32_t evaluateImageChunk(mtmd_context* vision, llama_context* context,
-                           const mtmd_input_chunk* chunk, llama_pos* nPast,
-                           int32_t nBatch,
-                           const OperationControl& control) {
-  if (!vision || !context || !chunk || !nPast || nBatch <= 0 ||
-      mtmd_input_chunk_get_type(chunk) != MTMD_INPUT_CHUNK_TYPE_IMAGE) {
-    return -1;
-  }
-  if (!continueOperation(control)) return 2;
-  if (mtmd_encode_chunk(vision, chunk) != 0) return 1;
-  if (!continueOperation(control)) return 2;
-
-  float* embeddings = mtmd_get_output_embd(vision);
-  const std::size_t tokenCount = mtmd_input_chunk_get_n_tokens(chunk);
-  const int32_t embeddingSize =
-      llama_model_n_embd_inp(llama_get_model(context));
-  if (!embeddings || tokenCount == 0 ||
-      tokenCount > static_cast<std::size_t>(INT32_MAX) || embeddingSize <= 0) {
-    return -1;
-  }
-
-  const bool mrope = mtmd_decode_use_mrope(vision);
-  const std::size_t positionDimensions = mrope ? 4u : 1u;
-  if (tokenCount > (std::numeric_limits<std::size_t>::max)() /
-                       positionDimensions) {
-    return -1;
-  }
-  std::vector<llama_pos> positions(tokenCount * positionDimensions);
-  std::vector<int32_t> sequenceCounts(tokenCount, 1);
-  std::vector<llama_seq_id> sequenceZero(1, 0);
-  std::vector<llama_seq_id*> sequences(tokenCount, sequenceZero.data());
-  std::vector<int8_t> logits(tokenCount, 0);
-
-  if (mrope) {
-    const mtmd_image_tokens* imageTokens =
-        mtmd_input_chunk_get_tokens_image(chunk);
-    if (!imageTokens) return -1;
-    const std::size_t width = mtmd_image_tokens_get_nx(imageTokens);
-    const std::size_t height = mtmd_image_tokens_get_ny(imageTokens);
-    if (width == 0 || height == 0 || width > tokenCount / height ||
-        width * height != tokenCount) {
-      return -1;
-    }
-    for (std::size_t y = 0; y < height; ++y) {
-      for (std::size_t x = 0; x < width; ++x) {
-        const std::size_t index = y * width + x;
-        positions[index] = *nPast;
-        positions[index + tokenCount] =
-            *nPast + static_cast<llama_pos>(y);
-        positions[index + tokenCount * 2u] =
-            *nPast + static_cast<llama_pos>(x);
-        positions[index + tokenCount * 3u] = 0;
-      }
-    }
-  } else {
-    for (std::size_t index = 0; index < tokenCount; ++index) {
-      positions[index] = *nPast + static_cast<llama_pos>(index);
-    }
-  }
-
-  const bool nonCausal = mtmd_decode_use_non_causal(vision);
-  if (nonCausal) llama_set_causal_attn(context, false);
-  struct CausalRestore {
-    llama_context* context = nullptr;
-    bool restore = false;
-    ~CausalRestore() {
-      if (context && restore) llama_set_causal_attn(context, true);
-    }
-  } causalRestore{context, nonCausal};
-
-  for (std::size_t offset = 0; offset < tokenCount;) {
-    if (!continueOperation(control)) return 2;
-    const int32_t count = static_cast<int32_t>(std::min<std::size_t>(
-        static_cast<std::size_t>(nBatch), tokenCount - offset));
-    std::vector<llama_pos> positionView;
-    llama_pos* batchPositions = positions.data() + offset;
-    if (mrope) {
-      positionView.reserve(static_cast<std::size_t>(count) * 4u);
-      for (std::size_t dimension = 0; dimension < 4u; ++dimension) {
-        const llama_pos* begin =
-            positions.data() + dimension * tokenCount + offset;
-        positionView.insert(positionView.end(), begin, begin + count);
-      }
-      batchPositions = positionView.data();
-    }
-    llama_batch batch{};
-    batch.n_tokens = count;
-    batch.embd = embeddings + offset * static_cast<std::size_t>(embeddingSize);
-    batch.pos = batchPositions;
-    batch.n_seq_id = sequenceCounts.data() + offset;
-    batch.seq_id = sequences.data() + offset;
-    batch.logits = logits.data() + offset;
-    const int32_t decoded = llama_decode(context, batch);
-    if (decoded != 0) return decoded;
-    offset += static_cast<std::size_t>(count);
-  }
-  *nPast += mtmd_input_chunk_get_n_pos(chunk);
-  return 0;
-}
-
 int32_t evaluateChunks(mtmd_context* vision, llama_context* context,
                        const mtmd_input_chunks* chunks, llama_pos* nPast,
                        int32_t nBatch, const OperationControl& control) {
@@ -440,17 +261,12 @@ int32_t evaluateChunks(mtmd_context* vision, llama_context* context,
   const std::size_t count = mtmd_input_chunks_size(chunks);
   if (count == 0) return -1;
   for (std::size_t index = 0; index < count; ++index) {
+    if (!continueOperation(control)) return 2;
     const mtmd_input_chunk* chunk = mtmd_input_chunks_get(chunks, index);
     if (!chunk) return -1;
-    const mtmd_input_chunk_type type = mtmd_input_chunk_get_type(chunk);
-    int32_t evaluated = -1;
-    if (type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
-      evaluated = evaluateTextChunk(context, chunk, nPast,
-                                    index + 1u == count, nBatch, control);
-    } else if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
-      evaluated = evaluateImageChunk(vision, context, chunk, nPast, nBatch,
-                                     control);
-    }
+    const int32_t evaluated = mtmd_helper_eval_chunk_single(
+        vision, context, chunk, *nPast, 0, nBatch, index + 1u == count,
+        nPast);
     if (evaluated != 0) return evaluated;
   }
   return 0;
@@ -707,10 +523,10 @@ InferenceResult InferenceEngine::run(const InferenceRequest& request,
             "sheet.",
             {}};
   }
-  const std::size_t promptTokens = totalChunkTokens(chunks.get());
-  const std::size_t promptPositions = totalChunkPositions(chunks.get());
-  if (promptTokens == 0 || promptPositions == 0 ||
-      promptPositions >= actualContextTokens) {
+  const std::size_t promptTokens = mtmd_helper_get_n_tokens(chunks.get());
+  const llama_pos promptPositions = mtmd_helper_get_n_pos(chunks.get());
+  if (promptTokens == 0 || promptPositions <= 0 ||
+      static_cast<std::uint64_t>(promptPositions) >= actualContextTokens) {
     return {OperationStatus::Failed,
             "The chapter prompt does not fit in the fixed inference context.",
             {}};

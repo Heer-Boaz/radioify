@@ -8,6 +8,7 @@
 #include "playback/overlay/interaction.h"
 #include "playback/session/context_menu_controller.h"
 #include "playback/session/input_transport.h"
+#include "playback/video/chapter/chapter.h"
 #include "playback/video/edit/view.h"
 #include "playback/video/timeline_preview_types.h"
 
@@ -73,6 +74,11 @@ struct TransportRequest {
   PlaybackTransportCommand command = PlaybackTransportCommand::Next;
 };
 
+struct ChapterNavigationRequest {
+  playback_video_chapters::NavigationDirection direction =
+      playback_video_chapters::NavigationDirection::Next;
+};
+
 struct VideoEditRequest {
   playback_video_edit::Command command = playback_video_edit::Command::Open;
 };
@@ -104,7 +110,8 @@ struct ClearTimelinePreview {
 };
 
 using Command =
-    std::variant<CommandAction, TransportRequest, VideoEditRequest,
+    std::variant<CommandAction, TransportRequest, ChapterNavigationRequest,
+                 VideoEditRequest,
                  ContextMenuRequest, MoveVideoEditBoundary,
                  PlaybackExitRequest, TimelinePreviewRequest,
                  ClearTimelinePreview, ShowPlaybackControls,

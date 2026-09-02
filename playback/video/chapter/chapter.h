@@ -58,6 +58,18 @@ bool validatePartition(std::int64_t durationUs,
 
 const Chapter* chapterAt(const Snapshot& snapshot, std::int64_t positionUs);
 
+enum class NavigationDirection : std::uint8_t {
+  Previous,
+  Next,
+};
+
+// Resolves chapter navigation against the immutable partition. Returning no
+// target is intentional at either edge and while analysis is not ready; input
+// routing must never fall back to playlist navigation for the same gesture.
+std::optional<std::int64_t> navigationTarget(
+    const Snapshot& snapshot, std::int64_t positionUs,
+    NavigationDirection direction);
+
 // Projects interior chapter boundaries into renderer addressable units.
 // Multiple boundaries that collapse onto one unit are reported once in
 // boundaryCells and separately in collisionCells so a renderer can use a

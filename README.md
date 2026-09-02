@@ -56,12 +56,14 @@ for presentation; visual analysis still works without them.
 
 The inference backend links the vcpkg-baseline-pinned `llama` and `libmtmd`
 libraries directly. Their native objects live behind one RAII-owned Radioify
-adapter; the D3D11-decoded RGB contact sheet stays in memory, and generation is
-constrained with llama.cpp's JSON grammar before Radioify validates the typed
-chapter domain object. No CLI executable, command-line protocol, temporary PNG,
-or diagnostic-log parsing participates in inference. Because llama.cpp marks
-`libmtmd` experimental, its version is pinned at the build boundary rather than
-allowed to drift at runtime. The model and projector come directly from the Apache-2.0-licensed
+adapter; libmtmd's published helper API owns multimodal batching, M-RoPE
+positions, and `llama_decode` orchestration instead of duplicating that vendor
+logic in Radioify. The D3D11-decoded RGB contact sheet stays in memory, and
+generation is constrained with llama.cpp's JSON grammar before Radioify
+validates the typed chapter domain object. No CLI executable, command-line
+protocol, temporary PNG, or diagnostic-log parsing participates in inference.
+Because llama.cpp marks `libmtmd` experimental, its version is pinned at the
+build boundary rather than allowed to drift at runtime. The model and projector come directly from the Apache-2.0-licensed
 [ggml-org SmolVLM2 repository](https://huggingface.co/ggml-org/SmolVLM2-2.2B-Instruct-GGUF)
 at a fixed revision and are accepted only at their compiled-in sizes and
 SHA-256 hashes.
@@ -235,16 +237,17 @@ to the browser.
   framebuffer presentation. Hovering anywhere on that timeline keeps the
   existing preview frame and adds the chapter title, time range, and summary;
   setup or analysis progress appears in that popover and overview, never next
-  to the progress bar.
+  to the progress bar. Permanently unsupported analysis leaves the hover
+  preview frame-only instead of reserving an unusable metadata panel.
 - Enter: open folder / play file
 - Backspace: up
 - Arrows: move selection
 - PgUp/PgDn: page
 - Space or Media Play/Pause: pause/resume
 - Media Previous/Next: previous/next track
+- Ctrl+Left/Right: previous/next video chapter (when chapters are ready)
 - Media Stop: stop playback
 - Left/Right or [ ]: seek +/-5s
-- Ctrl+Left/Right: previous/next track
 - , / .: previous/next video frame
 - F1: open command menu / command palette
 - Shift+S: copy the current rendered video frame (including subtitles) to the clipboard

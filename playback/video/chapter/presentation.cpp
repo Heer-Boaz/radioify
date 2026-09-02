@@ -78,6 +78,11 @@ std::string stateStatusLine(const Snapshot& snapshot) {
 
 std::vector<std::string> previewMetadata(const Snapshot& snapshot,
                                          std::int64_t targetUs) {
+  // Unsupported is a terminal capability result, not useful hover metadata.
+  // Returning no metadata lets the shared preview layout collapse to the
+  // existing frame-only popover instead of reserving an empty text column.
+  if (snapshot.state == AnalysisState::Unsupported) return {};
+
   if (snapshot.ready()) {
     const Chapter* chapter = chapterAt(snapshot, targetUs);
     if (!chapter) return {};

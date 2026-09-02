@@ -271,14 +271,14 @@ inline constexpr std::array<PlaybackShortcutBinding, 63>
          kPlaybackShortcutContextShared, {},
          ShortcutRepeatPolicy::InitialPressOnly,
          PlaybackShortcutScope::SystemMedia},
-        // Shared navigation layer:
-        //   - Left/Right arrows seek within the current item.
-        //   - Ctrl+Left/Right move to the previous/next item in the playlist.
-        {PlaybackAction::Previous, VK_LEFT, 0, 0,
+        // YouTube-compatible video chapter navigation. Playlist transport is
+        // still available through the dedicated media Previous/Next keys.
+        {PlaybackAction::PreviousChapter, VK_LEFT, 0, 0,
          kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
-         kPlaybackShortcutContextShared},
-        {PlaybackAction::Next, VK_RIGHT, 0, 0, kPlaybackShortcutCtrlMask,
-         kPlaybackShortcutChordForbiddenMask, kPlaybackShortcutContextShared},
+         kPlaybackShortcutContextVideoPlayback},
+        {PlaybackAction::NextChapter, VK_RIGHT, 0, 0,
+         kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
+         kPlaybackShortcutContextVideoPlayback},
         {PlaybackAction::ToggleWindow, 'W', 'w', 'W',
          kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
          kPlaybackShortcutContextShared, "Ctrl+W"},
@@ -518,6 +518,8 @@ resolveLiveBrowserVideoShortcut(const InputEvent& event) {
     case PlaybackAction::Stop:
     case PlaybackAction::Previous:
     case PlaybackAction::Next:
+    case PlaybackAction::PreviousChapter:
+    case PlaybackAction::NextChapter:
     case PlaybackAction::ToggleWindow:
     case PlaybackAction::ToggleFullscreen:
     case PlaybackAction::ToggleRadio:

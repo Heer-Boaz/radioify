@@ -171,6 +171,15 @@ void sendRelativeSeekRequest(SessionPort& session,
   markSeekSent(session, seekState);
 }
 
+bool requestChapterNavigation(
+    SessionPort& session, PlaybackSeekGestureState& seekState,
+    playback_video_chapters::NavigationDirection direction) {
+  commitQueuedSeek(session, seekState);
+  if (!session.dispatch(ChapterNavigationRequest{direction})) return false;
+  markSeekSent(session, seekState);
+  return true;
+}
+
 bool toggleRequestedLayout(SessionPort& session) {
   return session.dispatch(CommandAction::ToggleWindowPresentation);
 }
@@ -354,6 +363,16 @@ InputPresentationFeedback dispatchPlaybackInputCommand(
       return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::Next:
       requestTransport(session, PlaybackTransportCommand::Next);
+      return InputPresentationFeedback::RefreshOverlay;
+    case PlaybackAction::PreviousChapter:
+      requestChapterNavigation(
+          session, seekState,
+          playback_video_chapters::NavigationDirection::Previous);
+      return InputPresentationFeedback::RefreshOverlay;
+    case PlaybackAction::NextChapter:
+      requestChapterNavigation(
+          session, seekState,
+          playback_video_chapters::NavigationDirection::Next);
       return InputPresentationFeedback::RefreshOverlay;
     case PlaybackAction::ToggleWindow:
       toggleRequestedLayout(session);

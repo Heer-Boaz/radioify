@@ -1000,6 +1000,17 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     return requestTransportExit(request.command);
   }
 
+  bool executeInputCommand(
+      playback_session_input::ChapterNavigationRequest request) {
+    const playback_session_input::TransportSnapshot transport =
+        core.snapshot();
+    const std::optional<std::int64_t> target =
+        playback_video_chapters::navigationTarget(
+            chapterSnapshot, transport.positionUs, request.direction);
+    return target && executeInputCommand(
+                         playback_session_input::SeekTo{*target});
+  }
+
   bool executeInputCommand(playback_session_input::VideoEditRequest request) {
     return executeVideoEditCommand(request.command);
   }

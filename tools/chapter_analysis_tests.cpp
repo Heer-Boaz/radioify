@@ -64,6 +64,17 @@ bool runChapterDomainTests() {
                    chapterAt(snapshot, 20'000'000) == &snapshot.chapters[1] &&
                    chapterAt(snapshot, 59'999'999) == &snapshot.chapters[2],
                "hover lookup must use half-open chapter intervals");
+  ok &= expect(
+      !navigationTarget(snapshot, 10'000'000,
+                        NavigationDirection::Previous) &&
+          navigationTarget(snapshot, 25'000'000,
+                           NavigationDirection::Previous) == 0 &&
+          navigationTarget(snapshot, 25'000'000,
+                           NavigationDirection::Next) == 40'000'000 &&
+          !navigationTarget(snapshot, 50'000'000,
+                            NavigationDirection::Next),
+      "chapter navigation must move between adjacent sections without an "
+      "edge fallback");
 
   const MarkerProjection markers = projectMarkers(snapshot, 7);
   ok &= expect(markers.boundaryCells == std::vector<int>({2, 4}) &&
@@ -89,7 +100,28 @@ bool runChapterDomainTests() {
                    progressMetadata.front().find("37%") != std::string::npos,
                "analysis progress must project into the hover popover");
 
+  snapshot.state = AnalysisState::Unsupported;
+  snapshot.progress.reset();
+  snapshot.phase.clear();
+  snapshot.detail = "D3D11 hardware decoding is unavailable.";
+  ok &= expect(previewMetadata(snapshot, 10'000'000).empty(),
+               "unsupported analysis must preserve the frame-only hover "
+               "preview without an empty metadata panel");
+  const auto unsupportedPreview =
+      playback_video_timeline_preview::layoutCells(
+          120, 30, 25, 1, 118, 0.5, 1920, 1080, 9.0, 21.0,
+          "00:10", previewMetadata(snapshot, 10'000'000));
+  ok &= expect(
+      unsupportedPreview.drawable() &&
+          unsupportedPreview.metadataPlacement ==
+              playback_video_timeline_preview::CellLayout::MetadataPlacement::
+                  None &&
+          unsupportedPreview.metadataWidth == 0 &&
+          unsupportedPreview.metadataHeight == 0,
+      "unsupported analysis must not reserve hover layout space for text");
+
   snapshot.state = AnalysisState::Ready;
+  snapshot.detail.clear();
   snapshot.progress.reset();
   snapshot.overview = "A compact overview of the video.";
   snapshot.chapters = chapters;
