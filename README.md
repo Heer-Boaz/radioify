@@ -332,6 +332,12 @@ to the browser.
   metadata wraps to the responsive panel width. Until usable chapter content
   exists, the overview stays closed and the hover preview remains frame-only
   instead of reserving an empty status panel.
+- Right-click the active video to start chapter analysis manually, inspect a
+  failure, approve model installation, or cancel/retry the current request.
+  The same typed actions are exposed in terminal and framebuffer playback.
+  While analysis runs, its context-menu action reports the current phase or
+  progress without taking permanent toolbar space. `--no-automatic-chapters`
+  disables only the automatic trigger; manual analysis remains available.
 - Enter: open folder / play file
 - Backspace: up
 - Arrows: move selection

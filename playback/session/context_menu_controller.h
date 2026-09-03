@@ -9,13 +9,15 @@
 
 #include "playback/media_action_catalog.h"
 #include "playback/overlay/context_menu.h"
+#include "playback/video/chapter/action_catalog.h"
 #include "playback/video/edit/command.h"
 #include "playback/video/edit/view.h"
 
 namespace playback_session {
 
 using ContextMenuCommand =
-    std::variant<playback_media_actions::Action, playback_video_edit::Command>;
+    std::variant<playback_media_actions::Action, playback_video_edit::Command,
+                 playback_video_chapters::Action>;
 
 enum class ContextMenuSurface : uint8_t {
   Terminal,
@@ -44,14 +46,15 @@ struct ContextMenuInput {
   int64_t timelineToleranceUs = 0;
 };
 
-// Owns only popup presentation state. Edit decisions and command execution
-// stay with the video-edit workspace.
+// Owns only popup presentation state. Media, chapter, and edit decisions and
+// command execution stay with their respective session/domain owners.
 class ContextMenuController {
  public:
   bool visible() const { return visible_; }
   void refresh(const playback_video_edit::EditSnapshot& edit,
                const playback_video_edit::ExportProgress& editExport,
-               playback_media_actions::Context sourceContext);
+               playback_media_actions::Context sourceContext,
+               const playback_video_chapters::ActionContext& chapterContext);
   bool open(ContextMenuSurface surface, double xRatio, double yRatio);
   bool dismiss();
   bool moveSelection(int delta);

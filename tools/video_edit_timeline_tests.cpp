@@ -1783,7 +1783,11 @@ int main() {
   playbackSourceContext.canGenerateSubtitles = true;
   playback_video_edit::EditSnapshot cleanEdit;
   playback_video_edit::ExportProgress idleExport;
-  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
+  playback_video_chapters::Snapshot chapterSnapshot;
+  chapterSnapshot.state = playback_video_chapters::AnalysisState::Disabled;
+  playback_video_chapters::ActionContext chapterContext{chapterSnapshot};
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext,
+                       chapterContext);
   ok &= expect(playbackMenu.open(playback_session::ContextMenuSurface::Terminal,
                                  0.25, 0.75),
                "ordinary playback must expose an explicit edit command");
@@ -1791,24 +1795,94 @@ int main() {
       playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
   const auto windowMenu = playbackMenu.snapshotFor(
       playback_session::ContextMenuSurface::VideoWindow);
-  ok &= expect(terminalMenu.visible && terminalMenu.items.size() == 2 &&
+  ok &= expect(terminalMenu.visible && terminalMenu.items.size() == 3 &&
                    terminalMenu.items[0].label == "Edit video" &&
                    terminalMenu.items[1].label == "Generate transcript..." &&
+                   terminalMenu.items[2].label == "Analyze video chapters" &&
                    terminalMenu.items[0].token != 0 &&
                    terminalMenu.items[1].token != 0 &&
+                   terminalMenu.items[2].token != 0 &&
                    terminalMenu.items[0].token != terminalMenu.items[1].token &&
                    !windowMenu.visible,
                "a playback context menu must expose unique opaque source "
                "action identities on exactly one presentation surface");
+  const auto startChapterToken = terminalMenu.items[2].token;
+  const auto startChapterCommand = playbackMenu.activate(startChapterToken);
+  const auto *startChapterAction =
+      startChapterCommand
+          ? std::get_if<playback_video_chapters::Action>(
+                &*startChapterCommand)
+          : nullptr;
+  ok &= expect(startChapterAction &&
+                   *startChapterAction ==
+                       playback_video_chapters::Action::StartAnalysis,
+               "the chapter menu item must dispatch a typed chapter action");
+  playbackMenu.open(playback_session::ContextMenuSurface::Terminal, 0.25,
+                    0.75);
+  chapterContext.requestActive = true;
+  chapterSnapshot.state = playback_video_chapters::AnalysisState::Analyzing;
+  chapterSnapshot.progress = 0.37;
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext,
+                       chapterContext);
+  const auto runningChapterMenu =
+      playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
+  const auto cancelChapterItem =
+      std::find_if(runningChapterMenu.items.begin(),
+                   runningChapterMenu.items.end(), [](const auto &item) {
+                     return item.label == "Cancel chapter analysis (37%)";
+                   });
+  const auto cancelChapterCommand =
+      cancelChapterItem != runningChapterMenu.items.end()
+          ? playbackMenu.activate(cancelChapterItem->token)
+          : std::nullopt;
+  const auto *cancelChapterAction =
+      cancelChapterCommand
+          ? std::get_if<playback_video_chapters::Action>(
+                &*cancelChapterCommand)
+          : nullptr;
+  ok &= expect(cancelChapterAction &&
+                   *cancelChapterAction ==
+                       playback_video_chapters::Action::CancelAnalysis,
+               "a running chapter job must be visible and cancellable from "
+               "the active-video context menu without taking toolbar space");
+  playbackMenu.open(playback_session::ContextMenuSurface::Terminal, 0.25,
+                    0.75);
+  chapterSnapshot.state = playback_video_chapters::AnalysisState::Unsupported;
+  chapterSnapshot.progress.reset();
+  chapterSnapshot.detail = "Required runtime is unavailable.";
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext,
+                       chapterContext);
+  const auto unsupportedChapterMenu =
+      playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
+  ok &= expect(
+      std::any_of(unsupportedChapterMenu.items.begin(),
+                  unsupportedChapterMenu.items.end(), [](const auto &item) {
+                    return item.label == "Chapter analysis unavailable";
+                  }) &&
+          unsupportedChapterMenu.items.size() == 3,
+      "an unsupported request must remain diagnosable without presenting a "
+      "retry that cannot change its prerequisites");
+  chapterContext.requestActive = false;
+  chapterSnapshot = {};
+  chapterSnapshot.state = playback_video_chapters::AnalysisState::Disabled;
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext,
+                       chapterContext);
+  const auto restoredChapterMenu =
+      playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
+  ok &= expect(restoredChapterMenu.items[2].token == startChapterToken,
+               "chapter command identity must remain stable when the action "
+               "returns after cancellation");
   cleanEdit.hasEdits = true;
-  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext,
+                       chapterContext);
   const auto retainedMenu =
       playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
-  ok &= expect(retainedMenu.items.size() == 4 &&
+  ok &= expect(retainedMenu.items.size() == 5 &&
                    retainedMenu.items[0].label == "Resume editing" &&
                    retainedMenu.items[1].label == "Generate transcript..." &&
-                   retainedMenu.items[2].label == "Export edited copy" &&
-                   retainedMenu.items[3].label == "Discard changes" &&
+                   retainedMenu.items[2].label == "Analyze video chapters" &&
+                   retainedMenu.items[3].label == "Export edited copy" &&
+                   retainedMenu.items[4].label == "Discard changes" &&
                    retainedMenu.items[0].token == terminalMenu.items[0].token &&
                    retainedMenu.items[1].token == terminalMenu.items[1].token,
                "an exported edit revision must remain resumable, exportable, "
@@ -1824,7 +1898,8 @@ int main() {
   cleanEdit.canRedo = true;
   cleanEdit.canToggleSmoothCut = true;
   cleanEdit.selectedCutTransition = playback_video_edit::CutTransition::hard();
-  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext,
+                       chapterContext);
   const auto dirtyMenu =
       playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
   const auto clearAllItem = std::find_if(
@@ -1883,7 +1958,8 @@ int main() {
   menuSuggestion.spans.push_back({0, 1'000'000});
   cleanEdit.suggestionReview.suggestions = {menuSuggestion};
   cleanEdit.suggestionReview.selectedId = menuSuggestion.id;
-  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext,
+                       chapterContext);
   const auto analysedMenu =
       playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
   ok &= expect(
@@ -1903,7 +1979,8 @@ int main() {
       "hiding, and no destructive edit");
   cleanEdit.selectedCutTransition =
       playback_video_edit::CutTransition::motionSmooth();
-  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext,
+                       chapterContext);
   const auto smoothEnabledMenu =
       playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
   ok &=
@@ -1948,7 +2025,8 @@ int main() {
 
   playback_video_edit::ExportProgress runningExport;
   runningExport.status = playback_video_edit::ExportStatus::Running;
-  playbackMenu.refresh(cleanEdit, runningExport, playbackSourceContext);
+  playbackMenu.refresh(cleanEdit, runningExport, playbackSourceContext,
+                       chapterContext);
   ok &= expect(playbackMenu.open(playback_session::ContextMenuSurface::Terminal,
                                  0.25, 0.75),
                "a running export must retain a secondary command surface");
@@ -1975,7 +2053,8 @@ int main() {
   }
 
   playbackMenu.dismiss();
-  playbackMenu.refresh(cleanEdit, failedExport, playbackSourceContext);
+  playbackMenu.refresh(cleanEdit, failedExport, playbackSourceContext,
+                       chapterContext);
   ok &= expect(playbackMenu.open(playback_session::ContextMenuSurface::Terminal,
                                  0.25, 0.75),
                "a failed current-revision export must remain actionable");

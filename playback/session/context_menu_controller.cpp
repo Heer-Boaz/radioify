@@ -43,7 +43,8 @@ playback_overlay::ContextMenuItemToken ContextMenuController::tokenFor(
 void ContextMenuController::refresh(
     const playback_video_edit::EditSnapshot& edit,
     const playback_video_edit::ExportProgress& editExport,
-    playback_media_actions::Context sourceContext) {
+    playback_media_actions::Context sourceContext,
+    const playback_video_chapters::ActionContext& chapterContext) {
   std::optional<ContextMenuCommand> selectedCommand;
   if (selected_ < items_.size()) selectedCommand = items_[selected_].command;
 
@@ -54,6 +55,10 @@ void ContextMenuController::refresh(
   sourceContext.hasEdits = edit.hasEdits;
   for (playback_media_actions::Item& item :
        playback_media_actions::build(sourceContext)) {
+    next.push_back({item.action, std::move(item.label)});
+  }
+  for (playback_video_chapters::ActionItem& item :
+       playback_video_chapters::buildActionCatalog(chapterContext)) {
     next.push_back({item.action, std::move(item.label)});
   }
 

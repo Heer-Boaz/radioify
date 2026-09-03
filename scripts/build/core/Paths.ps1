@@ -52,10 +52,6 @@ function Find-RadioifyExecutable {
       $candidates += (Join-Path (Join-Path $BuildDir $Config) "radioify.exe")
     }
   }
-  if ($Root) {
-    $candidates += (Join-Path $Root "dist\radioify.exe")
-  }
-
   foreach ($candidate in ($candidates | Select-Object -Unique)) {
     if ($candidate -and (Test-Path $candidate)) {
       return $candidate
@@ -68,6 +64,17 @@ function Find-RadioifyExecutable {
       Select-Object -First 1
     if ($found) {
       return $found.FullName
+    }
+  }
+
+  # dist is a publication destination, not a build output. Only fall back to
+  # it after every configured and discovered build-tree candidate has been
+  # exhausted; otherwise single-config builds can select dist before their
+  # bin\Release output and make companion publication copy a file onto itself.
+  if ($Root) {
+    $published = Join-Path $Root "dist\radioify.exe"
+    if (Test-Path -LiteralPath $published -PathType Leaf) {
+      return $published
     }
   }
 

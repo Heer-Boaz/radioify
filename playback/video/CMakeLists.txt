@@ -94,6 +94,7 @@ radioify_add_module_object_library(radioify_scene_analysis
 )
 
 radioify_add_module_object_library(radioify_video_chapters
+  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/action_catalog.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/backend.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/cache.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/chapter.cpp

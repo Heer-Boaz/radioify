@@ -455,6 +455,7 @@ bool Service::retry(RequestId requestId) {
     }
     impl_->published = initialSnapshot(impl_->active->request);
     impl_->published.revision = impl_->nextRevision++;
+    impl_->gpuAllowed.store(false, std::memory_order_release);
     impl_->generation.fetch_add(1, std::memory_order_acq_rel);
   }
   impl_->condition.notify_all();

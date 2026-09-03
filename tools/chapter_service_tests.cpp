@@ -290,6 +290,14 @@ bool runExplicitRetryTest() {
                    "terminal state");
   ok &= expect(service.retry(id),
                "the active failed request must expose an explicit retry");
+  ok &= expect(waitUntil([&]() {
+                 return service.snapshot(id).state ==
+                        AnalysisState::WaitingForPlayback;
+               }) &&
+                   observed->attempts.load() == 1,
+               "retry must reacquire background GPU admission instead of "
+               "retaining a stale foreground lease");
+  service.setBackgroundGpuAllowed(id, true);
   ok &= expect(waitUntil([&]() { return service.snapshot(id).ready(); }) &&
                    observed->attempts.load() == 2 && !service.retry(id),
                "retry must restart the same owner-bound request exactly once");

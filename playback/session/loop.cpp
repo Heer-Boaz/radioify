@@ -35,6 +35,7 @@
 #include "playback/session/osd_timeline.h"
 #include "playback/session/shutdown_sequence.h"
 #include "playback/session/video_edit_workspace.h"
+#include "playback/video/chapter/action_catalog.h"
 #include "playback/video/chapter/presentation.h"
 #include "playback/video/chapter/service.h"
 #include "playback/video/chapter/text_evidence.h"
@@ -83,6 +84,11 @@ PlaybackPresentationState initialPlaybackPresentation(
 } // namespace
 
 struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
+  enum class ChapterAnalysisTrigger : uint8_t {
+    Automatic,
+    Manual,
+  };
+
   static constexpr auto kSeekThrottleInterval = std::chrono::milliseconds(50);
   static constexpr auto kFrameCopyMessageDuration =
       std::chrono::milliseconds(1500);
@@ -118,6 +124,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   bool hasSubtitles;
   bool chapterOverviewOpen = false;
   int chapterOverviewScrollOffset = 0;
+  bool chapterAutoStartSuppressed = false;
   std::optional<playback_video_chapters::Service::RequestId> chapterRequestId;
   playback_video_chapters::Snapshot chapterSnapshot;
   playback_session::BackgroundGpuAdmissionPolicy chapterGpuAdmission;
@@ -260,14 +267,24 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       chapterAnalysis.cancel(*chapterRequestId);
   }
 
-  void startChapterAnalysis() {
-    if (!config.enableAutomaticChapterAnalysis) {
-      chapterSnapshot = {};
-      chapterSnapshot.state = playback_video_chapters::AnalysisState::Disabled;
-      chapterSnapshot.detail =
-          "Automatic chapter analysis is disabled for this launch.";
+  void startChapterAnalysis(
+      ChapterAnalysisTrigger trigger = ChapterAnalysisTrigger::Automatic) {
+    if (trigger == ChapterAnalysisTrigger::Automatic &&
+        (!config.enableAutomaticChapterAnalysis ||
+         chapterAutoStartSuppressed)) {
+      if (!chapterRequestId) {
+        chapterSnapshot = {};
+        chapterSnapshot.state =
+            playback_video_chapters::AnalysisState::Disabled;
+        chapterSnapshot.detail =
+            !config.enableAutomaticChapterAnalysis
+                ? "Automatic chapter analysis is disabled for this launch."
+                : "Automatic chapter analysis was cancelled for this video.";
+      }
       return;
     }
+    if (trigger == ChapterAnalysisTrigger::Manual)
+      chapterAutoStartSuppressed = false;
     if (chapterRequestId)
       chapterAnalysis.cancel(*chapterRequestId);
     playback_video_chapters::AnalysisRequest request;
@@ -282,6 +299,10 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     chapterSnapshot = chapterAnalysis.snapshot(*chapterRequestId);
     chapterGpuAdmission.reset();
     lastChapterGpuHeartbeat = std::chrono::steady_clock::time_point::min();
+    osd.showMessage("Chapter analysis started in background",
+                    playback_session::PlaybackOsdTimeline::Clock::now(),
+                    kEditMessageDuration);
+    redraw = true;
   }
 
   void cancelChapterAnalysis() {
@@ -503,9 +524,10 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     playback_media_actions::Context sourceContext =
         mediaProcessingActions.contextForSource(file);
     sourceContext.currentPlayback = true;
-    contextMenuController.refresh(videoEditWorkspace.edit(),
-                                  videoEditWorkspace.exportProgress(),
-                                  std::move(sourceContext));
+    contextMenuController.refresh(
+        videoEditWorkspace.edit(), videoEditWorkspace.exportProgress(),
+        std::move(sourceContext),
+        {chapterSnapshot, chapterRequestId.has_value(), chapterOverviewOpen});
     if (videoEditPrompt() != playback_video_edit::Prompt::None ||
         mediaActionConfirmation.snapshot()) {
       contextMenuController.dismiss();
@@ -732,14 +754,92 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     return false;
   }
 
+  bool executeChapterAction(playback_video_chapters::Action action) {
+    using Action = playback_video_chapters::Action;
+    switch (action) {
+    case Action::StartAnalysis:
+      startChapterAnalysis(ChapterAnalysisTrigger::Manual);
+      chapterOverviewOpen = false;
+      chapterOverviewScrollOffset = 0;
+      syncOverlayPresentation();
+      return true;
+    case Action::CancelAnalysis:
+      if (!chapterRequestId)
+        return false;
+      cancelChapterAnalysis();
+      chapterAutoStartSuppressed = true;
+      chapterSnapshot = {};
+      chapterSnapshot.state = playback_video_chapters::AnalysisState::Disabled;
+      chapterSnapshot.detail = "Chapter analysis was cancelled for this video.";
+      chapterOverviewOpen = false;
+      chapterOverviewScrollOffset = 0;
+      syncOverlayPresentation();
+      showEditMessage("Chapter analysis cancelled");
+      return true;
+    case Action::InstallModels:
+      if (!chapterRequestId ||
+          !chapterAnalysis.requestInstallation(*chapterRequestId)) {
+        return false;
+      }
+      showEditMessage("Installing chapter models in background");
+      return true;
+    case Action::CancelInstallation:
+      if (!chapterRequestId ||
+          !chapterAnalysis.cancelInstallation(*chapterRequestId)) {
+        return false;
+      }
+      showEditMessage("Cancelling chapter model installation");
+      return true;
+    case Action::RetryAnalysis:
+      if (!chapterRequestId || !chapterAnalysis.retry(*chapterRequestId)) {
+        return false;
+      }
+      chapterSnapshot = chapterAnalysis.snapshot(*chapterRequestId);
+      chapterGpuAdmission.reset();
+      chapterOverviewOpen = false;
+      chapterOverviewScrollOffset = 0;
+      syncOverlayPresentation();
+      showEditMessage("Retrying chapter analysis");
+      return true;
+    case Action::ToggleOverview:
+      if (!chapterSnapshot.ready())
+        return false;
+      chapterOverviewOpen = !chapterOverviewOpen;
+      chapterOverviewScrollOffset = 0;
+      syncOverlayPresentation();
+      return true;
+    case Action::ShowStatus: {
+      std::string message =
+          playback_video_chapters::analysisStateLabel(chapterSnapshot.state);
+      if (!chapterSnapshot.detail.empty()) {
+        message += ": " + chapterSnapshot.detail;
+      } else if (!chapterSnapshot.phase.empty()) {
+        message += ": " + chapterSnapshot.phase;
+      }
+      osd.showMessage(std::move(message),
+                      playback_session::PlaybackOsdTimeline::Clock::now(),
+                      kAnalysisMessageDuration);
+      redraw = true;
+      publishWindowUiState();
+      output.requestWindowPresent();
+      return true;
+    }
+    }
+    return false;
+  }
+
   bool executeContextMenuCommand(
       const playback_session::ContextMenuCommand &command) {
     if (const auto *media =
             std::get_if<playback_media_actions::Action>(&command)) {
       return executeMediaAction(*media);
     }
-    return executeVideoEditCommand(
-        std::get<playback_video_edit::Command>(command));
+    if (const auto *edit =
+            std::get_if<playback_video_edit::Command>(&command)) {
+      return executeVideoEditCommand(*edit);
+    }
+    return executeChapterAction(
+        std::get<playback_video_chapters::Action>(command));
   }
 
   bool waitForVideoEditExportAndExit() {
@@ -932,41 +1032,19 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     case Action::ToggleSubtitles:
       return toggleSubtitles();
     case Action::ToggleChapterOverview:
-      if (!chapterSnapshot.ready()) {
-        std::string message =
-            playback_video_chapters::analysisStateLabel(chapterSnapshot.state);
-        if (!chapterSnapshot.detail.empty()) {
-          message += ": " + chapterSnapshot.detail;
-        }
-        osd.showMessage(std::move(message),
-                        playback_session::PlaybackOsdTimeline::Clock::now(),
-                        kAnalysisMessageDuration);
-        redraw = true;
-        publishWindowUiState();
-        output.requestWindowPresent();
-        return true;
-      }
-      chapterOverviewOpen = !chapterOverviewOpen;
-      chapterOverviewScrollOffset = 0;
-      redraw = true;
-      forceRefreshArt = true;
-      publishWindowUiState();
-      output.requestWindowPresent();
-      return true;
+      return executeChapterAction(
+          chapterSnapshot.ready()
+              ? playback_video_chapters::Action::ToggleOverview
+              : playback_video_chapters::Action::ShowStatus);
     case Action::InstallChapterModel:
-      return chapterRequestId &&
-             chapterAnalysis.requestInstallation(*chapterRequestId);
+      return executeChapterAction(
+          playback_video_chapters::Action::InstallModels);
     case Action::CancelChapterOperation:
-      return chapterRequestId &&
-             chapterAnalysis.cancelInstallation(*chapterRequestId);
+      return executeChapterAction(
+          playback_video_chapters::Action::CancelInstallation);
     case Action::RetryChapterAnalysis:
-      if (!chapterRequestId || !chapterAnalysis.retry(*chapterRequestId)) {
-        return false;
-      }
-      chapterOverviewOpen = false;
-      chapterOverviewScrollOffset = 0;
-      showEditMessage("Retrying chapter analysis");
-      return true;
+      return executeChapterAction(
+          playback_video_chapters::Action::RetryAnalysis);
     case Action::ToggleWindowPresentation: {
       const bool changed = presentationController.toggleWindow();
       redraw = redraw || changed;
@@ -1353,8 +1431,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     }
     redraw = true;
     forceRefreshArt = true;
-    publishWindowUiState();
-    output.requestWindowPresent();
+    syncOverlayPresentation();
   }
 
   void updateChapterGpuPriority() {

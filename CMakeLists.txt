@@ -1038,6 +1038,7 @@ target_sources(video_edit_timeline_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/overlay/interaction.cpp
   ${CMAKE_SOURCE_DIR}/playback/session/context_menu_controller.cpp
   ${CMAKE_SOURCE_DIR}/playback/media_action_catalog.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/action_catalog.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/composition/render_plan.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/frame_step_prefetch_mapping.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/sequence.cpp
