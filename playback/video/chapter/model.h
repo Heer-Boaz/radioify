@@ -21,6 +21,10 @@ struct ModelPaths {
 ModelPaths resolveModelPaths();
 CapabilityResult inspectModelArtifacts(const ModelPaths &paths,
                                        const OperationControl &control);
+// Verifies only immutable files that must travel beside the executable. User
+// downloaded model files and GPU capability are deliberately outside this
+// staged-runtime contract.
+CapabilityResult inspectPackagedChapterRuntime();
 InstallResult installModelArtifacts(const ModelPaths &paths,
                                     const OperationControl &control);
 

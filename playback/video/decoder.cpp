@@ -1436,6 +1436,7 @@ bool probeVideoMetadata(const std::filesystem::path& path, VideoMetadata* out,
     setError(error, "No video stream found.");
     return false;
   }
+  out->videoStreamIndex = streamIndex;
 
   AVStream* stream = fmt->streams[streamIndex];
   const AVCodecParameters* params = stream ? stream->codecpar : nullptr;
@@ -1462,12 +1463,15 @@ bool probeVideoMetadata(const std::filesystem::path& path, VideoMetadata* out,
   }
 
   int64_t totalDuration100ns = 0;
-  if (stream && stream->duration > 0) {
+  // Match Player's source timeline: container duration is authoritative when
+  // available, with the selected stream duration only as a fallback. Cache
+  // identities produced by headless analysis must be identical to playback.
+  if (fmt->duration > 0) {
+    totalDuration100ns = fmt->duration * 10;
+  } else if (stream && stream->duration > 0) {
     int64_t us =
         av_rescale_q(stream->duration, stream->time_base, AVRational{1, 1000000});
     totalDuration100ns = us * 10;
-  } else if (fmt->duration > 0) {
-    totalDuration100ns = fmt->duration * 10;
   }
   out->duration100ns = totalDuration100ns;
 

@@ -19,10 +19,14 @@ Quick start:
 ```powershell
 .\build.ps1 -Static
 .\build.ps1 -Static -Ninja
+.\build.ps1 -Static -Tests
 .\dist\radioify.exe
 ```
 
 The binary is written to `dist/radioify.exe`.
+`-Tests` builds every executable registered with CTest before running the
+suite, and validates chapter resources from an isolated staged directory. It
+does not install or launch the MSIX package.
 
 The default build enables whisper.cpp's Vulkan backend and downloads the
 SHA-256-verified multilingual Whisper base model used for offline,
@@ -130,6 +134,32 @@ in-memory result available for the active session and reports a non-fatal OSD
 warning. In-progress or unsupported analysis never opens an
 empty overview or timeline-metadata panel; failures remain visible through the
 normal playback status/retry surface.
+
+For a presentation-free production-path diagnostic, run:
+
+```powershell
+.\dist\radioify.exe analyze-chapters "C:\path\to\video.mkv"
+```
+
+This uses the same metadata probe, English-subtitle selection, chapter service,
+GPU backend, validation, and durable cache as playback. Progress goes to
+stderr; the final JSON document on stdout reports the cache key, cache path,
+and whether the completed result is persisted. It never opens a playback
+window and never installs models without explicit user interaction.
+
+The explicit hardware/model end-to-end test uses a fresh isolated cache, runs
+that production path twice, and requires a cold first run followed by discovery
+of its durable result:
+
+```powershell
+.\scripts\test\Invoke-RadioifyChapterE2E.ps1 `
+  -ApplicationPath .\dist\radioify.exe `
+  -VideoPath "C:\path\to\video.mkv"
+```
+
+This test is intentionally separate from CTest because it requires supported
+GPU hardware, locally installed model artifacts, and representative media. It
+uses hidden child processes and does not require an installed MSIX package.
 
 ## Windows Package
 Build a distributable Windows x64 bundle and zip:

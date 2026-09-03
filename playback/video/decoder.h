@@ -93,6 +93,7 @@ struct VideoStreamSelection {
 };
 
 struct VideoMetadata {
+  int videoStreamIndex = -1;
   int width = 0;
   int height = 0;
   int64_t duration100ns = 0;

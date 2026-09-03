@@ -100,6 +100,13 @@ bool fileIdentity(const std::filesystem::path &path, std::uintmax_t *size,
   return true;
 }
 
+bool nonEmptyRegularFile(const std::filesystem::path &path) {
+  std::error_code error;
+  if (!std::filesystem::is_regular_file(path, error) || error)
+    return false;
+  return std::filesystem::file_size(path, error) > 0 && !error;
+}
+
 bool verifiedReceiptMatches(const std::filesystem::path &path,
                             std::uintmax_t expected, const char *digest) {
   std::uintmax_t size = 0;
@@ -504,6 +511,44 @@ ModelPaths resolveModelPaths() {
     }
   }
   return paths;
+}
+
+CapabilityResult inspectPackagedChapterRuntime() {
+  const std::filesystem::path executableRoot = radioifyExecutableDir();
+  if (executableRoot.empty()) {
+    return {CapabilityState::Unsupported,
+            "The executable directory could not be resolved."};
+  }
+
+  const std::filesystem::path chapterRoot =
+      executableRoot / "models" / "chapter_analysis";
+  const std::filesystem::path adapter = chapterRoot / kPlannerAdapterFile;
+  std::string verificationError;
+  if (!exactFile(adapter, kPlannerAdapterBytes, kPlannerAdapterSha256, {},
+                 &verificationError)) {
+    std::string detail =
+        "The staged Chapter-Llama planner adapter could not be verified";
+    if (!verificationError.empty())
+      detail += ": " + verificationError;
+    detail += ".";
+    return {CapabilityState::Unsupported, std::move(detail)};
+  }
+
+  const std::filesystem::path requiredFiles[] = {
+      executableRoot / "radioify_chapter_worker.exe",
+      executableRoot / "llama-cpp-LICENSE.txt",
+      chapterRoot / "CHAPTER-LLAMA-NOTICE.md",
+      chapterRoot / "LLAMA-3.1-LICENSE",
+      chapterRoot / "NOTICE",
+  };
+  for (const std::filesystem::path &required : requiredFiles) {
+    if (!nonEmptyRegularFile(required)) {
+      return {CapabilityState::Unsupported,
+              "The staged chapter runtime is missing " +
+                  toUtf8String(required.filename()) + "."};
+    }
+  }
+  return {CapabilityState::Ready, {}};
 }
 
 CapabilityResult inspectModelArtifacts(const ModelPaths &paths,

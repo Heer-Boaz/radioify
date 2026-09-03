@@ -589,6 +589,21 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   target_link_libraries(radioify PRIVATE WindowsML::Runtime)
   radioify_deploy_windows_ml(radioify)
 endif()
+if (WIN32)
+  find_program(RADIOIFY_POWERSHELL_EXECUTABLE
+    NAMES powershell.exe pwsh.exe
+    REQUIRED)
+  add_test(NAME chapter_runtime_layout_tests
+    COMMAND "${RADIOIFY_POWERSHELL_EXECUTABLE}"
+            -NoProfile
+            -ExecutionPolicy Bypass
+            -File
+            "${CMAKE_SOURCE_DIR}/scripts/test/Verify-RadioifyChapterRuntimeLayout.ps1"
+            -ApplicationPath "$<TARGET_FILE:radioify>"
+            -WindowsMlRuntime "${RADIOIFY_HAS_AUDIO_SEPARATION}")
+  set_tests_properties(chapter_runtime_layout_tests PROPERTIES
+    LABELS "chapter;runtime-layout")
+endif()
 
 add_executable(radio_measurements)
 target_sources(radio_measurements PRIVATE
@@ -954,6 +969,7 @@ target_sources(chapter_inference_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_client.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_protocol.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/storage.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
@@ -976,6 +992,7 @@ target_sources(chapter_inference_probe PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_client.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_protocol.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/storage.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/sampled_evidence.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/analysis/visual_timeline_checkpoint.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/analysis/scene_analysis.cpp
@@ -3005,3 +3022,36 @@ endif()
 if (WIN32 AND RADIOIFY_BUILD_WIN11_EXPLORER_INTEGRATION)
   add_subdirectory(windows/explorer)
 endif()
+
+# CTest never builds its command executables. Keep the registered test graph
+# as the source of truth for a check target that first refreshes every test
+# binary and the production application, then runs the suite. The three tests
+# whose command names intentionally differ from their executable targets are
+# included explicitly.
+get_property(_radioify_registered_tests DIRECTORY PROPERTY TESTS)
+set(_radioify_test_targets radioify)
+foreach(_radioify_test_name IN LISTS _radioify_registered_tests)
+  if (TARGET "${_radioify_test_name}")
+    list(APPEND _radioify_test_targets "${_radioify_test_name}")
+  endif()
+endforeach()
+foreach(_radioify_indirect_test_target IN ITEMS
+    radio_measurements
+    radio_node_physics
+    video_edit_export_smoke)
+  if (TARGET "${_radioify_indirect_test_target}")
+    list(APPEND _radioify_test_targets "${_radioify_indirect_test_target}")
+  endif()
+endforeach()
+list(REMOVE_DUPLICATES _radioify_test_targets)
+
+add_custom_target(radioify_test_binaries
+  DEPENDS ${_radioify_test_targets})
+add_custom_target(radioify_check
+  COMMAND "${CMAKE_CTEST_COMMAND}"
+          --test-dir "${CMAKE_BINARY_DIR}"
+          --output-on-failure
+          -C "$<CONFIG>"
+  DEPENDS radioify_test_binaries
+  USES_TERMINAL
+  COMMENT "Running Radioify tests from freshly built executables")

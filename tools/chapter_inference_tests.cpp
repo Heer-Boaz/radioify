@@ -1,5 +1,6 @@
 #include "playback/video/chapter/inference.h"
 #include "playback/video/chapter/inference_worker.h"
+#include "playback/video/chapter/storage.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -10,6 +11,7 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -40,6 +42,18 @@ std::wstring executablePath() {
   if (length == 0 || length >= path.size())
     return {};
   return std::wstring(path.data(), length);
+}
+
+std::filesystem::path isolatedCacheRoot() {
+  std::error_code error;
+  const std::filesystem::path temporary =
+      std::filesystem::temp_directory_path(error);
+  if (error || temporary.empty())
+    return {};
+  return temporary /
+         (L"Radioify-ChapterInferenceTests-" +
+          std::to_wstring(GetCurrentProcessId()) + L"-" +
+          std::to_wstring(GetTickCount64()));
 }
 
 bool interprocessLeaseTest(const std::string &sourceKey) {
@@ -93,6 +107,14 @@ int main(int argc, char **argv) {
   const bool requireVulkan =
       argc == 2 && std::string_view(argv[1]) == "--require-vulkan";
 
+  const std::filesystem::path cacheRoot = isolatedCacheRoot();
+  if (cacheRoot.empty() ||
+      !SetEnvironmentVariableW(L"RADIOIFY_CHAPTER_CACHE_ROOT",
+                               cacheRoot.c_str())) {
+    std::cerr << "chapter_inference_tests: could not isolate chapter cache\n";
+    return 1;
+  }
+
   InferenceRequest boundedPrompt;
   boundedPrompt.durationUs = kMaximumAutomaticChapterVideoDurationUs;
   boundedPrompt.windows.resize(60);
@@ -126,6 +148,8 @@ int main(int argc, char **argv) {
   ok &= expect(interprocessLeaseTest(processSourceKey()),
                "a second process must wait until the complete source-level "
                "workspace transaction releases ownership");
+  ok &= expect(analysisCacheRoot() == cacheRoot.lexically_normal(),
+               "chapter inference must honor its isolated cache root");
 
   InferenceEngine engine;
   OperationControl cancelled;
@@ -164,5 +188,9 @@ int main(int argc, char **argv) {
     ok &= expect(invalidResult.status == OperationStatus::Unsupported,
                  "unsupported hardware must remain an explicit result");
   }
+  std::error_code cleanupError;
+  std::filesystem::remove(cacheRoot / "work", cleanupError);
+  cleanupError.clear();
+  std::filesystem::remove(cacheRoot, cleanupError);
   return ok ? 0 : 1;
 }

@@ -19,6 +19,7 @@
 #include "core/runtime_helpers.h"
 #include "playback/video/chapter/integrity.h"
 #include "playback/video/chapter/model.h"
+#include "playback/video/chapter/storage.h"
 
 namespace playback_video_chapters {
 namespace {
@@ -62,10 +63,10 @@ std::string sourceIdentity(const AnalysisRequest &request) {
 
 std::filesystem::path cachePath(const AnalysisRequest &request) {
   const std::string hash = analysisSourceKey(request);
-  if (hash.empty())
+  const std::filesystem::path root = analysisCacheRoot();
+  if (hash.empty() || root.empty())
     return {};
-  return radioifyWritableDataDir() / "cache" / "video-chapters" /
-         (hash + ".json");
+  return root / (hash + ".json");
 }
 
 bool decode(const nlohmann::json &document, std::int64_t durationUs,
@@ -102,6 +103,10 @@ bool decode(const nlohmann::json &document, std::int64_t durationUs,
 
 std::string analysisSourceKey(const AnalysisRequest &request) {
   return sha256Text(sourceIdentity(request));
+}
+
+std::filesystem::path analysisCachePath(const AnalysisRequest &request) {
+  return cachePath(request);
 }
 
 std::optional<AnalysisResult>

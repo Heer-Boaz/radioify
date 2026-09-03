@@ -15,7 +15,8 @@ function Resolve-TrailingSwitchOverrides {
     "StagingUpload",
     "VideoErrorLog",
     "FfmpegErrorLog",
-    "EnableNvidiaRtxVideoSdk"
+    "EnableNvidiaRtxVideoSdk",
+    "Tests"
   )
 
   $overrides = [ordered]@{}
@@ -66,7 +67,8 @@ function New-InitialBuildOptions {
     [bool]$StagingUpload,
     [bool]$VideoErrorLog,
     [bool]$FfmpegErrorLog,
-    [bool]$EnableNvidiaRtxVideoSdk
+    [bool]$EnableNvidiaRtxVideoSdk,
+    [bool]$Tests
   )
 
   return [ordered]@{
@@ -87,6 +89,7 @@ function New-InitialBuildOptions {
     VideoErrorLog = $VideoErrorLog
     FfmpegErrorLog = $FfmpegErrorLog
     EnableNvidiaRtxVideoSdk = $EnableNvidiaRtxVideoSdk
+    Tests = $Tests
     NvidiaRtxVideo = $true
     NvidiaRtxVideoSdk = $EnableNvidiaRtxVideoSdk
   }

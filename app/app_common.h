@@ -23,6 +23,8 @@ struct Options {
   bool extractSheet = false;
   bool renderRadio = false;
   bool verifyChapterModels = false;
+  bool verifyChapterRuntime = false;
+  bool analyzeChapters = false;
   bool force50Hz = false;
   int bwHz = kDefaultRadioBandwidthHz;
   double noise = kDefaultRadioNoiseAmount;

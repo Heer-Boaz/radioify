@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "core/runtime_helpers.h"
+#include "playback/video/chapter/storage.h"
 
 namespace playback_video_chapters {
 namespace {
@@ -77,9 +78,10 @@ bool validSourceKey(const std::string &key) {
 }
 
 std::filesystem::path workspacePath(const std::string &key) {
-  if (!validSourceKey(key))
+  const std::filesystem::path root = analysisCacheRoot();
+  if (!validSourceKey(key) || root.empty())
     return {};
-  return radioifyWritableDataDir() / "cache" / "video-chapters" / "work" / key;
+  return root / "work" / key;
 }
 
 std::wstring quoteArgument(const std::wstring &argument) {

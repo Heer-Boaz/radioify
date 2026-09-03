@@ -12,6 +12,10 @@ namespace playback_video_chapters {
 // hashes, and the cache schema.
 std::string analysisSourceKey(const AnalysisRequest& request);
 
+// Durable location owned by the cache policy. Diagnostics and headless tools
+// may report this path, but must not synthesize it independently.
+std::filesystem::path analysisCachePath(const AnalysisRequest& request);
+
 std::optional<AnalysisResult> loadCachedAnalysis(
     const AnalysisRequest& request);
 bool storeCachedAnalysis(const AnalysisRequest& request,

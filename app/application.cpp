@@ -3,6 +3,7 @@
 #include <iostream>
 #include <utility>
 
+#include "app/chapter_analysis_cli.h"
 #include "app/application_runtime.h"
 #include "audio/loopsplit/loopsplit_cli.h"
 #include "core/runtime_helpers.h"
@@ -47,6 +48,21 @@ int verifyChapterModels() {
   return result.state == CapabilityState::Ready ? 0 : 1;
 }
 
+int verifyChapterRuntime() {
+  using namespace playback_video_chapters;
+  const CapabilityResult result = inspectPackagedChapterRuntime();
+  const std::filesystem::path adapter =
+      radioifyExecutableDir() / "models" / "chapter_analysis" /
+      "chapter-llama-captions-asr-10k-f16.gguf";
+  std::cout << "state=" << capabilityName(result.state) << '\n'
+            << "executable_root=" << toUtf8String(radioifyExecutableDir())
+            << '\n'
+            << "planner_adapter=" << toUtf8String(adapter) << '\n';
+  if (!result.detail.empty())
+    std::cout << "detail=" << result.detail << '\n';
+  return result.state == CapabilityState::Ready ? 0 : 1;
+}
+
 } // namespace
 
 int runApplication(Options options) {
@@ -54,6 +70,12 @@ int runApplication(Options options) {
 
   if (options.verifyChapterModels) {
     return verifyChapterModels();
+  }
+  if (options.verifyChapterRuntime) {
+    return verifyChapterRuntime();
+  }
+  if (options.analyzeChapters) {
+    return runChapterAnalysisCli(pathFromUtf8String(options.input));
   }
 
   if (options.extractSheet) {
