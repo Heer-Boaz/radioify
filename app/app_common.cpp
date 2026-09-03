@@ -49,6 +49,7 @@ static void showUsage(const char *exe) {
   logLine("  --radio      Start with the selected radio model enabled");
   logLine("  --no-radio   Start with radio filter disabled (default)");
   logLine("  --window     Open a window for video playback");
+  logLine("  --verify-chapter-models Verify installed chapter-model artifacts");
   logLine(
       "  --no-automatic-chapters Disable background semantic video analysis");
   logLine("  --ascii-debug-overlay Show ASCII playback debug overlay");
@@ -278,6 +279,10 @@ Options parseArgs(int argc, char **argv) {
       o.enableWindow = true;
       continue;
     }
+    if (arg == "--verify-chapter-models") {
+      o.verifyChapterModels = true;
+      continue;
+    }
     if (arg == "--no-automatic-chapters") {
       o.enableAutomaticChapterAnalysis = false;
       continue;
@@ -317,6 +322,12 @@ Options parseArgs(int argc, char **argv) {
       die("Provide a single file or folder path only.");
     }
     o.input = arg;
+  }
+  if (o.verifyChapterModels &&
+      (o.extractSheet || o.splitLoop || o.renderRadio || !o.input.empty() ||
+       !o.output.empty())) {
+    die("--verify-chapter-models cannot be combined with media input or "
+        "another command.");
   }
   return o;
 }

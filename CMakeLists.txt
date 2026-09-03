@@ -217,6 +217,12 @@ set(RADIOIFY_CHAPTER_PLANNER_ADAPTER_PATH
 set(RADIOIFY_CHAPTER_PLANNER_ADAPTER_SIZE 13640320)
 set(RADIOIFY_CHAPTER_PLANNER_ADAPTER_SHA256
     "4e07a53dfa65e356e691716645d795697427c30dc983b198faf9e84d7eeec6da")
+file(MAKE_DIRECTORY
+  "${CMAKE_BINARY_DIR}/generated/playback/video/chapter")
+configure_file(
+  "${CMAKE_SOURCE_DIR}/cmake/chapter_model_contract.h.in"
+  "${CMAKE_BINARY_DIR}/generated/playback/video/chapter/model_contract.h"
+  @ONLY)
 set(RADIOIFY_CHAPTER_PLANNER_NOTICE_PATH
     "${CMAKE_SOURCE_DIR}/models/chapter_analysis/CHAPTER-LLAMA-NOTICE.md")
 set(RADIOIFY_LLAMA_31_LICENSE_PATH
@@ -920,6 +926,7 @@ target_sources(chapter_analysis_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/evidence_plan.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/generated_document.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/integrity.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/analysis/visual_timeline_checkpoint.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/analysis/scene_analysis.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/transcript/cue_semantics.cpp
@@ -933,6 +940,9 @@ target_sources(chapter_analysis_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
 radioify_link_repo_target(chapter_analysis_tests)
+if (WIN32)
+  target_link_libraries(chapter_analysis_tests PRIVATE bcrypt)
+endif()
 add_test(NAME chapter_analysis_tests
          COMMAND $<TARGET_FILE:chapter_analysis_tests>)
 

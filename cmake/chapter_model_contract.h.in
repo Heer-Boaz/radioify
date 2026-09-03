@@ -1,0 +1,14 @@
+#pragma once
+
+#include <cstdint>
+
+namespace playback_video_chapters {
+
+// Generated from the release artifact contract used by CMake packaging and
+// verification. Do not duplicate these values in source code.
+inline constexpr std::uintmax_t kPlannerAdapterBytes =
+    @RADIOIFY_CHAPTER_PLANNER_ADAPTER_SIZE@ull;
+inline constexpr const char *kPlannerAdapterSha256 =
+    "@RADIOIFY_CHAPTER_PLANNER_ADAPTER_SHA256@";
+
+} // namespace playback_video_chapters

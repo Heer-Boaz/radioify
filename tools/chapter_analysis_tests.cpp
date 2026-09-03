@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstring>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -10,6 +11,8 @@
 #include "playback/video/chapter/chapter.h"
 #include "playback/video/chapter/evidence_plan.h"
 #include "playback/video/chapter/generated_document.h"
+#include "playback/video/chapter/integrity.h"
+#include "playback/video/chapter/model.h"
 #include "playback/video/chapter/presentation.h"
 #include "playback/video/chapter/text_evidence.h"
 #include "playback/video/subtitle/manager.h"
@@ -39,6 +42,12 @@ SubtitleTrack track(std::string label, std::string language, bool forced,
 bool runChapterDomainTests() {
   using namespace playback_video_chapters;
   bool ok = true;
+  ok &= expect(std::strlen(kPlannerAdapterSha256) == 64,
+               "release SHA-256 contracts must contain all 64 hex digits");
+  ok &= expect(
+      sha256Text("abc") ==
+          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      "the native SHA-256 implementation must match a published test vector");
   const std::vector<Chapter> chapters = {
       {1, 0, 20'000'000, "Opening", "The topic is introduced."},
       {2, 20'000'000, 40'000'000, "Demonstration", "A worked example."},

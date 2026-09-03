@@ -13,6 +13,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <appmodel.h>
 #endif
 
 #include "media_formats.h"
@@ -81,6 +82,22 @@ std::filesystem::path executableDirOrEmpty() {
   std::filesystem::path exe = std::filesystem::read_symlink("/proc/self/exe", ec);
   if (ec) return {};
   return exe.parent_path();
+#endif
+}
+
+std::filesystem::path installedPackageDirOrEmpty() {
+#ifdef _WIN32
+  UINT32 length = 0;
+  const LONG query = GetCurrentPackagePath(&length, nullptr);
+  if (query != ERROR_INSUFFICIENT_BUFFER || length <= 1) return {};
+
+  std::wstring buffer(length, L'\0');
+  const LONG result = GetCurrentPackagePath(&length, buffer.data());
+  if (result != ERROR_SUCCESS || length <= 1) return {};
+  buffer.resize(length - 1);
+  return std::filesystem::path(std::move(buffer));
+#else
+  return {};
 #endif
 }
 
@@ -183,6 +200,11 @@ std::filesystem::path radioifyExecutableDir() {
   return dir;
 }
 
+std::filesystem::path radioifyInstalledPackageDir() {
+  static const std::filesystem::path dir = installedPackageDirOrEmpty();
+  return dir;
+}
+
 std::filesystem::path radioifyWritableDataDir() {
   static const std::filesystem::path dir =
       firstCreatableDirectory(defaultWritableDataDirCandidates());
@@ -215,6 +237,11 @@ std::filesystem::path radioifyLogPath() {
 
 std::vector<std::filesystem::path> radioifyResourceSearchRoots() {
   std::vector<std::filesystem::path> roots;
+  // The package graph, rather than the current working directory or a
+  // projected executable path, owns immutable MSIX resources. Windows also
+  // supports package volumes outside C:\Program Files\WindowsApps, so never
+  // synthesize this path.
+  appendUniquePath(&roots, radioifyInstalledPackageDir());
   const std::filesystem::path exeDir = radioifyExecutableDir();
   appendUniquePath(&roots, exeDir);
   if (!exeDir.empty()) {

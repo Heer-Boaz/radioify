@@ -185,9 +185,37 @@ bool acquireModelFileLock(const char *digest, const OperationControl &control,
 bool exactFile(const std::filesystem::path &path, std::uintmax_t expected,
                const char *digest, const OperationControl &control,
                std::string *error) {
+  if (error)
+    error->clear();
+  if (path.empty()) {
+    if (error)
+      *error = "no resource path was resolved";
+    return false;
+  }
   std::error_code fileError;
-  if (!std::filesystem::is_regular_file(path, fileError) || fileError ||
-      std::filesystem::file_size(path, fileError) != expected || fileError) {
+  const bool regular = std::filesystem::is_regular_file(path, fileError);
+  if (fileError) {
+    if (error)
+      *error = "the resource could not be inspected (" +
+               fileError.message() + ")";
+    return false;
+  }
+  if (!regular) {
+    if (error)
+      *error = "the resource is missing";
+    return false;
+  }
+  const std::uintmax_t actualFileSize =
+      std::filesystem::file_size(path, fileError);
+  if (fileError) {
+    if (error)
+      *error = "the resource size could not be read (" +
+               fileError.message() + ")";
+    return false;
+  }
+  if (actualFileSize != expected) {
+    if (error)
+      *error = "the resource size does not match the release manifest";
     return false;
   }
   if (verifiedReceiptMatches(path, expected, digest))
@@ -198,8 +226,11 @@ bool exactFile(const std::filesystem::path &path, std::uintmax_t expected,
     return false;
   }
   const bool valid = actualSize == expected && actualDigest == digest;
-  if (valid)
+  if (valid) {
     publishVerifiedReceipt(path, expected, digest);
+  } else if (error) {
+    *error = "the resource checksum does not match the release manifest";
+  }
   return valid;
 }
 
@@ -456,9 +487,16 @@ ModelPaths resolveModelPaths() {
   paths.plannerDirectory =
       radioifyWritableDataDir() / "models" / "chapter-llama-8b-q4-k-m";
   paths.plannerModel = paths.plannerDirectory / kPlannerModelFile;
-  for (const std::filesystem::path &root : radioifyResourceSearchRoots()) {
+  const std::vector<std::filesystem::path> resourceRoots =
+      radioifyResourceSearchRoots();
+  const std::filesystem::path relativeAdapter =
+      std::filesystem::path("models") / "chapter_analysis" /
+      kPlannerAdapterFile;
+  if (!resourceRoots.empty())
+    paths.plannerAdapter = resourceRoots.front() / relativeAdapter;
+  for (const std::filesystem::path &root : resourceRoots) {
     const std::filesystem::path candidate =
-        root / "models" / "chapter_analysis" / kPlannerAdapterFile;
+        root / relativeAdapter;
     std::error_code fileError;
     if (std::filesystem::is_regular_file(candidate, fileError) && !fileError) {
       paths.plannerAdapter = candidate;
@@ -504,9 +542,13 @@ CapabilityResult inspectModelArtifacts(const ModelPaths &paths,
   if (gpuRevoked(control))
     return {CapabilityState::Yielded, {}};
   if (!adapterReady) {
+    std::string detail =
+        "The packaged Chapter-Llama planner adapter could not be verified";
+    if (!error.empty())
+      detail += ": " + error;
+    detail += ".";
     return {CapabilityState::Unsupported,
-            "The packaged Chapter-Llama planner adapter is missing or "
-            "invalid."};
+            std::move(detail)};
   }
   if (!modelReady || !projectorReady || !plannerReady) {
     return {CapabilityState::SetupRequired,
@@ -529,9 +571,13 @@ InstallResult installModelArtifacts(const ModelPaths &paths,
     return {OperationStatus::Yielded, "Model installation yielded."};
   }
   if (!adapterReady) {
+    std::string detail =
+        "The packaged Chapter-Llama planner adapter could not be verified";
+    if (!verificationError.empty())
+      detail += ": " + verificationError;
+    detail += ".";
     return {OperationStatus::Unsupported,
-            "The packaged Chapter-Llama planner adapter is missing or "
-            "invalid."};
+            std::move(detail)};
   }
   bool modelReady = exactFile(paths.model, kModelBytes, kModelSha256, control,
                               &verificationError);
