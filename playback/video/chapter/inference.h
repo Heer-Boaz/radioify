@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -12,19 +14,32 @@
 
 namespace playback_video_chapters {
 
-struct InferenceImage {
+struct InferenceFrame {
   std::uint32_t imageWidth = 0;
   std::uint32_t imageHeight = 0;
-  const std::vector<std::uint8_t>* imageRgb = nullptr;
+  const std::vector<std::uint8_t> *imageRgb = nullptr;
   std::int64_t timeUs = 0;
-  std::string englishDialogue;
+};
+
+struct InferenceTemporalWindow {
+  std::int64_t intervalStartUs = 0;
+  std::int64_t intervalEndUs = 0;
+  std::vector<InferenceFrame> frames;
+};
+
+struct InferenceDialogueCue {
+  std::int64_t timeUs = 0;
+  std::string text;
 };
 
 struct InferenceRequest {
   std::filesystem::path model;
   std::filesystem::path projector;
+  std::filesystem::path plannerModel;
+  std::filesystem::path plannerAdapter;
   std::int64_t durationUs = 0;
-  std::vector<InferenceImage> images;
+  std::vector<InferenceTemporalWindow> windows;
+  std::vector<InferenceDialogueCue> englishDialogue;
 };
 
 struct InferenceResult {
@@ -33,41 +48,64 @@ struct InferenceResult {
   GeneratedDocument document;
 };
 
+// Checks the worst-case serialized planner prompt before any expensive model
+// is loaded. Captions are still generated later, so their published per-frame
+// bound is used while optional dialogue is measured exactly.
+bool validateInferenceInputBudget(const InferenceRequest &request,
+                                  std::string *error = nullptr);
+
 // Caller-owned, model-independent checkpoint for one exact inference request.
-// Successfully validated stages survive cooperative GPU preemption; native
-// llama/mtmd objects never cross a run() boundary and therefore release all
-// GPU allocations immediately when foreground playback reclaims the device.
+// Completed timestamped temporal observations survive cooperative GPU
+// preemption and form the ownership boundary between the vision model and the
+// specialized planner;
+// native llama/mtmd objects never cross a run() boundary and therefore release
+// all GPU allocations immediately when foreground playback reclaims the
+// device. The complete caption-stream plan, independently bounded chapter
+// metadata, and hierarchical overview each retain only validated typed state.
 struct InferenceCheckpoint {
   std::filesystem::path model;
   std::filesystem::path projector;
+  std::filesystem::path plannerModel;
+  std::filesystem::path plannerAdapter;
   std::int64_t durationUs = 0;
-  std::vector<std::int64_t> sampleTimesUs;
+  std::vector<std::vector<std::int64_t>> sampleTimesUs;
+  std::vector<std::int64_t> intervalStartsUs;
+  std::vector<std::int64_t> intervalEndsUs;
+  // One caption for every sampled frame, in the exact flattened sample order.
+  // Checkpoints are committed only at complete temporal-window boundaries.
   std::vector<std::string> observations;
-  std::optional<GeneratedSegmentationPlan> plan;
-  std::vector<GeneratedChangePointScore> changePoints;
-  std::vector<std::size_t> startFrames;
-  std::vector<GeneratedChapterMetadata> chapterMetadata;
+  std::vector<GeneratedChapterPlanEntry> chapterPlan;
+  std::vector<GeneratedChapter> completedChapters;
+  std::vector<std::string> overviewSections;
+  std::string overview;
 };
+
+// Publishes one complete typed stage boundary. Implementations are expected to
+// use an atomic replace so a terminated inference worker can resume without
+// observing a partially written checkpoint.
+using InferenceCheckpointSink =
+    std::function<bool(const InferenceCheckpoint &, std::string *error)>;
 
 // Owns the process-wide llama.cpp backend lifecycle. The public boundary stays
 // typed and independent of llama.cpp's experimental C structs; all third-party
 // ownership is contained by the implementation.
 class InferenceEngine final {
- public:
+public:
   InferenceEngine();
   ~InferenceEngine();
 
-  InferenceEngine(const InferenceEngine&) = delete;
-  InferenceEngine& operator=(const InferenceEngine&) = delete;
+  InferenceEngine(const InferenceEngine &) = delete;
+  InferenceEngine &operator=(const InferenceEngine &) = delete;
 
-  CapabilityResult inspect(const OperationControl& control);
-  InferenceResult run(const InferenceRequest& request,
-                      const OperationControl& control,
-                      InferenceCheckpoint* checkpoint = nullptr);
+  CapabilityResult inspect(const OperationControl &control);
+  InferenceResult run(const InferenceRequest &request,
+                      const OperationControl &control,
+                      InferenceCheckpoint *checkpoint = nullptr,
+                      const InferenceCheckpointSink &checkpointSink = {});
 
- private:
+private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace playback_video_chapters
+} // namespace playback_video_chapters

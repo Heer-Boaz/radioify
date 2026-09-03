@@ -1,0 +1,77 @@
+diff --git a/tools/mtmd/clip.h b/tools/mtmd/clip.h
+index 3e05e35..ef56f30 100644
+--- a/tools/mtmd/clip.h
++++ b/tools/mtmd/clip.h
+@@ -43,6 +43,9 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
+ 
+ void clip_free(struct clip_ctx * ctx);
+ 
++const char * clip_backend_name(const struct clip_ctx * ctx);
++bool clip_backend_is_gpu(const struct clip_ctx * ctx);
++
+ size_t clip_embd_nbytes(const struct clip_ctx * ctx);
+ size_t clip_embd_nbytes_by_img(const struct clip_ctx * ctx, int img_w, int img_h);
+ 
+diff --git a/tools/mtmd/clip.cpp b/tools/mtmd/clip.cpp
+index b8f0b94..c93a494 100644
+--- a/tools/mtmd/clip.cpp
++++ b/tools/mtmd/clip.cpp
+@@ -4427,6 +4427,22 @@ void clip_free(clip_ctx * ctx) {
+     delete ctx;
+ }
+ 
++const char * clip_backend_name(const struct clip_ctx * ctx) {
++    return ctx && ctx->backend ? ggml_backend_name(ctx->backend) : nullptr;
++}
++
++bool clip_backend_is_gpu(const struct clip_ctx * ctx) {
++    if (!ctx || !ctx->backend) {
++        return false;
++    }
++    ggml_backend_dev_t device = ggml_backend_get_device(ctx->backend);
++    if (!device) {
++        return false;
++    }
++    const enum ggml_backend_dev_type type = ggml_backend_dev_type(device);
++    return type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU;
++}
++
+ // deprecated
+ size_t clip_embd_nbytes(const struct clip_ctx * ctx) {
+     const int32_t nx = ctx->model.hparams.image_size;
+diff --git a/tools/mtmd/mtmd.h b/tools/mtmd/mtmd.h
+index f58acb8..c79403c 100644
+--- a/tools/mtmd/mtmd.h
++++ b/tools/mtmd/mtmd.h
+@@ -109,6 +109,12 @@ MTMD_API bool mtmd_decode_use_mrope(mtmd_context * ctx);
+ // whether the current model supports vision input
+ MTMD_API bool mtmd_support_vision(mtmd_context * ctx);
+ 
++// Backend selected for the vision projector. The name remains owned by ctx.
++MTMD_API const char * mtmd_get_vision_backend_name(mtmd_context * ctx);
++
++// True only for a discrete or integrated GPU, never the CPU fallback.
++MTMD_API bool mtmd_vision_backend_is_gpu(mtmd_context * ctx);
++
+ // whether the current model supports audio input
+ MTMD_API bool mtmd_support_audio(mtmd_context * ctx);
+ 
+diff --git a/tools/mtmd/mtmd.cpp b/tools/mtmd/mtmd.cpp
+index 28fb8af..a58d259 100644
+--- a/tools/mtmd/mtmd.cpp
++++ b/tools/mtmd/mtmd.cpp
+@@ -848,6 +848,14 @@ bool mtmd_support_vision(mtmd_context * ctx) {
+     return ctx->ctx_v != nullptr;
+ }
+ 
++const char * mtmd_get_vision_backend_name(mtmd_context * ctx) {
++    return ctx && ctx->ctx_v ? clip_backend_name(ctx->ctx_v) : nullptr;
++}
++
++bool mtmd_vision_backend_is_gpu(mtmd_context * ctx) {
++    return ctx && ctx->ctx_v && clip_backend_is_gpu(ctx->ctx_v);
++}
++
+ bool mtmd_support_audio(mtmd_context * ctx) {
+     return ctx->ctx_a != nullptr;
+ }

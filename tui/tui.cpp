@@ -13,14 +13,14 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <mutex>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <string>
@@ -30,86 +30,86 @@
 #include <variant>
 #include <vector>
 
-#include "app_common.h"
 #include "app/application_runtime.h"
 #include "app/media_processing_actions.h"
 #include "app/media_processing_coordinator.h"
 #include "app/playback_queue.h"
 #include "app/playback_route.h"
+#include "app_common.h"
 #include "application_exit.h"
 #include "audio_picture_in_picture_window.h"
+#include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
+#include "audiofilter/radio1938/radio_buffer_io.h"
 #include "audioplayback.h"
 #include "browser_action_strip.h"
 #include "browser_action_strip_renderer.h"
 #include "browser_chrome.h"
-#include "browser_wake_schedule.h"
+#include "browser_content_service.h"
 #include "browser_media_menu.h"
+#include "browser_model.h"
+#include "browser_navigation.h"
 #include "browser_playback_reveal.h"
 #include "browser_playback_source.h"
 #include "browser_search.h"
 #include "browser_thumbnail_cache.h"
-#include "browser_content_service.h"
-#include "browser_navigation.h"
-#include "browser_model.h"
+#include "browser_wake_schedule.h"
 #include "browsermeta.h"
+#include "calibration_report.h"
 #include "consoleinput.h"
 #include "consolescreen.h"
 #include "core/open_file_requests.h"
-#include "core/windows_app_resources.h"
-#include "core/windows_message_pump.h"
-#include "core/windows_console_window.h"
-#include "core/windows_shell_open.h"
-#include "media_coordinator.h"
-#include "image_viewer.h"
-#include "playback_presenter.h"
-#include "m4adecoder.h"
-#include "miniaudio.h"
-#include "optionsbrowser.h"
 #include "core/path_identity.h"
-#include "playback_dialogs.h"
-#include "calibration_report.h"
-#include "radio.h"
-#include "audiofilter/radio1938/radio_buffer_io.h"
-#include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
-#include "playback/control/command.h"
-#include "playback/control/transport.h"
-#include "playback/input/shortcuts.h"
-#include "playback/media_action_catalog.h"
-#include "playback/media_processing_actions.h"
-#include "playback/media/track_catalog.h"
-#include "playback/notification_area/controls.h"
-#include "playback/session/session.h"
-#include "playback/system_media_transport/controls.h"
-#include "playback_target_match.h"
-#include "playback/target.h"
-#include "mouse_double_click_tracker.h"
-#include "tracklist.h"
-#include "track_browser_state.h"
-#include "tui_export.h"
-#include "tui_theme.h"
-#include "ui_helpers.h"
-#include "ui_inputlogic.h"
-#include "ui_input_pump.h"
-#include "ui_viewport.h"
-#include "video_transition_view.h"
+#include "core/windows_app_resources.h"
+#include "core/windows_console_window.h"
+#include "core/windows_message_pump.h"
+#include "core/windows_shell_open.h"
+#include "image_viewer.h"
+#include "m4adecoder.h"
+#include "media_coordinator.h"
+#include "media_formats.h"
 #include "media_task_card.h"
 #include "media_task_controller.h"
 #include "media_task_presentation.h"
 #include "melody_visualization.h"
 #include "melody_visualization_renderer.h"
-#include "playback/video/playback.h"
+#include "miniaudio.h"
+#include "mouse_double_click_tracker.h"
+#include "optionsbrowser.h"
+#include "playback/control/command.h"
+#include "playback/control/transport.h"
+#include "playback/input/shortcuts.h"
+#include "playback/media/track_catalog.h"
+#include "playback/media_action_catalog.h"
+#include "playback/media_processing_actions.h"
+#include "playback/notification_area/controls.h"
+#include "playback/session/session.h"
+#include "playback/system_media_transport/controls.h"
+#include "playback/target.h"
 #include "playback/video/framebuffer/window/window.h"
-#include "windows_file_drop_apartment.h"
-#include "media_formats.h"
+#include "playback/video/playback.h"
+#include "playback_dialogs.h"
+#include "playback_presenter.h"
+#include "playback_target_match.h"
+#include "radio.h"
 #include "runtime_helpers.h"
 #include "shell_command_catalog.h"
 #include "shell_dialog_host.h"
 #include "shell_keyboard_input.h"
 #include "shell_overlay_stack.h"
 #include "shell_overlay_stack_renderer.h"
+#include "track_browser_state.h"
+#include "tracklist.h"
+#include "tui_export.h"
+#include "tui_theme.h"
+#include "ui_helpers.h"
+#include "ui_input_pump.h"
+#include "ui_inputlogic.h"
+#include "ui_viewport.h"
+#include "video_transition_view.h"
+#include "windows_file_drop_apartment.h"
 
-#include "tui.h"
 #include "timing_log.h"
+#include "tui.h"
 
 enum class UiDirtyFlags : uint32_t {
   None = 0,
@@ -123,7 +123,7 @@ inline UiDirtyFlags operator|(UiDirtyFlags a, UiDirtyFlags b) {
                                    static_cast<uint32_t>(b));
 }
 
-inline UiDirtyFlags& operator|=(UiDirtyFlags& a, UiDirtyFlags b) {
+inline UiDirtyFlags &operator|=(UiDirtyFlags &a, UiDirtyFlags b) {
   a = a | b;
   return a;
 }
@@ -132,22 +132,20 @@ inline bool hasDirtyFlag(UiDirtyFlags value, UiDirtyFlags flag) {
   return (static_cast<uint32_t>(value) & static_cast<uint32_t>(flag)) != 0;
 }
 
-static DWORD waitForBrowserWake(ConsoleInput& input,
-                                NativeWaitHandle openFileRequestWakeHandle,
-                                NativeWaitHandle thumbnailWakeHandle,
-                                NativeWaitHandle browserContentWakeHandle,
-                                NativeWaitHandle browserMetadataWakeHandle,
-                                NativeWaitHandle notificationAreaHandle,
-                                const VideoWindow& browserWindow,
-                                const AudioPictureInPictureWindow&
-                                    audioPictureInPicture,
-                                const std::vector<NativeWaitHandle>&
-                                    activityHandles,
-                                wake_schedule::Deadline deadline) {
+static DWORD waitForBrowserWake(
+    ConsoleInput &input, NativeWaitHandle openFileRequestWakeHandle,
+    NativeWaitHandle thumbnailWakeHandle,
+    NativeWaitHandle browserContentWakeHandle,
+    NativeWaitHandle browserMetadataWakeHandle,
+    NativeWaitHandle notificationAreaHandle, const VideoWindow &browserWindow,
+    const AudioPictureInPictureWindow &audioPictureInPicture,
+    const std::vector<NativeWaitHandle> &activityHandles,
+    wake_schedule::Deadline deadline) {
   std::vector<NativeWaitHandle> handles;
   handles.reserve(10 + activityHandles.size());
   const auto append = [&](NativeWaitHandle handle) {
-    if (handle) handles.push_back(handle);
+    if (handle)
+      handles.push_back(handle);
   };
   append(input.waitHandle());
   append(openFileRequestWakeHandle);
@@ -163,7 +161,8 @@ static DWORD waitForBrowserWake(ConsoleInput& input,
     append(audioPictureInPicture.inputWaitHandle());
     append(audioPictureInPicture.closeRequestedWaitHandle());
   }
-  for (NativeWaitHandle handle : activityHandles) append(handle);
+  for (NativeWaitHandle handle : activityHandles)
+    append(handle);
   return waitForHandlesAndPumpThreadWindowMessages(
       static_cast<DWORD>(handles.size()),
       handles.empty() ? nullptr : handles.data(), deadline);
@@ -184,9 +183,8 @@ static int gridPixelExtent(int cells, double pixelsPerCell,
       1, static_cast<int>(std::lround(resolvedCells * resolvedPixelsPerCell)));
 }
 
-static void mapWindowPointerToGrid(InputEvent& event,
-                                   const VideoWindow& window,
-                                   const ConsoleScreen& screen) {
+static void mapWindowPointerToGrid(InputEvent &event, const VideoWindow &window,
+                                   const ConsoleScreen &screen) {
   if (event.type != InputEvent::Type::Mouse ||
       !isWindowMouseEvent(event.mouse)) {
     return;
@@ -195,10 +193,10 @@ static void mapWindowPointerToGrid(InputEvent& event,
   const int windowHeight = std::max(1, window.GetHeight());
   const int gridWidth = std::max(1, screen.width());
   const int gridHeight = std::max(1, screen.height());
-  const int pixelX = event.mouse.hasPixelPosition ? event.mouse.pixelX
-                                                  : event.mouse.pos.X;
-  const int pixelY = event.mouse.hasPixelPosition ? event.mouse.pixelY
-                                                  : event.mouse.pos.Y;
+  const int pixelX =
+      event.mouse.hasPixelPosition ? event.mouse.pixelX : event.mouse.pos.X;
+  const int pixelY =
+      event.mouse.hasPixelPosition ? event.mouse.pixelY : event.mouse.pos.Y;
   event.mouse.hasPixelPosition = true;
   event.mouse.pixelX = pixelX;
   event.mouse.pixelY = pixelY;
@@ -206,17 +204,18 @@ static void mapWindowPointerToGrid(InputEvent& event,
       static_cast<double>(windowWidth) / static_cast<double>(gridWidth);
   event.mouse.unitHeight =
       static_cast<double>(windowHeight) / static_cast<double>(gridHeight);
-  event.mouse.pos.X = static_cast<SHORT>(std::clamp(
-      static_cast<int>((static_cast<int64_t>(pixelX) * gridWidth) /
-                       windowWidth),
-      0, gridWidth - 1));
-  event.mouse.pos.Y = static_cast<SHORT>(std::clamp(
-      static_cast<int>((static_cast<int64_t>(pixelY) * gridHeight) /
-                       windowHeight),
-      0, gridHeight - 1));
+  event.mouse.pos.X = static_cast<SHORT>(
+      std::clamp(static_cast<int>((static_cast<int64_t>(pixelX) * gridWidth) /
+                                  windowWidth),
+                 0, gridWidth - 1));
+  event.mouse.pos.Y = static_cast<SHORT>(
+      std::clamp(static_cast<int>((static_cast<int64_t>(pixelY) * gridHeight) /
+                                  windowHeight),
+                 0, gridHeight - 1));
 }
 
-static WindowClientSize initialWindowTuiClientSize(const ConsoleScreen& screen) {
+static WindowClientSize
+initialWindowTuiClientSize(const ConsoleScreen &screen) {
   constexpr int kFallbackCellPixelWidth = 10;
   constexpr int kFallbackCellPixelHeight = 20;
   return {
@@ -227,12 +226,12 @@ static WindowClientSize initialWindowTuiClientSize(const ConsoleScreen& screen) 
   };
 }
 
-static ShellOpenMode resolveWindowsShellOpenMode(const Options& options) {
+static ShellOpenMode resolveWindowsShellOpenMode(const Options &options) {
   return resolveShellOpenModeSelection(options.shellOpenMode,
                                        configuredWindowsShellOpenMode());
 }
 
-static bool shouldForwardInputToExistingInstance(const Options& options,
+static bool shouldForwardInputToExistingInstance(const Options &options,
                                                  ShellOpenMode mode) {
   if (mode != ShellOpenMode::SameInstance || options.input.empty()) {
     return false;
@@ -243,50 +242,53 @@ static bool shouldForwardInputToExistingInstance(const Options& options,
   return true;
 }
 
-static bool isVideoExt(const std::filesystem::path& p) {
+static bool isVideoExt(const std::filesystem::path &p) {
   return isSupportedVideoExt(p);
 }
 
-static std::string buildTrackSelectionMeta(const BrowserState& browser) {
-  if (browser.entries.empty()) return "";
+static std::string buildTrackSelectionMeta(const BrowserState &browser) {
+  if (browser.entries.empty())
+    return "";
   int idx = std::clamp(browser.selected, 0,
                        static_cast<int>(browser.entries.size()) - 1);
-  const auto& entry = browser.entries[static_cast<size_t>(idx)];
+  const auto &entry = browser.entries[static_cast<size_t>(idx)];
   std::string name = entry.name;
   if (entry.isDirectory() && !entry.actionAs<browser_entry::NavigateUp>()) {
     name += "/";
   }
 
   std::string sortLabel = "Name";
-  if (browser.sortMode == BrowserState::SortMode::Date) sortLabel = "Date";
-  else if (browser.sortMode == BrowserState::SortMode::Size) sortLabel = "Size";
+  if (browser.sortMode == BrowserState::SortMode::Date)
+    sortLabel = "Date";
+  else if (browser.sortMode == BrowserState::SortMode::Size)
+    sortLabel = "Size";
 
-  std::string dirArrow = browser.sortDescending ? " \xE2\x86\x93" : " \xE2\x86\x91";
+  std::string dirArrow =
+      browser.sortDescending ? " \xE2\x86\x93" : " \xE2\x86\x91";
   std::string metaLine = " [" + sortLabel + dirArrow + "]";
 
   metaLine += " Selected: " + name;
-  if (const auto* selectedTrack =
-          entry.actionAs<browser_entry::PlayTrack>()) {
-    const TrackBrowserContent* content = trackBrowserContent(browser);
-    const TrackEntry* track =
+  if (const auto *selectedTrack = entry.actionAs<browser_entry::PlayTrack>()) {
+    const TrackBrowserContent *content = trackBrowserContent(browser);
+    const TrackEntry *track =
         findTrackEntry(browser, selectedTrack->trackIndex);
     if (track && track->lengthMs > 0) {
-      metaLine += "  " + formatTime(static_cast<double>(track->lengthMs) / 1000.0);
+      metaLine +=
+          "  " + formatTime(static_cast<double>(track->lengthMs) / 1000.0);
     }
     if (content && !content->tracks.empty()) {
-      metaLine += "  Track " +
-                  std::to_string(selectedTrack->trackIndex + 1) + "/" +
-                  std::to_string(content->tracks.size());
+      metaLine += "  Track " + std::to_string(selectedTrack->trackIndex + 1) +
+                  "/" + std::to_string(content->tracks.size());
     }
   }
   return metaLine;
 }
 
-static std::vector<std::filesystem::path> imageFilesFromBrowserEntries(
-    const std::vector<BrowserEntry>& entries) {
+static std::vector<std::filesystem::path>
+imageFilesFromBrowserEntries(const std::vector<BrowserEntry> &entries) {
   std::vector<std::filesystem::path> images;
   images.reserve(entries.size());
-  for (const BrowserEntry& entry : entries) {
+  for (const BrowserEntry &entry : entries) {
     if (entry.actionAs<browser_entry::OpenFile>() &&
         isSupportedImageExt(entry.path)) {
       images.push_back(entry.path);
@@ -295,9 +297,9 @@ static std::vector<std::filesystem::path> imageFilesFromBrowserEntries(
   return images;
 }
 
-int runTui(Options o, ApplicationRuntime& runtime) {
-  AudioPlaybackRuntime& audioPlayback = runtime.audioPlayback();
-  GpuRuntime& gpu = runtime.gpu();
+int runTui(Options o, ApplicationRuntime &runtime) {
+  AudioPlaybackRuntime &audioPlayback = runtime.audioPlayback();
+  GpuRuntime &gpu = runtime.gpu();
   const ShellOpenMode shellOpenMode = resolveWindowsShellOpenMode(o);
   const bool acceptShellOpenHandoffs =
       shellOpenMode == ShellOpenMode::SameInstance;
@@ -390,9 +392,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   BrowserNavigator browserNavigator(browser, browserContentService);
   BrowserSelectionMetadata browserSelectionMetadata(isVideoExt);
   BrowserThumbnailCache browserThumbnails;
-  const bool initialBrowserPreparationAccepted =
-      browserNavigator.initialize(browserDirectoryLocation(startDir),
-                                  initialName);
+  const bool initialBrowserPreparationAccepted = browserNavigator.initialize(
+      browserDirectoryLocation(startDir), initialName);
   initialBrowserPreparationId = browserNavigator.pendingPreparationId();
   if (!initialBrowserPreparationAccepted) {
     initialBrowserPreparationId.reset();
@@ -437,12 +438,13 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   VideoPlaybackConfig videoConfig;
   videoConfig.enableAscii = o.enableAscii;
   videoConfig.enableAudio = o.enableAudio;
+  videoConfig.enableAutomaticChapterAnalysis = o.enableAutomaticChapterAnalysis;
   videoConfig.debugOverlay = o.asciiDebugOverlay;
   videoConfig.systemMediaCommandOwner = systemMediaCommandOwner;
 
   std::optional<OpenFilesRequest> initialOpenRequest;
 
-  auto renderFile = [&](const std::filesystem::path& file) -> void {
+  auto renderFile = [&](const std::filesystem::path &file) -> void {
     Options renderOpt = o;
     renderOpt.input = toUtf8String(file);
     std::filesystem::path outputPath =
@@ -470,8 +472,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         std::string radioIniError;
         if (!applyRadioSettingsIni(activeRadioTemplate, o.radioSettingsPath,
                                    o.radioPresetName, &radioIniError)) {
-          die("Failed to apply radio settings from '" +
-              o.radioSettingsPath + "': " + radioIniError);
+          die("Failed to apply radio settings from '" + o.radioSettingsPath +
+              "': " + radioIniError);
         }
       }
     }
@@ -529,61 +531,66 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   tui_video_transition_view::Layout videoTransitionLayout;
   auto presentTextGrid = [&]() {
     screen.draw();
-    if (!windowTuiEnabled || !tuiWindow.IsOpen()) return;
+    if (!windowTuiEnabled || !tuiWindow.IsOpen())
+      return;
     int gridWidth = 0;
     int gridHeight = 0;
     if (screen.snapshot(windowCells, gridWidth, gridHeight)) {
       tuiWindow.PresentTextGrid(windowCells, gridWidth, gridHeight);
     }
   };
-  AudioPictureInPictureWindow audioPictureInPicture(
-      gpu, systemMediaCommandOwner);
+  AudioPictureInPictureWindow audioPictureInPicture(gpu,
+                                                    systemMediaCommandOwner);
   ApplicationInputPump applicationInputPump;
   pointer_input::MouseDoubleClickTracker browserDoubleClickTracker;
   BrowserViewport viewport;
   browser_chrome::Model browserChrome;
   auto applyAudioPictureInPicturePlan =
       [&](playback_route::AudioPictureInPicturePlan plan) {
-    switch (plan) {
-      case playback_route::AudioPictureInPicturePlan::Keep:
-        break;
-      case playback_route::AudioPictureInPicturePlan::Close:
-        if (audioPictureInPicture.isOpen()) {
-          audioPictureInPicture.close();
-          markDirty(UiDirtyFlags::Async);
+        switch (plan) {
+        case playback_route::AudioPictureInPicturePlan::Keep:
+          break;
+        case playback_route::AudioPictureInPicturePlan::Close:
+          if (audioPictureInPicture.isOpen()) {
+            audioPictureInPicture.close();
+            markDirty(UiDirtyFlags::Async);
+          }
+          break;
         }
-        break;
-    }
-  };
+      };
 
   BrowserPlaybackRevealer browserPlaybackRevealer(browserNavigator);
   auto consumeBrowserNavigationEvents = [&]() {
     const std::vector<BrowserNavigator::Event> events =
         browserNavigator.drainEvents();
-    if (!events.empty()) markLayoutDirty();
+    if (!events.empty())
+      markLayoutDirty();
   };
 
   std::string mediaCommandError;
 
   PlaybackSession::Dependencies mediaSessionDependencies{
-      audioPlayback, gpu, screen, runtime.subtitleLoader(),
+      audioPlayback,
+      gpu,
+      screen,
+      runtime.subtitleLoader(),
       runtime.chapterAnalysis(),
       theme.playbackSessionAppearance()};
   playback_session::VideoSessionFactory createVideoSession =
       [mediaSessionDependencies](
           playback_session::VideoSessionRequest request) {
-        return std::make_unique<PlaybackSession>(
-            std::move(request), mediaSessionDependencies);
+        return std::make_unique<PlaybackSession>(std::move(request),
+                                                 mediaSessionDependencies);
       };
-  playback_queue::Queue& playbackQueue = runtime.playbackQueue();
-  media_processing::Coordinator& mediaProcessing = runtime.mediaProcessing();
-  media_processing::Actions& mediaActions = runtime.mediaActions();
+  playback_queue::Queue &playbackQueue = runtime.playbackQueue();
+  media_processing::Coordinator &mediaProcessing = runtime.mediaProcessing();
+  media_processing::Actions &mediaActions = runtime.mediaActions();
   playback_media_processing::Actions mediaProcessingActions =
       mediaActions.playbackActions();
   tui_media_tasks::Controller mediaTasks(mediaProcessing, mediaActions);
   TuiMediaCoordinator mediaCoordinator(
-      {playbackQueue, mediaProcessing, mediaProcessingActions,
-       audioPlayback, std::move(createVideoSession), videoConfig});
+      {playbackQueue, mediaProcessing, mediaProcessingActions, audioPlayback,
+       std::move(createVideoSession), videoConfig});
 
   shell_overlay_stack::Model shellOverlays;
   tui_shell_dialogs::Host shellDialogs(shellOverlays);
@@ -593,69 +600,65 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       theme.popupMenuStyles(), theme.commandPaletteStyles(),
       theme.dialogStyles()};
 
-  const auto showPlaybackErrorDialog =
-      [&](const std::filesystem::path& file) {
-        shellDialogs.showInformation(
-            tui_playback_dialogs::audioPlaybackFailure(
-                file, audioPlayback.warning()));
-      };
+  const auto showPlaybackErrorDialog = [&](const std::filesystem::path &file) {
+    shellDialogs.showInformation(tui_playback_dialogs::audioPlaybackFailure(
+        file, audioPlayback.warning()));
+  };
 
   const auto showVideoPlaybackErrorDialog =
-      [&](const std::filesystem::path& file,
-          const playback_session::Problem& problem) {
+      [&](const std::filesystem::path &file,
+          const playback_session::Problem &problem) {
         shellDialogs.showInformation(
             tui_playback_dialogs::videoPlaybackFailure(file, problem));
       };
 
   const auto showAudioPictureInPictureOpenError = [&]() {
-    shellDialogs.showInformation(
-        tui_playback_dialogs::pictureInPictureFailure(
-            audioPictureInPicture.lastError()));
+    shellDialogs.showInformation(tui_playback_dialogs::pictureInPictureFailure(
+        audioPictureInPicture.lastError()));
   };
 
   const auto showAudioFallbackDialog =
-      [&](const application_playback::AudioFallbackRequest& request) {
+      [&](const application_playback::AudioFallbackRequest &request) {
         shellDialogs.showAudioFallback(request);
       };
 
   TuiPlaybackPresenter playbackPresenter(mediaCoordinator);
   bool applicationQuitRequested = false;
-  auto handleMediaCoordinatorEvent =
-      [&](TuiMediaCoordinator::Event event) {
+  auto handleMediaCoordinatorEvent = [&](TuiMediaCoordinator::Event event) {
     std::visit(
-        [&](auto&& value) {
+        [&](auto &&value) {
           using Event = std::decay_t<decltype(value)>;
           if constexpr (std::is_same_v<
                             Event,
                             TuiMediaCoordinator::ApplyAudioPictureInPicture>) {
             applyAudioPictureInPicturePlan(value.plan);
-          } else if constexpr (
-              std::is_same_v<Event,
-                             TuiMediaCoordinator::CommandErrorChanged>) {
+          } else if constexpr (std::is_same_v<
+                                   Event,
+                                   TuiMediaCoordinator::CommandErrorChanged>) {
             mediaCommandError = value.message;
             markDirty(UiDirtyFlags::Async);
-          } else if constexpr (
-              std::is_same_v<Event,
-                             TuiMediaCoordinator::AudioPlaybackFailed>) {
+          } else if constexpr (std::is_same_v<
+                                   Event,
+                                   TuiMediaCoordinator::AudioPlaybackFailed>) {
             showPlaybackErrorDialog(value.file);
             markDirty();
-          } else if constexpr (
-              std::is_same_v<Event,
-                             TuiMediaCoordinator::VideoPlaybackFailed>) {
+          } else if constexpr (std::is_same_v<
+                                   Event,
+                                   TuiMediaCoordinator::VideoPlaybackFailed>) {
             showVideoPlaybackErrorDialog(value.file, value.problem);
             markDirty();
-          } else if constexpr (
-              std::is_same_v<
-                  Event, application_playback::AudioFallbackRequest>) {
+          } else if constexpr (std::is_same_v<Event,
+                                              application_playback::
+                                                  AudioFallbackRequest>) {
             showAudioFallbackDialog(value);
             markDirty();
-          } else if constexpr (
-              std::is_same_v<
-                  Event, application_playback::AudioFallbackRevoked>) {
+          } else if constexpr (std::is_same_v<Event,
+                                              application_playback::
+                                                  AudioFallbackRevoked>) {
             shellDialogs.revokeAudioFallback(value.id);
             markDirty();
-          } else if constexpr (
-              std::is_same_v<Event, TuiMediaCoordinator::ShowImages>) {
+          } else if constexpr (std::is_same_v<
+                                   Event, TuiMediaCoordinator::ShowImages>) {
             applyAudioPictureInPicturePlan(value.audioPictureInPicture);
             image_viewer::Result result = image_viewer::run(
                 std::move(value.sequence), input, screen, theme.normal,
@@ -666,24 +669,24 @@ int runTui(Options o, ApplicationRuntime& runtime) {
               mediaCoordinator.openFiles(*result.openFiles);
             }
             markDirty();
-          } else if constexpr (
-              std::is_same_v<Event, TuiMediaCoordinator::QuitRequested>) {
+          } else if constexpr (std::is_same_v<
+                                   Event, TuiMediaCoordinator::QuitRequested>) {
             applicationQuitRequested = true;
-          } else if constexpr (
-              std::is_same_v<Event,
-                             TuiMediaCoordinator::PlaybackStateChanged>) {
+          } else if constexpr (std::is_same_v<
+                                   Event,
+                                   TuiMediaCoordinator::PlaybackStateChanged>) {
             markDirty();
-          } else if constexpr (
-              std::is_same_v<Event,
-                             TuiMediaCoordinator::ActivateBrowserSurface>) {
+          } else if constexpr (std::is_same_v<Event,
+                                              TuiMediaCoordinator::
+                                                  ActivateBrowserSurface>) {
             if (windowTuiEnabled && tuiWindow.IsOpen()) {
               tuiWindow.Activate();
             } else {
               activateWindowsConsoleWindow();
             }
-          } else if constexpr (
-              std::is_same_v<Event,
-                             TuiMediaCoordinator::OpenBrowserDirectory>) {
+          } else if constexpr (std::is_same_v<
+                                   Event,
+                                   TuiMediaCoordinator::OpenBrowserDirectory>) {
             if (!browserNavigator.navigate(
                     browserDirectoryLocation(value.path))) {
               mediaCommandError = "Unable to open the requested folder.";
@@ -706,38 +709,35 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
     return handles;
   };
-  auto buildPlaybackLabel =
-      [&](const std::optional<PlaybackTarget>& target) {
+  auto buildPlaybackLabel = [&](const std::optional<PlaybackTarget> &target) {
     const std::filesystem::path nowPlaying =
         target ? playbackTargetFile(*target) : std::filesystem::path{};
-    std::string label =
-        nowPlaying.empty() ? std::string("(none)")
-                           : toUtf8String(nowPlaying.filename());
+    std::string label = nowPlaying.empty()
+                            ? std::string("(none)")
+                            : toUtf8String(nowPlaying.filename());
     const std::optional<int> trackIndex =
         target ? playbackTargetTrackIndex(*target) : std::nullopt;
     if (!nowPlaying.empty() && trackIndex) {
       int digits = 3;
-      const TrackEntry* track = nullptr;
-      const TrackBrowserContent* content = trackBrowserContent(browser);
+      const TrackEntry *track = nullptr;
+      const TrackBrowserContent *content = trackBrowserContent(browser);
       if (content && samePath(nowPlaying, content->file) &&
           !content->tracks.empty()) {
         digits = trackLabelDigits(content->tracks.size());
         track = findTrackEntry(browser, *trackIndex);
       }
-      label += "  |  " +
-               (track ? formatTrackLabel(*track, digits)
-                      : formatTrackIndexLabel(*trackIndex, digits));
+      label += "  |  " + (track ? formatTrackLabel(*track, digits)
+                                : formatTrackIndexLabel(*trackIndex, digits));
     }
     return label;
   };
   auto startPlayback = [&](playback_route::Route route,
                            playback_queue::Source source) {
-    return mediaCoordinator.startPlayback(std::move(route),
-                                          std::move(source));
+    return mediaCoordinator.startPlayback(std::move(route), std::move(source));
   };
-  auto openBrowserMediaTarget = [&](const PlaybackTarget& target) {
+  auto openBrowserMediaTarget = [&](const PlaybackTarget &target) {
     playback_route::Route route = playback_route::resolveTarget(target);
-    const std::filesystem::path& targetFile = playbackTargetFile(target);
+    const std::filesystem::path &targetFile = playbackTargetFile(target);
     if (isSupportedImageExt(targetFile)) {
       return mediaCoordinator.startFiles(
           std::move(route), imageFilesFromBrowserEntries(browser.entries));
@@ -745,12 +745,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     return startPlayback(std::move(route),
                          browser_playback_source::capture(browser.entries));
   };
-  auto playBrowserEntry = [&](const BrowserEntry& entry) {
+  auto playBrowserEntry = [&](const BrowserEntry &entry) {
     const std::optional<PlaybackTarget> target =
         browser_playback_source::targetFor(entry);
     return target && openBrowserMediaTarget(*target);
   };
-  auto playOpenFilesRequest = [&](const OpenFilesRequest& request) {
+  auto playOpenFilesRequest = [&](const OpenFilesRequest &request) {
     return mediaCoordinator.openFiles(request);
   };
 
@@ -772,12 +772,11 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     mediaCoordinator.setExternalInputModal(shellModal);
     const TuiMediaCoordinator::ShellSnapshot shell =
         mediaCoordinator.shellSnapshot();
-    const bool acceptsFileDrop =
-        !shellModal && !shell.capturesBrowserInput;
+    const bool acceptsFileDrop = !shellModal && !shell.capturesBrowserInput;
     tuiWindow.SetFileDropAcceptanceEnabled(acceptsFileDrop);
     audioPictureInPicture.setFileDropAcceptanceEnabled(acceptsFileDrop);
   };
-  const auto deferCommittedFileDrop = [&](InputEvent& event) {
+  const auto deferCommittedFileDrop = [&](InputEvent &event) {
     if (event.type != InputEvent::Type::FileDrop ||
         !isCommittedFileDropEvent(event.fileDrop)) {
       return false;
@@ -792,8 +791,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     return true;
   };
 
-  auto selectedOptionsSubject = [&]()
-      -> std::optional<OptionsBrowserSubject> {
+  auto selectedOptionsSubject = [&]() -> std::optional<OptionsBrowserSubject> {
     if (optionsBrowserIsActive(browser) || browser.entries.empty() ||
         browser.selected < 0 ||
         browser.selected >= static_cast<int>(browser.entries.size())) {
@@ -811,16 +809,14 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     chromeInput.videoPresentation = presentation.videoPresentation;
     chromeInput.playbackTargetAvailable =
         presentation.currentTarget.has_value();
-    chromeInput.audioPictureInPictureOpen =
-        audioPictureInPicture.isOpen();
+    chromeInput.audioPictureInPictureOpen = audioPictureInPicture.isOpen();
     chromeInput.melodyVisualizationActive = melodyVisualization.active();
     chromeInput.transportUiEnabled = o.play;
     chromeInput.optionsModeActive = optionsBrowserIsActive(browser);
-    chromeInput.selectedEntryHasOptions =
-        selectedOptionsSubject().has_value();
-    const std::optional<MediaTaskStatusModel>& mediaTaskStatus =
+    chromeInput.selectedEntryHasOptions = selectedOptionsSubject().has_value();
+    const std::optional<MediaTaskStatusModel> &mediaTaskStatus =
         mediaTasks.snapshot().latestStatus;
-    const std::optional<MediaTaskCardModel>& activeTask =
+    const std::optional<MediaTaskCardModel> &activeTask =
         mediaTasks.snapshot().activeCard;
     chromeInput.hasMediaTaskStatus =
         mediaTaskPanel.indicatorVisible(activeTask) ||
@@ -844,11 +840,10 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     const bool showHeaderLabel =
         browserInteractionEnabled &&
         (optionsBrowserIsActive(browser) || isTrackBrowserActive(browser));
-    viewport = computeBrowserViewport(screen.width(), screen.height(),
-                                      browserInteractionEnabled,
-                                      showHeaderLabel,
-                                      browserChrome.footer.reservedLines,
-                                      searchBarClearButtonWidth);
+    viewport = computeBrowserViewport(
+        screen.width(), screen.height(), browserInteractionEnabled,
+        showHeaderLabel, browserChrome.footer.reservedLines,
+        searchBarClearButtonWidth);
     width = viewport.width;
     height = viewport.height;
     searchBarY = viewport.searchBarY;
@@ -880,7 +875,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       markDirty();
     }
   };
-  auto activateBrowserEntry = [&](const BrowserEntry& entry) {
+  auto activateBrowserEntry = [&](const BrowserEntry &entry) {
     OptionsBrowserResult optionsResult =
         optionsBrowserActivateEntry(browser, entry, audioPlayback);
     if (optionsResult == OptionsBrowserResult::Changed) {
@@ -892,7 +887,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
     return playBrowserEntry(entry);
   };
-  auto openFileContextMenu = [&](const BrowserEntry& entry, int x, int y) {
+  auto openFileContextMenu = [&](const BrowserEntry &entry, int x, int y) {
     if (!o.play || !entry.isMedia()) {
       return;
     }
@@ -900,20 +895,19 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         mediaTasks.contextForSource(entry.path);
     const bool audio =
         context.mediaKind == playback_media_actions::MediaKind::Audio;
-    context.canBrowseTracks =
-        audio && supportsPlaybackTrackCatalog(entry.path);
-    context.canAnalyzeAudio =
-        audio && audioPlayback.canAnalyzeFile(entry.path);
+    context.canBrowseTracks = audio && supportsPlaybackTrackCatalog(entry.path);
+    context.canAnalyzeAudio = audio && audioPlayback.canAnalyzeFile(entry.path);
     std::vector<playback_media_actions::Item> items =
         playback_media_actions::build(context);
-    if (items.empty()) return;
+    if (items.empty())
+      return;
     tui_popup_menu::Anchor anchor;
     anchor.x = x;
     anchor.y = y;
     shellOverlays.openMediaMenu(entry, std::move(items), anchor);
     markDirty();
   };
-  auto renderInputFile = [&](const std::filesystem::path& file) {
+  auto renderInputFile = [&](const std::filesystem::path &file) {
     renderFile(file);
     didRender = true;
   };
@@ -929,7 +923,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   };
   auto togglePitchMonitor = [&]() {
     const PlaybackPresentationModel presentation = playbackPresenter.model();
-    const AudioPlaybackSnapshot& audio = presentation.audio;
+    const AudioPlaybackSnapshot &audio = presentation.audio;
     if (!melodyVisualization.active() && !audio.source && !audio.ready) {
       return;
     }
@@ -954,10 +948,11 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   auto toggleWindowPresentation = [&]() {
     const PlaybackPresentationModel presentation = playbackPresenter.model();
     if (presentation.control && presentation.control->isVideo) {
-      if (mediaCoordinator.toggleWindowPresentation()) markLayoutDirty();
+      if (mediaCoordinator.toggleWindowPresentation())
+        markLayoutDirty();
       return;
     }
-    const AudioPlaybackSnapshot& audio = presentation.audio;
+    const AudioPlaybackSnapshot &audio = presentation.audio;
     if (!audioPictureInPicture.isOpen() && !audio.source && !audio.ready) {
       return;
     }
@@ -971,122 +966,123 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   auto togglePictureInPicture = [&]() {
     const PlaybackPresentationModel presentation = playbackPresenter.model();
     if (presentation.control && presentation.control->isVideo) {
-      if (mediaCoordinator.togglePictureInPicture()) markLayoutDirty();
+      if (mediaCoordinator.togglePictureInPicture())
+        markLayoutDirty();
       return;
     }
     toggleWindowPresentation();
   };
   auto dispatchPlaybackShortcut = [&](PlaybackAction action) {
     switch (action) {
-      case PlaybackAction::Quit:
-        mediaCoordinator.requestQuit();
-        break;
-      case PlaybackAction::Play:
-        handlePlaybackControlCommand(PlaybackControlCommand::Play);
-        break;
-      case PlaybackAction::Pause:
-        handlePlaybackControlCommand(PlaybackControlCommand::Pause);
-        break;
-      case PlaybackAction::TogglePause:
-        handlePlaybackControlCommand(PlaybackControlCommand::TogglePause);
-        break;
-      case PlaybackAction::Stop:
-        handlePlaybackControlCommand(PlaybackControlCommand::Stop);
-        break;
-      case PlaybackAction::Previous:
-        handlePlaybackControlCommand(PlaybackControlCommand::Previous);
-        break;
-      case PlaybackAction::Next:
-        handlePlaybackControlCommand(PlaybackControlCommand::Next);
-        break;
-      case PlaybackAction::ToggleWindow:
-        toggleWindowPresentation();
-        break;
-      case PlaybackAction::TogglePictureInPicture:
-      case PlaybackAction::DismissPictureInPicture:
-        togglePictureInPicture();
-        break;
-      case PlaybackAction::ToggleFullscreen:
-        if (mediaCoordinator.toggleFullscreen()) markLayoutDirty();
-        break;
-      case PlaybackAction::ToggleRadio:
-        toggleRadio();
-        break;
-      case PlaybackAction::Toggle50Hz:
-        toggle50Hz();
-        break;
-      case PlaybackAction::ToggleOptions:
-        toggleOptions();
-        break;
-      case PlaybackAction::TogglePitchMonitor:
-        togglePitchMonitor();
-        break;
-      case PlaybackAction::SeekBackward:
-        audioPlayback.seekBy(-1);
-        markDirty();
-        break;
-      case PlaybackAction::SeekForward:
-        audioPlayback.seekBy(1);
-        markDirty();
-        break;
-      case PlaybackAction::VolumeUp:
-        audioPlayback.adjustVolume(0.10f);
-        markDirty();
-        break;
-      case PlaybackAction::VolumeDown:
-        audioPlayback.adjustVolume(-0.10f);
-        markDirty();
-        break;
-      case PlaybackAction::ToggleSubtitles:
-      case PlaybackAction::ToggleAudioTrack:
-      case PlaybackAction::PreviousChapter:
-      case PlaybackAction::NextChapter:
-      case PlaybackAction::PreviousFrame:
-      case PlaybackAction::NextFrame:
-      case PlaybackAction::CopyVideoFrame:
-      case PlaybackAction::OpenVideoEditor:
-      case PlaybackAction::RequestCloseVideoEditor:
-      case PlaybackAction::NavigateBackInVideoEditor:
-      case PlaybackAction::ConfirmVideoEditPrompt:
-      case PlaybackAction::SetVideoEditIn:
-      case PlaybackAction::SetVideoEditOut:
-      case PlaybackAction::ClearVideoEditIn:
-      case PlaybackAction::ClearVideoEditOut:
-      case PlaybackAction::ClearVideoEditInAndOut:
-      case PlaybackAction::RippleDeleteVideoEditSelection:
-      case PlaybackAction::TrimVideoEditSelection:
-      case PlaybackAction::UndoVideoEdit:
-      case PlaybackAction::RedoVideoEdit:
-      case PlaybackAction::ResetVideoEdits:
-      case PlaybackAction::ExportVideoEdits:
-      case PlaybackAction::DiscardVideoEditsAndExit:
-      case PlaybackAction::CancelVideoEditPrompt:
-      case PlaybackAction::SelectPreviousMediaActionConfirmation:
-      case PlaybackAction::SelectNextMediaActionConfirmation:
-      case PlaybackAction::ActivateMediaActionConfirmation:
-      case PlaybackAction::DismissMediaActionConfirmation:
-      case PlaybackAction::ExitPlaybackSession:
-      case PlaybackAction::CloseViewer:
-        break;
+    case PlaybackAction::Quit:
+      mediaCoordinator.requestQuit();
+      break;
+    case PlaybackAction::Play:
+      handlePlaybackControlCommand(PlaybackControlCommand::Play);
+      break;
+    case PlaybackAction::Pause:
+      handlePlaybackControlCommand(PlaybackControlCommand::Pause);
+      break;
+    case PlaybackAction::TogglePause:
+      handlePlaybackControlCommand(PlaybackControlCommand::TogglePause);
+      break;
+    case PlaybackAction::Stop:
+      handlePlaybackControlCommand(PlaybackControlCommand::Stop);
+      break;
+    case PlaybackAction::Previous:
+      handlePlaybackControlCommand(PlaybackControlCommand::Previous);
+      break;
+    case PlaybackAction::Next:
+      handlePlaybackControlCommand(PlaybackControlCommand::Next);
+      break;
+    case PlaybackAction::ToggleWindow:
+      toggleWindowPresentation();
+      break;
+    case PlaybackAction::TogglePictureInPicture:
+    case PlaybackAction::DismissPictureInPicture:
+      togglePictureInPicture();
+      break;
+    case PlaybackAction::ToggleFullscreen:
+      if (mediaCoordinator.toggleFullscreen())
+        markLayoutDirty();
+      break;
+    case PlaybackAction::ToggleRadio:
+      toggleRadio();
+      break;
+    case PlaybackAction::Toggle50Hz:
+      toggle50Hz();
+      break;
+    case PlaybackAction::ToggleOptions:
+      toggleOptions();
+      break;
+    case PlaybackAction::TogglePitchMonitor:
+      togglePitchMonitor();
+      break;
+    case PlaybackAction::SeekBackward:
+      audioPlayback.seekBy(-1);
+      markDirty();
+      break;
+    case PlaybackAction::SeekForward:
+      audioPlayback.seekBy(1);
+      markDirty();
+      break;
+    case PlaybackAction::VolumeUp:
+      audioPlayback.adjustVolume(0.10f);
+      markDirty();
+      break;
+    case PlaybackAction::VolumeDown:
+      audioPlayback.adjustVolume(-0.10f);
+      markDirty();
+      break;
+    case PlaybackAction::ToggleSubtitles:
+    case PlaybackAction::ToggleAudioTrack:
+    case PlaybackAction::PreviousChapter:
+    case PlaybackAction::NextChapter:
+    case PlaybackAction::PreviousFrame:
+    case PlaybackAction::NextFrame:
+    case PlaybackAction::CopyVideoFrame:
+    case PlaybackAction::OpenVideoEditor:
+    case PlaybackAction::RequestCloseVideoEditor:
+    case PlaybackAction::NavigateBackInVideoEditor:
+    case PlaybackAction::ConfirmVideoEditPrompt:
+    case PlaybackAction::SetVideoEditIn:
+    case PlaybackAction::SetVideoEditOut:
+    case PlaybackAction::ClearVideoEditIn:
+    case PlaybackAction::ClearVideoEditOut:
+    case PlaybackAction::ClearVideoEditInAndOut:
+    case PlaybackAction::RippleDeleteVideoEditSelection:
+    case PlaybackAction::TrimVideoEditSelection:
+    case PlaybackAction::UndoVideoEdit:
+    case PlaybackAction::RedoVideoEdit:
+    case PlaybackAction::ResetVideoEdits:
+    case PlaybackAction::ExportVideoEdits:
+    case PlaybackAction::DiscardVideoEditsAndExit:
+    case PlaybackAction::CancelVideoEditPrompt:
+    case PlaybackAction::SelectPreviousMediaActionConfirmation:
+    case PlaybackAction::SelectNextMediaActionConfirmation:
+    case PlaybackAction::ActivateMediaActionConfirmation:
+    case PlaybackAction::DismissMediaActionConfirmation:
+    case PlaybackAction::ExitPlaybackSession:
+    case PlaybackAction::CloseViewer:
+      break;
     }
   };
   auto dispatchPlaybackCommand = [&](playback_input::Command command) {
-    if (const auto* action = std::get_if<PlaybackAction>(&command)) {
+    if (const auto *action = std::get_if<PlaybackAction>(&command)) {
       dispatchPlaybackShortcut(*action);
       return;
     }
-    if (const auto* seek =
-            std::get_if<playback_input::SeekToRatio>(&command)) {
-      if (mediaCoordinator.seekToRatio(seek->ratio)) markDirty();
+    if (const auto *seek = std::get_if<playback_input::SeekToRatio>(&command)) {
+      if (mediaCoordinator.seekToRatio(seek->ratio))
+        markDirty();
       return;
     }
-    if (const auto* seek =
-            std::get_if<playback_input::SeekBySteps>(&command)) {
+    if (const auto *seek = std::get_if<playback_input::SeekBySteps>(&command)) {
       audioPlayback.seekBy(seek->steps);
       markDirty();
       return;
     }
-    const auto* volume = std::get_if<playback_input::AdjustVolume>(&command);
+    const auto *volume = std::get_if<playback_input::AdjustVolume>(&command);
     if (volume) {
       audioPlayback.adjustVolume(volume->delta);
       markDirty();
@@ -1112,32 +1108,31 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   };
   std::deque<AudioPictureInPictureWindow::OpenFiles>
       pendingAudioPictureInPictureOpens;
-  auto handleAudioPictureInPictureEvent =
-      [&](AudioPictureInPictureWindow::Event event) {
-        std::visit(
-            [&](auto&& value) {
-              using Event = std::decay_t<decltype(value)>;
-              if constexpr (std::is_same_v<
-                                Event,
-                                AudioPictureInPictureWindow::PlaybackCommand>) {
-                dispatchPlaybackCommand(std::move(value.command));
-              } else if constexpr (
-                  std::is_same_v<Event,
-                                 AudioPictureInPictureWindow::OpenFiles>) {
-                // The OLE target normally refuses drops while modal. Retain a
-                // drop that won the cross-thread race just before modality so
-                // Windows never reports success for input we subsequently
-                // discard.
-                pendingAudioPictureInPictureOpens.push_back(
-                    std::move(value));
-              } else if constexpr (
-                  std::is_same_v<Event,
-                                 AudioPictureInPictureWindow::Closed>) {
-                markDirty(UiDirtyFlags::Async);
-              }
-            },
-            std::move(event));
-      };
+  auto handleAudioPictureInPictureEvent = [&](AudioPictureInPictureWindow::Event
+                                                  event) {
+    std::visit(
+        [&](auto &&value) {
+          using Event = std::decay_t<decltype(value)>;
+          if constexpr (std::is_same_v<
+                            Event,
+                            AudioPictureInPictureWindow::PlaybackCommand>) {
+            dispatchPlaybackCommand(std::move(value.command));
+          } else if constexpr (std::is_same_v<
+                                   Event,
+                                   AudioPictureInPictureWindow::OpenFiles>) {
+            // The OLE target normally refuses drops while modal. Retain a
+            // drop that won the cross-thread race just before modality so
+            // Windows never reports success for input we subsequently
+            // discard.
+            pendingAudioPictureInPictureOpens.push_back(std::move(value));
+          } else if constexpr (std::is_same_v<
+                                   Event,
+                                   AudioPictureInPictureWindow::Closed>) {
+            markDirty(UiDirtyFlags::Async);
+          }
+        },
+        std::move(event));
+  };
 
   auto activateRadioifySurface = [&]() {
     if (mediaCoordinator.shellSnapshot().videoReady) {
@@ -1167,19 +1162,19 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   };
 
   auto handleNotificationAreaCommand =
-      [&](const PlaybackNotificationAreaCommand& command) {
-    switch (command.kind) {
-      case PlaybackNotificationAreaCommand::Kind::Activate:
-        activateRadioifySurface();
-        break;
-      case PlaybackNotificationAreaCommand::Kind::Playback:
-        handlePlaybackControlCommand(command.playbackCommand);
-        break;
-      case PlaybackNotificationAreaCommand::Kind::Quit:
-        dispatchPlaybackShortcut(PlaybackAction::Quit);
-        break;
-    }
-  };
+      [&](const PlaybackNotificationAreaCommand &command) {
+        switch (command.kind) {
+        case PlaybackNotificationAreaCommand::Kind::Activate:
+          activateRadioifySurface();
+          break;
+        case PlaybackNotificationAreaCommand::Kind::Playback:
+          handlePlaybackControlCommand(command.playbackCommand);
+          break;
+        case PlaybackNotificationAreaCommand::Kind::Quit:
+          dispatchPlaybackShortcut(PlaybackAction::Quit);
+          break;
+        }
+      };
 
   auto processShellPlaybackCommands = [&]() {
     PlaybackControlCommandEvent event;
@@ -1199,21 +1194,19 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   };
   auto handleTuiInputCommand = [&](tui_input::Command command) {
     std::visit(
-        [&](auto&& value) {
+        [&](auto &&value) {
           using Command = std::decay_t<decltype(value)>;
-          if constexpr (
-              std::is_same_v<Command, tui_input::PlaybackCommand>) {
+          if constexpr (std::is_same_v<Command, tui_input::PlaybackCommand>) {
             dispatchPlaybackCommand(std::move(value.command));
           } else if constexpr (std::is_same_v<Command, tui_input::Resize>) {
             handleResize();
-          } else if constexpr (
-              std::is_same_v<Command, tui_input::ActivateEntry>) {
+          } else if constexpr (std::is_same_v<Command,
+                                              tui_input::ActivateEntry>) {
             activateBrowserEntry(value.entry);
-          } else if constexpr (
-              std::is_same_v<Command, tui_input::OpenFileContextMenu>) {
+          } else if constexpr (std::is_same_v<Command,
+                                              tui_input::OpenFileContextMenu>) {
             openFileContextMenu(value.entry, value.x, value.y);
-          } else if constexpr (
-              std::is_same_v<Command, tui_input::RenderFile>) {
+          } else if constexpr (std::is_same_v<Command, tui_input::RenderFile>) {
             renderInputFile(value.file);
           }
         },
@@ -1222,27 +1215,22 @@ int runTui(Options o, ApplicationRuntime& runtime) {
 
   auto buildCommands = [&]() {
     const PlaybackPresentationModel presentation = playbackPresenter.model();
-    const AudioPlaybackSnapshot& audio = presentation.audio;
-    const tui_media_tasks::Snapshot& taskSnapshot = mediaTasks.snapshot();
+    const AudioPlaybackSnapshot &audio = presentation.audio;
+    const tui_media_tasks::Snapshot &taskSnapshot = mediaTasks.snapshot();
     shell_command_catalog::Context context;
-    context.videoActive =
-        presentation.control && presentation.control->isVideo;
+    context.videoActive = presentation.control && presentation.control->isVideo;
     context.audioAvailable = audio.source || audio.ready;
     context.pictureInPictureOpen = audioPictureInPicture.isOpen();
     context.supports50Hz = audio.supports50HzToggle;
     context.pitchMonitorActive = melodyVisualization.active();
     context.optionsAvailable =
-        optionsBrowserIsActive(browser) ||
-        selectedOptionsSubject().has_value();
-    context.currentTargetAvailable =
-        presentation.currentTarget.has_value();
+        optionsBrowserIsActive(browser) || selectedOptionsSubject().has_value();
+    context.currentTargetAvailable = presentation.currentTarget.has_value();
     context.activeMediaTaskCancellable =
-        taskSnapshot.activeActivity &&
-        taskSnapshot.activeActivity->cancellable;
-    context.mediaTaskPanelHidden = mediaTaskPanel.indicatorVisible(
-        taskSnapshot.activeCard);
-    context.mediaTaskFailureAvailable =
-        taskSnapshot.latestFailure.has_value();
+        taskSnapshot.activeActivity && taskSnapshot.activeActivity->cancellable;
+    context.mediaTaskPanelHidden =
+        mediaTaskPanel.indicatorVisible(taskSnapshot.activeCard);
+    context.mediaTaskFailureAvailable = taskSnapshot.latestFailure.has_value();
     return shell_command_catalog::build(context);
   };
 
@@ -1251,23 +1239,19 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   };
 
   auto presentAudioSeparationSetup =
-      [&](const std::filesystem::path& sourceFile) {
-        const auto setup =
-            mediaProcessingActions.prepareAudioSeparationSetup(
-                playback_media_actions::Action::SetUpAudioSeparation,
-                sourceFile);
+      [&](const std::filesystem::path &sourceFile) {
+        const auto setup = mediaProcessingActions.prepareAudioSeparationSetup(
+            playback_media_actions::Action::SetUpAudioSeparation, sourceFile);
         if (!setup) {
           mediaCommandError =
               "Audio separation setup is no longer required or available.";
-          const std::string sourceName =
-              toUtf8String(sourceFile.filename());
+          const std::string sourceName = toUtf8String(sourceFile.filename());
           if (!sourceName.empty()) {
             mediaCommandError += " Source: \"" + sourceName + "\".";
           }
         } else {
           openMediaTaskDialog(
-              tui_media_task_panel::audioSeparationSetupDialogRequest(
-                  *setup));
+              tui_media_task_panel::audioSeparationSetupDialogRequest(*setup));
           mediaCommandError.clear();
         }
         markLayoutDirty();
@@ -1275,28 +1259,28 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       };
 
   auto confirmAudioSeparationSetup =
-      [&](const playback_media_processing::AudioSeparationSetupRequest&
-              request) {
-        const auto result =
-            mediaTasks.confirmAudioSeparationSetup(request);
+      [&](const playback_media_processing::AudioSeparationSetupRequest
+              &request) {
+        const auto result = mediaTasks.confirmAudioSeparationSetup(request);
         mediaCommandError = result.accepted ? std::string() : result.feedback;
-        if (result.accepted) markDirty(UiDirtyFlags::Async);
+        if (result.accepted)
+          markDirty(UiDirtyFlags::Async);
         markLayoutDirty();
         return result.accepted;
       };
 
   auto dispatchShellDialogEvents = [&]() {
     for (;;) {
-      std::vector<tui_shell_dialogs::Event> events =
-          shellDialogs.drainEvents();
-      if (events.empty()) return;
+      std::vector<tui_shell_dialogs::Event> events = shellDialogs.drainEvents();
+      if (events.empty())
+        return;
 
-      for (tui_shell_dialogs::Event& event : events) {
+      for (tui_shell_dialogs::Event &event : events) {
         std::visit(
-            [&](auto&& value) {
+            [&](auto &&value) {
               using Event = std::decay_t<decltype(value)>;
-              if constexpr (
-                  std::is_same_v<Event, tui_application_exit::QuitNow>) {
+              if constexpr (std::is_same_v<Event,
+                                           tui_application_exit::QuitNow>) {
                 running = false;
               } else if constexpr (std::is_same_v<
                                        Event,
@@ -1306,9 +1290,9 @@ int runTui(Options o, ApplicationRuntime& runtime) {
                     value.taskId, accepted,
                     mediaTasks.snapshot().activeActivity);
                 markDirty(UiDirtyFlags::Async);
-              } else if constexpr (
-                  std::is_same_v<Event,
-                                 tui_media_task_panel::RetryTask>) {
+              } else if constexpr (std::is_same_v<
+                                       Event,
+                                       tui_media_task_panel::RetryTask>) {
                 if (value.action ==
                     playback_media_actions::Action::SetUpAudioSeparation) {
                   presentAudioSeparationSetup(value.sourceFile);
@@ -1316,29 +1300,27 @@ int runTui(Options o, ApplicationRuntime& runtime) {
                 }
                 const media_processing::ActionRequest request =
                     media_processing::captureActionRequest(
-                        value.action, value.sourceFile, std::nullopt,
-                        o.output, audioPlayback);
+                        value.action, value.sourceFile, std::nullopt, o.output,
+                        audioPlayback);
                 const auto retry = mediaTasks.retry(value.taskId, request);
                 if (retry) {
                   mediaCommandError =
                       retry->accepted ? std::string() : retry->feedback;
                   markLayoutDirty();
                 }
-              } else if constexpr (
-                  std::is_same_v<Event,
-                                 tui_media_task_panel::CancelTask>) {
+              } else if constexpr (std::is_same_v<
+                                       Event,
+                                       tui_media_task_panel::CancelTask>) {
                 if (mediaTasks.cancelActive(value.taskId)) {
                   markDirty(UiDirtyFlags::Async);
                 }
-              } else if constexpr (
-                  std::is_same_v<
-                      Event,
-                      tui_media_task_panel::SetUpAudioSeparation>) {
+              } else if constexpr (std::is_same_v<Event,
+                                                  tui_media_task_panel::
+                                                      SetUpAudioSeparation>) {
                 confirmAudioSeparationSetup(value.request);
-              } else if constexpr (
-                  std::is_same_v<
-                      Event,
-                      tui_playback_dialogs::AudioFallbackResolution>) {
+              } else if constexpr (std::is_same_v<
+                                       Event, tui_playback_dialogs::
+                                                  AudioFallbackResolution>) {
                 if (mediaCoordinator.resolveAudioFallback(value.decision,
                                                           value.playAudio)) {
                   markDirty(UiDirtyFlags::Async);
@@ -1346,13 +1328,14 @@ int runTui(Options o, ApplicationRuntime& runtime) {
               }
             },
             std::move(event));
-        if (!running) return;
+        if (!running)
+          return;
       }
     }
   };
 
   auto requestMediaTaskCancellation = [&]() {
-    const tui_media_tasks::Snapshot& snapshot = mediaTasks.snapshot();
+    const tui_media_tasks::Snapshot &snapshot = mediaTasks.snapshot();
     if (!snapshot.activeActivity || !snapshot.activeCard ||
         !snapshot.activeActivity->cancellable ||
         snapshot.activeActivity->taskId != snapshot.activeCard->taskId) {
@@ -1364,51 +1347,51 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   };
 
   auto requestMediaTaskCancellationFor =
-      [&](const playback_media_processing::CancellationRequest& request) {
+      [&](const playback_media_processing::CancellationRequest &request) {
         const std::optional<MediaTaskCardModel> task =
             mediaTasks.cancellationTarget(request);
-        if (!task) return false;
+        if (!task)
+          return false;
         openMediaTaskDialog(
             tui_media_task_panel::cancellationDialogRequest(*task));
         return true;
       };
 
-  auto dispatchPaletteIntent = [&](const shell_command_catalog::Intent&
-                                       intent) {
+  auto dispatchPaletteIntent = [&](const shell_command_catalog::Intent
+                                       &intent) {
     std::visit(
-        [&](const auto& value) {
+        [&](const auto &value) {
           using Intent = std::decay_t<decltype(value)>;
           if constexpr (std::is_same_v<Intent, PlaybackAction>) {
             dispatchPlaybackShortcut(value);
-          } else if constexpr (
-              std::is_same_v<Intent,
-                             shell_command_catalog::SetBrowserView>) {
+          } else if constexpr (std::is_same_v<
+                                   Intent,
+                                   shell_command_catalog::SetBrowserView>) {
             browser.viewMode = value.mode;
             markLayoutDirty();
-          } else if constexpr (
-              std::is_same_v<Intent,
-                             shell_command_catalog::RevealPlayingFile>) {
-            const PlaybackPresentationModel current =
-                playbackPresenter.model();
+          } else if constexpr (std::is_same_v<
+                                   Intent,
+                                   shell_command_catalog::RevealPlayingFile>) {
+            const PlaybackPresentationModel current = playbackPresenter.model();
             if (current.currentTarget) {
               browserPlaybackRevealer.reveal(*current.currentTarget);
             }
-          } else if constexpr (
-              std::is_same_v<Intent,
-                             shell_command_catalog::ShowMediaTaskPanel>) {
+          } else if constexpr (std::is_same_v<
+                                   Intent,
+                                   shell_command_catalog::ShowMediaTaskPanel>) {
             if (mediaTaskPanel.show()) {
               markLayoutDirty();
             }
-          } else if constexpr (
-              std::is_same_v<Intent,
-                             shell_command_catalog::CancelMediaTask>) {
+          } else if constexpr (std::is_same_v<
+                                   Intent,
+                                   shell_command_catalog::CancelMediaTask>) {
             if (requestMediaTaskCancellation()) {
               markDirty();
             }
-          } else if constexpr (
-              std::is_same_v<Intent,
-                             shell_command_catalog::ShowMediaTaskFailure>) {
-            const auto& failure = mediaTasks.snapshot().latestFailure;
+          } else if constexpr (std::is_same_v<Intent,
+                                              shell_command_catalog::
+                                                  ShowMediaTaskFailure>) {
+            const auto &failure = mediaTasks.snapshot().latestFailure;
             if (failure) {
               deferredMediaTaskFailure.take();
               openMediaTaskDialog(
@@ -1421,20 +1404,19 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   };
 
   auto runFileContextAction = [&](tui_browser_media_menu::Command command) {
-    const BrowserEntry& entry = command.entry;
+    const BrowserEntry &entry = command.entry;
     const playback_media_actions::Action action = command.action;
     dirty = true;
-    const auto* track = entry.actionAs<browser_entry::PlayTrack>();
+    const auto *track = entry.actionAs<browser_entry::PlayTrack>();
     const std::optional<int> trackIndex =
         track ? std::optional<int>(track->trackIndex) : std::nullopt;
-    if (action ==
-        playback_media_actions::Action::SetUpAudioSeparation) {
+    if (action == playback_media_actions::Action::SetUpAudioSeparation) {
       presentAudioSeparationSetup(entry.path);
       return;
     }
     if (playback_media_processing::isCancellationAction(action)) {
-      const auto request = mediaProcessingActions.prepareCancellation(
-          action, entry.path);
+      const auto request =
+          mediaProcessingActions.prepareCancellation(action, entry.path);
       if (!request || !requestMediaTaskCancellationFor(*request)) {
         mediaCommandError =
             "The matching background task is no longer running. Source: \"" +
@@ -1446,8 +1428,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       return;
     }
     const media_processing::ActionRequest processingRequest =
-        media_processing::captureActionRequest(
-            action, entry.path, trackIndex, o.output, audioPlayback);
+        media_processing::captureActionRequest(action, entry.path, trackIndex,
+                                               o.output, audioPlayback);
     const std::optional<playback_media_processing::ActionResult> processing =
         mediaTasks.execute(processingRequest);
     if (processing) {
@@ -1461,38 +1443,38 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
 
     switch (action) {
-      case playback_media_actions::Action::Play:
-        if (playBrowserEntry(entry)) {
-          markDirty(UiDirtyFlags::Async);
-        }
-        return;
-      case playback_media_actions::Action::BrowseTracks:
-        browserNavigator.navigate(
-            browserTrackLocation(normalizeTrackBrowserPath(entry.path)));
-        return;
-      case playback_media_actions::Action::EditVideo: {
-        playback_route::Route route =
-            playback_route::resolveTarget(playbackFileTarget(entry.path));
-        route.sessionIntent = PlaybackSessionIntent::EditVideo;
-        const PlaybackTarget target = route.target;
-        if (startPlayback(std::move(route),
-                          playback_queue::singleSource(target))) {
-          markDirty(UiDirtyFlags::Async);
-        }
-        return;
+    case playback_media_actions::Action::Play:
+      if (playBrowserEntry(entry)) {
+        markDirty(UiDirtyFlags::Async);
       }
-      case playback_media_actions::Action::AnalyzeAudio:
-      case playback_media_actions::Action::SplitLoop:
-      case playback_media_actions::Action::GenerateSubtitles:
-      case playback_media_actions::Action::CancelSubtitleGeneration:
-      case playback_media_actions::Action::ExportTranscriptText:
-      case playback_media_actions::Action::ExportAudio:
-      case playback_media_actions::Action::CancelMediaExport:
-      case playback_media_actions::Action::SetUpAudioSeparation:
-      case playback_media_actions::Action::CancelAudioSeparationSetup:
-      case playback_media_actions::Action::SeparateAudio:
-      case playback_media_actions::Action::CancelAudioSeparation:
-        return;
+      return;
+    case playback_media_actions::Action::BrowseTracks:
+      browserNavigator.navigate(
+          browserTrackLocation(normalizeTrackBrowserPath(entry.path)));
+      return;
+    case playback_media_actions::Action::EditVideo: {
+      playback_route::Route route =
+          playback_route::resolveTarget(playbackFileTarget(entry.path));
+      route.sessionIntent = PlaybackSessionIntent::EditVideo;
+      const PlaybackTarget target = route.target;
+      if (startPlayback(std::move(route),
+                        playback_queue::singleSource(target))) {
+        markDirty(UiDirtyFlags::Async);
+      }
+      return;
+    }
+    case playback_media_actions::Action::AnalyzeAudio:
+    case playback_media_actions::Action::SplitLoop:
+    case playback_media_actions::Action::GenerateSubtitles:
+    case playback_media_actions::Action::CancelSubtitleGeneration:
+    case playback_media_actions::Action::ExportTranscriptText:
+    case playback_media_actions::Action::ExportAudio:
+    case playback_media_actions::Action::CancelMediaExport:
+    case playback_media_actions::Action::SetUpAudioSeparation:
+    case playback_media_actions::Action::CancelAudioSeparationSetup:
+    case playback_media_actions::Action::SeparateAudio:
+    case playback_media_actions::Action::CancelAudioSeparation:
+      return;
     }
   };
 
@@ -1501,15 +1483,15 @@ int runTui(Options o, ApplicationRuntime& runtime) {
   while (running) {
     synchronizeNativeInputModality();
     TuiMediaCoordinator::PollResult mediaUpdate = mediaCoordinator.poll();
-    for (TuiMediaCoordinator::Event& event : mediaUpdate.events) {
+    for (TuiMediaCoordinator::Event &event : mediaUpdate.events) {
       handleMediaCoordinatorEvent(std::move(event));
     }
     tui_media_tasks::Update taskUpdate = mediaTasks.poll();
-    const tui_media_tasks::Snapshot& taskSnapshot = mediaTasks.snapshot();
+    const tui_media_tasks::Snapshot &taskSnapshot = mediaTasks.snapshot();
     mediaTaskPanel.synchronize(taskSnapshot.activeCard);
     if (shellDialogs.synchronizeMediaTask(
             taskSnapshot.activeCard, taskSnapshot.latestFailure,
-            [&](const std::filesystem::path& sourceFile) {
+            [&](const std::filesystem::path &sourceFile) {
               return mediaProcessingActions.contextForSource(sourceFile)
                          .audioSeparationAvailability ==
                      playback_media_processing::AudioSeparationAvailability::
@@ -1517,11 +1499,11 @@ int runTui(Options o, ApplicationRuntime& runtime) {
             })) {
       markDirty();
     }
-    for (const media_processing::TaskCompletion& completion :
+    for (const media_processing::TaskCompletion &completion :
          taskUpdate.completions) {
       mediaCoordinator.handleMediaTaskCompletion(completion);
-      deferredMediaTaskFailure.observe(
-          mediaTaskFailureDialogModel(completion), taskSnapshot.activeCard);
+      deferredMediaTaskFailure.observe(mediaTaskFailureDialogModel(completion),
+                                       taskSnapshot.activeCard);
     }
     // A newly active task is newer than every completion delivered by this
     // poll. Apply that lifecycle edge last so an old completion cannot be
@@ -1538,12 +1520,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         markDirty();
       }
     }
-    if (shellDialogs.synchronizeApplicationExit(
-            taskSnapshot.activeActivity)) {
+    if (shellDialogs.synchronizeApplicationExit(taskSnapshot.activeActivity)) {
       markDirty();
     }
     dispatchShellDialogEvents();
-    if (!running) break;
+    if (!running)
+      break;
     syncShellControls();
     const TuiMediaCoordinator::ShellSnapshot shellState =
         mediaCoordinator.shellSnapshot();
@@ -1570,10 +1552,9 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           initialBrowserPreparationId &&
           *initialBrowserPreparationId == browserContentCompletion->generation;
       const bool initialPreparationFailed =
-          initialCompletion &&
-          (!browserContentCompletion->result ||
-           std::holds_alternative<BrowserPreparationError>(
-               *browserContentCompletion->result));
+          initialCompletion && (!browserContentCompletion->result ||
+                                std::holds_alternative<BrowserPreparationError>(
+                                    *browserContentCompletion->result));
       BrowserPreparationResult result =
           browserContentCompletion->result
               ? std::move(*browserContentCompletion->result)
@@ -1608,13 +1589,15 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     if (audioPictureInPicture.isOpen()) {
       AudioPictureInPictureWindow::PollResult update =
           audioPictureInPicture.pollEvents();
-      for (AudioPictureInPictureWindow::Event& event : update.events) {
+      for (AudioPictureInPictureWindow::Event &event : update.events) {
         handleAudioPictureInPictureEvent(std::move(event));
       }
-      if (update.windowChanged) markDirty(UiDirtyFlags::Async);
+      if (update.windowChanged)
+        markDirty(UiDirtyFlags::Async);
     }
     processShellPlaybackCommands();
-    if (!running) break;
+    if (!running)
+      break;
 
     if (browserThumbnails.consumeReady()) {
       markDirty(UiDirtyFlags::Async);
@@ -1628,9 +1611,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           std::move(pendingAudioPictureInPictureOpens.front());
       pendingAudioPictureInPictureOpens.pop_front();
       PlaybackPresentationState videoPresentation =
-          videoConfig.enableAscii
-              ? PlaybackPresentationState::terminalAscii()
-              : PlaybackPresentationState::nativeWindowed();
+          videoConfig.enableAscii ? PlaybackPresentationState::terminalAscii()
+                                  : PlaybackPresentationState::nativeWindowed();
       videoPresentation = videoPresentation.togglePictureInPicture();
       if (mediaCoordinator.startDroppedFiles(
               request.files, &request.sourcePlacement, videoPresentation)) {
@@ -1660,11 +1642,10 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       }
 
       InputEvent playbackEvent{};
-      ApplicationInputSurface inputSurface =
-          ApplicationInputSurface::Terminal;
-      VideoWindow* shellInputWindow =
+      ApplicationInputSurface inputSurface = ApplicationInputSurface::Terminal;
+      VideoWindow *shellInputWindow =
           windowTuiEnabled && tuiWindow.IsOpen() ? &tuiWindow : nullptr;
-      const auto pollPlaybackWindow = [&](InputEvent& event) {
+      const auto pollPlaybackWindow = [&](InputEvent &event) {
         return mediaCoordinator.pollVideoWindowInput(event);
       };
       if (applicationInputPump.pollNext(input, shellInputWindow,
@@ -1685,8 +1666,8 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           continue;
         }
         if (playbackShell.videoTransition &&
-            tui_video_transition_view::cancelRequested(
-                playbackEvent, videoTransitionLayout)) {
+            tui_video_transition_view::cancelRequested(playbackEvent,
+                                                       videoTransitionLayout)) {
           mediaCoordinator.handleControlCommand(PlaybackControlCommand::Stop);
           continue;
         }
@@ -1698,14 +1679,13 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       forceFullRedraw = false;
       const std::vector<NativeWaitHandle> activityHandles =
           applicationActivityWaitHandles();
-      waitForBrowserWake(
-          input, openFileRequestWakeHandle(),
-          browserThumbnails.waitHandle(),
-          browserContentService.nativeWaitHandle(),
-          browserSelectionMetadata.nativeWaitHandle(),
-          notificationAreaControls.nativeWaitHandle(), tuiWindow,
-          audioPictureInPicture, activityHandles,
-          mediaCoordinator.nextWakeDeadline());
+      waitForBrowserWake(input, openFileRequestWakeHandle(),
+                         browserThumbnails.waitHandle(),
+                         browserContentService.nativeWaitHandle(),
+                         browserSelectionMetadata.nativeWaitHandle(),
+                         notificationAreaControls.nativeWaitHandle(), tuiWindow,
+                         audioPictureInPicture, activityHandles,
+                         mediaCoordinator.nextWakeDeadline());
       continue;
     }
 
@@ -1741,8 +1721,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         }
         return;
       }
-      if (ev.type == InputEvent::Type::Mouse &&
-          isWindowMouseEvent(ev.mouse)) {
+      if (ev.type == InputEvent::Type::Mouse && isWindowMouseEvent(ev.mouse)) {
         mapWindowPointerToGrid(ev, tuiWindow, screen);
       }
       const PlaybackPresentationModel playbackPresentation =
@@ -1752,11 +1731,11 @@ int runTui(Options o, ApplicationRuntime& runtime) {
                   ev, shell_keyboard_input::Context{
                           shellOverlays.inputModal(),
                           playbackPresentation.currentTarget.has_value()})) {
-        if (std::holds_alternative<
-                shell_keyboard_input::ToggleCommandPalette>(*shellCommand)) {
+        if (std::holds_alternative<shell_keyboard_input::ToggleCommandPalette>(
+                *shellCommand)) {
           shellOverlays.toggleCommandPalette();
-          dirty = setBrowserSearchFocus(browser, BrowserSearchFocus::None) ||
-                  dirty;
+          dirty =
+              setBrowserSearchFocus(browser, BrowserSearchFocus::None) || dirty;
           markDirty();
         } else {
           dispatchPlaybackCommand(std::move(
@@ -1786,13 +1765,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       if (ev.type == InputEvent::Type::Resize) {
         return;
       }
-      if (const std::optional<MediaTaskCardModel>& task =
+      if (const std::optional<MediaTaskCardModel> &task =
               mediaTasks.snapshot().activeCard) {
         const tui_media_task_panel::Interaction interaction =
             mediaTaskPanel.handle(
                 ev, tui_media_task_panel::Bounds{width, height, listTop},
-                mediaTaskIndicator,
-                *task);
+                mediaTaskIndicator, *task);
         if (interaction.focusChanged && mediaTaskPanel.focused()) {
           setBrowserSearchFocus(browser, BrowserSearchFocus::None);
         }
@@ -1814,16 +1792,15 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       }
       const bool browserInteractionEnabled = !melodyVisualization.active();
       const bool isLeftClick = ev.type == InputEvent::Type::Mouse &&
-                               isMouseButtonDown(ev.mouse,
-                                                 MouseButton::Left);
+                               isMouseButtonDown(ev.mouse, MouseButton::Left);
       bool clearBtnHover = false;
       if (ev.type == InputEvent::Type::Mouse) {
-        clearBtnHover =
-            browserInteractionEnabled && searchBarY >= 0 &&
-            ev.mouse.pos.Y == searchBarY && searchBarClearStart >= 0 &&
-            searchBarClearEnd > searchBarClearStart &&
-            ev.mouse.pos.X >= searchBarClearStart &&
-            ev.mouse.pos.X < searchBarClearEnd;
+        clearBtnHover = browserInteractionEnabled && searchBarY >= 0 &&
+                        ev.mouse.pos.Y == searchBarY &&
+                        searchBarClearStart >= 0 &&
+                        searchBarClearEnd > searchBarClearStart &&
+                        ev.mouse.pos.X >= searchBarClearStart &&
+                        ev.mouse.pos.X < searchBarClearEnd;
         if (searchBarClearHover != clearBtnHover) {
           searchBarClearHover = clearBtnHover;
           markDirty();
@@ -1867,9 +1844,11 @@ int runTui(Options o, ApplicationRuntime& runtime) {
                              progressBarY, progressBarWidth, actionStrip},
           BrowserInputCapabilities{browserInteractionEnabled, o.play,
                                    audioPlayback.ready()});
-      if (inputResult.dirty) markDirty();
-      if (inputResult.quitRequested) running = false;
-      for (tui_input::Command& command : inputResult.commands) {
+      if (inputResult.dirty)
+        markDirty();
+      if (inputResult.quitRequested)
+        running = false;
+      for (tui_input::Command &command : inputResult.commands) {
         handleTuiInputCommand(std::move(command));
       }
     };
@@ -1881,10 +1860,12 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       }
     };
 
-    auto dispatchInputEvent = [&](const InputEvent& event,
-                                  ApplicationInputSurface inputSurface) -> bool {
+    auto dispatchInputEvent =
+        [&](const InputEvent &event,
+            ApplicationInputSurface inputSurface) -> bool {
       processShellPlaybackCommands();
-      if (!running) return true;
+      if (!running)
+        return true;
       processInputEvent(event, inputSurface);
       dispatchShellDialogEvents();
       if (didRender) {
@@ -1899,11 +1880,10 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     const bool preInputOptionsMode = optionsBrowserIsActive(browser);
     const bool preInputTrackMode = isTrackBrowserActive(browser);
     InputEvent ev{};
-    ApplicationInputSurface inputSurface =
-        ApplicationInputSurface::Terminal;
-    VideoWindow* shellInputWindow =
+    ApplicationInputSurface inputSurface = ApplicationInputSurface::Terminal;
+    VideoWindow *shellInputWindow =
         windowTuiEnabled && tuiWindow.IsOpen() ? &tuiWindow : nullptr;
-    const auto pollPlaybackWindow = [&](InputEvent& event) {
+    const auto pollPlaybackWindow = [&](InputEvent &event) {
       return mediaCoordinator.pollVideoWindowInput(event);
     };
     if (running &&
@@ -1922,14 +1902,16 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       finalizeRenderedExit();
       return 0;
     }
-    if (!running) break;
+    if (!running)
+      break;
     if (mediaCoordinator.shellSnapshot().terminalRole !=
         PlaybackShellTerminalRole::Browser) {
       continue;
     }
 
     processShellPlaybackCommands();
-    if (!running) break;
+    if (!running)
+      break;
     consumeBrowserNavigationEvents();
     browser_chrome::Model nextBrowserChrome = buildBrowserChrome();
     if (nextBrowserChrome.footer != browserChrome.footer) {
@@ -1949,19 +1931,16 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       const PlaybackPresentationModel presentation = playbackPresenter.model();
       browser_wake_schedule::Activity activity;
       activity.searchCaretVisible =
-          viewport.browserInteractionEnabled &&
-          browserSearchFocused(browser);
+          viewport.browserInteractionEnabled && browserSearchFocused(browser);
       activity.melodyMonitorVisible = melodyVisualization.active();
       activity.transportProgressVisible =
           o.play &&
           (presentation.audio.ready || presentation.currentTarget.has_value());
-      activity.audioPictureInPictureVisible =
-          audioPictureInPicture.isOpen();
+      activity.audioPictureInPictureVisible = audioPictureInPicture.isOpen();
 
-      wake_schedule::Deadline deadline = browser_wake_schedule::nextDeadline(
-          nowTime, lastDraw, activity);
-      wake_schedule::include(deadline,
-                             mediaCoordinator.nextWakeDeadline());
+      wake_schedule::Deadline deadline =
+          browser_wake_schedule::nextDeadline(nowTime, lastDraw, activity);
+      wake_schedule::include(deadline, mediaCoordinator.nextWakeDeadline());
       return deadline;
     };
 
@@ -1970,8 +1949,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       const std::vector<NativeWaitHandle> activityHandles =
           applicationActivityWaitHandles();
       DWORD waitResult = waitForBrowserWake(
-          input, openFileRequestWakeHandle(),
-          browserThumbnails.waitHandle(),
+          input, openFileRequestWakeHandle(), browserThumbnails.waitHandle(),
           browserContentService.nativeWaitHandle(),
           browserSelectionMetadata.nativeWaitHandle(),
           notificationAreaControls.nativeWaitHandle(), tuiWindow,
@@ -1988,7 +1966,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
     }
     if (dirty) {
       const PlaybackPresentationModel presentation = playbackPresenter.model();
-      const AudioPlaybackSnapshot& audio = presentation.audio;
+      const AudioPlaybackSnapshot &audio = presentation.audio;
       bool optionsMode = optionsBrowserIsActive(browser);
       bool trackMode = isTrackBrowserActive(browser);
       bool browserInteractionEnabled = !melodyVisualization.active();
@@ -2045,11 +2023,10 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       breadcrumbLine = buildBreadcrumbLine(browser.location, width);
       if (browserInteractionEnabled && searchBarY >= 0) {
         const bool searchFocused = browserSearchFocused(browser);
-        Style searchStyle =
-            searchFocused
-                ? theme.searchBarActive
-                : (browserInteraction.searchBarHover ? theme.searchBarGlow
-                                                     : theme.searchBar);
+        Style searchStyle = searchFocused ? theme.searchBarActive
+                                          : (browserInteraction.searchBarHover
+                                                 ? theme.searchBarGlow
+                                                 : theme.searchBar);
         screen.writeRun(0, searchBarY, width, L' ', searchStyle);
         const bool showSearchCursor =
             searchFocused && browser_wake_schedule::searchCaretOn(now);
@@ -2085,7 +2062,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         }
         screen.writeText(0, breadcrumbY, breadcrumbLine.text, theme.accent);
         if (browserInteraction.breadcrumbHover >= 0) {
-          const auto& crumb = breadcrumbLine.crumbs[static_cast<size_t>(
+          const auto &crumb = breadcrumbLine.crumbs[static_cast<size_t>(
               browserInteraction.breadcrumbHover)];
           std::string hoverText = utf8SliceDisplayWidth(
               breadcrumbLine.text, crumb.startX, crumb.endX - crumb.startX);
@@ -2095,7 +2072,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       } else if (breadcrumbY < 0 || !browserInteractionEnabled) {
         browserInteraction.breadcrumbHover = -1;
       }
-      const std::optional<PlaybackTarget>& nowPlayingTarget =
+      const std::optional<PlaybackTarget> &nowPlayingTarget =
           presentation.currentTarget;
       const std::filesystem::path nowPlaying =
           nowPlayingTarget ? playbackTargetFile(*nowPlayingTarget)
@@ -2109,45 +2086,39 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       } else if (optionsMode) {
         showingLabel = optionsBrowserShowingLabel(browser);
       } else if (trackMode) {
-        showingLabel =
-            "  Showing: tracks in " +
-            toUtf8String(browser.location.path().filename());
+        showingLabel = "  Showing: tracks in " +
+                       toUtf8String(browser.location.path().filename());
       } else {
         showingLabel.clear();
       }
       if (!showingLabel.empty() && viewport.headerLabelY >= 0) {
-        screen.writeText(0, viewport.headerLabelY,
-                         fitLine(showingLabel, width), theme.dim);
+        screen.writeText(0, viewport.headerLabelY, fitLine(showingLabel, width),
+                         theme.dim);
       }
       tui_melody_visualization::Observation melodyObservation;
       melodyObservation.source.file = nowPlaying;
       melodyObservation.source.trackIndex = nowPlayingTrackIndex;
       melodyObservation.pitch = audioPlayback.melodyInfo();
       melodyObservation.analysis = audioPlayback.melodyAnalysisState();
-      melodyObservation.playbackAdvancing =
-          !audio.paused && !audio.holding;
+      melodyObservation.playbackAdvancing = !audio.paused && !audio.holding;
       melodyVisualization.update(std::move(melodyObservation));
       if (browserInteractionEnabled) {
         const int playingEntryIndex =
-            nowPlayingTarget
-                ? findBrowserPlaybackTargetEntry(browser.entries,
-                                                 *nowPlayingTarget)
-                : -1;
-        drawBrowserEntries(screen, browserThumbnails, browser, layout, listTop,
-                           listHeight,
-                           theme.normal, theme.normal, theme.directory,
-                           theme.highlight, theme.browserHover, theme.dim,
-                           theme.accent,
-                           playingEntryIndex, isSupportedImageExt, isVideoExt,
-                           isSupportedAudioExt);
+            nowPlayingTarget ? findBrowserPlaybackTargetEntry(browser.entries,
+                                                              *nowPlayingTarget)
+                             : -1;
+        drawBrowserEntries(
+            screen, browserThumbnails, browser, layout, listTop, listHeight,
+            theme.normal, theme.normal, theme.directory, theme.highlight,
+            theme.browserHover, theme.dim, theme.accent, playingEntryIndex,
+            isSupportedImageExt, isVideoExt, isSupportedAudioExt);
       } else {
         tui_melody_visualization::Bounds melodyBounds;
         melodyBounds.top = listTop;
         melodyBounds.height = listHeight;
         melodyBounds.width = width;
         tui_melody_visualization::draw(screen, melodyVisualization,
-                                       melodyBounds,
-                                       melodyVisualizationStyles);
+                                       melodyBounds, melodyVisualizationStyles);
       }
 
       int footerStart = listTop + listHeight;
@@ -2173,53 +2144,51 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       }
       if (line < height && browserChrome.footer.showWarning) {
         if (!mediaCommandError.empty()) {
-          screen.writeText(
-              0, line++, fitLine("  Error: " + mediaCommandError, width),
-              theme.alert);
+          screen.writeText(0, line++,
+                           fitLine("  Error: " + mediaCommandError, width),
+                           theme.alert);
         } else {
           std::string warning = audioPlayback.warning();
           if (!warning.empty()) {
-          screen.writeText(0, line++, fitLine("  Warning: " + warning, width),
-                           theme.dim);
+            screen.writeText(0, line++, fitLine("  Warning: " + warning, width),
+                             theme.dim);
           }
         }
       }
       if (line < height && browserChrome.footer.showMediaTaskStatus) {
-        const std::optional<MediaTaskCardModel>& activeTask =
+        const std::optional<MediaTaskCardModel> &activeTask =
             mediaTasks.snapshot().activeCard;
         if (activeTask && mediaTaskPanel.indicatorVisible(activeTask)) {
           mediaTaskIndicator = drawMediaTaskIndicator(
               screen, width, line++, *activeTask, mediaTaskPanel,
               theme.mediaTaskCardStyles());
         } else if (!activeTask) {
-          const std::optional<MediaTaskStatusModel>& status =
+          const std::optional<MediaTaskStatusModel> &status =
               mediaTasks.snapshot().latestStatus;
           if (status && !status->text.empty()) {
-            const Style& statusStyle =
+            const Style &statusStyle =
                 status->tone == MediaTaskStatusTone::Error ? theme.alert
-                                                          : theme.dim;
-            screen.writeText(0, line++,
-                             fitLine(" " + status->text, width),
+                                                           : theme.dim;
+            screen.writeText(0, line++, fitLine(" " + status->text, width),
                              statusStyle);
           }
         }
       } else {
         mediaTaskIndicator = {};
       }
-      const std::string& nowLabel = browserChrome.nowPlayingLabel;
+      const std::string &nowLabel = browserChrome.nowPlayingLabel;
       if (browserChrome.footer.showNowPlaying) {
         const int nowStart = line;
         const int nowPlayingLines =
             std::max(1, browserChrome.footer.nowPlayingLines);
         std::vector<std::string> lines =
             wrapLine(std::string(" ") + nowLabel, width);
-        for (int i = 0; i < nowPlayingLines &&
-                        i < static_cast<int>(lines.size());
-             ++i) {
+        for (int i = 0;
+             i < nowPlayingLines && i < static_cast<int>(lines.size()); ++i) {
           const int y = nowStart + i;
-          if (y >= height) break;
-          screen.writeText(0, y, lines[static_cast<size_t>(i)],
-                           theme.accent);
+          if (y >= height)
+            break;
+          screen.writeText(0, y, lines[static_cast<size_t>(i)], theme.accent);
         }
         line = nowStart + nowPlayingLines;
       }
@@ -2229,8 +2198,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       if (browserChrome.footer.showActionStrip && line < height) {
         actionStrip = browser_action_strip::draw(
             screen, browserChrome.actions, width, height, line,
-            browserInteraction.actionHover,
-            theme.browserActionStripStyles());
+            browserInteraction.actionHover, theme.browserActionStripStyles());
         if (browserInteraction.actionHover >=
             static_cast<int>(actionStrip.buttons.size())) {
           browserInteraction.actionHover = -1;
@@ -2246,16 +2214,14 @@ int runTui(Options o, ApplicationRuntime& runtime) {
         line++;
       }
 
-      const std::optional<PlaybackControlState>& controlState =
+      const std::optional<PlaybackControlState> &controlState =
           presentation.control;
       const bool videoActive = controlState && controlState->isVideo;
       const bool audioReady = audio.ready;
-      double currentSec = controlState
-                              ? controlState->positionSec
-                              : audio.positionSec;
-      double totalSec = controlState
-                            ? controlState->durationSec.value_or(-1.0)
-                            : audio.durationSec;
+      double currentSec =
+          controlState ? controlState->positionSec : audio.positionSec;
+      double totalSec = controlState ? controlState->durationSec.value_or(-1.0)
+                                     : audio.durationSec;
       double displaySec = currentSec;
       if (!videoActive && audioReady && audio.seeking) {
         const double seekSec = audio.seekTargetSec;
@@ -2263,8 +2229,7 @@ int runTui(Options o, ApplicationRuntime& runtime) {
           displaySec = seekSec;
         }
       }
-      const int volPct =
-          static_cast<int>(std::round(audio.volume * 100.0f));
+      const int volPct = static_cast<int>(std::round(audio.volume * 100.0f));
       double ratio = 0.0;
       if (totalSec > 0.0 && std::isfinite(totalSec)) {
         ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
@@ -2285,12 +2250,11 @@ int runTui(Options o, ApplicationRuntime& runtime) {
       progressBarY = footerResult.progressBarY;
       progressBarWidth = footerResult.progressBarWidth;
 
-      if (const std::optional<MediaTaskCardModel>& taskCard =
+      if (const std::optional<MediaTaskCardModel> &taskCard =
               mediaTasks.snapshot().activeCard;
           mediaTaskPanel.visible(taskCard)) {
         drawMediaTaskCard(screen, width, height, listTop, *taskCard,
-                          mediaTaskPanel,
-                          theme.mediaTaskCardStyles());
+                          mediaTaskPanel, theme.mediaTaskCardStyles());
       }
 
       if (shellOverlays.active()) {

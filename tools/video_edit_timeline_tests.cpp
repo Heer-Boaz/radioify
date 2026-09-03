@@ -1,11 +1,11 @@
-#include "playback/video/edit/command.h"
-#include "playback/video/edit/overlay_model.h"
-#include "playback/video/edit/timeline.h"
-#include "playback/video/composition/render_plan.h"
-#include "playback/video/frame_step_prefetch.h"
 #include "playback/overlay/context_menu.h"
 #include "playback/overlay/overlay.h"
 #include "playback/session/context_menu_controller.h"
+#include "playback/video/composition/render_plan.h"
+#include "playback/video/edit/command.h"
+#include "playback/video/edit/overlay_model.h"
+#include "playback/video/edit/timeline.h"
+#include "playback/video/frame_step_prefetch.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -16,7 +16,7 @@
 
 namespace {
 
-bool expect(bool condition, const char* message) {
+bool expect(bool condition, const char *message) {
   if (!condition) {
     std::cerr << "video_edit_timeline_tests: " << message << '\n';
     return false;
@@ -24,8 +24,8 @@ bool expect(bool condition, const char* message) {
   return true;
 }
 
-std::vector<playback_video_composition::SourceFrameTiming> observedTiming(
-    const std::vector<int64_t>& pts, int64_t quantumUs = 1) {
+std::vector<playback_video_composition::SourceFrameTiming>
+observedTiming(const std::vector<int64_t> &pts, int64_t quantumUs = 1) {
   const auto quantize = [quantumUs](int64_t value) {
     return ((value + quantumUs / 2) / quantumUs) * quantumUs;
   };
@@ -40,35 +40,35 @@ std::vector<playback_video_composition::SourceFrameTiming> observedTiming(
   return frames;
 }
 
-std::optional<playback_video_edit::Command> editCommandForControl(
-    playback_overlay::OverlayControlId control) {
+std::optional<playback_video_edit::Command>
+editCommandForControl(playback_overlay::OverlayControlId control) {
   const playback_overlay::OverlayControlIntent intent =
       playback_overlay::intentForOverlayControl(control);
-  if (const auto* command =
+  if (const auto *command =
           std::get_if<playback_video_edit::Command>(&intent)) {
     return *command;
   }
   return std::nullopt;
 }
 
-std::optional<playback_overlay::OverlayAction> overlayActionForControl(
-    playback_overlay::OverlayControlId control) {
+std::optional<playback_overlay::OverlayAction>
+overlayActionForControl(playback_overlay::OverlayControlId control) {
   const playback_overlay::OverlayControlIntent intent =
       playback_overlay::intentForOverlayControl(control);
-  if (const auto* action =
+  if (const auto *action =
           std::get_if<playback_overlay::OverlayAction>(&intent)) {
     return *action;
   }
   return std::nullopt;
 }
 
-}  // namespace
+} // namespace
 
 int main() {
-  using playback_video_edit::Document;
   using playback_video_edit::DecisionList;
-  using playback_video_edit::ExitExportAction;
+  using playback_video_edit::Document;
   using playback_video_edit::ExitContext;
+  using playback_video_edit::ExitExportAction;
   using playback_video_edit::Prompt;
   using playback_video_edit::Selection;
   using playback_video_edit::SourceRange;
@@ -99,12 +99,12 @@ int main() {
   playback_video_composition::RenderPlan motionPlan;
   std::string motionPlanError;
   const std::vector<SourceRange> motionRanges{{0, 3'003'000},
-                                               {5'005'000, 10'010'000}};
+                                              {5'005'000, 10'010'000}};
   const std::vector<playback_video_edit::CutTransition> motionTransitions{
       playback_video_edit::CutTransition::motionSmooth()};
   ok &= expect(playback_video_composition::buildRenderPlan(
-                   motionRanges, motionTransitions, timingNtsc,
-                   &motionPlan, &motionPlanError) &&
+                   motionRanges, motionTransitions, timingNtsc, &motionPlan,
+                   &motionPlanError) &&
                    motionPlan.hasMotionTransitions() &&
                    motionPlan.motionTransitions.size() == 1 &&
                    motionPlan.motionTransitions[0].outgoingFrames == 2 &&
@@ -117,27 +117,24 @@ int main() {
                "a motion transition must own explicit coterminous outgoing "
                "and incoming overlap windows");
   if (!motionPlan.motionTransitions.empty()) {
-    const auto& window = motionPlan.motionTransitions[0];
+    const auto &window = motionPlan.motionTransitions[0];
     const int64_t renderedDurationUs =
-        motionPlan.clips[0].sourceEndUs -
-            motionPlan.clips[0].sourceStartUs +
+        motionPlan.clips[0].sourceEndUs - motionPlan.clips[0].sourceStartUs +
         window.durationUs + motionPlan.clips[1].sourceEndUs -
-            motionPlan.clips[1].sourceStartUs;
+        motionPlan.clips[1].sourceStartUs;
     const std::string transitionFilter =
         playback_video_composition::buildTransitionFilterDescription(
             motionPlan, window, AV_PIX_FMT_P010LE, &motionPlanError);
     const std::string programFilter =
         playback_video_composition::buildProgramFilterDescription(
             motionPlan, AV_PIX_FMT_P010LE, &motionPlanError);
-    const std::string exactCore =
-        "settb=1001/30000,setpts=N+gte(N\\,2)*3";
+    const std::string exactCore = "settb=1001/30000,setpts=N+gte(N\\,2)*3";
     ok &= expect(std::llabs(renderedDurationUs - 8'008'000) <= 1 &&
                      window.presentationStartUs ==
                          motionPlan.clips[0].sourceEndUs &&
                      transitionFilter.find(exactCore) != std::string::npos &&
                      programFilter.find(exactCore) != std::string::npos &&
-                     transitionFilter.find(
-                         "trim=start_frame=1:end_frame=5") !=
+                     transitionFilter.find("trim=start_frame=1:end_frame=5") !=
                          std::string::npos &&
                      transitionFilter.find(
                          "format=pix_fmts=yuv420p10le,settb=1001/30000") !=
@@ -152,9 +149,8 @@ int main() {
 
     playback_video_composition::MotionSourceTiming expectedTiming;
     std::string cadenceError;
-    const bool resolvedTiming =
-        playback_video_composition::motionSourceTiming(
-            motionPlan, window, &expectedTiming, &cadenceError);
+    const bool resolvedTiming = playback_video_composition::motionSourceTiming(
+        motionPlan, window, &expectedTiming, &cadenceError);
     auto outgoingTiming = observedTiming(expectedTiming.outgoingPtsUs);
     auto incomingTiming = observedTiming(expectedTiming.incomingPtsUs);
     ok &= expect(
@@ -177,38 +173,35 @@ int main() {
   }
   playback_video_composition::RenderPlan millisecondPlan;
   std::string millisecondError;
-  ok &= expect(
-      playback_video_composition::buildRenderPlan(
-          {{200'000, 1'233'000}, {1'800'000, 2'800'000}},
-          motionTransitions,
-          {AVRational{30, 1}, AVRational{1, 1'000}}, &millisecondPlan,
-          &millisecondError),
-      "a millisecond source clock must remain usable for 30 fps video");
+  ok &=
+      expect(playback_video_composition::buildRenderPlan(
+                 {{200'000, 1'233'000}, {1'800'000, 2'800'000}},
+                 motionTransitions, {AVRational{30, 1}, AVRational{1, 1'000}},
+                 &millisecondPlan, &millisecondError),
+             "a millisecond source clock must remain usable for 30 fps video");
   if (millisecondPlan.hasMotionTransitions()) {
-    const auto& window = millisecondPlan.motionTransitions.front();
+    const auto &window = millisecondPlan.motionTransitions.front();
     playback_video_composition::MotionSourceTiming expectedTiming;
-    ok &= expect(playback_video_composition::motionSourceTiming(
-                     millisecondPlan, window, &expectedTiming,
+    ok &=
+        expect(playback_video_composition::motionSourceTiming(
+                   millisecondPlan, window, &expectedTiming, &millisecondError),
+               "millisecond source timing must resolve");
+    ok &= expect(playback_video_composition::validateMotionSourceTiming(
+                     millisecondPlan, window,
+                     observedTiming(expectedTiming.outgoingPtsUs, 1'000),
+                     observedTiming(expectedTiming.incomingPtsUs, 1'000),
                      &millisecondError),
-                 "millisecond source timing must resolve");
-    ok &= expect(
-        playback_video_composition::validateMotionSourceTiming(
-            millisecondPlan, window,
-            observedTiming(expectedTiming.outgoingPtsUs, 1'000),
-            observedTiming(expectedTiming.incomingPtsUs, 1'000),
-            &millisecondError),
-        "stable CFR timing quantized to millisecond ticks must not be "
-        "misclassified as VFR");
+                 "stable CFR timing quantized to millisecond ticks must not be "
+                 "misclassified as VFR");
   }
   playback_video_composition::RenderPlan phasePlan;
   ok &= expect(
       playback_video_composition::buildRenderPlan(
-          {{1'000, 3'004'000}, {5'006'000, 10'011'000}},
-          motionTransitions, timingNtsc, &phasePlan, &motionPlanError) &&
+          {{1'000, 3'004'000}, {5'006'000, 10'011'000}}, motionTransitions,
+          timingNtsc, &phasePlan, &motionPlanError) &&
           phasePlan.motionTransitions[0].outgoingAnchorUs ==
               3'004'000 - 66'733 &&
-          phasePlan.motionTransitions[0].incomingAnchorUs ==
-              5'006'000 + 66'733,
+          phasePlan.motionTransitions[0].incomingAnchorUs == 5'006'000 + 66'733,
       "source-frame windows must remain relative to real edit boundaries, "
       "not a synthetic zero-based frame grid");
   playback_video_composition::RenderPlan coarseTimingPlan;
@@ -236,8 +229,10 @@ int main() {
   playback_video_composition::RenderPlan sparseMotionPlan;
   ok &= expect(
       playback_video_composition::buildRenderPlan(
-          {{0, 2'000'000}, {3'000'000, 5'000'000},
-           {6'000'000, 8'000'000}, {9'000'000, 11'000'000}},
+          {{0, 2'000'000},
+           {3'000'000, 5'000'000},
+           {6'000'000, 8'000'000},
+           {9'000'000, 11'000'000}},
           {playback_video_edit::CutTransition::motionSmooth(),
            playback_video_edit::CutTransition::hard(),
            playback_video_edit::CutTransition::motionSmooth()},
@@ -264,10 +259,9 @@ int main() {
   roundedFrameRequest.rangeStartUs = 916'667;
   roundedFrameRequest.rangeEndUs = 1'958'334;
   const auto roundedFrameMapping =
-      mappedSequence
-          ? playback_video_frame_step_prefetch::mapRequestToTimeline(
-                *mappedSequence, roundedFrameRequest)
-          : std::nullopt;
+      mappedSequence ? playback_video_frame_step_prefetch::mapRequestToTimeline(
+                           *mappedSequence, roundedFrameRequest)
+                     : std::nullopt;
   ok &= expect(
       roundedFrameMapping &&
           roundedFrameMapping->joinContinuity ==
@@ -281,33 +275,30 @@ int main() {
   roundedFrameRequest.join = roundedFrameRequest.boundary;
   roundedFrameRequest.rangeStartUs = 958'333;
   const auto boundaryFrameMapping =
-      mappedSequence
-          ? playback_video_frame_step_prefetch::mapRequestToTimeline(
-                *mappedSequence, roundedFrameRequest)
-          : std::nullopt;
+      mappedSequence ? playback_video_frame_step_prefetch::mapRequestToTimeline(
+                           *mappedSequence, roundedFrameRequest)
+                     : std::nullopt;
   ok &= expect(
       boundaryFrameMapping &&
           boundaryFrameMapping->joinContinuity ==
-              playback_video_frame_step_prefetch::JoinContinuity::Presentation &&
+              playback_video_frame_step_prefetch::JoinContinuity::
+                  Presentation &&
           boundaryFrameMapping->sourceRangeStartUs == 2'500'000,
       "the final frame must cross to the next clip on its exact half-open "
       "boundary");
-  ok &= expect(playback_video_edit::exitExportAction(ExitContext{}) ==
-                   ExitExportAction::None &&
-                   playback_video_edit::exitExportAction(
-                       ExitContext{true, false, false}) ==
-                       ExitExportAction::ExportCurrent &&
-                   playback_video_edit::exitExportAction(
-                       ExitContext{true, true, true}) ==
-                       ExitExportAction::WaitForExport &&
-                   playback_video_edit::exitExportAction(
-                       ExitContext{false, true, false}) ==
-                       ExitExportAction::WaitForExport &&
-                   playback_video_edit::exitExportAction(
-                       ExitContext{true, true, false}) ==
-                       ExitExportAction::CancelBlockingExport,
-               "playback exit must distinguish exporting, waiting, and a "
-               "blocking older export from leaving the edit tools");
+  ok &= expect(
+      playback_video_edit::exitExportAction(ExitContext{}) ==
+              ExitExportAction::None &&
+          playback_video_edit::exitExportAction(ExitContext{
+              true, false, false}) == ExitExportAction::ExportCurrent &&
+          playback_video_edit::exitExportAction(ExitContext{
+              true, true, true}) == ExitExportAction::WaitForExport &&
+          playback_video_edit::exitExportAction(ExitContext{
+              false, true, false}) == ExitExportAction::WaitForExport &&
+          playback_video_edit::exitExportAction(ExitContext{
+              true, true, false}) == ExitExportAction::CancelBlockingExport,
+      "playback exit must distinguish exporting, waiting, and a "
+      "blocking older export from leaving the edit tools");
   const Timeline unopenedTimeline;
   ok &= expect(unopenedTimeline.isUnmodified(),
                "an unopened edit document must not be dirty");
@@ -316,15 +307,15 @@ int main() {
                "a new sequence must reference the complete source");
   ok &= expect(timeline.rippleDelete({3'000'000, 5'000'000}),
                "a middle range must be removable");
-  ok &= expect(timeline.keptRanges() ==
-                   std::vector<SourceRange>{{0, 3'000'000},
-                                            {5'000'000, 10'000'000}},
-               "middle removal must produce two source clips");
+  ok &= expect(
+      timeline.keptRanges() ==
+          std::vector<SourceRange>{{0, 3'000'000}, {5'000'000, 10'000'000}},
+      "middle removal must produce two source clips");
   ok &= expect(timeline.outputDurationUs() == 8'000'000,
-                "ripple deletion must close the sequence gap");
+               "ripple deletion must close the sequence gap");
   ok &= expect(timeline.cutTransitions() ==
-                   std::vector<playback_video_edit::CutTransition>{
-                       playback_video_edit::CutTransition::hard()} &&
+                       std::vector<playback_video_edit::CutTransition>{
+                           playback_video_edit::CutTransition::hard()} &&
                    timeline.nearestCutIndex(3'000'000, 1) ==
                        std::optional<size_t>(0) &&
                    timeline.setCutTransition(
@@ -332,16 +323,14 @@ int main() {
                    timeline.cutTransitions()[0] ==
                        playback_video_edit::CutTransition::motionSmooth(),
                "a cut must own its explicit hard/smooth transition");
-  const auto sequence =
-      SequenceTimeline::create(timeline.sourceDurationUs(),
-                               timeline.keptRanges());
+  const auto sequence = SequenceTimeline::create(timeline.sourceDurationUs(),
+                                                 timeline.keptRanges());
   ok &= expect(sequence && sequence->durationUs() == 8'000'000,
                "the playback sequence must derive the ripple duration");
   if (sequence) {
     const playback_video_sequence::Point afterCut =
         sequence->pointAt(3'000'000);
-    ok &= expect(afterCut.clipIndex == 1 &&
-                     afterCut.sourceUs == 5'000'000 &&
+    ok &= expect(afterCut.clipIndex == 1 && afterCut.sourceUs == 5'000'000 &&
                      afterCut.presentationUs == 3'000'000,
                  "presentation time must cross a cut without a time gap");
     const playback_video_sequence::Point playableEnd =
@@ -358,24 +347,22 @@ int main() {
     ok &= expect(removedForward && removedForward->sourceUs == 5'000'000 &&
                      removedForward->presentationUs == 3'000'000,
                  "a removed source point must resolve to the next clip");
-    ok &= expect(removedBackward && removedBackward->sourceUs == 3'000'000 &&
-                     removedBackward->presentationUs == 3'000'000,
-                 "backward source resolution must select the previous cut edge");
-    ok &= expect(sequence->clipIndexAtSource(2'000'000) ==
-                         std::optional<size_t>(0) &&
-                     !sequence->clipIndexAtSource(4'000'000) &&
-                     sequence->clipIndexAtSource(5'000'000) ==
-                         std::optional<size_t>(1),
-                 "source lookup must distinguish kept clips from removed gaps");
+    ok &=
+        expect(removedBackward && removedBackward->sourceUs == 3'000'000 &&
+                   removedBackward->presentationUs == 3'000'000,
+               "backward source resolution must select the previous cut edge");
+    ok &= expect(
+        sequence->clipIndexAtSource(2'000'000) == std::optional<size_t>(0) &&
+            !sequence->clipIndexAtSource(4'000'000) &&
+            sequence->clipIndexAtSource(5'000'000) == std::optional<size_t>(1),
+        "source lookup must distinguish kept clips from removed gaps");
     const auto mappedFrame = sequence->mapFrame(2'900'000, 200'000);
-    ok &= expect(mappedFrame &&
-                     mappedFrame->presentationPtsUs == 2'900'000 &&
+    ok &= expect(mappedFrame && mappedFrame->presentationPtsUs == 2'900'000 &&
                      mappedFrame->presentationDurationUs == 100'000 &&
                      !sequence->mapFrame(4'000'000, 100'000),
                  "video projection must trim at clip out-points and reject "
                  "removed source frames");
-    const auto audioSlice =
-        sequence->sliceAudio(4'500'000, 1000, 1000);
+    const auto audioSlice = sequence->sliceAudio(4'500'000, 1000, 1000);
     ok &= expect(audioSlice && audioSlice->sourceOffsetFrames == 500 &&
                      audioSlice->frameCount == 500 &&
                      audioSlice->presentationPtsUs == 3'000'000,
@@ -396,7 +383,7 @@ int main() {
   ok &= expect(timeline.keptRanges() ==
                    std::vector<SourceRange>{{1'000'000, 3'000'000},
                                             {5'000'000, 9'000'000}},
-                "outer trims must preserve all remaining source clips");
+               "outer trims must preserve all remaining source clips");
   ok &= expect(timeline.cutTransitions()[0] ==
                    playback_video_edit::CutTransition::motionSmooth(),
                "trimming clip edges must preserve an unchanged edit point");
@@ -424,44 +411,39 @@ int main() {
   Document document;
   document.load(10'000'000);
   Selection selection;
-  ok &= expect(!playback_video_edit::buildSnapshot(document, selection, false)
-                    .active &&
-                   playback_video_edit::buildSnapshot(document, selection,
-                                                        true)
-                       .active,
-               "workspace activation must be projected without changing the document");
-  const auto emptySelectionSnapshot = playback_video_edit::buildSnapshot(
-      document, selection, true);
-  ok &= expect(!selection.range() &&
-                   !emptySelectionSnapshot.canTrim &&
+  ok &= expect(
+      !playback_video_edit::buildSnapshot(document, selection, false).active &&
+          playback_video_edit::buildSnapshot(document, selection, true).active,
+      "workspace activation must be projected without changing the document");
+  const auto emptySelectionSnapshot =
+      playback_video_edit::buildSnapshot(document, selection, true);
+  ok &= expect(!selection.range() && !emptySelectionSnapshot.canTrim &&
                    !emptySelectionSnapshot.canRippleDelete,
                "an unmarked timeline must not advertise an edit operation");
 
   Selection finishSelection;
   finishSelection.markIn(document.timeline(), 1'000'000);
   finishSelection.markOut(document.timeline(), 1'966'667, 2'000'000);
-  const auto finishSelectionSnapshot = playback_video_edit::buildSnapshot(
-      document, finishSelection, true);
+  const auto finishSelectionSnapshot =
+      playback_video_edit::buildSnapshot(document, finishSelection, true);
   ok &= expect(!finishSelectionSnapshot.hasUnexportedChanges,
                "an unapplied In/Out range must remain outside the persistent "
                "edit document");
 
   Selection inOnlySelection;
   inOnlySelection.markIn(document.timeline(), 2'000'000);
-  const auto inOnlySnapshot = playback_video_edit::buildSnapshot(
-      document, inOnlySelection, true);
-  ok &= expect(!inOnlySelection.range() &&
-                   !inOnlySnapshot.canTrim &&
+  const auto inOnlySnapshot =
+      playback_video_edit::buildSnapshot(document, inOnlySelection, true);
+  ok &= expect(!inOnlySelection.range() && !inOnlySnapshot.canTrim &&
                    !inOnlySnapshot.canRippleDelete,
                "a selection start alone must not imply a hidden end or an "
                "edit operation");
 
   Selection outOnlySelection;
   outOnlySelection.markOut(document.timeline(), 7'966'667, 8'000'000);
-  const auto outOnlySnapshot = playback_video_edit::buildSnapshot(
-      document, outOnlySelection, true);
-  ok &= expect(!outOnlySelection.range() &&
-                   !outOnlySnapshot.canTrim &&
+  const auto outOnlySnapshot =
+      playback_video_edit::buildSnapshot(document, outOnlySelection, true);
+  ok &= expect(!outOnlySelection.range() && !outOnlySnapshot.canTrim &&
                    !outOnlySnapshot.canRippleDelete &&
                    outOnlySnapshot.outFrameTimelineUs ==
                        std::optional<int64_t>(7'966'667),
@@ -483,10 +465,9 @@ int main() {
   Selection completeSelection;
   completeSelection.markIn(document.timeline(), 0);
   completeSelection.markOut(document.timeline(), 9'966'667, 10'000'000);
-  const auto completeSnapshot = playback_video_edit::buildSnapshot(
-      document, completeSelection, true);
-  ok &= expect(!completeSnapshot.canTrim &&
-                   !completeSnapshot.canRippleDelete,
+  const auto completeSnapshot =
+      playback_video_edit::buildSnapshot(document, completeSelection, true);
+  ok &= expect(!completeSnapshot.canTrim && !completeSnapshot.canRippleDelete,
                "the complete sequence must be neither a trim change nor a "
                "valid emptying ripple delete");
 
@@ -502,20 +483,18 @@ int main() {
           clearableSelection.outFrameSourceUs() ==
               std::optional<int64_t>(1'966'667),
       "an active In control must clear only its own mark");
-  ok &= expect(clearableSelection.clear() &&
-                   !clearableSelection.inSourceUs() &&
-                   !clearableSelection.outSourceUs() &&
-                   !clearableSelection.outFrameSourceUs() &&
-                   !clearableSelection.hasMarks() &&
-                   !clearableSelection.clear(),
-               "Escape-style selection cancellation must clear all marks once");
+  ok &=
+      expect(clearableSelection.clear() && !clearableSelection.inSourceUs() &&
+                 !clearableSelection.outSourceUs() &&
+                 !clearableSelection.outFrameSourceUs() &&
+                 !clearableSelection.hasMarks() && !clearableSelection.clear(),
+             "Escape-style selection cancellation must clear all marks once");
 
   Selection crossedStart;
-  crossedStart.markOut(document.timeline(), 4'966'667, 5'000'000,
-                       100'000);
+  crossedStart.markOut(document.timeline(), 4'966'667, 5'000'000, 100'000);
   crossedStart.markIn(document.timeline(), 7'000'000, 100'000);
-  const auto crossedStartSnapshot = playback_video_edit::buildSnapshot(
-      document, crossedStart, true);
+  const auto crossedStartSnapshot =
+      playback_video_edit::buildSnapshot(document, crossedStart, true);
   ok &= expect(crossedStartSnapshot.inTimelineUs ==
                        std::optional<int64_t>(4'900'000) &&
                    crossedStartSnapshot.outTimelineUs ==
@@ -525,16 +504,14 @@ int main() {
 
   Selection crossedEnd;
   crossedEnd.markIn(document.timeline(), 5'000'000, 100'000);
-  crossedEnd.markOut(document.timeline(), 3'000'000, 3'100'000,
-                     100'000);
-  const auto crossedEndSnapshot = playback_video_edit::buildSnapshot(
-      document, crossedEnd, true);
-  ok &= expect(crossedEndSnapshot.inTimelineUs ==
-                       std::optional<int64_t>(5'000'000) &&
-                   crossedEndSnapshot.outTimelineUs ==
-                       std::optional<int64_t>(5'100'000),
-               "setting End before Start must clamp End without clearing or "
-               "swapping Start");
+  crossedEnd.markOut(document.timeline(), 3'000'000, 3'100'000, 100'000);
+  const auto crossedEndSnapshot =
+      playback_video_edit::buildSnapshot(document, crossedEnd, true);
+  ok &= expect(
+      crossedEndSnapshot.inTimelineUs == std::optional<int64_t>(5'000'000) &&
+          crossedEndSnapshot.outTimelineUs == std::optional<int64_t>(5'100'000),
+      "setting End before Start must clamp End without clearing or "
+      "swapping Start");
   selection.markIn(document.timeline(), 3'000'000);
   selection.markOut(document.timeline(), 4'966'667, 5'000'000);
   const auto initialRemoval = selection.range();
@@ -543,33 +520,30 @@ int main() {
   selection.clear();
   ok &= expect(document.undo() && document.timeline().isUnmodified(),
                "undo must restore the exact prior timeline snapshot");
-  ok &= expect(document.redo() && document.timeline().outputDurationUs() ==
-                                     8'000'000,
+  ok &= expect(document.redo() &&
+                   document.timeline().outputDurationUs() == 8'000'000,
                "redo must restore the exact removed range");
   ok &= expect(document.resetEdits() && document.timeline().isUnmodified(),
                "reset must itself be an undoable timeline revision");
-  ok &= expect(document.undo() && document.timeline().outputDurationUs() ==
-                                     8'000'000,
+  ok &= expect(document.undo() &&
+                   document.timeline().outputDurationUs() == 8'000'000,
                "reset must not discard edit history");
 
   Document discarded;
   discarded.load(10'000'000);
-  ok &= expect(discarded.rippleDelete({3'000'000, 5'000'000}) &&
-                   playback_video_edit::buildSnapshot(
-                       discarded, Selection{}, true)
-                       .hasEdits &&
-                   playback_video_edit::buildSnapshot(
-                       discarded, Selection{}, true)
-                       .hasUnexportedChanges,
-               "committed edit decisions must expose edit and dirty state");
-  ok &= expect(discarded.discardAllChanges() &&
-                   discarded.timeline().isUnmodified() &&
-                   !playback_video_edit::buildSnapshot(
-                        discarded, Selection{}, true)
-                        .hasEdits &&
-                   !discarded.canUndo() &&
-                   !discarded.canRedo(),
-               "discard must restore the source sequence and clear its history");
+  ok &= expect(
+      discarded.rippleDelete({3'000'000, 5'000'000}) &&
+          playback_video_edit::buildSnapshot(discarded, Selection{}, true)
+              .hasEdits &&
+          playback_video_edit::buildSnapshot(discarded, Selection{}, true)
+              .hasUnexportedChanges,
+      "committed edit decisions must expose edit and dirty state");
+  ok &= expect(
+      discarded.discardAllChanges() && discarded.timeline().isUnmodified() &&
+          !playback_video_edit::buildSnapshot(discarded, Selection{}, true)
+               .hasEdits &&
+          !discarded.canUndo() && !discarded.canRedo(),
+      "discard must restore the source sequence and clear its history");
 
   Document exported;
   exported.load(10'000'000);
@@ -578,11 +552,11 @@ int main() {
                "a committed decision must make its document dirty");
   const DecisionList exportedRevision = exported.timeline().decisionList();
   exported.markExported(exportedRevision);
-  const auto exportedSnapshot = playback_video_edit::buildSnapshot(
-      exported, Selection{}, true);
-  ok &= expect(exportedSnapshot.hasEdits &&
-                   !exportedSnapshot.hasUnexportedChanges,
-               "a successful export must mark its exact document revision clean");
+  const auto exportedSnapshot =
+      playback_video_edit::buildSnapshot(exported, Selection{}, true);
+  ok &= expect(
+      exportedSnapshot.hasEdits && !exportedSnapshot.hasUnexportedChanges,
+      "a successful export must mark its exact document revision clean");
   Document exportedDiscard;
   exportedDiscard.load(10'000'000);
   ok &= expect(exportedDiscard.rippleDelete({2'000'000, 3'000'000}),
@@ -597,7 +571,7 @@ int main() {
                    exported.hasUnexportedChanges(),
                "editing after export must create a new dirty revision");
   ok &= expect(exported.undo() &&
-                    exported.timeline().decisionList() == exportedRevision &&
+                   exported.timeline().decisionList() == exportedRevision &&
                    !exported.hasUnexportedChanges(),
                "undoing to the exported revision must restore clean state");
   ok &= expect(exported.redo() && exported.hasUnexportedChanges(),
@@ -623,17 +597,16 @@ int main() {
   asynchronousExport.markExported(queuedExportRevision);
   ok &= expect(asynchronousExport.hasUnexportedChanges(),
                "finishing an older export must not mark newer decisions clean");
-  ok &= expect(asynchronousExport.undo() &&
-                   !asynchronousExport.hasUnexportedChanges(),
-               "the exported asynchronous revision must remain the clean baseline");
+  ok &= expect(
+      asynchronousExport.undo() && !asynchronousExport.hasUnexportedChanges(),
+      "the exported asynchronous revision must remain the clean baseline");
 
   Document transitionDocument;
   transitionDocument.load(10'000'000);
-  ok &= expect(
-      transitionDocument.rippleDelete({3'000'000, 5'000'000}) &&
-          transitionDocument.setCutTransition(
-              0, playback_video_edit::CutTransition::motionSmooth()),
-      "a smooth cut must commit as an undoable edit-point decision");
+  ok &= expect(transitionDocument.rippleDelete({3'000'000, 5'000'000}) &&
+                   transitionDocument.setCutTransition(
+                       0, playback_video_edit::CutTransition::motionSmooth()),
+               "a smooth cut must commit as an undoable edit-point decision");
   const DecisionList exportedTransitionRevision =
       transitionDocument.timeline().decisionList();
   transitionDocument.markExported(exportedTransitionRevision);
@@ -645,15 +618,15 @@ int main() {
                        std::optional<playback_video_edit::CutTransition>(
                            playback_video_edit::CutTransition::motionSmooth()),
                "the playhead must select the transition owned by its cut");
-  ok &= expect(
-      transitionDocument.setCutTransition(
-          0, playback_video_edit::CutTransition::hard()) &&
-          transitionDocument.hasUnexportedChanges() &&
-          transitionDocument.undo() &&
-          transitionDocument.timeline().decisionList() ==
-              exportedTransitionRevision &&
-          !transitionDocument.hasUnexportedChanges(),
-      "transition changes must participate in dirty tracking and undo");
+  ok &=
+      expect(transitionDocument.setCutTransition(
+                 0, playback_video_edit::CutTransition::hard()) &&
+                 transitionDocument.hasUnexportedChanges() &&
+                 transitionDocument.undo() &&
+                 transitionDocument.timeline().decisionList() ==
+                     exportedTransitionRevision &&
+                 !transitionDocument.hasUnexportedChanges(),
+             "transition changes must participate in dirty tracking and undo");
 
   ok &= expect(document.rippleDelete({1'000'000, 2'000'000}),
                "a new decision after undo must commit normally");
@@ -671,54 +644,43 @@ int main() {
 
   selection.markIn(document.timeline(), 2'000'000);
   ok &= expect(playback_video_edit::buildSnapshot(document, selection, true)
-                       .inSourceUs ==
-                   std::optional<int64_t>(2'000'000),
-                "setting an In mark must publish its source position");
+                       .inSourceUs == std::optional<int64_t>(2'000'000),
+               "setting an In mark must publish its source position");
   selection.markIn(document.timeline(), 2'000'000);
   ok &= expect(playback_video_edit::buildSnapshot(document, selection, true)
-                       .inSourceUs ==
-                   std::optional<int64_t>(2'000'000),
-                "setting an identical mark must preserve the selection");
+                       .inSourceUs == std::optional<int64_t>(2'000'000),
+               "setting an identical mark must preserve the selection");
 
   Document draggedDocument;
   draggedDocument.load(10'000'000);
   ok &= expect(draggedDocument.rippleDelete({2'000'000, 4'000'000}),
                "drag mapping setup must create a source gap");
   Selection draggedIn;
-  ok &= expect(draggedIn.moveBoundary(
-                   draggedDocument.timeline(),
-                   playback_video_edit::EditBoundary::In, 2'000'000,
-                   100'000) &&
-                   draggedIn.inSourceUs() ==
-                       std::optional<int64_t>(4'000'000),
+  ok &= expect(draggedIn.moveBoundary(draggedDocument.timeline(),
+                                      playback_video_edit::EditBoundary::In,
+                                      2'000'000, 100'000) &&
+                   draggedIn.inSourceUs() == std::optional<int64_t>(4'000'000),
                "an In handle at a cut must bind to the following clip");
 
   Selection draggedOut;
-  ok &= expect(draggedOut.moveBoundary(
-                   draggedDocument.timeline(),
-                   playback_video_edit::EditBoundary::Out, 2'000'000,
-                   100'000) &&
-                   draggedOut.outSourceUs() ==
-                       std::optional<int64_t>(2'000'000) &&
-                   playback_video_edit::buildSnapshot(
-                       draggedDocument, draggedOut, true)
-                           .outFrameTimelineUs ==
-                       std::optional<int64_t>(1'999'999),
-               "an Out handle at a cut must bind to the preceding clip edge");
+  ok &= expect(
+      draggedOut.moveBoundary(draggedDocument.timeline(),
+                              playback_video_edit::EditBoundary::Out, 2'000'000,
+                              100'000) &&
+          draggedOut.outSourceUs() == std::optional<int64_t>(2'000'000) &&
+          playback_video_edit::buildSnapshot(draggedDocument, draggedOut, true)
+                  .outFrameTimelineUs == std::optional<int64_t>(1'999'999),
+      "an Out handle at a cut must bind to the preceding clip edge");
   draggedOut.markIn(draggedDocument.timeline(), 1'000'000);
-  ok &= expect(draggedOut.moveBoundary(
-                   draggedDocument.timeline(),
-                   playback_video_edit::EditBoundary::In, 3'000'000,
-                   100'000) &&
-                   playback_video_edit::buildSnapshot(
-                       draggedDocument, draggedOut, true)
-                           .inTimelineUs ==
-                       std::optional<int64_t>(1'900'000) &&
-                   playback_video_edit::buildSnapshot(
-                       draggedDocument, draggedOut, true)
-                           .outTimelineUs ==
-                       std::optional<int64_t>(2'000'000),
-               "dragged boundaries must clamp instead of crossing");
+  ok &= expect(
+      draggedOut.moveBoundary(draggedDocument.timeline(),
+                              playback_video_edit::EditBoundary::In, 3'000'000,
+                              100'000) &&
+          playback_video_edit::buildSnapshot(draggedDocument, draggedOut, true)
+                  .inTimelineUs == std::optional<int64_t>(1'900'000) &&
+          playback_video_edit::buildSnapshot(draggedDocument, draggedOut, true)
+                  .outTimelineUs == std::optional<int64_t>(2'000'000),
+      "dragged boundaries must clamp instead of crossing");
 
   playback_video_edit::EditSnapshot hiddenOverlay;
   playback_video_edit::ExportProgress idleOverlayExport;
@@ -762,8 +724,7 @@ int main() {
   overlayEdit.keptRanges = {{0, 2'000'000}, {4'000'000, 10'000'000}};
   overlayEdit.clips = {{{0, 2'000'000}, 0},
                        {{4'000'000, 10'000'000}, 2'000'000}};
-  overlayEdit.cuts = {
-      {2'000'000, playback_video_edit::CutTransition::hard()}};
+  overlayEdit.cuts = {{2'000'000, playback_video_edit::CutTransition::hard()}};
   overlayEdit.inTimelineUs = 2'000'000;
   overlayEdit.outTimelineUs = 4'000'000;
   overlayEdit.outFrameTimelineUs = 3'966'667;
@@ -774,21 +735,21 @@ int main() {
   overlayExport.targetsCurrentRevision = true;
   const playback_video_edit::OverlayModel overlayModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
-                                              Prompt::None, 10, 0.5);
+                                             Prompt::None, 10, 0.5);
   ok &= expect(overlayModel.cells.size() == 10 &&
-                    overlayModel.cells[0] ==
-                        playback_video_edit::TimelineCellKind::Kept &&
-                    overlayModel.cells[2] ==
-                        playback_video_edit::TimelineCellKind::Selected &&
-                    overlayModel.cells[4] ==
-                        playback_video_edit::TimelineCellKind::Selected,
-                "the edit UI must project selection in compact program time");
+                   overlayModel.cells[0] ==
+                       playback_video_edit::TimelineCellKind::Kept &&
+                   overlayModel.cells[2] ==
+                       playback_video_edit::TimelineCellKind::Selected &&
+                   overlayModel.cells[4] ==
+                       playback_video_edit::TimelineCellKind::Selected,
+               "the edit UI must project selection in compact program time");
   ok &= expect(overlayModel.inCell == std::optional<int>(2) &&
-                    overlayModel.outCell == std::optional<int>(5) &&
-                    overlayModel.playheadCell == 5 &&
-                    overlayModel.cutCells == std::vector<int>{2} &&
-                    overlayModel.smoothCutCells.empty(),
-                "marks, cuts, and playhead must share the program-time axis");
+                   overlayModel.outCell == std::optional<int>(5) &&
+                   overlayModel.playheadCell == 5 &&
+                   overlayModel.cutCells == std::vector<int>{2} &&
+                   overlayModel.smoothCutCells.empty(),
+               "marks, cuts, and playhead must share the program-time axis");
   playback_video_edit::EditSnapshot suggestedOverlay = overlayEdit;
   playback_video_edit::SceneSuggestionSnapshot suggestedScene;
   suggestedScene.id = 7;
@@ -805,11 +766,11 @@ int main() {
   suggestedOverlay.suggestionReview.suggestions.push_back(suggestedScene);
   suggestedOverlay.suggestionReview.selectedId = suggestedScene.id;
   const playback_video_edit::OverlayModel suggestedOverlayModel =
-      playback_video_edit::buildOverlayModel(
-          suggestedOverlay, nullptr, Prompt::None, 10, 0.5);
+      playback_video_edit::buildOverlayModel(suggestedOverlay, nullptr,
+                                             Prompt::None, 10, 0.5);
   const playback_video_edit::OverlayModel wideSuggestedOverlayModel =
-      playback_video_edit::buildOverlayModel(
-          suggestedOverlay, nullptr, Prompt::None, 80, 0.5);
+      playback_video_edit::buildOverlayModel(suggestedOverlay, nullptr,
+                                             Prompt::None, 80, 0.5);
   ok &= expect(suggestedOverlayModel.sceneSuggestionCells.size() == 10 &&
                    suggestedOverlayModel.sceneSuggestionCells[2] ==
                        playback_video_edit::SceneSuggestionCellKind::Selected &&
@@ -827,36 +788,36 @@ int main() {
       playback_video_edit::SceneAnalysisStatus::Running;
   analysingOverlay.sceneAnalysisProgress = 0.42;
   const playback_video_edit::OverlayModel analysingOverlayModel =
-      playback_video_edit::buildOverlayModel(
-          analysingOverlay, nullptr, Prompt::None, 40, 0.5);
+      playback_video_edit::buildOverlayModel(analysingOverlay, nullptr,
+                                             Prompt::None, 40, 0.5);
   ok &= expect(analysingOverlayModel.status.find("SEGMENTS 42%") !=
                    std::string::npos,
                "background segment-detection progress must remain visible in "
                "the shared overlay model");
   const playback_video_edit::OverlayModel narrowAnalysingOverlayModel =
-      playback_video_edit::buildOverlayModel(
-          analysingOverlay, nullptr, Prompt::None, 8, 0.5);
-  ok &= expect(narrowAnalysingOverlayModel.status.find("AI") ==
-                   std::string::npos,
-               "narrow status text must not leak an unexplained AI label");
+      playback_video_edit::buildOverlayModel(analysingOverlay, nullptr,
+                                             Prompt::None, 8, 0.5);
+  ok &=
+      expect(narrowAnalysingOverlayModel.status.find("AI") == std::string::npos,
+             "narrow status text must not leak an unexplained AI label");
   playback_video_edit::EditSnapshot smoothOverlay = overlayEdit;
   smoothOverlay.cuts.front().transition =
       playback_video_edit::CutTransition::motionSmooth();
   const playback_video_edit::OverlayModel smoothOverlayModel =
-      playback_video_edit::buildOverlayModel(
-          smoothOverlay, nullptr, Prompt::None, 10, 0.5);
+      playback_video_edit::buildOverlayModel(smoothOverlay, nullptr,
+                                             Prompt::None, 10, 0.5);
   ok &= expect(smoothOverlayModel.cutCells.empty() &&
                    smoothOverlayModel.smoothCutCells == std::vector<int>{2},
                "a smooth cut must remain distinct in the shared timeline "
                "projection");
   ok &= expect(overlayModel.status == "EDITING*" &&
-                    overlayModel.status.size() <= 10,
+                   overlayModel.status.size() <= 10,
                "narrow editor status must keep the active mode visible");
   playback_video_edit::EditSnapshot inOnlyOverlay = overlayEdit;
   inOnlyOverlay.outTimelineUs.reset();
   const playback_video_edit::OverlayModel inOnlyOverlayModel =
-      playback_video_edit::buildOverlayModel(
-          inOnlyOverlay, nullptr, Prompt::None, 10, 0.5);
+      playback_video_edit::buildOverlayModel(inOnlyOverlay, nullptr,
+                                             Prompt::None, 10, 0.5);
   ok &= expect(inOnlyOverlayModel.cells[1] ==
                        playback_video_edit::TimelineCellKind::Kept &&
                    inOnlyOverlayModel.cells[2] ==
@@ -869,8 +830,8 @@ int main() {
   playback_video_edit::EditSnapshot outOnlyOverlay = overlayEdit;
   outOnlyOverlay.inTimelineUs.reset();
   const playback_video_edit::OverlayModel outOnlyOverlayModel =
-      playback_video_edit::buildOverlayModel(
-          outOnlyOverlay, nullptr, Prompt::None, 10, 0.5);
+      playback_video_edit::buildOverlayModel(outOnlyOverlay, nullptr,
+                                             Prompt::None, 10, 0.5);
   ok &= expect(outOnlyOverlayModel.cells[0] ==
                        playback_video_edit::TimelineCellKind::Kept &&
                    outOnlyOverlayModel.cells[4] ==
@@ -882,83 +843,76 @@ int main() {
                "a lone End handle must not imply or paint a hidden Start");
   const playback_video_edit::OverlayModel tinyExportModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
-                                              Prompt::None, 6, 0.5);
+                                             Prompt::None, 6, 0.5);
   ok &= expect(tinyExportModel.status == "EDIT*",
                "tiny editor status must retain a compact mode indicator");
   const playback_video_edit::OverlayModel tinyDirtyModel =
-      playback_video_edit::buildOverlayModel(
-          overlayEdit, nullptr, Prompt::None, 1, 0.5);
+      playback_video_edit::buildOverlayModel(overlayEdit, nullptr, Prompt::None,
+                                             1, 0.5);
   ok &= expect(tinyDirtyModel.status == "*",
                "one-column editor status must retain the dirty indicator");
   const playback_video_edit::OverlayModel wideOverlayModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &overlayExport,
-                                              Prompt::None, 96, 0.5);
-  ok &= expect(wideOverlayModel.status.find("EXPORT 42%") !=
-                        std::string::npos &&
-                    wideOverlayModel.status.find("TC 00:00:04:00") !=
-                        std::string::npos &&
-                    wideOverlayModel.status.find("SELECTED 00:02:00") !=
-                        std::string::npos &&
-                    wideOverlayModel.status.find("1 REMOVED") !=
-                        std::string::npos &&
-                    wideOverlayModel.status.find("EDITING*") !=
-                        std::string::npos &&
-                    wideOverlayModel.status.find("Ctrl+") ==
-                        std::string::npos &&
-                    wideOverlayModel.status.size() <= 96,
-               "wide editor status must identify the selection and prior "
-               "removals without duplicating controls");
+                                             Prompt::None, 96, 0.5);
+  ok &= expect(
+      wideOverlayModel.status.find("EXPORT 42%") != std::string::npos &&
+          wideOverlayModel.status.find("TC 00:00:04:00") != std::string::npos &&
+          wideOverlayModel.status.find("SELECTED 00:02:00") !=
+              std::string::npos &&
+          wideOverlayModel.status.find("1 REMOVED") != std::string::npos &&
+          wideOverlayModel.status.find("EDITING*") != std::string::npos &&
+          wideOverlayModel.status.find("Ctrl+") == std::string::npos &&
+          wideOverlayModel.status.size() <= 96,
+      "wide editor status must identify the selection and prior "
+      "removals without duplicating controls");
   const playback_video_edit::OverlayModel rangeOverlayModel =
-      playback_video_edit::buildOverlayModel(overlayEdit, nullptr,
-                                              Prompt::None, 34, 0.5);
-  ok &= expect(rangeOverlayModel.status ==
-                   "EDITING*  SELECTED 00:02:00",
+      playback_video_edit::buildOverlayModel(overlayEdit, nullptr, Prompt::None,
+                                             34, 0.5);
+  ok &= expect(rangeOverlayModel.status == "EDITING*  SELECTED 00:02:00",
                "compact editor status must describe the selected section "
                "without exposing In/Out jargon");
   playback_video_edit::EditSnapshot vfrOutOverlay = overlayEdit;
   vfrOutOverlay.outFrameTimelineUs = 3'950'000;
   const playback_video_edit::OverlayModel vfrOutOverlayModel =
-      playback_video_edit::buildOverlayModel(
-          vfrOutOverlay, nullptr, Prompt::None, 64, 0.5);
+      playback_video_edit::buildOverlayModel(vfrOutOverlay, nullptr,
+                                             Prompt::None, 64, 0.5);
   ok &= expect(vfrOutOverlayModel.status.find("SELECTED 00:02:00") !=
                    std::string::npos,
                "selection duration must remain stable when the exact VFR end "
                "frame PTS differs from nominal cadence");
   const playback_video_edit::OverlayModel inOnlyDurationModel =
-      playback_video_edit::buildOverlayModel(
-          inOnlyOverlay, nullptr, Prompt::None, 64, 0.5);
-  ok &= expect(inOnlyDurationModel.status.find("START 00:02:00") !=
-                       std::string::npos &&
-                   inOnlyDurationModel.status.find("SELECTED") ==
-                       std::string::npos,
-               "a lone Start must remain an incomplete selection");
+      playback_video_edit::buildOverlayModel(inOnlyOverlay, nullptr,
+                                             Prompt::None, 64, 0.5);
+  ok &= expect(
+      inOnlyDurationModel.status.find("START 00:02:00") != std::string::npos &&
+          inOnlyDurationModel.status.find("SELECTED") == std::string::npos,
+      "a lone Start must remain an incomplete selection");
   const playback_video_edit::OverlayModel outOnlyDurationModel =
-      playback_video_edit::buildOverlayModel(
-          outOnlyOverlay, nullptr, Prompt::None, 64, 0.5);
-  ok &= expect(outOnlyDurationModel.status.find("END 00:03:29") !=
-                       std::string::npos &&
-                   outOnlyDurationModel.status.find("SELECTED") ==
-                       std::string::npos,
-               "a lone End must remain an incomplete selection");
+      playback_video_edit::buildOverlayModel(outOnlyOverlay, nullptr,
+                                             Prompt::None, 64, 0.5);
+  ok &= expect(
+      outOnlyDurationModel.status.find("END 00:03:29") != std::string::npos &&
+          outOnlyDurationModel.status.find("SELECTED") == std::string::npos,
+      "a lone End must remain an incomplete selection");
 
   playback_video_edit::ExportProgress failedExport;
   failedExport.status = playback_video_edit::ExportStatus::Failed;
   const playback_video_edit::OverlayModel failedExportModel =
       playback_video_edit::buildOverlayModel(
-          playback_video_edit::EditSnapshot{}, &failedExport, Prompt::None,
-          20, 0.0);
+          playback_video_edit::EditSnapshot{}, &failedExport, Prompt::None, 20,
+          0.0);
   const playback_video_edit::OverlayModel tinyFailedExportModel =
       playback_video_edit::buildOverlayModel(
-          playback_video_edit::EditSnapshot{}, &failedExport, Prompt::None,
-          6, 0.0);
+          playback_video_edit::EditSnapshot{}, &failedExport, Prompt::None, 6,
+          0.0);
   const playback_video_edit::OverlayModel failedExitModel =
       playback_video_edit::buildOverlayModel(
           playback_video_edit::EditSnapshot{}, &failedExport,
           Prompt::LeavePlayback, 20, 0.0);
   playback_video_edit::EditSnapshot activeFailedEdit = overlayEdit;
   const playback_video_edit::OverlayModel activeFailedExportModel =
-      playback_video_edit::buildOverlayModel(
-          activeFailedEdit, &failedExport, Prompt::None, 10, 0.0);
+      playback_video_edit::buildOverlayModel(activeFailedEdit, &failedExport,
+                                             Prompt::None, 10, 0.0);
   ok &= expect(failedExport.visible() && !failedExport.running() &&
                    failedExport.failed() &&
                    failedExportModel.status == "EXPORT FAILED" &&
@@ -984,10 +938,10 @@ int main() {
                "an exported edited program must remain identifiable without "
                "claiming that it is dirty");
   retainedProgram.active = true;
-  ok &= expect(playback_video_edit::retainedProgramBadge(retainedProgram)
-                   .empty(),
-               "the edit-mode timeline status must not duplicate the edited "
-               "program marker in the title");
+  ok &=
+      expect(playback_video_edit::retainedProgramBadge(retainedProgram).empty(),
+             "the edit-mode timeline status must not duplicate the edited "
+             "program marker in the title");
 
   playback_overlay::PlaybackOverlayState editorControlState;
   editorControlState.videoEdit.active = true;
@@ -1007,16 +961,18 @@ int main() {
                "playback chrome must retain volume for an active audio "
                "output");
   playbackSuffixState.videoEdit.active = true;
-  ok &= expect(playback_overlay::buildWindowOverlayProgressSuffix(
-                   playbackSuffixState).empty(),
-               "edit mode must own its frame-accurate timeline row without "
-               "a duplicate rounded playback clock");
+  ok &= expect(
+      playback_overlay::buildWindowOverlayProgressSuffix(playbackSuffixState)
+          .empty(),
+      "edit mode must own its frame-accurate timeline row without "
+      "a duplicate rounded playback clock");
   playbackSuffixState.videoEdit.active = false;
   playbackSuffixState.videoEditPrompt = Prompt::LeavePlayback;
-  ok &= expect(playback_overlay::buildWindowOverlayProgressSuffix(
-                   playbackSuffixState).empty(),
-               "a modal editor prompt must own its chrome without an "
-               "unrelated playback suffix");
+  ok &= expect(
+      playback_overlay::buildWindowOverlayProgressSuffix(playbackSuffixState)
+          .empty(),
+      "a modal editor prompt must own its chrome without an "
+      "unrelated playback suffix");
   playback_overlay::MediaActionConfirmationDialog mediaActionPrompt;
   mediaActionPrompt.title = "Cancel audio separation?";
   mediaActionPrompt.text = {"NTE.mp4", "Progress will be lost."};
@@ -1024,10 +980,11 @@ int main() {
   mediaActionPrompt.secondaryLabel = "Keep running";
   playbackSuffixState.videoEditPrompt = Prompt::None;
   playbackSuffixState.mediaActionConfirmationPrompt = mediaActionPrompt;
-  ok &= expect(playback_overlay::buildWindowOverlayProgressSuffix(
-                   playbackSuffixState).empty(),
-               "a media-task decision must own its modal status row without "
-               "an unrelated playback clock");
+  ok &= expect(
+      playback_overlay::buildWindowOverlayProgressSuffix(playbackSuffixState)
+          .empty(),
+      "a media-task decision must own its modal status row without "
+      "an unrelated playback clock");
   const auto emptyEditControls =
       playback_overlay::buildOverlayControlSpecs(editorControlState, -1);
   const std::vector<playback_overlay::OverlayControlId> expectedEmptyControls{
@@ -1037,16 +994,17 @@ int main() {
       playback_overlay::OverlayControlId::PlayPause,
       playback_overlay::OverlayControlId::EditDone,
   };
-  const auto controlIds = [](const auto& specs) {
+  const auto controlIds = [](const auto &specs) {
     std::vector<playback_overlay::OverlayControlId> ids;
     ids.reserve(specs.size());
-    for (const auto& spec : specs) ids.push_back(spec.id);
+    for (const auto &spec : specs)
+      ids.push_back(spec.id);
     return ids;
   };
-  const auto controlFor = [](const auto& specs,
+  const auto controlFor = [](const auto &specs,
                              playback_overlay::OverlayControlId id) {
     return std::find_if(specs.begin(), specs.end(),
-                        [&](const auto& spec) { return spec.id == id; });
+                        [&](const auto &spec) { return spec.id == id; });
   };
   playback_overlay::PlaybackOverlayState chapterControlState;
   chapterControlState.chapters.state =
@@ -1054,25 +1012,41 @@ int main() {
   chapterControlState.chapters.progress = 0.37;
   const auto analyzingChapterControls =
       playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
-  const auto chaptersControl = controlFor(
-      analyzingChapterControls,
-      playback_overlay::OverlayControlId::Chapters);
   ok &= expect(
-      chaptersControl != analyzingChapterControls.end() &&
-          !chaptersControl->enabled &&
-          chaptersControl->normalText.find("37%") == std::string::npos &&
-          overlayActionForControl(
-              playback_overlay::OverlayControlId::Chapters) ==
-              playback_overlay::OverlayAction::ToggleChapterOverview,
-      "chapter analysis progress must stay out of the timeline toolbar while "
-      "the content-only overview remains unavailable");
+      controlFor(analyzingChapterControls,
+                 playback_overlay::OverlayControlId::Chapters) ==
+          analyzingChapterControls.end(),
+      "automatic analysis must own no timeline-toolbar space until chapter "
+      "content exists");
+  chapterControlState.chapters.state =
+      playback_video_chapters::AnalysisState::Unsupported;
+  const auto unsupportedChapterControls =
+      playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
+  ok &= expect(
+      controlFor(unsupportedChapterControls,
+                 playback_overlay::OverlayControlId::Chapters) ==
+          unsupportedChapterControls.end(),
+      "unsupported automatic analysis must not reserve a dead chapter "
+      "control");
+  chapterControlState.chapters.state =
+      playback_video_chapters::AnalysisState::Disabled;
+  const auto disabledChapterControls =
+      playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
+  ok &= expect(
+      controlFor(disabledChapterControls,
+                 playback_overlay::OverlayControlId::Chapters) ==
+              disabledChapterControls.end() &&
+          controlFor(disabledChapterControls,
+                     playback_overlay::OverlayControlId::ChapterInstall) ==
+              disabledChapterControls.end(),
+      "a launch-level automatic-chapter opt-out must remove the feature "
+      "instead of leaving a permanently pending control");
   chapterControlState.chapters.state =
       playback_video_chapters::AnalysisState::SetupRequired;
   const auto chapterSetupControls =
       playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
   const auto installChapterModel = controlFor(
-      chapterSetupControls,
-      playback_overlay::OverlayControlId::ChapterInstall);
+      chapterSetupControls, playback_overlay::OverlayControlId::ChapterInstall);
   ok &= expect(installChapterModel != chapterSetupControls.end() &&
                    overlayActionForControl(
                        playback_overlay::OverlayControlId::ChapterInstall) ==
@@ -1082,14 +1056,13 @@ int main() {
       playback_video_chapters::AnalysisState::Installing;
   const auto chapterInstallingControls =
       playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
-  ok &= expect(
-      controlFor(chapterInstallingControls,
-                 playback_overlay::OverlayControlId::ChapterCancel) !=
-              chapterInstallingControls.end() &&
-          overlayActionForControl(
-              playback_overlay::OverlayControlId::ChapterCancel) ==
-              playback_overlay::OverlayAction::CancelChapterOperation,
-      "an explicit chapter-model install must remain cancellable");
+  ok &= expect(controlFor(chapterInstallingControls,
+                          playback_overlay::OverlayControlId::ChapterCancel) !=
+                       chapterInstallingControls.end() &&
+                   overlayActionForControl(
+                       playback_overlay::OverlayControlId::ChapterCancel) ==
+                       playback_overlay::OverlayAction::CancelChapterOperation,
+               "an explicit chapter-model install must remain cancellable");
   chapterControlState.chapters.state =
       playback_video_chapters::AnalysisState::Failed;
   const auto chapterFailedControls =
@@ -1118,16 +1091,14 @@ int main() {
   mediaCancellationDialogInput.width = 120;
   mediaCancellationDialogInput.height = 40;
   mediaCancellationDialogInput.title = "Cancel audio separation?";
-  mediaCancellationDialogInput.text = {
-      "Progress on NTE.mp4 will be lost."};
+  mediaCancellationDialogInput.text = {"Progress on NTE.mp4 will be lost."};
   mediaCancellationDialogInput.buttons = {
       {playback_overlay::OverlayControlId::MediaActionPrimary, "Cancel task",
        "Stop", false, false, true},
-      {playback_overlay::OverlayControlId::MediaActionSecondary,
-       "Keep running", "Keep", true, false, true}};
+      {playback_overlay::OverlayControlId::MediaActionSecondary, "Keep running",
+       "Keep", true, false, true}};
   const auto mediaCancellationLayout =
-      playback_overlay::layoutOverlayDialogCells(
-          mediaCancellationDialogInput);
+      playback_overlay::layoutOverlayDialogCells(mediaCancellationDialogInput);
   ok &= expect(
       mediaCancellationLayout.dialog &&
           mediaCancellationLayout.dialog->valid() &&
@@ -1154,71 +1125,62 @@ int main() {
   const auto activeTaskControls =
       playback_overlay::buildOverlayControlSpecs(playbackSuffixState, -1);
   const auto cancelTaskControl = controlFor(
-      activeTaskControls,
-      playback_overlay::OverlayControlId::MediaTaskCancel);
-  ok &= expect(
-      cancelTaskControl != activeTaskControls.end() &&
-          cancelTaskControl->enabled &&
-          overlayActionForControl(
-              playback_overlay::OverlayControlId::MediaTaskCancel) ==
-              playback_overlay::OverlayAction::CancelMediaTask,
-      "a modeless playback task must expose identity-bound cancellation "
-      "through the normal overlay interaction pipeline");
+      activeTaskControls, playback_overlay::OverlayControlId::MediaTaskCancel);
+  ok &=
+      expect(cancelTaskControl != activeTaskControls.end() &&
+                 cancelTaskControl->enabled &&
+                 overlayActionForControl(
+                     playback_overlay::OverlayControlId::MediaTaskCancel) ==
+                     playback_overlay::OverlayAction::CancelMediaTask,
+             "a modeless playback task must expose identity-bound cancellation "
+             "through the normal overlay interaction pipeline");
   playbackSuffixState.mediaTaskActivity->cancellable = false;
   const auto committedTaskControls =
       playback_overlay::buildOverlayControlSpecs(playbackSuffixState, -1);
-  ok &= expect(controlFor(committedTaskControls,
-                          playback_overlay::OverlayControlId::
-                              MediaTaskCancel) ==
-                   committedTaskControls.end(),
-               "a task past its cancellation barrier must remove the "
-               "playback cancellation control");
+  ok &=
+      expect(controlFor(committedTaskControls,
+                        playback_overlay::OverlayControlId::MediaTaskCancel) ==
+                 committedTaskControls.end(),
+             "a task past its cancellation barrier must remove the "
+             "playback cancellation control");
   mediaCancellationDialogInput.width = 20;
   mediaCancellationDialogInput.height = 4;
   const auto compactMediaCancellationLayout =
-      playback_overlay::layoutOverlayDialogCells(
-          mediaCancellationDialogInput);
+      playback_overlay::layoutOverlayDialogCells(mediaCancellationDialogInput);
   mediaCancellationDialogInput.width = 12;
   mediaCancellationDialogInput.height = 6;
   const auto stackedMediaCancellationLayout =
-      playback_overlay::layoutOverlayDialogCells(
-          mediaCancellationDialogInput);
+      playback_overlay::layoutOverlayDialogCells(mediaCancellationDialogInput);
   mediaCancellationDialogInput.width = 1;
   mediaCancellationDialogInput.height = 8;
   const auto oneColumnMediaCancellationLayout =
-      playback_overlay::layoutOverlayDialogCells(
-          mediaCancellationDialogInput);
+      playback_overlay::layoutOverlayDialogCells(mediaCancellationDialogInput);
   mediaCancellationDialogInput.width = 8;
   mediaCancellationDialogInput.height = 1;
   const auto oneRowMediaCancellationLayout =
-      playback_overlay::layoutOverlayDialogCells(
-          mediaCancellationDialogInput);
+      playback_overlay::layoutOverlayDialogCells(mediaCancellationDialogInput);
   mediaCancellationDialogInput.width = 3;
   mediaCancellationDialogInput.height = 3;
   const auto threeByThreeMediaCancellationLayout =
-      playback_overlay::layoutOverlayDialogCells(
-          mediaCancellationDialogInput);
+      playback_overlay::layoutOverlayDialogCells(mediaCancellationDialogInput);
   mediaCancellationDialogInput.width = 4;
   mediaCancellationDialogInput.height = 4;
   const auto fourByFourMediaCancellationLayout =
-      playback_overlay::layoutOverlayDialogCells(
-          mediaCancellationDialogInput);
+      playback_overlay::layoutOverlayDialogCells(mediaCancellationDialogInput);
   mediaCancellationDialogInput.width = 120;
   mediaCancellationDialogInput.height = 40;
   const auto restoredMediaCancellationLayout =
-      playback_overlay::layoutOverlayDialogCells(
-          mediaCancellationDialogInput);
-  ok &= expect(
-      compactMediaCancellationLayout.dialog &&
-          compactMediaCancellationLayout.controls.size() == 2 &&
-          compactMediaCancellationLayout.controls[0].y ==
-              compactMediaCancellationLayout.controls[1].y &&
-          stackedMediaCancellationLayout.dialog &&
-          stackedMediaCancellationLayout.controls.size() == 2 &&
-          stackedMediaCancellationLayout.controls[0].y !=
-              stackedMediaCancellationLayout.controls[1].y,
-      "playback dialogs must inherit the browser dialog's compact and "
-      "stacked responsive button layouts");
+      playback_overlay::layoutOverlayDialogCells(mediaCancellationDialogInput);
+  ok &= expect(compactMediaCancellationLayout.dialog &&
+                   compactMediaCancellationLayout.controls.size() == 2 &&
+                   compactMediaCancellationLayout.controls[0].y ==
+                       compactMediaCancellationLayout.controls[1].y &&
+                   stackedMediaCancellationLayout.dialog &&
+                   stackedMediaCancellationLayout.controls.size() == 2 &&
+                   stackedMediaCancellationLayout.controls[0].y !=
+                       stackedMediaCancellationLayout.controls[1].y,
+               "playback dialogs must inherit the browser dialog's compact and "
+               "stacked responsive button layouts");
   ok &= expect(
       !oneColumnMediaCancellationLayout.dialog &&
           !oneRowMediaCancellationLayout.dialog &&
@@ -1243,30 +1205,29 @@ int main() {
   editorControlState.videoEdit.inTimelineUs = 1'000'000;
   const auto partialEditControls =
       playback_overlay::buildOverlayControlSpecs(editorControlState, -1);
-  const std::vector<playback_overlay::OverlayControlId>
-      expectedPartialControls{
-          playback_overlay::OverlayControlId::EditMarkIn,
-          playback_overlay::OverlayControlId::EditMarkOut,
-          playback_overlay::OverlayControlId::EditClearSelection,
-          playback_overlay::OverlayControlId::EditSuggestions,
-          playback_overlay::OverlayControlId::PlayPause,
-          playback_overlay::OverlayControlId::EditDone,
-      };
+  const std::vector<playback_overlay::OverlayControlId> expectedPartialControls{
+      playback_overlay::OverlayControlId::EditMarkIn,
+      playback_overlay::OverlayControlId::EditMarkOut,
+      playback_overlay::OverlayControlId::EditClearSelection,
+      playback_overlay::OverlayControlId::EditSuggestions,
+      playback_overlay::OverlayControlId::PlayPause,
+      playback_overlay::OverlayControlId::EditDone,
+  };
   const auto activeStart = controlFor(
       partialEditControls, playback_overlay::OverlayControlId::EditMarkIn);
-  ok &= expect(controlIds(partialEditControls) == expectedPartialControls &&
-                   activeStart != partialEditControls.end() &&
-                   activeStart->active &&
-                   std::none_of(
-                       partialEditControls.begin(), partialEditControls.end(),
-                       [](const auto& control) {
-                         return control.id == playback_overlay::OverlayControlId::
-                                                  EditRippleDelete ||
-                                control.id == playback_overlay::OverlayControlId::
-                                                  EditTrim;
-                       }),
-               "one endpoint must remain an incomplete, cancellable "
-               "selection instead of implying a hidden trim range");
+  ok &= expect(
+      controlIds(partialEditControls) == expectedPartialControls &&
+          activeStart != partialEditControls.end() && activeStart->active &&
+          std::none_of(
+              partialEditControls.begin(), partialEditControls.end(),
+              [](const auto &control) {
+                return control.id == playback_overlay::OverlayControlId::
+                                         EditRippleDelete ||
+                       control.id ==
+                           playback_overlay::OverlayControlId::EditTrim;
+              }),
+      "one endpoint must remain an incomplete, cancellable "
+      "selection instead of implying a hidden trim range");
 
   editorControlState.videoEdit.outTimelineUs = 2'000'000;
   editorControlState.videoEdit.canRippleDelete = true;
@@ -1313,25 +1274,24 @@ int main() {
       playback_video_edit::ExportStatus::Running;
   const auto exportingEditControls =
       playback_overlay::buildOverlayControlSpecs(editorControlState, -1);
-  ok &= expect(controlIds(exportingEditControls) ==
-                   expectedCompleteControls,
+  ok &= expect(controlIds(exportingEditControls) == expectedCompleteControls,
                "background export state must not repurpose the monitor bar");
-  ok &= expect(editCommandForControl(
-                   playback_overlay::OverlayControlId::EditDone) ==
-                   playback_video_edit::Command::Finish,
-               "Done must only leave the edit tools instead of entering the "
-               "Escape confirmation path or implying an export");
-  ok &= expect(editCommandForControl(
-                   playback_overlay::OverlayControlId::EditMarkIn) ==
-                       playback_video_edit::Command::ToggleIn &&
-                   editCommandForControl(
-                       playback_overlay::OverlayControlId::EditMarkOut) ==
-                       playback_video_edit::Command::ToggleOut &&
-                   editCommandForControl(playback_overlay::OverlayControlId::
-                                             EditClearSelection) ==
-                       playback_video_edit::Command::ClearInAndOut,
-               "endpoint buttons must toggle and Cancel must clear only the "
-               "local range-selection tool");
+  ok &= expect(
+      editCommandForControl(playback_overlay::OverlayControlId::EditDone) ==
+          playback_video_edit::Command::Finish,
+      "Done must only leave the edit tools instead of entering the "
+      "Escape confirmation path or implying an export");
+  ok &= expect(
+      editCommandForControl(playback_overlay::OverlayControlId::EditMarkIn) ==
+              playback_video_edit::Command::ToggleIn &&
+          editCommandForControl(
+              playback_overlay::OverlayControlId::EditMarkOut) ==
+              playback_video_edit::Command::ToggleOut &&
+          editCommandForControl(
+              playback_overlay::OverlayControlId::EditClearSelection) ==
+              playback_video_edit::Command::ClearInAndOut,
+      "endpoint buttons must toggle and Cancel must clear only the "
+      "local range-selection tool");
 
   playback_overlay::PlaybackOverlayState suggestionControlState;
   suggestionControlState.videoEdit.active = true;
@@ -1346,8 +1306,8 @@ int main() {
   suggestionControlState.videoEdit.suggestionReview.filteredCount = 3;
   suggestionControlState.videoEdit.suggestionReview.selectedId = 42;
   suggestionControlState.videoEdit.suggestionReview.canUndoHide = true;
-  const auto suggestionControls = playback_overlay::buildOverlayControlSpecs(
-      suggestionControlState, -1);
+  const auto suggestionControls =
+      playback_overlay::buildOverlayControlSpecs(suggestionControlState, -1);
   const std::vector<playback_overlay::OverlayControlId>
       expectedSuggestionControls{
           playback_overlay::OverlayControlId::EditMarkIn,
@@ -1363,39 +1323,34 @@ int main() {
           playback_overlay::OverlayControlId::EditDone,
       };
   const auto suggestionsControl = controlFor(
-      suggestionControls,
-      playback_overlay::OverlayControlId::EditSuggestions);
-  const auto suggestionFilterControl = controlFor(
-      suggestionControls,
-      playback_overlay::OverlayControlId::EditSuggestionFilter);
-  ok &= expect(
-      controlIds(suggestionControls) == expectedSuggestionControls &&
-          suggestionsControl != suggestionControls.end() &&
-          suggestionsControl->normalText == " [Suggestions 8] " &&
-          suggestionsControl->active &&
-          suggestionFilterControl != suggestionControls.end() &&
-          suggestionFilterControl->normalText == " [Filter: Cutscenes] ",
-      "the shared editor toolbar must expose a persistent, filterable "
-      "suggestion review workflow");
+      suggestionControls, playback_overlay::OverlayControlId::EditSuggestions);
+  const auto suggestionFilterControl =
+      controlFor(suggestionControls,
+                 playback_overlay::OverlayControlId::EditSuggestionFilter);
+  ok &=
+      expect(controlIds(suggestionControls) == expectedSuggestionControls &&
+                 suggestionsControl != suggestionControls.end() &&
+                 suggestionsControl->normalText == " [Suggestions 8] " &&
+                 suggestionsControl->active &&
+                 suggestionFilterControl != suggestionControls.end() &&
+                 suggestionFilterControl->normalText == " [Filter: Cutscenes] ",
+             "the shared editor toolbar must expose a persistent, filterable "
+             "suggestion review workflow");
   for (const auto [control, command] : {
            std::pair{playback_overlay::OverlayControlId::EditSuggestions,
                      playback_video_edit::Command::ToggleSceneSuggestions},
-           std::pair{
-               playback_overlay::OverlayControlId::EditSuggestionFilter,
-               playback_video_edit::Command::CycleSceneSuggestionFilter},
-           std::pair{
-               playback_overlay::OverlayControlId::EditPreviousSuggestion,
-               playback_video_edit::Command::PreviousSceneSuggestion},
+           std::pair{playback_overlay::OverlayControlId::EditSuggestionFilter,
+                     playback_video_edit::Command::CycleSceneSuggestionFilter},
+           std::pair{playback_overlay::OverlayControlId::EditPreviousSuggestion,
+                     playback_video_edit::Command::PreviousSceneSuggestion},
            std::pair{playback_overlay::OverlayControlId::EditNextSuggestion,
                      playback_video_edit::Command::NextSceneSuggestion},
-           std::pair{
-               playback_overlay::OverlayControlId::EditSelectSuggestion,
-               playback_video_edit::Command::SelectSceneSuggestion},
+           std::pair{playback_overlay::OverlayControlId::EditSelectSuggestion,
+                     playback_video_edit::Command::SelectSceneSuggestion},
            std::pair{playback_overlay::OverlayControlId::EditHideSuggestion,
                      playback_video_edit::Command::DismissSceneSuggestion},
-           std::pair{
-               playback_overlay::OverlayControlId::EditUndoHideSuggestion,
-               playback_video_edit::Command::UndoDismissSceneSuggestion},
+           std::pair{playback_overlay::OverlayControlId::EditUndoHideSuggestion,
+                     playback_video_edit::Command::UndoDismissSceneSuggestion},
        }) {
     ok &= expect(editCommandForControl(control) == command,
                  "each suggestion control must dispatch through the shared "
@@ -1404,8 +1359,8 @@ int main() {
   ok &= expect(editCommandForControl(
                    playback_overlay::OverlayControlId::EditStartExport) ==
                        playback_video_edit::Command::StartExport &&
-                   editCommandForControl(playback_overlay::OverlayControlId::
-                                             EditCancelExport) ==
+                   editCommandForControl(
+                       playback_overlay::OverlayControlId::EditCancelExport) ==
                        playback_video_edit::Command::CancelExport,
                "rendered export and cancel controls must dispatch distinct "
                "commands rather than a worker-state toggle");
@@ -1432,12 +1387,13 @@ int main() {
   ok &= expect(
       controlIds(pictureInPictureEditControls) ==
               expectedPictureInPictureEditControls &&
-          pictureInPictureEditControls.front().normalText ==
-              " [Close PiP] " &&
+          pictureInPictureEditControls.front().normalText == " [Close PiP] " &&
           std::none_of(
               pictureInPictureEditControls.begin(),
-              pictureInPictureEditControls.end(), [](const auto& control) {
-                return control.id == playback_overlay::OverlayControlId::Radio ||
+              pictureInPictureEditControls.end(),
+              [](const auto &control) {
+                return control.id ==
+                           playback_overlay::OverlayControlId::Radio ||
                        control.id ==
                            playback_overlay::OverlayControlId::AudioTrack ||
                        control.id ==
@@ -1452,39 +1408,40 @@ int main() {
   pendingExitControlState.videoEditExport.status =
       playback_video_edit::ExportStatus::Running;
   pendingExitControlState.videoEditExport.targetsCurrentRevision = true;
-  const auto pendingExitControls = playback_overlay::buildOverlayControlSpecs(
-      pendingExitControlState, -1);
-  ok &= expect(pendingExitControls.size() == 3 &&
-                   pendingExitControls.front().id ==
-                       playback_overlay::OverlayControlId::EditWaitForExport &&
-                   pendingExitControls[1].id ==
-                       playback_overlay::OverlayControlId::EditCancelExport &&
-                   pendingExitControls.front().normalText == " [Wait] " &&
-                   std::none_of(
-                       pendingExitControls.begin(), pendingExitControls.end(),
-                       [](const auto& control) {
-                         return control.id == playback_overlay::OverlayControlId::
-                                                  EditDiscardAndExit;
-                       }),
-               "a current-revision export must offer wait or explicit cancel "
-               "without conflating either action with discard");
+  const auto pendingExitControls =
+      playback_overlay::buildOverlayControlSpecs(pendingExitControlState, -1);
+  ok &= expect(
+      pendingExitControls.size() == 3 &&
+          pendingExitControls.front().id ==
+              playback_overlay::OverlayControlId::EditWaitForExport &&
+          pendingExitControls[1].id ==
+              playback_overlay::OverlayControlId::EditCancelExport &&
+          pendingExitControls.front().normalText == " [Wait] " &&
+          std::none_of(
+              pendingExitControls.begin(), pendingExitControls.end(),
+              [](const auto &control) {
+                return control.id ==
+                       playback_overlay::OverlayControlId::EditDiscardAndExit;
+              }),
+      "a current-revision export must offer wait or explicit cancel "
+      "without conflating either action with discard");
 
   pendingExitControlState.videoEditExport.targetsCurrentRevision = false;
   const auto blockingExportControls =
       playback_overlay::buildOverlayControlSpecs(pendingExitControlState, -1);
-  ok &= expect(blockingExportControls.size() == 2 &&
-                   blockingExportControls.front().id ==
-                       playback_overlay::OverlayControlId::EditCancelExport &&
-                   blockingExportControls.front().normalText ==
-                       " [Cancel export] " &&
-                   std::none_of(
-                       blockingExportControls.begin(),
-                       blockingExportControls.end(), [](const auto& control) {
-                         return control.id == playback_overlay::OverlayControlId::
-                                                  EditDiscardAndExit;
-                       }),
-               "an older export must be identified as blocking instead of "
-               "pretending that waiting or discard resolves both revisions");
+  ok &= expect(
+      blockingExportControls.size() == 2 &&
+          blockingExportControls.front().id ==
+              playback_overlay::OverlayControlId::EditCancelExport &&
+          blockingExportControls.front().normalText == " [Cancel export] " &&
+          std::none_of(
+              blockingExportControls.begin(), blockingExportControls.end(),
+              [](const auto &control) {
+                return control.id ==
+                       playback_overlay::OverlayControlId::EditDiscardAndExit;
+              }),
+      "an older export must be identified as blocking instead of "
+      "pretending that waiting or discard resolves both revisions");
 
   pendingExitControlState.videoEditExport = {};
   const auto resolvedExportControls =
@@ -1514,28 +1471,26 @@ int main() {
       playback_overlay::buildOverlayInteractionMap(disabledLayout);
   const auto disabledDelete = std::find_if(
       disabledLayout.controls.begin(), disabledLayout.controls.end(),
-      [](const auto& item) {
-        return item.id ==
-               playback_overlay::OverlayControlId::EditRippleDelete;
+      [](const auto &item) {
+        return item.id == playback_overlay::OverlayControlId::EditRippleDelete;
       });
   const auto enabledCancel = std::find_if(
       disabledLayout.controls.begin(), disabledLayout.controls.end(),
-      [](const auto& item) {
+      [](const auto &item) {
         return item.id ==
                playback_overlay::OverlayControlId::EditClearSelection;
       });
-  ok &= expect(disabledDelete != disabledLayout.controls.end() &&
-                   !disabledDelete->enabled && !disabledDelete->hovered &&
-                   !playback_overlay::overlayControlAt(
-                       disabledMap, disabledDelete->x + 0.5,
-                       disabledDelete->y + 0.5),
-               "disabled controls must render without accepting hover or clicks");
+  ok &= expect(
+      disabledDelete != disabledLayout.controls.end() &&
+          !disabledDelete->enabled && !disabledDelete->hovered &&
+          !playback_overlay::overlayControlAt(
+              disabledMap, disabledDelete->x + 0.5, disabledDelete->y + 0.5),
+      "disabled controls must render without accepting hover or clicks");
   ok &= expect(enabledCancel != disabledLayout.controls.end() &&
-                   playback_overlay::overlayControlAt(
-                       disabledMap, enabledCancel->x + 0.5,
-                       enabledCancel->y + 0.5) ==
-                       playback_overlay::OverlayControlId::
-                           EditClearSelection,
+                   playback_overlay::overlayControlAt(disabledMap,
+                                                      enabledCancel->x + 0.5,
+                                                      enabledCancel->y + 0.5) ==
+                       playback_overlay::OverlayControlId::EditClearSelection,
                "enabled controls must retain normal semantic hit-testing");
 
   playback_overlay::OverlayCellLayoutInput shortSurface;
@@ -1552,20 +1507,18 @@ int main() {
   };
   const playback_overlay::OverlayCellLayout shortLayout =
       playback_overlay::layoutOverlayCells(shortSurface);
-  ok &= expect(shortLayout.controls.size() == 3 &&
-                   shortLayout.controls[0].id ==
-                       playback_overlay::OverlayControlId::EditMarkIn &&
-                   shortLayout.controls[1].id ==
-                       playback_overlay::OverlayControlId::EditMarkOut &&
-                   shortLayout.controls[2].id ==
-                       playback_overlay::OverlayControlId::PlayPause &&
-                   std::all_of(shortLayout.controls.begin(),
-                               shortLayout.controls.end(),
-                               [](const auto& control) {
-                                 return control.y >= 0;
-                               }),
-               "a short ASCII or PiP surface must retain its leading primary "
-               "control row instead of exposing later commands");
+  ok &= expect(
+      shortLayout.controls.size() == 3 &&
+          shortLayout.controls[0].id ==
+              playback_overlay::OverlayControlId::EditMarkIn &&
+          shortLayout.controls[1].id ==
+              playback_overlay::OverlayControlId::EditMarkOut &&
+          shortLayout.controls[2].id ==
+              playback_overlay::OverlayControlId::PlayPause &&
+          std::all_of(shortLayout.controls.begin(), shortLayout.controls.end(),
+                      [](const auto &control) { return control.y >= 0; }),
+      "a short ASCII or PiP surface must retain its leading primary "
+      "control row instead of exposing later commands");
   shortSurface.height = 1;
   const playback_overlay::OverlayCellLayout oneRowLayout =
       playback_overlay::layoutOverlayCells(shortSurface);
@@ -1576,16 +1529,16 @@ int main() {
   overlayEdit.inTimelineUs.reset();
   overlayEdit.outTimelineUs.reset();
   const playback_video_edit::OverlayModel unselectedOverlayModel =
-      playback_video_edit::buildOverlayModel(
-          overlayEdit, nullptr, Prompt::None, 10, 0.0);
+      playback_video_edit::buildOverlayModel(overlayEdit, nullptr, Prompt::None,
+                                             10, 0.0);
   ok &= expect(unselectedOverlayModel.cells[2] ==
-                   playback_video_edit::TimelineCellKind::KeptAlternate &&
+                       playback_video_edit::TimelineCellKind::KeptAlternate &&
                    unselectedOverlayModel.cutCells == std::vector<int>{2},
                "removed sections must remain visible as distinct adjacent "
                "clips separated by explicit cut points");
   const playback_video_edit::OverlayModel unselectedWideOverlayModel =
-      playback_video_edit::buildOverlayModel(
-          overlayEdit, nullptr, Prompt::None, 64, 0.0);
+      playback_video_edit::buildOverlayModel(overlayEdit, nullptr, Prompt::None,
+                                             64, 0.0);
   ok &= expect(unselectedWideOverlayModel.status.find("SELECTED") ==
                        std::string::npos &&
                    unselectedWideOverlayModel.status.find("1 REMOVED") !=
@@ -1609,11 +1562,11 @@ int main() {
   multipleRemovalOverlay.outTimelineUs.reset();
   multipleRemovalOverlay.outFrameTimelineUs.reset();
   const playback_video_edit::OverlayModel multipleRemovalModel =
-      playback_video_edit::buildOverlayModel(
-          multipleRemovalOverlay, nullptr, Prompt::None, 12, 0.0);
+      playback_video_edit::buildOverlayModel(multipleRemovalOverlay, nullptr,
+                                             Prompt::None, 12, 0.0);
   const playback_video_edit::OverlayModel multipleRemovalStatusModel =
-      playback_video_edit::buildOverlayModel(
-          multipleRemovalOverlay, nullptr, Prompt::None, 64, 0.0);
+      playback_video_edit::buildOverlayModel(multipleRemovalOverlay, nullptr,
+                                             Prompt::None, 64, 0.0);
   ok &= expect(
       multipleRemovalModel.cells[0] ==
               playback_video_edit::TimelineCellKind::Kept &&
@@ -1627,66 +1580,65 @@ int main() {
       "multiple removals must stay visibly separate as alternating clips, "
       "cut markers, and an accumulated count");
   const playback_video_edit::OverlayModel multipleRemovalPromptBaseline =
-      playback_video_edit::buildOverlayModel(
-          multipleRemovalOverlay, nullptr, Prompt::None, 20, 0.0);
+      playback_video_edit::buildOverlayModel(multipleRemovalOverlay, nullptr,
+                                             Prompt::None, 20, 0.0);
   const playback_video_edit::OverlayModel multipleRemovalPromptModel =
-      playback_video_edit::buildOverlayModel(
-          multipleRemovalOverlay, nullptr, Prompt::LeaveEditMode, 20, 0.0);
-  ok &= expect(
-      multipleRemovalPromptModel.status == "LEAVE EDIT MODE?" &&
-          multipleRemovalPromptModel.cells ==
-              multipleRemovalPromptBaseline.cells &&
-          multipleRemovalPromptModel.playheadCell ==
-              multipleRemovalPromptBaseline.playheadCell &&
-          multipleRemovalPromptModel.cutCells ==
-              multipleRemovalPromptBaseline.cutCells,
-      "opening a modal editor prompt must preserve the current program "
-      "timeline instead of revealing the playback progress bar");
+      playback_video_edit::buildOverlayModel(multipleRemovalOverlay, nullptr,
+                                             Prompt::LeaveEditMode, 20, 0.0);
+  ok &=
+      expect(multipleRemovalPromptModel.status == "LEAVE EDIT MODE?" &&
+                 multipleRemovalPromptModel.cells ==
+                     multipleRemovalPromptBaseline.cells &&
+                 multipleRemovalPromptModel.playheadCell ==
+                     multipleRemovalPromptBaseline.playheadCell &&
+                 multipleRemovalPromptModel.cutCells ==
+                     multipleRemovalPromptBaseline.cutCells,
+             "opening a modal editor prompt must preserve the current program "
+             "timeline instead of revealing the playback progress bar");
   overlayEdit.active = false;
   playback_video_edit::ExportProgress olderOverlayExport = overlayExport;
   olderOverlayExport.targetsCurrentRevision = false;
   const playback_video_edit::OverlayModel backgroundExportModel =
       playback_video_edit::buildOverlayModel(overlayEdit, &olderOverlayExport,
-                                              Prompt::None, 10, 0.0);
+                                             Prompt::None, 10, 0.0);
   ok &= expect(backgroundExportModel.cells.empty() &&
-                    backgroundExportModel.status == "OLD EXPORT",
-                "a background job for an older decision list must remain "
-                "visible without claiming to export the current revision");
+                   backgroundExportModel.status == "OLD EXPORT",
+               "a background job for an older decision list must remain "
+               "visible without claiming to export the current revision");
 
   const playback_video_edit::OverlayModel exitModel =
-      playback_video_edit::buildOverlayModel(
-          overlayEdit, nullptr, Prompt::LeavePlayback, 10, 0.0);
-  ok &= expect(exitModel.status == "UNEXPORTED" &&
-                   exitModel.status.size() <= 10,
-               "exit confirmation must use a complete width-bounded state");
+      playback_video_edit::buildOverlayModel(overlayEdit, nullptr,
+                                             Prompt::LeavePlayback, 10, 0.0);
+  ok &=
+      expect(exitModel.status == "UNEXPORTED" && exitModel.status.size() <= 10,
+             "exit confirmation must use a complete width-bounded state");
   playback_video_edit::ExportProgress blockingExitExport;
   blockingExitExport.status = playback_video_edit::ExportStatus::Running;
   blockingExitExport.fraction = 0.42;
   const playback_video_edit::OverlayModel blockingExitModel =
-      playback_video_edit::buildOverlayModel(
-          overlayEdit, &blockingExitExport, Prompt::LeavePlayback, 40, 0.0);
-  ok &= expect(blockingExitModel.status ==
-                   "UNEXPORTED EDITS  EXPORT BUSY",
+      playback_video_edit::buildOverlayModel(overlayEdit, &blockingExitExport,
+                                             Prompt::LeavePlayback, 40, 0.0);
+  ok &= expect(blockingExitModel.status == "UNEXPORTED EDITS  EXPORT BUSY",
                "playback exit must expose an older blocking job without "
                "claiming that it saves the current revision");
   overlayEdit.hasUnexportedChanges = false;
   const playback_video_edit::OverlayModel hazardFreeExitModel =
-      playback_video_edit::buildOverlayModel(
-          overlayEdit, nullptr, Prompt::LeavePlayback, 20, 0.0);
+      playback_video_edit::buildOverlayModel(overlayEdit, nullptr,
+                                             Prompt::LeavePlayback, 20, 0.0);
   ok &= expect(hazardFreeExitModel.status == "LEAVE PLAYBACK?",
                "a completion race with no remaining hazard must not invent "
                "unexported edits");
   overlayEdit.hasUnexportedChanges = true;
 
   const playback_video_edit::OverlayModel closeEditorModel =
-      playback_video_edit::buildOverlayModel(
-          overlayEdit, nullptr, Prompt::LeaveEditMode, 16, 0.0);
+      playback_video_edit::buildOverlayModel(overlayEdit, nullptr,
+                                             Prompt::LeaveEditMode, 16, 0.0);
   ok &= expect(closeEditorModel.status == "LEAVE EDIT MODE?",
                "leaving only edit mode must have its own explicit prompt");
 
   const playback_video_edit::OverlayModel discardModel =
-      playback_video_edit::buildOverlayModel(
-          overlayEdit, nullptr, Prompt::DiscardEdits, 18, 0.0);
+      playback_video_edit::buildOverlayModel(overlayEdit, nullptr,
+                                             Prompt::DiscardEdits, 18, 0.0);
   ok &= expect(discardModel.status == "DISCARD ALL EDITS?",
                "discarding edit history must have its own explicit prompt");
 
@@ -1695,21 +1647,21 @@ int main() {
   promptLayout.progressBarY = 4;
   promptLayout.progressBarWidth = 20;
   const playback_overlay::InteractionMap discardInteractions =
-      playback_overlay::buildOverlayInteractionMap(
-          promptLayout, &overlayEdit, Prompt::DiscardEdits);
+      playback_overlay::buildOverlayInteractionMap(promptLayout, &overlayEdit,
+                                                   Prompt::DiscardEdits);
   ok &= expect(discardInteractions.modal &&
                    discardInteractions.contains(-100.0, -100.0) &&
                    !discardInteractions.progressBar,
                "a visible editor prompt must capture the entire input surface");
   const playback_overlay::InteractionMap ordinaryInteractions =
-      playback_overlay::buildOverlayInteractionMap(
-          promptLayout, &overlayEdit, Prompt::None);
+      playback_overlay::buildOverlayInteractionMap(promptLayout, &overlayEdit,
+                                                   Prompt::None);
   ok &= expect(!ordinaryInteractions.modal &&
                    ordinaryInteractions.progressBar.has_value(),
                "ordinary edit mode must restore precise timeline hit-testing");
   const playback_overlay::InteractionMap mediaCancellationInteractions =
-      playback_overlay::buildOverlayInteractionMap(
-          promptLayout, &overlayEdit, Prompt::None, true);
+      playback_overlay::buildOverlayInteractionMap(promptLayout, &overlayEdit,
+                                                   Prompt::None, true);
   ok &= expect(mediaCancellationInteractions.modal &&
                    !mediaCancellationInteractions.progressBar,
                "media-task confirmation must block timeline interaction on "
@@ -1722,15 +1674,18 @@ int main() {
       {{20.0, 30.0, 40.0, 40.0},
        playback_overlay::OverlayControlId::EditStartExport});
   interactions.editBoundaries.push_back(
-      {{95.0, 200.0, 115.0, 210.0},
-       playback_video_edit::EditBoundary::In});
+      {{95.0, 200.0, 115.0, 210.0}, playback_video_edit::EditBoundary::In});
+  interactions.chapterOverview = playback_overlay::ChapterOverviewRegion{
+      {300.0, 20.0, 500.0, 180.0},
+      0,
+      4,
+      {{{310.0, 60.0, 490.0, 70.0}, 120'000'000}}};
   auto progressHit =
       playback_overlay::progressBarHitAt(interactions, 149.5, 205.0);
   ok &= expect(progressHit && progressHit->ratio == 0.5 &&
                    progressHit->units == 10,
                "progress hit-testing must preserve exact in-bar geometry");
-  ok &= expect(!playback_overlay::progressBarHitAt(interactions, 200.0,
-                                                    205.0),
+  ok &= expect(!playback_overlay::progressBarHitAt(interactions, 200.0, 205.0),
                "ordinary progress hit-testing must reject outside input");
   progressHit =
       playback_overlay::progressBarHitAt(interactions, 0.0, 0.0, true);
@@ -1746,18 +1701,28 @@ int main() {
   ok &= expect(playback_overlay::editBoundaryAt(interactions, 100.0, 205.0) ==
                    playback_video_edit::EditBoundary::In,
                "rendered edit handles must retain their boundary identity");
+  const playback_overlay::InteractionHit chapterRowHit =
+      playback_overlay::interactionHitAt(interactions, 320.0, 65.0);
+  ok &= expect(chapterRowHit.chapterOverview &&
+                   chapterRowHit.chapterStartUs == 120'000'000,
+               "overview chapter rows must retain a direct seek target");
   const playback_overlay::InteractionMap transformed =
-      playback_overlay::transformInteractionMap(interactions, 5.0, 7.0,
-                                                2.0, 3.0);
+      playback_overlay::transformInteractionMap(interactions, 5.0, 7.0, 2.0,
+                                                3.0);
   ok &= expect(playback_overlay::overlayControlAt(transformed, 50.0, 100.0) ==
                    playback_overlay::OverlayControlId::EditStartExport,
                "presentation transforms must preserve exact control hits");
   const playback_overlay::InteractionHit transformedHit =
-      playback_overlay::interactionHitAtTransformed(
-          interactions, 5.0, 7.0, 2.0, 3.0, 304.5, 610.0);
+      playback_overlay::interactionHitAtTransformed(interactions, 5.0, 7.0, 2.0,
+                                                    3.0, 304.5, 610.0);
   ok &= expect(transformedHit.progressBar &&
                    transformedHit.progressBar->ratio == 0.5,
                "pixel mouse input must preserve sub-cell progress precision");
+  const playback_overlay::InteractionHit transformedChapterRowHit =
+      playback_overlay::interactionHitAtTransformed(
+          interactions, 5.0, 7.0, 2.0, 3.0, 645.0, 202.0);
+  ok &= expect(transformedChapterRowHit.chapterStartUs == 120'000'000,
+               "chapter-row targets must survive framebuffer transforms");
 
   playback_overlay::ContextMenuSnapshot contextMenu;
   contextMenu.visible = true;
@@ -1770,11 +1735,11 @@ int main() {
   };
   const playback_overlay::ContextMenuCellLayout contextLayout =
       playback_overlay::layoutContextMenuCells(contextMenu, 30, 10);
-  ok &= expect(contextLayout.drawable() && contextLayout.x >= 0 &&
-                   contextLayout.y >= 0 &&
-                   contextLayout.x + contextLayout.width <= 30 &&
-                   contextLayout.y + contextLayout.height <= 10,
-               "a context menu must flip and clamp inside its presentation surface");
+  ok &= expect(
+      contextLayout.drawable() && contextLayout.x >= 0 &&
+          contextLayout.y >= 0 && contextLayout.x + contextLayout.width <= 30 &&
+          contextLayout.y + contextLayout.height <= 10,
+      "a context menu must flip and clamp inside its presentation surface");
   ok &= expect(contextLayout.items.size() == 2 &&
                    !contextLayout.items[0].selected &&
                    contextLayout.items[1].selected,
@@ -1789,11 +1754,10 @@ int main() {
                    static_cast<double>(contextLayout.items[1].x),
                    static_cast<double>(contextLayout.items[1].y)) == 20,
                "context menu hit-testing must preserve its opaque item token");
-  const auto transformedMenuHit =
-      playback_overlay::interactionHitAtTransformed(
-          contextInteractions, 5.0, 7.0, 2.0, 3.0,
-          5.0 + (static_cast<double>(contextLayout.items[1].x) + 0.5) * 2.0,
-          7.0 + (static_cast<double>(contextLayout.items[1].y) + 0.5) * 3.0);
+  const auto transformedMenuHit = playback_overlay::interactionHitAtTransformed(
+      contextInteractions, 5.0, 7.0, 2.0, 3.0,
+      5.0 + (static_cast<double>(contextLayout.items[1].x) + 0.5) * 2.0,
+      7.0 + (static_cast<double>(contextLayout.items[1].y) + 0.5) * 3.0);
   ok &= expect(transformedMenuHit.contextMenuItem == 20,
                "framebuffer scaling must preserve context-menu item identity");
 
@@ -1820,38 +1784,33 @@ int main() {
   playback_video_edit::EditSnapshot cleanEdit;
   playback_video_edit::ExportProgress idleExport;
   playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
-  ok &= expect(playbackMenu.open(
-                   playback_session::ContextMenuSurface::Terminal, 0.25, 0.75),
+  ok &= expect(playbackMenu.open(playback_session::ContextMenuSurface::Terminal,
+                                 0.25, 0.75),
                "ordinary playback must expose an explicit edit command");
-  const auto terminalMenu = playbackMenu.snapshotFor(
-      playback_session::ContextMenuSurface::Terminal);
+  const auto terminalMenu =
+      playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
   const auto windowMenu = playbackMenu.snapshotFor(
       playback_session::ContextMenuSurface::VideoWindow);
   ok &= expect(terminalMenu.visible && terminalMenu.items.size() == 2 &&
                    terminalMenu.items[0].label == "Edit video" &&
-                   terminalMenu.items[1].label ==
-                       "Generate transcript..." &&
+                   terminalMenu.items[1].label == "Generate transcript..." &&
                    terminalMenu.items[0].token != 0 &&
                    terminalMenu.items[1].token != 0 &&
-                   terminalMenu.items[0].token !=
-                       terminalMenu.items[1].token &&
+                   terminalMenu.items[0].token != terminalMenu.items[1].token &&
                    !windowMenu.visible,
                "a playback context menu must expose unique opaque source "
                "action identities on exactly one presentation surface");
   cleanEdit.hasEdits = true;
   playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
-  const auto retainedMenu = playbackMenu.snapshotFor(
-      playback_session::ContextMenuSurface::Terminal);
+  const auto retainedMenu =
+      playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
   ok &= expect(retainedMenu.items.size() == 4 &&
                    retainedMenu.items[0].label == "Resume editing" &&
-                   retainedMenu.items[1].label ==
-                       "Generate transcript..." &&
+                   retainedMenu.items[1].label == "Generate transcript..." &&
                    retainedMenu.items[2].label == "Export edited copy" &&
                    retainedMenu.items[3].label == "Discard changes" &&
-                   retainedMenu.items[0].token ==
-                       terminalMenu.items[0].token &&
-                   retainedMenu.items[1].token ==
-                       terminalMenu.items[1].token,
+                   retainedMenu.items[0].token == terminalMenu.items[0].token &&
+                   retainedMenu.items[1].token == terminalMenu.items[1].token,
                "an exported edit revision must remain resumable, exportable, "
                "transcribable, and discardable without changing semantic "
                "item identity");
@@ -1864,55 +1823,44 @@ int main() {
   cleanEdit.canUndo = true;
   cleanEdit.canRedo = true;
   cleanEdit.canToggleSmoothCut = true;
-  cleanEdit.selectedCutTransition =
-      playback_video_edit::CutTransition::hard();
+  cleanEdit.selectedCutTransition = playback_video_edit::CutTransition::hard();
   playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
-  const auto dirtyMenu = playbackMenu.snapshotFor(
-      playback_session::ContextMenuSurface::Terminal);
+  const auto dirtyMenu =
+      playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
   const auto clearAllItem = std::find_if(
-      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
-        return item.label == "Cancel selection";
-      });
+      dirtyMenu.items.begin(), dirtyMenu.items.end(),
+      [](const auto &item) { return item.label == "Cancel selection"; });
   const auto removeItem = std::find_if(
-      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
-        return item.label == "Remove selected section";
-      });
+      dirtyMenu.items.begin(), dirtyMenu.items.end(),
+      [](const auto &item) { return item.label == "Remove selected section"; });
   const auto keepOnlyItem = std::find_if(
-      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
+      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto &item) {
         return item.label == "Keep only selected section";
       });
-  const auto undoItem = std::find_if(
-      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
-        return item.label == "Undo";
-      });
-  const auto redoItem = std::find_if(
-      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
-        return item.label == "Redo";
-      });
+  const auto undoItem =
+      std::find_if(dirtyMenu.items.begin(), dirtyMenu.items.end(),
+                   [](const auto &item) { return item.label == "Undo"; });
+  const auto redoItem =
+      std::find_if(dirtyMenu.items.begin(), dirtyMenu.items.end(),
+                   [](const auto &item) { return item.label == "Redo"; });
   const auto resetItem = std::find_if(
-      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
-        return item.label == "Reset all edits";
-      });
+      dirtyMenu.items.begin(), dirtyMenu.items.end(),
+      [](const auto &item) { return item.label == "Reset all edits"; });
   const auto doneItem = std::find_if(
-      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
-        return item.label == "Done editing";
-      });
+      dirtyMenu.items.begin(), dirtyMenu.items.end(),
+      [](const auto &item) { return item.label == "Done editing"; });
   const auto discardItem = std::find_if(
-      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
-        return item.label == "Discard changes";
-      });
+      dirtyMenu.items.begin(), dirtyMenu.items.end(),
+      [](const auto &item) { return item.label == "Discard changes"; });
   const auto exportItem = std::find_if(
-      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
-        return item.label == "Export edited copy";
-      });
-  const auto smoothCutItem = std::find_if(
-      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
-        return item.label == "Smooth cut";
-      });
+      dirtyMenu.items.begin(), dirtyMenu.items.end(),
+      [](const auto &item) { return item.label == "Export edited copy"; });
+  const auto smoothCutItem =
+      std::find_if(dirtyMenu.items.begin(), dirtyMenu.items.end(),
+                   [](const auto &item) { return item.label == "Smooth cut"; });
   const auto detectSegmentsItem = std::find_if(
-      dirtyMenu.items.begin(), dirtyMenu.items.end(), [](const auto& item) {
-        return item.label == "Detect segments...";
-      });
+      dirtyMenu.items.begin(), dirtyMenu.items.end(),
+      [](const auto &item) { return item.label == "Detect segments..."; });
   ok &= expect(clearAllItem != dirtyMenu.items.end() &&
                    removeItem != dirtyMenu.items.end() &&
                    keepOnlyItem != dirtyMenu.items.end() &&
@@ -1936,46 +1884,43 @@ int main() {
   cleanEdit.suggestionReview.suggestions = {menuSuggestion};
   cleanEdit.suggestionReview.selectedId = menuSuggestion.id;
   playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
-  const auto analysedMenu = playbackMenu.snapshotFor(
-      playback_session::ContextMenuSurface::Terminal);
-  ok &= expect(std::any_of(
-                   analysedMenu.items.begin(), analysedMenu.items.end(),
-                   [](const auto& item) {
-                     return item.label == "Select suggested segment";
-                   }) &&
-                   std::any_of(
-                       analysedMenu.items.begin(), analysedMenu.items.end(),
-                       [](const auto& item) {
-                         return item.label == "Hide suggestion";
-                       }) &&
-                   std::any_of(
-                       analysedMenu.items.begin(), analysedMenu.items.end(),
-                       [](const auto& item) {
-                         return item.label == "Undo hidden suggestion";
-                       }),
-               "detected ranges must expose deliberate selection, reversible "
-               "hiding, and no destructive edit");
+  const auto analysedMenu =
+      playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
+  ok &= expect(
+      std::any_of(analysedMenu.items.begin(), analysedMenu.items.end(),
+                  [](const auto &item) {
+                    return item.label == "Select suggested segment";
+                  }) &&
+          std::any_of(analysedMenu.items.begin(), analysedMenu.items.end(),
+                      [](const auto &item) {
+                        return item.label == "Hide suggestion";
+                      }) &&
+          std::any_of(analysedMenu.items.begin(), analysedMenu.items.end(),
+                      [](const auto &item) {
+                        return item.label == "Undo hidden suggestion";
+                      }),
+      "detected ranges must expose deliberate selection, reversible "
+      "hiding, and no destructive edit");
   cleanEdit.selectedCutTransition =
       playback_video_edit::CutTransition::motionSmooth();
   playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
-  const auto smoothEnabledMenu = playbackMenu.snapshotFor(
-      playback_session::ContextMenuSurface::Terminal);
-  ok &= expect(std::any_of(
-                   smoothEnabledMenu.items.begin(),
-                   smoothEnabledMenu.items.end(), [](const auto& item) {
-                     return item.label == "Hard cut";
-                   }),
-               "an enabled smooth transition must expose its inverse action");
+  const auto smoothEnabledMenu =
+      playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
+  ok &=
+      expect(std::any_of(
+                 smoothEnabledMenu.items.begin(), smoothEnabledMenu.items.end(),
+                 [](const auto &item) { return item.label == "Hard cut"; }),
+             "an enabled smooth transition must expose its inverse action");
   const auto staleStartExportToken =
       exportItem != dirtyMenu.items.end()
           ? std::optional<playback_overlay::ContextMenuItemToken>(
                 exportItem->token)
           : std::nullopt;
-  const auto isEditCommand = [](const auto& command,
+  const auto isEditCommand = [](const auto &command,
                                 playback_video_edit::Command expected) {
-    if (!command) return false;
-    const auto* edit =
-        std::get_if<playback_video_edit::Command>(&*command);
+    if (!command)
+      return false;
+    const auto *edit = std::get_if<playback_video_edit::Command>(&*command);
     return edit && *edit == expected;
   };
   if (doneItem != dirtyMenu.items.end()) {
@@ -1988,43 +1933,40 @@ int main() {
                  "the context Done action must finish without entering the "
                  "Escape confirmation path or starting an implicit export");
   }
-  ok &= expect(playbackMenu.open(
-                   playback_session::ContextMenuSurface::Terminal, 0.25,
-                   0.75),
+  ok &= expect(playbackMenu.open(playback_session::ContextMenuSurface::Terminal,
+                                 0.25, 0.75),
                "the context menu must reopen after executing a command");
   if (discardItem != dirtyMenu.items.end()) {
     const bool selectedDiscard = playbackMenu.select(discardItem->token);
     const auto activatedDiscard = playbackMenu.activateSelection();
-    ok &= expect(
-        selectedDiscard &&
-            isEditCommand(activatedDiscard,
-                          playback_video_edit::Command::RequestDiscard),
-                 "context discard must still request confirmation");
+    ok &=
+        expect(selectedDiscard &&
+                   isEditCommand(activatedDiscard,
+                                 playback_video_edit::Command::RequestDiscard),
+               "context discard must still request confirmation");
   }
 
   playback_video_edit::ExportProgress runningExport;
   runningExport.status = playback_video_edit::ExportStatus::Running;
   playbackMenu.refresh(cleanEdit, runningExport, playbackSourceContext);
-  ok &= expect(playbackMenu.open(
-                   playback_session::ContextMenuSurface::Terminal, 0.25,
-                   0.75),
+  ok &= expect(playbackMenu.open(playback_session::ContextMenuSurface::Terminal,
+                                 0.25, 0.75),
                "a running export must retain a secondary command surface");
-  const auto runningExportMenu = playbackMenu.snapshotFor(
-      playback_session::ContextMenuSurface::Terminal);
-  ok &= expect(std::any_of(
-                   runningExportMenu.items.begin(),
-                   runningExportMenu.items.end(), [](const auto& item) {
-                     return item.label == "Cancel older export";
-                   }),
+  const auto runningExportMenu =
+      playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
+  ok &= expect(std::any_of(runningExportMenu.items.begin(),
+                           runningExportMenu.items.end(),
+                           [](const auto &item) {
+                             return item.label == "Cancel older export";
+                           }),
                "an older background job must expose precise cancellation "
                "without claiming to contain newer edits");
-  ok &= expect(std::any_of(
-                   runningExportMenu.items.begin(),
-                   runningExportMenu.items.end(), [](const auto& item) {
-                     return item.label == "Done editing";
-                   }),
-                "leaving the edit tools must remain independent from an older "
-                "background export");
+  ok &=
+      expect(std::any_of(
+                 runningExportMenu.items.begin(), runningExportMenu.items.end(),
+                 [](const auto &item) { return item.label == "Done editing"; }),
+             "leaving the edit tools must remain independent from an older "
+             "background export");
   if (staleStartExportToken) {
     ok &= expect(!playbackMenu.activate(*staleStartExportToken) &&
                      playbackMenu.visible(),
@@ -2034,24 +1976,20 @@ int main() {
 
   playbackMenu.dismiss();
   playbackMenu.refresh(cleanEdit, failedExport, playbackSourceContext);
-  ok &= expect(playbackMenu.open(
-                   playback_session::ContextMenuSurface::Terminal, 0.25,
-                   0.75),
+  ok &= expect(playbackMenu.open(playback_session::ContextMenuSurface::Terminal,
+                                 0.25, 0.75),
                "a failed current-revision export must remain actionable");
-  const auto failedExportMenu = playbackMenu.snapshotFor(
-      playback_session::ContextMenuSurface::Terminal);
-  ok &= expect(std::any_of(
-                   failedExportMenu.items.begin(), failedExportMenu.items.end(),
-                   [](const auto& item) {
-                     return item.label == "Retry export";
-                   }) &&
-                   std::none_of(
-                       failedExportMenu.items.begin(),
-                       failedExportMenu.items.end(), [](const auto& item) {
-                         return item.label == "Cancel export";
-                       }),
-               "a terminal export failure must offer retry rather than "
-               "pretending that a worker is still active");
+  const auto failedExportMenu =
+      playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
+  ok &= expect(
+      std::any_of(
+          failedExportMenu.items.begin(), failedExportMenu.items.end(),
+          [](const auto &item) { return item.label == "Retry export"; }) &&
+          std::none_of(
+              failedExportMenu.items.begin(), failedExportMenu.items.end(),
+              [](const auto &item) { return item.label == "Cancel export"; }),
+      "a terminal export failure must offer retry rather than "
+      "pretending that a worker is still active");
 
   return ok ? 0 : 1;
 }

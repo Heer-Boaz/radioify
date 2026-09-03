@@ -212,6 +212,17 @@ set(RADIOIFY_AUDIO_SEPARATION_MODEL_PATH
     CACHE FILEPATH "Path to Radioify's BandIt v2 mask model")
 set(RADIOIFY_AUDIO_SEPARATION_MODEL_SHA256
     "4694632688ae0b9a3e4c46918c0f9bb4f2af18c393d8e7d55f3e1e276d6fa6c7")
+set(RADIOIFY_CHAPTER_PLANNER_ADAPTER_PATH
+    "${CMAKE_SOURCE_DIR}/models/chapter_analysis/chapter-llama-captions-asr-10k-f16.gguf")
+set(RADIOIFY_CHAPTER_PLANNER_ADAPTER_SIZE 13640320)
+set(RADIOIFY_CHAPTER_PLANNER_ADAPTER_SHA256
+    "4e07a53dfa65e356e691716645d795697427c30dc983b198faf9e84d7eeec6da")
+set(RADIOIFY_CHAPTER_PLANNER_NOTICE_PATH
+    "${CMAKE_SOURCE_DIR}/models/chapter_analysis/CHAPTER-LLAMA-NOTICE.md")
+set(RADIOIFY_LLAMA_31_LICENSE_PATH
+    "${CMAKE_SOURCE_DIR}/models/chapter_analysis/LLAMA-3.1-LICENSE")
+set(RADIOIFY_LLAMA_31_NOTICE_PATH
+    "${CMAKE_SOURCE_DIR}/models/chapter_analysis/NOTICE")
 
 set(RADIOIFY_PROJECT_INCLUDE_DIRS
   ${CMAKE_SOURCE_DIR}/app
@@ -381,6 +392,80 @@ find_file(RADIOIFY_LLAMA_CPP_LICENSE
 if (NOT RADIOIFY_LLAMA_CPP_LICENSE)
   message(FATAL_ERROR "The llama.cpp third-party license file was not found.")
 endif()
+if (NOT EXISTS "${RADIOIFY_CHAPTER_PLANNER_ADAPTER_PATH}")
+  message(FATAL_ERROR
+    "Chapter-Llama planner adapter not found at "
+    "${RADIOIFY_CHAPTER_PLANNER_ADAPTER_PATH}. Ensure Git LFS objects were fetched.")
+endif()
+file(SIZE "${RADIOIFY_CHAPTER_PLANNER_ADAPTER_PATH}"
+     _radioify_chapter_planner_adapter_size)
+if (NOT _radioify_chapter_planner_adapter_size EQUAL
+    RADIOIFY_CHAPTER_PLANNER_ADAPTER_SIZE)
+  message(FATAL_ERROR
+    "Chapter-Llama planner adapter size mismatch. Expected "
+    "${RADIOIFY_CHAPTER_PLANNER_ADAPTER_SIZE}, got "
+    "${_radioify_chapter_planner_adapter_size}.")
+endif()
+file(SHA256 "${RADIOIFY_CHAPTER_PLANNER_ADAPTER_PATH}"
+     _radioify_chapter_planner_adapter_hash)
+if (NOT _radioify_chapter_planner_adapter_hash STREQUAL
+    RADIOIFY_CHAPTER_PLANNER_ADAPTER_SHA256)
+  message(FATAL_ERROR
+    "Chapter-Llama planner adapter hash mismatch. Expected "
+    "${RADIOIFY_CHAPTER_PLANNER_ADAPTER_SHA256}, got "
+    "${_radioify_chapter_planner_adapter_hash}.")
+endif()
+if (NOT EXISTS "${RADIOIFY_CHAPTER_PLANNER_NOTICE_PATH}")
+  message(FATAL_ERROR "The Chapter-Llama attribution notice was not found.")
+endif()
+if (NOT EXISTS "${RADIOIFY_LLAMA_31_LICENSE_PATH}" OR
+    NOT EXISTS "${RADIOIFY_LLAMA_31_NOTICE_PATH}")
+  message(FATAL_ERROR
+    "The required Llama 3.1 license or attribution notice was not found.")
+endif()
+
+function(radioify_deploy_chapter_planner target_name)
+  add_custom_command(TARGET ${target_name} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:${target_name}>/models/chapter_analysis"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${RADIOIFY_CHAPTER_PLANNER_ADAPTER_PATH}"
+            "$<TARGET_FILE_DIR:${target_name}>/models/chapter_analysis/chapter-llama-captions-asr-10k-f16.gguf"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${RADIOIFY_CHAPTER_PLANNER_NOTICE_PATH}"
+            "$<TARGET_FILE_DIR:${target_name}>/models/chapter_analysis/CHAPTER-LLAMA-NOTICE.md"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${RADIOIFY_LLAMA_31_LICENSE_PATH}"
+            "$<TARGET_FILE_DIR:${target_name}>/models/chapter_analysis/LLAMA-3.1-LICENSE"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${RADIOIFY_LLAMA_31_NOTICE_PATH}"
+            "$<TARGET_FILE_DIR:${target_name}>/models/chapter_analysis/NOTICE"
+    COMMENT "Publishing the pinned Chapter-Llama planner adapter for ${target_name}"
+    VERBATIM)
+endfunction()
+
+add_executable(radioify_chapter_worker
+  ${CMAKE_SOURCE_DIR}/tools/chapter_inference_worker.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_protocol.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/generated_document.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
+  ${CMAKE_SOURCE_DIR}/core/utf8.cpp
+)
+radioify_link_repo_target(radioify_chapter_worker)
+target_link_libraries(radioify_chapter_worker PRIVATE
+  nlohmann_json::nlohmann_json
+  llama::mtmd)
+set_target_properties(radioify_chapter_worker PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
+  string(TOUPPER "${config}" config_upper)
+  set_target_properties(radioify_chapter_worker PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY_${config_upper}
+      "${CMAKE_BINARY_DIR}/bin/${config}"
+  )
+endforeach()
 
 if (RADIOIFY_HAS_AUDIO_SEPARATION)
   find_package(radioify-windows-ml CONFIG REQUIRED)
@@ -439,6 +524,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
 endif()
 
 add_executable(radioify)
+add_dependencies(radioify radioify_chapter_worker)
 if (WIN32)
   set_source_files_properties("${CMAKE_SOURCE_DIR}/app/radioify.rc"
     PROPERTIES
@@ -492,6 +578,7 @@ add_custom_command(TARGET radioify POST_BUILD
           "$<TARGET_FILE_DIR:radioify>/llama-cpp-LICENSE.txt"
   COMMENT "Publishing the pinned in-process llama.cpp license"
   VERBATIM)
+radioify_deploy_chapter_planner(radioify)
 if (RADIOIFY_HAS_AUDIO_SEPARATION)
   target_link_libraries(radioify PRIVATE WindowsML::Runtime)
   radioify_deploy_windows_ml(radioify)
@@ -820,6 +907,7 @@ target_sources(timeline_preview_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/core/pumpable_worker_thread.cpp
   ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/core/unicode_display_width.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
 radioify_link_repo_target(timeline_preview_tests)
@@ -830,7 +918,11 @@ add_executable(chapter_analysis_tests)
 target_sources(chapter_analysis_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_chapter_analysis_tests>
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/evidence_plan.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/generated_document.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/visual_timeline_checkpoint.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/scene_analysis.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/transcript/cue_semantics.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/presentation.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/text_evidence.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/timeline_preview_policy.cpp
@@ -850,7 +942,11 @@ target_sources(chapter_inference_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/generated_document.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_client.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_protocol.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
 radioify_link_repo_target(chapter_inference_tests)
 target_link_libraries(chapter_inference_tests PRIVATE llama::mtmd)
@@ -865,9 +961,16 @@ target_sources(chapter_inference_probe PRIVATE
   $<TARGET_OBJECTS:radioify_tool_chapter_inference_probe>
   $<TARGET_OBJECTS:radioify_image_codec>
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/evidence_plan.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/generated_document.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_client.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_protocol.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/sampled_evidence.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/visual_timeline_checkpoint.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/scene_analysis.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/visual_timeline_scan.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/transcript/cue_semantics.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/frame_conversion.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/decoder.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/sequence.cpp
@@ -878,6 +981,14 @@ target_sources(chapter_inference_probe PRIVATE
 )
 radioify_link_repo_target(chapter_inference_probe)
 target_link_libraries(chapter_inference_probe PRIVATE llama::mtmd)
+add_dependencies(chapter_inference_probe radioify_chapter_worker)
+add_custom_command(TARGET chapter_inference_probe POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "$<TARGET_FILE:radioify_chapter_worker>"
+          "$<TARGET_FILE_DIR:chapter_inference_probe>/radioify_chapter_worker.exe"
+  COMMENT "Publishing the isolated inference worker for the hardware probe"
+  VERBATIM)
+radioify_deploy_chapter_planner(chapter_inference_probe)
 
 add_executable(chapter_service_tests)
 target_sources(chapter_service_tests PRIVATE

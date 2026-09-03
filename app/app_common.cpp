@@ -7,29 +7,40 @@
 #include "core/runtime_helpers.h"
 #include "core/windows_app_resources.h"
 
-static void showUsage(const char* exe) {
+static void showUsage(const char *exe) {
   std::string name = exe ? std::string(exe) : "radioify";
   logLine("Usage: " + name + " [options] [file_or_folder]");
   logLine("Options:");
-  logLine("  render-radio <file>    Render the explicit radio filter chain to WAV");
-  logLine("  split-loop <file>      Analyze and split audio into stinger + main loop");
-  logLine("  extract-sheet <file>   Analyze a track and write .melody + .mid output");
+  logLine(
+      "  render-radio <file>    Render the explicit radio filter chain to WAV");
+  logLine("  split-loop <file>      Analyze and split audio into stinger + "
+          "main loop");
+  logLine("  extract-sheet <file>   Analyze a track and write .melody + .mid "
+          "output");
   logLine("  --render-radio <file>  Same as render-radio");
   logLine("  --extract-sheet <file> Same as extract-sheet");
   logLine("  --split-loop <file>    Same as split-loop");
-  logLine("  out <path>             Generic output path (for extract/render flows)");
+  logLine("  out <path>             Generic output path (for extract/render "
+          "flows)");
   logLine("  --track <index>        Select track index for emulated formats");
   logLine("  --50hz                 Force 50Hz playback mode where supported");
-  logLine("  --calibration-report   Dump per-stage radio metrics after render-radio");
-  logLine("  --measure-node-steps   Render and report every disabled-node variant for render-radio");
-  logLine("  --click-trace-report   Dump largest radio output jumps with per-stage deltas");
-  logLine("  --click-threshold <v>  Minimum output jump for --click-trace-report");
+  logLine("  --calibration-report   Dump per-stage radio metrics after "
+          "render-radio");
+  logLine("  --measure-node-steps   Render and report every disabled-node "
+          "variant for render-radio");
+  logLine("  --click-trace-report   Dump largest radio output jumps with "
+          "per-stage deltas");
+  logLine(
+      "  --click-threshold <v>  Minimum output jump for --click-trace-report");
   logLine("  --click-events <n>     Number of click trace events to retain");
   logLine("  --out <path>           Same as out");
-  logLine("  --radio-settings <path> Override audio-filter settings from a .toml file");
-  logLine("  --radio-preset <name>   Select named audio-filter preset from the settings file");
+  logLine("  --radio-settings <path> Override audio-filter settings from a "
+          ".toml file");
+  logLine("  --radio-preset <name>   Select named audio-filter preset from the "
+          "settings file");
   logLine("  --radio-model <philco-37-116|typical-1930s>");
-  logLine("               Select the physical receiver, amplifier, speaker and cabinet");
+  logLine("               Select the physical receiver, amplifier, speaker and "
+          "cabinet");
   logLine("  --radio-reception <everyday-1938|strong-local>");
   logLine("               Select the AM reception environment");
   logLine("  --dry        Bypass radio processing for render/playback");
@@ -38,33 +49,34 @@ static void showUsage(const char* exe) {
   logLine("  --radio      Start with the selected radio model enabled");
   logLine("  --no-radio   Start with radio filter disabled (default)");
   logLine("  --window     Open a window for video playback");
+  logLine(
+      "  --no-automatic-chapters Disable background semantic video analysis");
   logLine("  --ascii-debug-overlay Show ASCII playback debug overlay");
   logLine("  --shell-open-mode <same-instance|new-instance>");
   logLine("               Choose how Windows shell opens are handled");
-  logLine("  --single-instance Forward this input to the running "
-          RADIOIFY_APP_NAME " instance");
+  logLine(
+      "  --single-instance Forward this input to the running " RADIOIFY_APP_NAME
+      " instance");
   logLine("  --new-instance     Open this launch in its own instance");
   logLine("  -h, --help   Show this help");
 }
 
-void die(const std::string& message) {
+void die(const std::string &message) {
   std::cerr << "ERROR: " << message << "\n";
   std::exit(1);
 }
 
-void logLine(const std::string& message) {
-  std::cout << message << "\n";
-}
+void logLine(const std::string &message) { std::cout << message << "\n"; }
 
-void requireSupportedAudioInputFile(const std::filesystem::path& path) {
+void requireSupportedAudioInputFile(const std::filesystem::path &path) {
   std::string error;
   if (!validateSupportedAudioInputFile(path, &error)) {
     die(error);
   }
 }
 
-static ShellOpenModeSelection parseShellOpenModeSelectionOrDie(
-    const std::string& value) {
+static ShellOpenModeSelection
+parseShellOpenModeSelectionOrDie(const std::string &value) {
   ShellOpenModeSelection mode = ShellOpenModeSelection::Configured;
   if (parseShellOpenModeSelection(value, mode)) {
     return mode;
@@ -73,10 +85,12 @@ static ShellOpenModeSelection parseShellOpenModeSelectionOrDie(
   return ShellOpenModeSelection::NewInstance;
 }
 
-Options parseArgs(int argc, char** argv) {
+Options parseArgs(int argc, char **argv) {
   Options o;
-  auto requireValue = [&](const std::string& option, int* index) -> std::string {
-    if (!index) return {};
+  auto requireValue = [&](const std::string &option,
+                          int *index) -> std::string {
+    if (!index)
+      return {};
     int i = *index;
     if (i + 1 >= argc) {
       die("Missing value for option: " + option);
@@ -179,7 +193,7 @@ Options parseArgs(int argc, char** argv) {
       if (value.empty()) {
         die("--track requires a non-empty integer.");
       }
-      char* end = nullptr;
+      char *end = nullptr;
       long parsed = std::strtol(value.c_str(), &end, 10);
       if (*end != '\0') {
         die("--track expects an integer.");
@@ -214,7 +228,7 @@ Options parseArgs(int argc, char** argv) {
       if (value.empty()) {
         die("--click-threshold requires a non-empty number.");
       }
-      char* end = nullptr;
+      char *end = nullptr;
       double parsed = std::strtod(value.c_str(), &end);
       if (*end != '\0' || parsed <= 0.0) {
         die("--click-threshold expects a positive number.");
@@ -227,7 +241,7 @@ Options parseArgs(int argc, char** argv) {
       if (value.empty()) {
         die("--click-events requires a non-empty integer.");
       }
-      char* end = nullptr;
+      char *end = nullptr;
       long parsed = std::strtol(value.c_str(), &end, 10);
       if (*end != '\0' || parsed <= 0) {
         die("--click-events expects a positive integer.");
@@ -264,6 +278,10 @@ Options parseArgs(int argc, char** argv) {
       o.enableWindow = true;
       continue;
     }
+    if (arg == "--no-automatic-chapters") {
+      o.enableAutomaticChapterAnalysis = false;
+      continue;
+    }
     if (arg == "--ascii-debug-overlay") {
       o.asciiDebugOverlay = true;
       continue;
@@ -292,7 +310,8 @@ Options parseArgs(int argc, char** argv) {
       die("Unknown option: " + arg);
     }
     if (o.extractSheet || o.splitLoop || o.renderRadio) {
-      die("Do not pass a positional input when using extract-sheet/split-loop/render-radio.");
+      die("Do not pass a positional input when using "
+          "extract-sheet/split-loop/render-radio.");
     }
     if (!o.input.empty()) {
       die("Provide a single file or folder path only.");

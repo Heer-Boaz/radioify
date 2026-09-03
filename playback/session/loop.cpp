@@ -71,8 +71,8 @@ bool shouldRenderPlaybackFrame(bool redraw, bool presented,
 }
 
 PlaybackPresentationState initialPlaybackPresentation(
-    const VideoPlaybackConfig& config,
-    const PlaybackSessionContinuationState& continuityState) {
+    const VideoPlaybackConfig &config,
+    const PlaybackSessionContinuationState &continuityState) {
   if (continuityState.presentation) {
     return *continuityState.presentation;
   }
@@ -80,7 +80,7 @@ PlaybackPresentationState initialPlaybackPresentation(
                             : PlaybackPresentationState::nativeWindowed();
 }
 
-}  // namespace
+} // namespace
 
 struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   static constexpr auto kSeekThrottleInterval = std::chrono::milliseconds(50);
@@ -90,20 +90,20 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   static constexpr auto kAnalysisMessageDuration =
       std::chrono::milliseconds(6000);
 
-  ConsoleScreen& screen;
-  AudioPlaybackRuntime& audioPlayback;
-  GpuRuntime& gpu;
+  ConsoleScreen &screen;
+  AudioPlaybackRuntime &audioPlayback;
+  GpuRuntime &gpu;
   const VideoPlaybackConfig config;
-  SubtitleManager& subtitleManager;
-  playback_video_chapters::Service& chapterAnalysis;
-  PerfLog& perfLog;
-  const Style& baseStyle;
-  const Style& accentStyle;
-  const Style& dimStyle;
-  const Style& progressEmptyStyle;
-  const Style& progressFrameStyle;
-  const Color& progressStart;
-  const Color& progressEnd;
+  SubtitleManager &subtitleManager;
+  playback_video_chapters::Service &chapterAnalysis;
+  PerfLog &perfLog;
+  const Style &baseStyle;
+  const Style &accentStyle;
+  const Style &dimStyle;
+  const Style &progressEmptyStyle;
+  const Style &progressFrameStyle;
+  const Color &progressStart;
+  const Color &progressEnd;
   playback_frame_output::LogLineWriter timingSink;
   playback_frame_output::LogLineWriter warningSink;
   bool subtitlesEnabled;
@@ -117,8 +117,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   const bool enableAudio;
   bool hasSubtitles;
   bool chapterOverviewOpen = false;
-  std::optional<playback_video_chapters::Service::RequestId>
-      chapterRequestId;
+  int chapterOverviewScrollOffset = 0;
+  std::optional<playback_video_chapters::Service::RequestId> chapterRequestId;
   playback_video_chapters::Snapshot chapterSnapshot;
   playback_session::BackgroundGpuAdmissionPolicy chapterGpuAdmission;
   std::chrono::steady_clock::time_point lastChapterGpuHeartbeat =
@@ -169,29 +169,20 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   playback_session::ShutdownSequence shutdownSequence;
 
   explicit Impl(PlaybackLoopRunner::Args args)
-      : screen(args.screen),
-        audioPlayback(args.audioPlayback),
-        gpu(args.gpu),
-        config(std::move(args.config)),
-        subtitleManager(args.subtitleManager),
-        chapterAnalysis(args.chapterAnalysis),
-        perfLog(args.perfLog),
-        baseStyle(args.baseStyle),
-        accentStyle(args.accentStyle),
-        dimStyle(args.dimStyle),
-        progressEmptyStyle(args.progressEmptyStyle),
+      : screen(args.screen), audioPlayback(args.audioPlayback), gpu(args.gpu),
+        config(std::move(args.config)), subtitleManager(args.subtitleManager),
+        chapterAnalysis(args.chapterAnalysis), perfLog(args.perfLog),
+        baseStyle(args.baseStyle), accentStyle(args.accentStyle),
+        dimStyle(args.dimStyle), progressEmptyStyle(args.progressEmptyStyle),
         progressFrameStyle(args.progressFrameStyle),
-        progressStart(args.progressStart),
-        progressEnd(args.progressEnd),
+        progressStart(args.progressStart), progressEnd(args.progressEnd),
         timingSink(std::move(args.timingSink)),
         warningSink(std::move(args.warningSink)),
         subtitlesEnabled(args.subtitlesEnabled),
-        windowTitle(std::move(args.windowTitle)),
-        file(std::move(args.file)),
+        windowTitle(std::move(args.windowTitle)), file(std::move(args.file)),
         capabilities(args.capabilities),
         mediaProcessingActions(std::move(args.mediaProcessingActions)),
-        sessionIntent(args.sessionIntent),
-        enableAudio(args.enableAudio),
+        sessionIntent(args.sessionIntent), enableAudio(args.enableAudio),
         hasSubtitles(args.hasSubtitles),
         presentationController(
             initialPlaybackPresentation(config, args.continuityState),
@@ -199,14 +190,9 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         core({args.player, audioPlayback, args.perfLog, args.enableAudio,
               initialPlaybackPresentation(config, args.continuityState)
                   .usesAsciiGrid()}),
-        screenResources{gpu,
-                        baseStyle,
-                        accentStyle,
-                        dimStyle,
-                        progressEmptyStyle,
-                        progressFrameStyle,
-                        progressStart,
-                        progressEnd, warningSink,
+        screenResources{gpu,           baseStyle,          accentStyle,
+                        dimStyle,      progressEmptyStyle, progressFrameStyle,
+                        progressStart, progressEnd,        warningSink,
                         timingSink},
         presentationModel(std::make_shared<playback_session::PresentationModel>(
             playback_session::PresentationModel::Dependencies{
@@ -228,8 +214,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
                  [this]() { return videoEditWorkspace.finishStop(); },
                  [this]() { return videoEditWorkspace.stopWaitHandles(); }},
                 {[this]() {
-                   perfLogAppendf(&perfLog,
-                                  "video_shutdown output_stop_begin");
+                   perfLogAppendf(&perfLog, "video_shutdown output_stop_begin");
                    perfLogFlush(&perfLog);
                    output.requestCloseWindow();
                  },
@@ -259,8 +244,10 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
                                previewSource.sourceWidth,
                                previewSource.sourceHeight);
     timelinePreviewStarted = timelinePreviewProvider.start(previewSource);
-    if (!timelinePreviewStarted) timelinePreviewModel.stop();
-    if (args.subtitleDiscoveryComplete) startChapterAnalysis();
+    if (!timelinePreviewStarted)
+      timelinePreviewModel.stop();
+    if (args.subtitleDiscoveryComplete)
+      startChapterAnalysis();
     syncOverlayPresentation(false);
     if (sessionIntent == PlaybackSessionIntent::EditVideo) {
       executeVideoEditCommand(playback_video_edit::Command::Open, false);
@@ -269,20 +256,28 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   ~Impl() {
-    if (chapterRequestId) chapterAnalysis.cancel(*chapterRequestId);
+    if (chapterRequestId)
+      chapterAnalysis.cancel(*chapterRequestId);
   }
 
   void startChapterAnalysis() {
-    if (chapterRequestId) chapterAnalysis.cancel(*chapterRequestId);
+    if (!config.enableAutomaticChapterAnalysis) {
+      chapterSnapshot = {};
+      chapterSnapshot.state = playback_video_chapters::AnalysisState::Disabled;
+      chapterSnapshot.detail =
+          "Automatic chapter analysis is disabled for this launch.";
+      return;
+    }
+    if (chapterRequestId)
+      chapterAnalysis.cancel(*chapterRequestId);
     playback_video_chapters::AnalysisRequest request;
     request.file = file;
     request.videoStreamIndex = core.player().videoStreamIndex();
     request.durationUs = core.player().durationUs();
     request.sourceWidth = core.player().sourceWidth();
     request.sourceHeight = core.player().sourceHeight();
-    request.englishText =
-        playback_video_chapters::selectEnglishTextEvidence(subtitleManager,
-                                                            file);
+    request.englishText = playback_video_chapters::selectEnglishTextEvidence(
+        subtitleManager, file);
     chapterRequestId = chapterAnalysis.start(std::move(request));
     chapterSnapshot = chapterAnalysis.snapshot(*chapterRequestId);
     chapterGpuAdmission.reset();
@@ -290,14 +285,15 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   void cancelChapterAnalysis() {
-    if (!chapterRequestId) return;
+    if (!chapterRequestId)
+      return;
     chapterAnalysis.cancel(*chapterRequestId);
     chapterRequestId.reset();
     chapterGpuAdmission.reset();
     lastChapterGpuHeartbeat = std::chrono::steady_clock::time_point::min();
   }
 
-  void showEditMessage(const std::string& message) {
+  void showEditMessage(const std::string &message) {
     osd.showMessage(message,
                     playback_session::PlaybackOsdTimeline::Clock::now(),
                     kEditMessageDuration);
@@ -326,9 +322,10 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     return videoEditWorkspace.prompt();
   }
 
-  bool applyExitTransition(
-      const playback_session_exit::Transition& transition) {
-    if (!transition.handled) return false;
+  bool
+  applyExitTransition(const playback_session_exit::Transition &transition) {
+    if (!transition.handled)
+      return false;
     if (transition.handoffRequest) {
       events.emplace_back(*transition.handoffRequest);
     }
@@ -344,9 +341,10 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     return true;
   }
 
-  playback_session_exit::Transition beginExit(
-      playback_session_exit::Intent intent) {
-    if (finished || exitCoordinator.pending()) return {};
+  playback_session_exit::Transition
+  beginExit(playback_session_exit::Intent intent) {
+    if (finished || exitCoordinator.pending())
+      return {};
 
     mediaActionConfirmation.dismiss();
 
@@ -371,20 +369,21 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
 
   void requestPlaybackExit(bool quitApplication) {
     beginExit(quitApplication
-                  ? playback_session_exit::Intent{
-                        playback_session_exit::QuitApplication{}}
+                  ? playback_session_exit::
+                        Intent{playback_session_exit::QuitApplication{}}
                   : playback_session_exit::Intent{
                         playback_session_exit::StopSession{}});
   }
 
   bool requestTransportExit(PlaybackTransportCommand command) {
-    if (!capabilities.transportHandoff) return false;
+    if (!capabilities.transportHandoff)
+      return false;
     return beginExit(playback_session_exit::Transport{command}).handled;
   }
 
-  bool requestOpenFilesExit(
-      const std::vector<std::filesystem::path>& files) {
-    if (!capabilities.openFilesHandoff || files.empty()) return false;
+  bool requestOpenFilesExit(const std::vector<std::filesystem::path> &files) {
+    if (!capabilities.openFilesHandoff || files.empty())
+      return false;
     return beginExit(playback_session_exit::OpenFiles{files}).handled;
   }
 
@@ -394,7 +393,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   bool receiveNativeFileDrop(std::vector<std::filesystem::path> files) {
-    if (!capabilities.openFilesHandoff || files.empty()) return false;
+    if (!capabilities.openFilesHandoff || files.empty())
+      return false;
     if (!nativeFileDropAccepted()) {
       deferredNativeFileDrops.push_back(std::move(files));
       return true;
@@ -403,7 +403,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   void resumeDeferredNativeFileDrop() {
-    if (deferredNativeFileDrops.empty() || !nativeFileDropAccepted()) return;
+    if (deferredNativeFileDrops.empty() || !nativeFileDropAccepted())
+      return;
     if (requestOpenFilesExit(deferredNativeFileDrops.front())) {
       deferredNativeFileDrops.pop_front();
     }
@@ -428,7 +429,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   bool cancelPendingExit() {
     const playback_session_exit::Transition transition =
         exitCoordinator.cancel();
-    if (!transition.handled) return false;
+    if (!transition.handled)
+      return false;
     exitWhenExportSucceeds = false;
     overlayControlHover = -1;
     applyExitTransition(transition);
@@ -441,7 +443,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     // A modal task decision owns this playback surface. External open requests
     // must wait instead of silently dismissing the decision and replacing the
     // media underneath it.
-    if (mediaActionConfirmation.snapshot()) return std::nullopt;
+    if (mediaActionConfirmation.snapshot())
+      return std::nullopt;
     const playback_session_exit::Transition transition =
         beginExit(playback_session_exit::ExternalHandoff{});
     return transition.handled ? transition.requestId : std::nullopt;
@@ -451,7 +454,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
                       bool accepted) {
     const playback_session_exit::Transition transition =
         exitCoordinator.resolve(requestId, accepted);
-    if (!transition.handled) return false;
+    if (!transition.handled)
+      return false;
     exitWhenExportSucceeds = false;
     overlayControlHover = -1;
     applyExitTransition(transition);
@@ -465,7 +469,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   bool abortHandoff(playback_session_exit::RequestId requestId) {
     const playback_session_exit::Transition transition =
         exitCoordinator.abortHandoff(requestId);
-    if (!transition.handled) return false;
+    if (!transition.handled)
+      return false;
     exitWhenExportSucceeds = false;
     overlayControlHover = -1;
     applyExitTransition(transition);
@@ -486,7 +491,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     }
     overlayControlHover = -1;
     syncOverlayPresentation();
-    if (!result.message.empty()) showEditMessage(result.message);
+    if (!result.message.empty())
+      showEditMessage(result.message);
   }
 
   void publishWindowUiState() {
@@ -509,10 +515,10 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
           playback_video_timeline_preview::PresentationSurface::VideoWindow);
       timelinePreviewProvider.cancelBefore(timelinePreviewModel.requestId());
     }
-    output.window().SetFileDropAcceptanceEnabled(
-        nativeFileDropAccepted());
+    output.window().SetFileDropAcceptanceEnabled(nativeFileDropAccepted());
     publishWindowUiState();
-    if (!requestPresent) return;
+    if (!requestPresent)
+      return;
     redraw = true;
     output.requestWindowPresent();
   }
@@ -523,14 +529,14 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         mediaActionConfirmation.snapshot()) {
       return false;
     }
-    if (!mediaActionConfirmation.open(std::move(request))) return false;
+    if (!mediaActionConfirmation.open(std::move(request)))
+      return false;
     overlayControlHover = -1;
     syncOverlayPresentation();
     return true;
   }
 
-  bool requestMediaTaskCancellation(
-      playback_media_actions::Action action) {
+  bool requestMediaTaskCancellation(playback_media_actions::Action action) {
     std::optional<playback_media_processing::CancellationRequest> request =
         mediaProcessingActions.prepareCancellation(action, file);
     if (!request) {
@@ -554,14 +560,16 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
           "Audio separation setup is no longer required or available");
       return true;
     }
-    if (!mediaActionConfirmation.open(std::move(*request))) return false;
+    if (!mediaActionConfirmation.open(std::move(*request)))
+      return false;
     overlayControlHover = -1;
     syncOverlayPresentation();
     return true;
   }
 
   bool requestActiveMediaTaskCancellation() {
-    if (!mediaTaskActivity || !mediaTaskActivity->cancellable) return false;
+    if (!mediaTaskActivity || !mediaTaskActivity->cancellable)
+      return false;
     std::optional<playback_media_processing::CancellationRequest> current =
         mediaProcessingActions.prepareCancellation(*mediaTaskActivity);
     if (!current) {
@@ -577,7 +585,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     std::optional<playback_session::MediaActionConfirmationActivation>
         activation = choice ? mediaActionConfirmation.resolve(*choice)
                             : mediaActionConfirmation.activate();
-    if (!activation) return false;
+    if (!activation)
+      return false;
     overlayControlHover = -1;
     seekState.overlayControlPointer.reset();
     if (const std::optional<playback_media_processing::ActionResult> result =
@@ -591,7 +600,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   bool moveMediaActionConfirmationSelection(int direction) {
-    if (!mediaActionConfirmation.moveSelection(direction)) return false;
+    if (!mediaActionConfirmation.moveSelection(direction))
+      return false;
     overlayControlHover = -1;
     syncOverlayPresentation();
     return true;
@@ -600,10 +610,12 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   void pollVideoEditExport() {
     const playback_session::VideoEditPollResult result =
         videoEditWorkspace.poll();
-    if (!result.changed) return;
+    if (!result.changed)
+      return;
     overlayControlHover = -1;
     syncOverlayPresentation();
-    if (!result.message.empty()) showEditMessage(result.message);
+    if (!result.message.empty())
+      showEditMessage(result.message);
     if (exitCoordinator.confirmationVisible() && exitWhenExportSucceeds &&
         result.completion !=
             playback_session::VideoEditExportCompletion::None) {
@@ -617,7 +629,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   void pollVideoEditBoundaryCommit() {
-    if (!seekState.pendingVideoEditBoundaryCommit) return;
+    if (!seekState.pendingVideoEditBoundaryCommit)
+      return;
     if (!videoEditWorkspace.active() || exitCoordinator.pending() ||
         videoEditWorkspace.prompt() != playback_video_edit::Prompt::None) {
       seekState.pendingVideoEditBoundaryCommit.reset();
@@ -630,15 +643,15 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         pending.seekGeneration, timeline.latestSeekRequestGeneration,
         timeline.handledSeekRequestGeneration, timeline.seekPending(),
         timeline.frameDurationUs > 0)) {
-      case playback_session_input::VideoEditBoundaryCommitState::Waiting:
-        return;
-      case playback_session_input::VideoEditBoundaryCommitState::Superseded:
-        // Never attach an edit mark to a frame from the wrong seek
-        // generation.
-        seekState.pendingVideoEditBoundaryCommit.reset();
-        return;
-      case playback_session_input::VideoEditBoundaryCommitState::Ready:
-        break;
+    case playback_session_input::VideoEditBoundaryCommitState::Waiting:
+      return;
+    case playback_session_input::VideoEditBoundaryCommitState::Superseded:
+      // Never attach an edit mark to a frame from the wrong seek
+      // generation.
+      seekState.pendingVideoEditBoundaryCommit.reset();
+      return;
+    case playback_session_input::VideoEditBoundaryCommitState::Ready:
+      break;
     }
 
     seekState.pendingVideoEditBoundaryCommit.reset();
@@ -698,30 +711,30 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     }
 
     switch (action) {
-      case playback_media_actions::Action::EditVideo:
-        return executeVideoEditCommand(playback_video_edit::Command::Open);
-      case playback_media_actions::Action::Play:
-      case playback_media_actions::Action::BrowseTracks:
-      case playback_media_actions::Action::AnalyzeAudio:
-      case playback_media_actions::Action::SplitLoop:
-        return false;
-      case playback_media_actions::Action::GenerateSubtitles:
-      case playback_media_actions::Action::CancelSubtitleGeneration:
-      case playback_media_actions::Action::ExportTranscriptText:
-      case playback_media_actions::Action::ExportAudio:
-      case playback_media_actions::Action::CancelMediaExport:
-      case playback_media_actions::Action::SetUpAudioSeparation:
-      case playback_media_actions::Action::CancelAudioSeparationSetup:
-      case playback_media_actions::Action::SeparateAudio:
-      case playback_media_actions::Action::CancelAudioSeparation:
-        return true;
+    case playback_media_actions::Action::EditVideo:
+      return executeVideoEditCommand(playback_video_edit::Command::Open);
+    case playback_media_actions::Action::Play:
+    case playback_media_actions::Action::BrowseTracks:
+    case playback_media_actions::Action::AnalyzeAudio:
+    case playback_media_actions::Action::SplitLoop:
+      return false;
+    case playback_media_actions::Action::GenerateSubtitles:
+    case playback_media_actions::Action::CancelSubtitleGeneration:
+    case playback_media_actions::Action::ExportTranscriptText:
+    case playback_media_actions::Action::ExportAudio:
+    case playback_media_actions::Action::CancelMediaExport:
+    case playback_media_actions::Action::SetUpAudioSeparation:
+    case playback_media_actions::Action::CancelAudioSeparationSetup:
+    case playback_media_actions::Action::SeparateAudio:
+    case playback_media_actions::Action::CancelAudioSeparation:
+      return true;
     }
     return false;
   }
 
   bool executeContextMenuCommand(
-      const playback_session::ContextMenuCommand& command) {
-    if (const auto* media =
+      const playback_session::ContextMenuCommand &command) {
+    if (const auto *media =
             std::get_if<playback_media_actions::Action>(&command)) {
       return executeMediaAction(*media);
     }
@@ -730,10 +743,10 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   bool waitForVideoEditExportAndExit() {
-    if (!exitCoordinator.confirmationVisible()) return false;
+    if (!exitCoordinator.confirmationVisible())
+      return false;
     const playback_video_edit::ExitExportAction action =
-        playback_video_edit::exitExportAction(
-            videoEditWorkspace.exitContext());
+        playback_video_edit::exitExportAction(videoEditWorkspace.exitContext());
     if (action != playback_video_edit::ExitExportAction::WaitForExport) {
       return false;
     }
@@ -746,80 +759,79 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     return true;
   }
 
-  bool handleContextMenuInput(
-      const playback_session::ContextMenuInput& request) {
+  bool
+  handleContextMenuInput(const playback_session::ContextMenuInput &request) {
     bool handled = false;
     std::optional<playback_session::ContextMenuCommand> activatedCommand;
     using InputKind = playback_session::ContextMenuInputKind;
     switch (request.kind) {
-      case InputKind::Open: {
-        if (videoEditPrompt() != playback_video_edit::Prompt::None ||
-            mediaActionConfirmation.snapshot()) {
-          return false;
-        }
-        if (videoEditWorkspace.active()) {
-          if (request.timelineUs) {
-            videoEditWorkspace.selectCutAt(
-                *request.timelineUs, request.timelineToleranceUs);
-            videoEditWorkspace.selectSceneSuggestionAt(
-                *request.timelineUs, request.timelineToleranceUs);
-          } else {
-            videoEditWorkspace.clearCutSelection();
-          }
-        }
-        syncOverlayPresentation(false);
-        const int width =
-            request.surface == playback_session::ContextMenuSurface::Terminal
-                ? screen.width()
-                : output.window().GetWidth();
-        const int height =
-            request.surface == playback_session::ContextMenuSurface::Terminal
-                ? screen.height()
-                : output.window().GetHeight();
-        const double xRatio =
-            request.x / static_cast<double>(std::max(1, width - 1));
-        const double yRatio =
-            request.y / static_cast<double>(std::max(1, height - 1));
-        handled = contextMenuController.open(
-            request.surface, xRatio, yRatio);
-        if (handled) {
-          const auto previewSurface =
-              request.surface ==
-                      playback_session::ContextMenuSurface::Terminal
-                  ? playback_video_timeline_preview::PresentationSurface::Terminal
-                  : playback_video_timeline_preview::PresentationSurface::VideoWindow;
-          timelinePreviewModel.hide(previewSurface);
-          timelinePreviewProvider.cancelBefore(timelinePreviewModel.requestId());
-        }
-        break;
+    case InputKind::Open: {
+      if (videoEditPrompt() != playback_video_edit::Prompt::None ||
+          mediaActionConfirmation.snapshot()) {
+        return false;
       }
-      case InputKind::Dismiss:
-        handled = contextMenuController.dismiss();
-        break;
-      case InputKind::MoveSelection:
-        if (contextMenuController.visible()) {
-          contextMenuController.moveSelection(request.selectionDelta);
-          handled = true;
+      if (videoEditWorkspace.active()) {
+        if (request.timelineUs) {
+          videoEditWorkspace.selectCutAt(*request.timelineUs,
+                                         request.timelineToleranceUs);
+          videoEditWorkspace.selectSceneSuggestionAt(
+              *request.timelineUs, request.timelineToleranceUs);
+        } else {
+          videoEditWorkspace.clearCutSelection();
         }
-        break;
-      case InputKind::SelectItem:
-        if (contextMenuController.visible() && request.item) {
-          contextMenuController.select(*request.item);
-          handled = true;
-        }
-        break;
-      case InputKind::ActivateSelection:
-        if (contextMenuController.visible()) {
-          activatedCommand = contextMenuController.activateSelection();
-          handled = true;
-        }
-        break;
-      case InputKind::ActivateItem:
-        if (contextMenuController.visible() && request.item) {
-          activatedCommand = contextMenuController.activate(*request.item);
-          handled = true;
-        }
-        break;
+      }
+      syncOverlayPresentation(false);
+      const int width =
+          request.surface == playback_session::ContextMenuSurface::Terminal
+              ? screen.width()
+              : output.window().GetWidth();
+      const int height =
+          request.surface == playback_session::ContextMenuSurface::Terminal
+              ? screen.height()
+              : output.window().GetHeight();
+      const double xRatio =
+          request.x / static_cast<double>(std::max(1, width - 1));
+      const double yRatio =
+          request.y / static_cast<double>(std::max(1, height - 1));
+      handled = contextMenuController.open(request.surface, xRatio, yRatio);
+      if (handled) {
+        const auto previewSurface =
+            request.surface == playback_session::ContextMenuSurface::Terminal
+                ? playback_video_timeline_preview::PresentationSurface::Terminal
+                : playback_video_timeline_preview::PresentationSurface::
+                      VideoWindow;
+        timelinePreviewModel.hide(previewSurface);
+        timelinePreviewProvider.cancelBefore(timelinePreviewModel.requestId());
+      }
+      break;
+    }
+    case InputKind::Dismiss:
+      handled = contextMenuController.dismiss();
+      break;
+    case InputKind::MoveSelection:
+      if (contextMenuController.visible()) {
+        contextMenuController.moveSelection(request.selectionDelta);
+        handled = true;
+      }
+      break;
+    case InputKind::SelectItem:
+      if (contextMenuController.visible() && request.item) {
+        contextMenuController.select(*request.item);
+        handled = true;
+      }
+      break;
+    case InputKind::ActivateSelection:
+      if (contextMenuController.visible()) {
+        activatedCommand = contextMenuController.activateSelection();
+        handled = true;
+      }
+      break;
+    case InputKind::ActivateItem:
+      if (contextMenuController.visible() && request.item) {
+        activatedCommand = contextMenuController.activate(*request.item);
+        handled = true;
+      }
+      break;
     }
     if (activatedCommand) {
       executeContextMenuCommand(*activatedCommand);
@@ -834,9 +846,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
 
   bool dispatch(playback_session_input::Command command) override {
     return std::visit(
-        [this](auto value) {
-          return executeInputCommand(std::move(value));
-        },
+        [this](auto value) { return executeInputCommand(std::move(value)); },
         std::move(command));
   }
 
@@ -857,19 +867,18 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     return state;
   }
 
-  playback_overlay::InteractionHit hitTest(
-      const playback_session_input::InteractionRequest& request)
+  playback_overlay::InteractionHit
+  hitTest(const playback_session_input::InteractionRequest &request)
       const override {
-    if (request.surface == playback_video_timeline_preview::
-                               PresentationSurface::VideoWindow) {
+    if (request.surface ==
+        playback_video_timeline_preview::PresentationSurface::VideoWindow) {
       return output.window().OverlayHitAt(request.x, request.y,
                                           request.capturedProgress);
     }
     if (request.scaleX != 1.0 || request.scaleY != 1.0) {
       return playback_overlay::interactionHitAtTransformed(
-          frameOutputState.overlayInteractions, 0.0, 0.0,
-          request.scaleX, request.scaleY, request.x, request.y,
-          request.capturedProgress);
+          frameOutputState.overlayInteractions, 0.0, 0.0, request.scaleX,
+          request.scaleY, request.x, request.y, request.capturedProgress);
     }
     return playback_overlay::interactionHitAt(
         frameOutputState.overlayInteractions, request.x, request.y,
@@ -877,7 +886,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   bool toggleSubtitles() {
-    if (!hasSubtitles) return false;
+    if (!hasSubtitles)
+      return false;
     if (!subtitlesEnabled) {
       subtitleManager.selectFirstTrackWithCues();
       subtitlesEnabled = true;
@@ -894,143 +904,158 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   bool executeInputCommand(playback_session_input::CommandAction action) {
     using Action = playback_session_input::CommandAction;
     switch (action) {
-      case Action::RequestWindowPresent:
-        publishWindowUiState();
-        output.requestWindowPresent();
-        return true;
-      case Action::RequestRedraw:
-        redraw = true;
-        return true;
-      case Action::RequestFrameRefresh:
-        redraw = true;
-        forceRefreshArt = true;
-        return true;
-      case Action::ToggleRadio:
-        if (!core.snapshot().audioAvailable) return false;
-        audioPlayback.cycleRadioFilter();
-        return true;
-      case Action::Toggle50Hz:
-        if (!core.snapshot().audioAvailable ||
-            !audioPlayback.snapshot().supports50HzToggle) {
-          return false;
-        }
-        audioPlayback.toggle50Hz();
-        return true;
-      case Action::CycleAudioTrack:
-        return core.cycleAudioTrack();
-      case Action::ToggleSubtitles:
-        return toggleSubtitles();
-      case Action::ToggleChapterOverview:
-        if (!chapterSnapshot.ready()) {
-          std::string message = playback_video_chapters::analysisStateLabel(
-              chapterSnapshot.state);
-          if (!chapterSnapshot.detail.empty()) {
-            message += ": " + chapterSnapshot.detail;
-          }
-          osd.showMessage(std::move(message),
-                          playback_session::PlaybackOsdTimeline::Clock::now(),
-                          kAnalysisMessageDuration);
-          redraw = true;
-          publishWindowUiState();
-          output.requestWindowPresent();
-          return true;
-        }
-        chapterOverviewOpen = !chapterOverviewOpen;
-        redraw = true;
-        forceRefreshArt = true;
-        publishWindowUiState();
-        output.requestWindowPresent();
-        return true;
-      case Action::InstallChapterModel:
-        return chapterRequestId &&
-               chapterAnalysis.requestInstallation(*chapterRequestId);
-      case Action::CancelChapterOperation:
-        return chapterRequestId &&
-               chapterAnalysis.cancelInstallation(*chapterRequestId);
-      case Action::RetryChapterAnalysis:
-        if (!chapterRequestId || !chapterAnalysis.retry(*chapterRequestId)) {
-          return false;
-        }
-        chapterOverviewOpen = false;
-        showEditMessage("Retrying chapter analysis");
-        return true;
-      case Action::ToggleWindowPresentation: {
-        const bool changed = presentationController.toggleWindow();
-        redraw = redraw || changed;
-        forceRefreshArt = forceRefreshArt || changed;
-        return changed;
+    case Action::RequestWindowPresent:
+      publishWindowUiState();
+      output.requestWindowPresent();
+      return true;
+    case Action::RequestRedraw:
+      redraw = true;
+      return true;
+    case Action::RequestFrameRefresh:
+      redraw = true;
+      forceRefreshArt = true;
+      return true;
+    case Action::ToggleRadio:
+      if (!core.snapshot().audioAvailable)
+        return false;
+      audioPlayback.cycleRadioFilter();
+      return true;
+    case Action::Toggle50Hz:
+      if (!core.snapshot().audioAvailable ||
+          !audioPlayback.snapshot().supports50HzToggle) {
+        return false;
       }
-      case Action::TogglePictureInPicture: {
-        const bool changed = presentationController.togglePictureInPicture();
-        redraw = redraw || changed;
-        forceRefreshArt = forceRefreshArt || changed;
-        return changed;
-      }
-      case Action::ToggleFullscreen: {
-        const bool changed = presentationController.toggleFullscreen();
-        redraw = redraw || changed;
-        forceRefreshArt = forceRefreshArt || changed;
-        return changed;
-      }
-      case Action::CopyCurrentVideoFrame: {
-        std::string error;
-        if (!output.copyCurrentVideoFrameToClipboard(&error)) {
-          std::fprintf(stderr, "Copy frame failed: %s\n", error.c_str());
-          osd.showMessage("Frame copy failed",
-                          playback_session::PlaybackOsdTimeline::Clock::now(),
-                          kFrameCopyMessageDuration);
-        } else {
-          osd.showMessage(
-              "Frame copied to clipboard",
-              playback_session::PlaybackOsdTimeline::Clock::now(),
-              kFrameCopyMessageDuration);
+      audioPlayback.toggle50Hz();
+      return true;
+    case Action::CycleAudioTrack:
+      return core.cycleAudioTrack();
+    case Action::ToggleSubtitles:
+      return toggleSubtitles();
+    case Action::ToggleChapterOverview:
+      if (!chapterSnapshot.ready()) {
+        std::string message =
+            playback_video_chapters::analysisStateLabel(chapterSnapshot.state);
+        if (!chapterSnapshot.detail.empty()) {
+          message += ": " + chapterSnapshot.detail;
         }
+        osd.showMessage(std::move(message),
+                        playback_session::PlaybackOsdTimeline::Clock::now(),
+                        kAnalysisMessageDuration);
         redraw = true;
         publishWindowUiState();
         output.requestWindowPresent();
         return true;
       }
-      case Action::WaitForVideoEditExportAndExit:
-        return waitForVideoEditExportAndExit();
-      case Action::NavigateBack:
-        navigateBack();
-        return true;
-      case Action::ConfirmPendingExit:
-        return completePendingExit();
-      case Action::CancelPendingExit:
-        return cancelPendingExit();
-      case Action::CancelActiveMediaTask:
-        return requestActiveMediaTaskCancellation();
-      case Action::ConfirmMediaAction:
-        return resolveMediaActionConfirmation(
-            playback_session::MediaActionConfirmationChoice::Primary);
-      case Action::DismissMediaAction:
-        return resolveMediaActionConfirmation(
-            playback_session::MediaActionConfirmationChoice::Secondary);
-      case Action::ActivateSelectedMediaActionConfirmation:
-        return resolveMediaActionConfirmation(std::nullopt);
-      case Action::SelectPreviousMediaActionConfirmation:
-        return moveMediaActionConfirmationSelection(-1);
-      case Action::SelectNextMediaActionConfirmation:
-        return moveMediaActionConfirmationSelection(1);
+      chapterOverviewOpen = !chapterOverviewOpen;
+      chapterOverviewScrollOffset = 0;
+      redraw = true;
+      forceRefreshArt = true;
+      publishWindowUiState();
+      output.requestWindowPresent();
+      return true;
+    case Action::InstallChapterModel:
+      return chapterRequestId &&
+             chapterAnalysis.requestInstallation(*chapterRequestId);
+    case Action::CancelChapterOperation:
+      return chapterRequestId &&
+             chapterAnalysis.cancelInstallation(*chapterRequestId);
+    case Action::RetryChapterAnalysis:
+      if (!chapterRequestId || !chapterAnalysis.retry(*chapterRequestId)) {
+        return false;
+      }
+      chapterOverviewOpen = false;
+      chapterOverviewScrollOffset = 0;
+      showEditMessage("Retrying chapter analysis");
+      return true;
+    case Action::ToggleWindowPresentation: {
+      const bool changed = presentationController.toggleWindow();
+      redraw = redraw || changed;
+      forceRefreshArt = forceRefreshArt || changed;
+      return changed;
+    }
+    case Action::TogglePictureInPicture: {
+      const bool changed = presentationController.togglePictureInPicture();
+      redraw = redraw || changed;
+      forceRefreshArt = forceRefreshArt || changed;
+      return changed;
+    }
+    case Action::ToggleFullscreen: {
+      const bool changed = presentationController.toggleFullscreen();
+      redraw = redraw || changed;
+      forceRefreshArt = forceRefreshArt || changed;
+      return changed;
+    }
+    case Action::CopyCurrentVideoFrame: {
+      std::string error;
+      if (!output.copyCurrentVideoFrameToClipboard(&error)) {
+        std::fprintf(stderr, "Copy frame failed: %s\n", error.c_str());
+        osd.showMessage("Frame copy failed",
+                        playback_session::PlaybackOsdTimeline::Clock::now(),
+                        kFrameCopyMessageDuration);
+      } else {
+        osd.showMessage("Frame copied to clipboard",
+                        playback_session::PlaybackOsdTimeline::Clock::now(),
+                        kFrameCopyMessageDuration);
+      }
+      redraw = true;
+      publishWindowUiState();
+      output.requestWindowPresent();
+      return true;
+    }
+    case Action::WaitForVideoEditExportAndExit:
+      return waitForVideoEditExportAndExit();
+    case Action::NavigateBack:
+      navigateBack();
+      return true;
+    case Action::ConfirmPendingExit:
+      return completePendingExit();
+    case Action::CancelPendingExit:
+      return cancelPendingExit();
+    case Action::CancelActiveMediaTask:
+      return requestActiveMediaTaskCancellation();
+    case Action::ConfirmMediaAction:
+      return resolveMediaActionConfirmation(
+          playback_session::MediaActionConfirmationChoice::Primary);
+    case Action::DismissMediaAction:
+      return resolveMediaActionConfirmation(
+          playback_session::MediaActionConfirmationChoice::Secondary);
+    case Action::ActivateSelectedMediaActionConfirmation:
+      return resolveMediaActionConfirmation(std::nullopt);
+    case Action::SelectPreviousMediaActionConfirmation:
+      return moveMediaActionConfirmationSelection(-1);
+    case Action::SelectNextMediaActionConfirmation:
+      return moveMediaActionConfirmationSelection(1);
     }
     return false;
   }
 
-  bool executeInputCommand(
-      playback_session_input::TransportRequest request) {
+  bool executeInputCommand(playback_session_input::TransportRequest request) {
     return requestTransportExit(request.command);
   }
 
   bool executeInputCommand(
       playback_session_input::ChapterNavigationRequest request) {
-    const playback_session_input::TransportSnapshot transport =
-        core.snapshot();
+    const playback_session_input::TransportSnapshot transport = core.snapshot();
     const std::optional<std::int64_t> target =
         playback_video_chapters::navigationTarget(
             chapterSnapshot, transport.positionUs, request.direction);
-    return target && executeInputCommand(
-                         playback_session_input::SeekTo{*target});
+    return target &&
+           executeInputCommand(playback_session_input::SeekTo{*target});
+  }
+
+  bool executeInputCommand(
+      playback_session_input::SetChapterOverviewScroll request) {
+    if (!chapterOverviewOpen || !chapterSnapshot.ready())
+      return false;
+    const int next = std::max(0, request.offset);
+    if (next == chapterOverviewScrollOffset)
+      return true;
+    chapterOverviewScrollOffset = next;
+    redraw = true;
+    forceRefreshArt = true;
+    publishWindowUiState();
+    output.requestWindowPresent();
+    return true;
   }
 
   bool executeInputCommand(playback_session_input::VideoEditRequest request) {
@@ -1041,8 +1066,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     return handleContextMenuInput(request.input);
   }
 
-  bool executeInputCommand(
-      playback_session_input::MoveVideoEditBoundary request) {
+  bool
+  executeInputCommand(playback_session_input::MoveVideoEditBoundary request) {
     if (exitCoordinator.pending() ||
         !videoEditWorkspace.moveBoundary(request.boundary,
                                          request.timelineUs)) {
@@ -1052,16 +1077,16 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     return true;
   }
 
-  bool executeInputCommand(
-      playback_session_input::PlaybackExitRequest request) {
+  bool
+  executeInputCommand(playback_session_input::PlaybackExitRequest request) {
     requestPlaybackExit(request.quitApplication);
     return true;
   }
 
-  bool executeInputCommand(
-      playback_session_input::TimelinePreviewRequest request) {
-    auto update = timelinePreviewModel.hover(
-        request.surface, request.ratio, request.progressUnits);
+  bool
+  executeInputCommand(playback_session_input::TimelinePreviewRequest request) {
+    auto update = timelinePreviewModel.hover(request.surface, request.ratio,
+                                             request.progressUnits);
     if (update.request && !timelinePreviewProvider.submit(*update.request)) {
       timelinePreviewModel.reject(*update.request);
     }
@@ -1073,9 +1098,10 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     return update.changed;
   }
 
-  bool executeInputCommand(
-      playback_session_input::ClearTimelinePreview request) {
-    if (!timelinePreviewModel.hide(request.surface)) return false;
+  bool
+  executeInputCommand(playback_session_input::ClearTimelinePreview request) {
+    if (!timelinePreviewModel.hide(request.surface))
+      return false;
     timelinePreviewProvider.cancelBefore(timelinePreviewModel.requestId());
     redraw = true;
     publishWindowUiState();
@@ -1083,17 +1109,18 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     return true;
   }
 
-  bool executeInputCommand(
-      playback_session_input::ShowPlaybackControls request) {
+  bool
+  executeInputCommand(playback_session_input::ShowPlaybackControls request) {
     osd.showControls(playback_session::PlaybackOsdTimeline::Clock::now(),
                      request.duration);
     redraw = true;
     return true;
   }
 
-  bool executeInputCommand(
-      playback_session_input::SetOverlayControlHover request) {
-    if (overlayControlHover == request.token) return false;
+  bool
+  executeInputCommand(playback_session_input::SetOverlayControlHover request) {
+    if (overlayControlHover == request.token)
+      return false;
     overlayControlHover = request.token;
     redraw = true;
     publishWindowUiState();
@@ -1107,7 +1134,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   bool executeInputCommand(playback_session_input::SeekTo request) {
-    if (!core.seekTo(request.targetUs)) return false;
+    if (!core.seekTo(request.targetUs))
+      return false;
     if (timingSink) {
       char buf[192];
       std::snprintf(buf, sizeof(buf),
@@ -1120,7 +1148,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   bool executeInputCommand(playback_session_input::SeekBy request) {
-    if (!core.seekBy(request.deltaUs)) return false;
+    if (!core.seekBy(request.deltaUs))
+      return false;
     if (timingSink) {
       const playback_session_input::TransportSnapshot transport =
           core.snapshot();
@@ -1147,13 +1176,12 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   bool overlayVisible() const {
-    const playback_video_edit::EditSnapshot edit =
-        videoEditWorkspace.edit();
+    const playback_video_edit::EditSnapshot edit = videoEditWorkspace.edit();
     const playback_video_edit::ExportProgress editExport =
         videoEditWorkspace.exportProgress();
     return config.debugOverlay || osd.controlsVisible() ||
-           playback_video_edit::needsOverlayPresentation(
-               edit, editExport, videoEditPrompt()) ||
+           playback_video_edit::needsOverlayPresentation(edit, editExport,
+                                                         videoEditPrompt()) ||
            contextMenuController.visible();
   }
 
@@ -1167,7 +1195,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     return presentationController.synchronize(output);
   }
 
-  void applyPresenterSync(const PlaybackPresentationSyncResult& syncResult) {
+  void applyPresenterSync(const PlaybackPresentationSyncResult &syncResult) {
     if (syncResult.switchedAwayFromWindow() || syncResult.transitionFailed) {
       osd.clearControls();
       overlayControlHover = -1;
@@ -1183,16 +1211,17 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       output.requestWindowPresent();
     }
     if (syncResult.visualModeChanged()) {
-      core.setAsciiPresentation(screen, syncResult.appliedState.usesAsciiGrid());
+      core.setAsciiPresentation(screen,
+                                syncResult.appliedState.usesAsciiGrid());
     }
     if (syncResult.shellFocusTarget) {
       switch (*syncResult.shellFocusTarget) {
-        case PlaybackShellFocusTarget::Browser:
-          activateBrowser();
-          break;
-        case PlaybackShellFocusTarget::TerminalPlayback:
-          activateWindowsConsoleWindow();
-          break;
+      case PlaybackShellFocusTarget::Browser:
+        activateBrowser();
+        break;
+      case PlaybackShellFocusTarget::TerminalPlayback:
+        activateWindowsConsoleWindow();
+        break;
       }
     }
     if (core.applyPresentationSync(syncResult.switchedAwayFromWindow())) {
@@ -1212,7 +1241,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   void beginShutdown() {
-    if (shutdownSequence.requested()) return;
+    if (shutdownSequence.requested())
+      return;
     perfLogAppendf(&perfLog, "video_shutdown begin");
     perfLogFlush(&perfLog);
     timelinePreviewModel.stop();
@@ -1221,13 +1251,13 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     (void)shutdownSequence.requestStop();
   }
 
-  bool shutdownReady() {
-    return shutdownSequence.ready();
-  }
+  bool shutdownReady() { return shutdownSequence.ready(); }
 
   bool finishShutdown() {
-    if (shutdownFinished) return true;
-    if (!shutdownSequence.finish()) return false;
+    if (shutdownFinished)
+      return true;
+    if (!shutdownSequence.finish())
+      return false;
     perfLogAppendf(&perfLog, "video_shutdown output_stop_end");
     perfLogFlush(&perfLog);
     perfLogAppendf(&perfLog, "video_shutdown player_close_end");
@@ -1244,7 +1274,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   void shutdown() {
-    if (shutdownFinished) return;
+    if (shutdownFinished)
+      return;
     beginShutdown();
     timelinePreviewProvider.stop();
     videoEditWorkspace.stop();
@@ -1270,25 +1301,39 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   void refreshChapterSnapshot() {
-    if (!chapterRequestId) return;
+    if (!chapterRequestId)
+      return;
     const playback_video_chapters::Snapshot next =
         chapterAnalysis.snapshot(*chapterRequestId);
-    if (next.revision == chapterSnapshot.revision) return;
+    if (next.revision == chapterSnapshot.revision)
+      return;
     const bool logMilestone = next.state != chapterSnapshot.state ||
                               next.phase != chapterSnapshot.phase ||
-                              next.detail != chapterSnapshot.detail;
+                              next.detail != chapterSnapshot.detail ||
+                              next.warning != chapterSnapshot.warning;
+    const bool replacedReadyDocument =
+        next.state == playback_video_chapters::AnalysisState::Ready &&
+        (chapterSnapshot.state !=
+             playback_video_chapters::AnalysisState::Ready ||
+         next.revision != chapterSnapshot.revision);
     chapterSnapshot = next;
     if (perfLog.enabled && logMilestone) {
       perfLogAppendf(
           &perfLog,
           "chapter_analysis_state revision=%llu state=%s progress=%.3f "
-          "phase=%s detail=%s",
+          "phase=%s detail=%s warning=%s",
           static_cast<unsigned long long>(chapterSnapshot.revision),
           playback_video_chapters::analysisStateLabel(chapterSnapshot.state),
           chapterSnapshot.progress.value_or(-1.0),
-          chapterSnapshot.phase.c_str(), chapterSnapshot.detail.c_str());
+          chapterSnapshot.phase.c_str(), chapterSnapshot.detail.c_str(),
+          chapterSnapshot.warning.c_str());
     }
-    if (!chapterSnapshot.ready()) chapterOverviewOpen = false;
+    if (!chapterSnapshot.ready()) {
+      chapterOverviewOpen = false;
+      chapterOverviewScrollOffset = 0;
+    } else if (replacedReadyDocument) {
+      chapterOverviewScrollOffset = 0;
+    }
     if (chapterSnapshot.state ==
             playback_video_chapters::AnalysisState::Unsupported ||
         chapterSnapshot.state ==
@@ -1301,6 +1346,10 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       osd.showMessage(std::move(message),
                       playback_session::PlaybackOsdTimeline::Clock::now(),
                       kAnalysisMessageDuration);
+    } else if (replacedReadyDocument && !chapterSnapshot.warning.empty()) {
+      osd.showMessage(chapterSnapshot.warning,
+                      playback_session::PlaybackOsdTimeline::Clock::now(),
+                      kAnalysisMessageDuration);
     }
     redraw = true;
     forceRefreshArt = true;
@@ -1309,7 +1358,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   void updateChapterGpuPriority() {
-    if (!chapterRequestId) return;
+    if (!chapterRequestId)
+      return;
     if (!chapterSnapshot.running() &&
         chapterSnapshot.state !=
             playback_video_chapters::AnalysisState::CheckingSupport) {
@@ -1385,7 +1435,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
 
   playback_screen_renderer::PlaybackMediaPresentation
   captureMediaPresentation() const {
-    const Player& player = core.player();
+    const Player &player = core.player();
     const AudioPlaybackSnapshot audio = audioPlayback.snapshot();
     PlayerTimelineSnapshot timeline = player.timelineSnapshot();
     playback_overlay::SubtitlePresentation subtitle =
@@ -1398,7 +1448,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   playback_overlay::PlaybackOverlayState buildOverlayState(
-      const playback_screen_renderer::PlaybackMediaPresentation& media,
+      const playback_screen_renderer::PlaybackMediaPresentation &media,
       PlaybackSessionState playbackState,
       playback_video_timeline_preview::PresentationSurface surface) const {
     playback_session::OverlayProjection projection{media};
@@ -1410,10 +1460,10 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     projection.pictureInPictureAvailable = true;
     projection.pictureInPictureActive =
         output.windowOpen() && output.window().IsPictureInPicture();
-    projection.subtitleRenderError =
-        output.window().GetSubtitleRenderError();
+    projection.subtitleRenderError = output.window().GetSubtitleRenderError();
     projection.contextMenu = contextMenuController.snapshotFor(
-        surface == playback_video_timeline_preview::PresentationSurface::Terminal
+        surface ==
+                playback_video_timeline_preview::PresentationSurface::Terminal
             ? playback_session::ContextMenuSurface::Terminal
             : playback_session::ContextMenuSurface::VideoWindow);
     projection.videoEdit = videoEditWorkspace.edit();
@@ -1424,19 +1474,19 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     projection.mediaTaskActivity = mediaTaskActivity;
     projection.chapters = chapterSnapshot;
     projection.chapterOverviewOpen = chapterOverviewOpen;
+    projection.chapterOverviewScrollOffset = chapterOverviewScrollOffset;
     if (config.debugOverlay &&
-        surface == playback_video_timeline_preview::
-                       PresentationSurface::VideoWindow) {
-      projection.debugLines.push_back(
-          output.window().OutputColorDebugLine());
+        surface ==
+            playback_video_timeline_preview::PresentationSurface::VideoWindow) {
+      projection.debugLines.push_back(output.window().OutputColorDebugLine());
       projection.debugLines.push_back(
           playback_debug_lines::videoFrameDebugLine(media.debug));
     }
     return playback_session::projectPlaybackOverlay(std::move(projection));
   }
 
-  playback_screen_renderer::PlaybackScreenModel buildScreenModel(
-      bool clearHistory, bool frameChanged) {
+  playback_screen_renderer::PlaybackScreenModel
+  buildScreenModel(bool clearHistory, bool frameChanged) {
     playback_screen_renderer::PlaybackScreenModel model;
     model.debugOverlay = config.debugOverlay;
     model.visualMode = presentationController.state().visual();
@@ -1455,7 +1505,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     model.overlay = buildOverlayState(
         model.media, model.playbackState,
         playback_video_timeline_preview::PresentationSurface::Terminal);
-    if (!overlayVisible()) overlayControlHover = -1;
+    if (!overlayVisible())
+      overlayControlHover = -1;
     model.controlHoverToken = overlayControlHover;
     model.nativeWindowWidth = output.window().GetWidth();
     model.nativeWindowHeight = output.window().GetHeight();
@@ -1468,7 +1519,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   void publishPresentation(
-      const playback_screen_renderer::PlaybackScreenModel& model) {
+      const playback_screen_renderer::PlaybackScreenModel &model) {
     playback_session::PresentationModel::Revision revision;
     revision.textGrid = model;
     revision.textGrid.timelinePreview = timelinePreviewSnapshot(
@@ -1476,21 +1527,24 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     revision.textGrid.overlay = buildOverlayState(
         model.media, model.playbackState,
         playback_video_timeline_preview::PresentationSurface::VideoWindow);
-    revision.window =
-        playback_session::projectWindowUiState(revision.textGrid);
+    revision.window = playback_session::projectWindowUiState(revision.textGrid);
     presentationModel->publish(std::move(revision));
   }
 
-  void renderTerminal(
-      const playback_screen_renderer::PlaybackScreenModel& model) {
+  void
+  renderTerminal(const playback_screen_renderer::PlaybackScreenModel &model) {
     playback_screen_renderer::PlaybackScreenTarget target{
-        screen, output.frameCache(), art, timelinePreviewArt,
-        core.presentationFrame(), frameOutputState};
+        screen,
+        output.frameCache(),
+        art,
+        timelinePreviewArt,
+        core.presentationFrame(),
+        frameOutputState};
     playback_screen_renderer::renderPlaybackScreen(screenResources, target,
                                                    model);
   }
 
-  void renderPlaybackFrame(bool presented, PlaybackLoopState& loopState) {
+  void renderPlaybackFrame(bool presented, PlaybackLoopState &loopState) {
     if (presentationController.terminalRole() ==
         PlaybackShellTerminalRole::Browser) {
       publishPresentation(buildScreenModel(false, presented));
@@ -1549,25 +1603,27 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   void emitHeartbeat() {
-    if (!perfLog.enabled) return;
+    if (!perfLog.enabled)
+      return;
     auto nowUi = std::chrono::steady_clock::now();
     if (nowUi - lastUiHeartbeat < kTimingLogHeartbeatInterval) {
       return;
     }
-    const bool isPaused = core.playbackState() == PlaybackSessionState::Paused ||
-                          audioPlayback.snapshot().paused;
+    const bool isPaused =
+        core.playbackState() == PlaybackSessionState::Paused ||
+        audioPlayback.snapshot().paused;
     const bool seeking =
         seekState.seekQueued || core.player().timelineSnapshot().seekPending();
-    perfLogAppendf(&perfLog,
-                   "video_heartbeat_ui redraw=%d seeker=%d paused=%d",
+    perfLogAppendf(&perfLog, "video_heartbeat_ui redraw=%d seeker=%d paused=%d",
                    redraw ? 1 : 0, seeking ? 1 : 0, isPaused ? 1 : 0);
     lastUiHeartbeat = nowUi;
   }
 
   void processInputEvent(
-      PlaybackLoopState& loopState, const InputEvent& event,
+      PlaybackLoopState &loopState, const InputEvent &event,
       playback_video_timeline_preview::PresentationSurface eventSurface) {
-    if (loopState == PlaybackLoopState::Stopped) return;
+    if (loopState == PlaybackLoopState::Stopped)
+      return;
     if (event.type == InputEvent::Type::Resize) {
       // A resize invalidates the geometry under which any desktop-style
       // press was armed. Its eventual button-up must not activate a control
@@ -1580,8 +1636,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       mouseDoubleClickTracker.reset();
     }
     if (event.type == InputEvent::Type::Resize) {
-      if (eventSurface == playback_video_timeline_preview::
-                              PresentationSurface::Terminal) {
+      if (eventSurface ==
+          playback_video_timeline_preview::PresentationSurface::Terminal) {
         core.markPendingResize();
       }
       redraw = true;
@@ -1590,19 +1646,18 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       receiveNativeFileDrop(std::move(event.fileDrop.files));
     } else if (event.type == InputEvent::Type::Key ||
                event.type == InputEvent::Type::Action) {
-      playback_session_input::handlePlaybackInputEvent(*this, seekState,
-                                                       event);
+      playback_session_input::handlePlaybackInputEvent(*this, seekState, event);
     } else if (event.type == InputEvent::Type::Mouse) {
       MouseEvent mouse = event.mouse;
       mouseDoubleClickTracker.classifyUsingSystemSettings(
           mouse, screen.cellPixelWidth(), screen.cellPixelHeight());
-      playback_session_input::handlePlaybackMouseEvent(*this, seekState,
-                                                       mouse);
+      playback_session_input::handlePlaybackMouseEvent(*this, seekState, mouse);
     } else if (event.type == InputEvent::Type::PointerLeave) {
       mouseDoubleClickTracker.reset();
       playback_session_input::handlePlaybackPointerLeave(*this, seekState);
     }
-    if (!loopStopRequested) applyPresenterSync(syncPresentation());
+    if (!loopStopRequested)
+      applyPresenterSync(syncPresentation());
     if (loopStopRequested) {
       loopState = PlaybackLoopState::Stopped;
     }
@@ -1630,8 +1685,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
 
     const PlayerTimelineSnapshot timeline = core.player().timelineSnapshot();
     if (timeline.positionUs > 0) {
-      state.positionSec =
-          static_cast<double>(timeline.positionUs) / 1000000.0;
+      state.positionSec = static_cast<double>(timeline.positionUs) / 1000000.0;
     }
     if (core.player().durationUs() > 0) {
       state.durationSec =
@@ -1651,13 +1705,12 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       return;
     }
     auto now = std::chrono::steady_clock::now();
-    bool canSend =
-        (seekState.lastSeekSentTime ==
-             std::chrono::steady_clock::time_point::min()) ||
-        (now - seekState.lastSeekSentTime >= kSeekThrottleInterval);
+    bool canSend = (seekState.lastSeekSentTime ==
+                    std::chrono::steady_clock::time_point::min()) ||
+                   (now - seekState.lastSeekSentTime >= kSeekThrottleInterval);
     if (canSend) {
-      playback_session_input::sendSeekRequest(
-          *this, seekState, seekState.queuedSeekTargetSec);
+      playback_session_input::sendSeekRequest(*this, seekState,
+                                              seekState.queuedSeekTargetSec);
     }
   }
 
@@ -1672,8 +1725,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     bool debugRefreshDue = false;
   };
 
-  wake_schedule::Deadline computeWakeDeadline(
-      const RefreshState& refresh) const {
+  wake_schedule::Deadline
+  computeWakeDeadline(const RefreshState &refresh) const {
     const auto now = wake_schedule::Clock::now();
     wake_schedule::Deadline deadline;
     if (const auto osdDeadline = osd.nextDeadline()) {
@@ -1681,10 +1734,9 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     }
     if (!refresh.nativeWindowActive && config.debugOverlay) {
       wake_schedule::include(
-          deadline,
-          lastDebugRefresh == wake_schedule::TimePoint::min()
-              ? now
-              : lastDebugRefresh + kTerminalDebugRefreshInterval);
+          deadline, lastDebugRefresh == wake_schedule::TimePoint::min()
+                        ? now
+                        : lastDebugRefresh + kTerminalDebugRefreshInterval);
     }
     if (seekState.seekQueued) {
       wake_schedule::include(
@@ -1695,8 +1747,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     }
     if (!refresh.nativeWindowActive &&
         core.playbackState() == PlaybackSessionState::Active) {
-      wake_schedule::include(deadline,
-                             now + kTerminalPlaybackRefreshInterval);
+      wake_schedule::include(deadline, now + kTerminalPlaybackRefreshInterval);
     }
     if (perfLog.enabled) {
       wake_schedule::include(deadline,
@@ -1762,13 +1813,15 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       output.requestWindowPresent();
     }
     finalizeAudioStart();
-    if (loopStopRequested) loopState = PlaybackLoopState::Stopped;
+    if (loopStopRequested)
+      loopState = PlaybackLoopState::Stopped;
 
     emitHeartbeat();
     if (loopState == PlaybackLoopState::Running) {
       applyPresenterSync(syncPresentation());
       pollWindowEvents();
-      if (loopStopRequested) loopState = PlaybackLoopState::Stopped;
+      if (loopStopRequested)
+        loopState = PlaybackLoopState::Stopped;
     }
     if (loopState == PlaybackLoopState::Running) {
       finalizeAudioStart();
@@ -1805,7 +1858,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     std::vector<NativeWaitHandle> handles;
     handles.reserve(8);
     const auto append = [&](NativeWaitHandle handle) {
-      if (handle) handles.push_back(handle);
+      if (handle)
+        handles.push_back(handle);
     };
     append(output.windowOpen() ? core.player().statusChangeWaitHandle()
                                : core.videoFrameWaitHandle());
@@ -1828,7 +1882,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   wake_schedule::Deadline nextWakeDeadline() const {
-    if (loopStopRequested || redraw) return wake_schedule::Clock::now();
+    if (loopStopRequested || redraw)
+      return wake_schedule::Clock::now();
     RefreshState state;
     state.nativeWindowActive = output.windowOpen();
     wake_schedule::Deadline deadline = computeWakeDeadline(state);
@@ -1851,15 +1906,17 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   void setExternalInputModal(bool modal) {
-    if (externalInputModal == modal) return;
+    if (externalInputModal == modal)
+      return;
     externalInputModal = modal;
-    output.window().SetFileDropAcceptanceEnabled(
-        nativeFileDropAccepted());
-    if (!externalInputModal) resumeDeferredNativeFileDrop();
+    output.window().SetFileDropAcceptanceEnabled(nativeFileDropAccepted());
+    if (!externalInputModal)
+      resumeDeferredNativeFileDrop();
   }
 
-  bool handleInputEvent(const InputEvent& event) {
-    if (finished) return false;
+  bool handleInputEvent(const InputEvent &event) {
+    if (finished)
+      return false;
     PlaybackLoopState loopState = PlaybackLoopState::Running;
     processInputEvent(
         loopState, event,
@@ -1867,12 +1924,13 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     return true;
   }
 
-  bool pollWindowInput(InputEvent& event) {
+  bool pollWindowInput(InputEvent &event) {
     return !finished && output.pollWindowInput(event);
   }
 
-  bool handleWindowInputEvent(const InputEvent& event) {
-    if (finished) return false;
+  bool handleWindowInputEvent(const InputEvent &event) {
+    if (finished)
+      return false;
     PlaybackLoopState loopState = PlaybackLoopState::Running;
     processInputEvent(
         loopState, event,
@@ -1881,7 +1939,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   bool handleControlCommand(PlaybackControlCommand command) {
-    if (finished) return false;
+    if (finished)
+      return false;
     playback_session_input::handlePlaybackControlCommand(*this, seekState,
                                                          command);
     if (!loopStopRequested) {
@@ -1891,51 +1950,59 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   bool seekToRatio(double ratio) {
-    if (finished || !std::isfinite(ratio)) return false;
+    if (finished || !std::isfinite(ratio))
+      return false;
     const int64_t durationUs = core.player().durationUs();
-    if (durationUs <= 0) return false;
-    const double targetSec =
-        std::clamp(ratio, 0.0, 1.0) *
-        (static_cast<double>(durationUs) / 1000000.0);
+    if (durationUs <= 0)
+      return false;
+    const double targetSec = std::clamp(ratio, 0.0, 1.0) *
+                             (static_cast<double>(durationUs) / 1000000.0);
     playback_session_input::queueSeekRequest(*this, seekState, targetSec);
     return true;
   }
 
   bool toggleWindowPresentation() {
-    if (finished) return false;
+    if (finished)
+      return false;
     const bool handled = dispatch(
         playback_session_input::CommandAction::ToggleWindowPresentation);
-    if (handled) applyPresenterSync(syncPresentation());
+    if (handled)
+      applyPresenterSync(syncPresentation());
     return handled;
   }
 
   bool togglePictureInPicture() {
-    if (finished) return false;
-    const bool handled = dispatch(
-        playback_session_input::CommandAction::TogglePictureInPicture);
-    if (handled) applyPresenterSync(syncPresentation());
+    if (finished)
+      return false;
+    const bool handled =
+        dispatch(playback_session_input::CommandAction::TogglePictureInPicture);
+    if (handled)
+      applyPresenterSync(syncPresentation());
     return handled;
   }
 
   bool toggleFullscreen() {
-    if (finished) return false;
+    if (finished)
+      return false;
     const bool handled =
         dispatch(playback_session_input::CommandAction::ToggleFullscreen);
-    if (handled) applyPresenterSync(syncPresentation());
+    if (handled)
+      applyPresenterSync(syncPresentation());
     return handled;
   }
 
   bool activatePresentation() {
-    if (finished) return false;
+    if (finished)
+      return false;
     switch (presentationController.state().primarySurface()) {
-      case PlaybackPrimarySurface::Browser:
-        activateBrowser();
-        return true;
-      case PlaybackPrimarySurface::TerminalPlayback:
-        activateWindowsConsoleWindow();
-        return true;
-      case PlaybackPrimarySurface::NativePlayback:
-        return output.windowOpen() && output.activateWindow();
+    case PlaybackPrimarySurface::Browser:
+      activateBrowser();
+      return true;
+    case PlaybackPrimarySurface::TerminalPlayback:
+      activateWindowsConsoleWindow();
+      return true;
+    case PlaybackPrimarySurface::NativePlayback:
+      return output.windowOpen() && output.activateWindow();
     }
     return false;
   }
@@ -1948,35 +2015,36 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     forceRefreshArt = true;
     copiedFrameNeedsRender = true;
     startChapterAnalysis();
-    if (initialized) syncOverlayPresentation();
+    if (initialized)
+      syncOverlayPresentation();
     if (reload) {
-      showEditMessage(
-          preferredTrackSelected
-              ? "Subtitles ready and enabled"
-              : (available ? "Subtitles reloaded"
-                           : "Subtitle file could not be loaded"));
+      showEditMessage(preferredTrackSelected
+                          ? "Subtitles ready and enabled"
+                          : (available ? "Subtitles reloaded"
+                                       : "Subtitle file could not be loaded"));
     }
   }
 
-  void mediaTaskFinished(
-      const playback_media_processing::Completion& completion) {
+  void
+  mediaTaskFinished(const playback_media_processing::Completion &completion) {
     const bool promptClosed = mediaActionConfirmation.synchronize(completion);
     if (promptClosed) {
       seekState.overlayControlPointer.reset();
     }
-    const bool targetsCurrentSource =
-        samePath(completion.sourceFile, file);
+    const bool targetsCurrentSource = samePath(completion.sourceFile, file);
     if (targetsCurrentSource &&
         completion.operation ==
             playback_media_processing::Operation::SubtitleGeneration &&
         completion.succeeded()) {
       syncOverlayPresentation();
       showEditMessage("Transcript generated; loading as subtitles...");
-      if (promptClosed) resumeDeferredNativeFileDrop();
+      if (promptClosed)
+        resumeDeferredNativeFileDrop();
       return;
     }
     syncOverlayPresentation();
-    if (promptClosed) resumeDeferredNativeFileDrop();
+    if (promptClosed)
+      resumeDeferredNativeFileDrop();
     showEditMessage(playback_session::mediaTaskFeedback(
         completion, targetsCurrentSource ? std::filesystem::path{}
                                          : completion.sourceFile));
@@ -1985,14 +2053,16 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   void mediaTaskActivityChanged(
       std::optional<playback_media_processing::Activity> activity) {
     const bool promptClosed = mediaActionConfirmation.synchronize(activity);
-    if (mediaTaskActivity == activity && !promptClosed) return;
+    if (mediaTaskActivity == activity && !promptClosed)
+      return;
     mediaTaskActivity = std::move(activity);
     overlayControlHover = -1;
     if (promptClosed) {
       seekState.overlayControlPointer.reset();
     }
     syncOverlayPresentation();
-    if (promptClosed) resumeDeferredNativeFileDrop();
+    if (promptClosed)
+      resumeDeferredNativeFileDrop();
   }
 
   std::optional<playback_session_exit::RequestId> requestHandoff() {
@@ -2006,11 +2076,13 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   void requestStop() {
-    if (!finished) requestPlaybackExit(false);
+    if (!finished)
+      requestPlaybackExit(false);
   }
 
   void requestQuit() {
-    if (!finished) requestPlaybackExit(true);
+    if (!finished)
+      requestPlaybackExit(true);
   }
 };
 
@@ -2019,14 +2091,13 @@ PlaybackLoopRunner::PlaybackLoopRunner(Args args)
 
 PlaybackLoopRunner::~PlaybackLoopRunner() = default;
 
-PlaybackLoopRunner::PlaybackLoopRunner(PlaybackLoopRunner&&) noexcept = default;
+PlaybackLoopRunner::PlaybackLoopRunner(PlaybackLoopRunner &&) noexcept =
+    default;
 
-PlaybackLoopRunner& PlaybackLoopRunner::operator=(
-    PlaybackLoopRunner&&) noexcept = default;
+PlaybackLoopRunner &
+PlaybackLoopRunner::operator=(PlaybackLoopRunner &&) noexcept = default;
 
-bool PlaybackLoopRunner::pump() {
-  return impl_->pump();
-}
+bool PlaybackLoopRunner::pump() { return impl_->pump(); }
 
 PlaybackShellTerminalRole PlaybackLoopRunner::terminalRole() const {
   return impl_->terminalRole();
@@ -2052,15 +2123,15 @@ void PlaybackLoopRunner::setExternalInputModal(bool modal) {
   impl_->setExternalInputModal(modal);
 }
 
-bool PlaybackLoopRunner::handleInputEvent(const InputEvent& event) {
+bool PlaybackLoopRunner::handleInputEvent(const InputEvent &event) {
   return impl_->handleInputEvent(event);
 }
 
-bool PlaybackLoopRunner::pollWindowInput(InputEvent& event) {
+bool PlaybackLoopRunner::pollWindowInput(InputEvent &event) {
   return impl_->pollWindowInput(event);
 }
 
-bool PlaybackLoopRunner::handleWindowInputEvent(const InputEvent& event) {
+bool PlaybackLoopRunner::handleWindowInputEvent(const InputEvent &event) {
   return impl_->handleWindowInputEvent(event);
 }
 
@@ -2108,7 +2179,7 @@ std::vector<playback_session::Event> PlaybackLoopRunner::drainEvents() {
 }
 
 void PlaybackLoopRunner::mediaTaskFinished(
-    const playback_media_processing::Completion& completion) {
+    const playback_media_processing::Completion &completion) {
   impl_->mediaTaskFinished(completion);
 }
 
@@ -2130,12 +2201,9 @@ void PlaybackLoopRunner::beginShutdown() { impl_->beginShutdown(); }
 
 bool PlaybackLoopRunner::shutdownReady() { return impl_->shutdownReady(); }
 
-bool PlaybackLoopRunner::finishShutdown() {
-  return impl_->finishShutdown();
-}
+bool PlaybackLoopRunner::finishShutdown() { return impl_->finishShutdown(); }
 
-std::vector<NativeWaitHandle>
-PlaybackLoopRunner::shutdownWaitHandles() const {
+std::vector<NativeWaitHandle> PlaybackLoopRunner::shutdownWaitHandles() const {
   return impl_->shutdownWaitHandles();
 }
 
@@ -2153,10 +2221,10 @@ bool PlaybackLoopRunner::hasRenderFailure() const {
   return impl_->frameOutputState.renderFailed;
 }
 
-const std::string& PlaybackLoopRunner::renderFailureMessage() const {
+const std::string &PlaybackLoopRunner::renderFailureMessage() const {
   return impl_->frameOutputState.renderFailMessage;
 }
 
-const std::string& PlaybackLoopRunner::renderFailureDetail() const {
+const std::string &PlaybackLoopRunner::renderFailureDetail() const {
   return impl_->frameOutputState.renderFailDetail;
 }

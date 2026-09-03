@@ -11,18 +11,18 @@ class Player;
 
 namespace playback_session {
 
-playback_screen_renderer::PlaybackMediaPresentation capturePlaybackMedia(
-    const Player& player, const AudioPlaybackSnapshot& audio,
-    PlayerTimelineSnapshot timeline, std::string windowTitle, bool audioOk,
-    bool hasSubtitles, bool subtitlesEnabled,
-    playback_overlay::SubtitlePresentation subtitle);
+playback_screen_renderer::PlaybackMediaPresentation
+capturePlaybackMedia(const Player &player, const AudioPlaybackSnapshot &audio,
+                     PlayerTimelineSnapshot timeline, std::string windowTitle,
+                     bool audioOk, bool hasSubtitles, bool subtitlesEnabled,
+                     playback_overlay::SubtitlePresentation subtitle);
 
 struct OverlayProjection {
   explicit OverlayProjection(
-      const playback_screen_renderer::PlaybackMediaPresentation& media)
+      const playback_screen_renderer::PlaybackMediaPresentation &media)
       : media(media) {}
 
-  const playback_screen_renderer::PlaybackMediaPresentation& media;
+  const playback_screen_renderer::PlaybackMediaPresentation &media;
   PlaybackSessionState playbackState = PlaybackSessionState::Active;
   bool audioOk = false;
   bool canPlayPrevious = false;
@@ -41,13 +41,14 @@ struct OverlayProjection {
   std::optional<playback_media_processing::Activity> mediaTaskActivity;
   playback_video_chapters::Snapshot chapters;
   bool chapterOverviewOpen = false;
+  int chapterOverviewScrollOffset = 0;
 };
 
-playback_overlay::PlaybackOverlayState projectPlaybackOverlay(
-    OverlayProjection projection);
+playback_overlay::PlaybackOverlayState
+projectPlaybackOverlay(OverlayProjection projection);
 
 playback_overlay::MediaActionConfirmationDialog
 projectMediaActionConfirmationDialog(
-    const MediaActionConfirmationPrompt& prompt);
+    const MediaActionConfirmationPrompt &prompt);
 
-}  // namespace playback_session
+} // namespace playback_session

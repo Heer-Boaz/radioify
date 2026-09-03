@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <fstream>
 #include <limits>
+#include <sstream>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -22,23 +23,44 @@
 namespace playback_video_chapters {
 namespace {
 
-constexpr const wchar_t* kPinnedRevision =
+constexpr const wchar_t *kVisionRevision =
     L"508edd0afaa66bb9e9f40587acc2184f02daf1f6";
-constexpr const wchar_t* kHost = L"huggingface.co";
-constexpr const wchar_t* kRepository =
+constexpr const wchar_t *kHost = L"huggingface.co";
+constexpr const wchar_t *kVisionRepository =
     L"/ggml-org/Qwen2.5-VL-7B-Instruct-GGUF/resolve/";
-constexpr const wchar_t* kModelFile = L"Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf";
-constexpr const wchar_t* kProjectorFile =
+constexpr const wchar_t *kModelFile = L"Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf";
+constexpr const wchar_t *kProjectorFile =
     L"mmproj-Qwen2.5-VL-7B-Instruct-Q8_0.gguf";
+constexpr const wchar_t *kPlannerRevision =
+    L"bf5b95e96dac0462e2a09145ec66cae9a3f12067";
+constexpr const wchar_t *kPlannerRepository =
+    L"/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/";
+constexpr const wchar_t *kPlannerModelFile =
+    L"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf";
+constexpr const wchar_t *kPlannerAdapterFile =
+    L"chapter-llama-captions-asr-10k-f16.gguf";
 
 struct InternetHandle {
   HINTERNET value = nullptr;
   ~InternetHandle() {
-    if (value) WinHttpCloseHandle(value);
+    if (value)
+      WinHttpCloseHandle(value);
   }
 };
 
-bool cancelled(const OperationControl& control) {
+struct ModelFileLock {
+  HANDLE value = nullptr;
+  bool owned = false;
+
+  ~ModelFileLock() {
+    if (owned)
+      ReleaseMutex(value);
+    if (value)
+      CloseHandle(value);
+  }
+};
+
+bool cancelled(const OperationControl &control) {
   try {
     return control.cancelled && control.cancelled();
   } catch (...) {
@@ -46,41 +68,149 @@ bool cancelled(const OperationControl& control) {
   }
 }
 
-bool gpuRevoked(const OperationControl& control) {
+bool gpuRevoked(const OperationControl &control) {
   try {
-    return control.backgroundGpuAllowed &&
-           !control.backgroundGpuAllowed();
+    return control.backgroundGpuAllowed && !control.backgroundGpuAllowed();
   } catch (...) {
     return true;
   }
 }
 
-bool exactFile(const std::filesystem::path& path, std::uintmax_t expected,
-               const char* digest, const OperationControl& control,
-               std::string* error) {
+std::filesystem::path receiptPath(const std::filesystem::path &path) {
+  std::filesystem::path receipt = path;
+  receipt += L".verified";
+  return receipt;
+}
+
+bool fileIdentity(const std::filesystem::path &path, std::uintmax_t *size,
+                  std::int64_t *modifiedTicks) {
+  if (!size || !modifiedTicks)
+    return false;
+  std::error_code error;
+  if (!std::filesystem::is_regular_file(path, error) || error)
+    return false;
+  *size = std::filesystem::file_size(path, error);
+  if (error)
+    return false;
+  const auto modified = std::filesystem::last_write_time(path, error);
+  if (error)
+    return false;
+  *modifiedTicks =
+      static_cast<std::int64_t>(modified.time_since_epoch().count());
+  return true;
+}
+
+bool verifiedReceiptMatches(const std::filesystem::path &path,
+                            std::uintmax_t expected, const char *digest) {
+  std::uintmax_t size = 0;
+  std::int64_t modifiedTicks = 0;
+  if (!fileIdentity(path, &size, &modifiedTicks) || size != expected)
+    return false;
+  std::ifstream input(receiptPath(path), std::ios::binary);
+  std::string magic;
+  std::string recordedDigest;
+  std::uintmax_t recordedSize = 0;
+  std::int64_t recordedTicks = 0;
+  return input && std::getline(input, magic) &&
+         std::getline(input, recordedDigest) &&
+         (input >> recordedSize >> recordedTicks) &&
+         magic == "radioify-model-verification-v1" &&
+         recordedDigest == digest && recordedSize == size &&
+         recordedTicks == modifiedTicks;
+}
+
+void publishVerifiedReceipt(const std::filesystem::path &path,
+                            std::uintmax_t expected, const char *digest) {
+  std::uintmax_t size = 0;
+  std::int64_t modifiedTicks = 0;
+  if (!fileIdentity(path, &size, &modifiedTicks) || size != expected)
+    return;
+  std::filesystem::path staging = receiptPath(path);
+  staging += L".writing-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+             std::to_wstring(GetCurrentThreadId());
+  std::ofstream output(staging, std::ios::binary | std::ios::trunc);
+  if (!output)
+    return;
+  output << "radioify-model-verification-v1\n"
+         << digest << '\n'
+         << size << '\n'
+         << modifiedTicks << '\n';
+  output.flush();
+  output.close();
+  if (!output) {
+    std::error_code ignored;
+    std::filesystem::remove(staging, ignored);
+    return;
+  }
+  if (!MoveFileExW(staging.c_str(), receiptPath(path).c_str(),
+                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    std::error_code ignored;
+    std::filesystem::remove(staging, ignored);
+  }
+}
+
+bool acquireModelFileLock(const char *digest, const OperationControl &control,
+                          ModelFileLock *lock, std::string *error) {
+  if (!digest || !lock)
+    return false;
+  const std::string digestText(digest);
+  const std::wstring name = L"Local\\Radioify.ChapterModel." +
+                            std::wstring(digestText.begin(), digestText.end());
+  lock->value = CreateMutexW(nullptr, FALSE, name.c_str());
+  if (!lock->value) {
+    if (error)
+      *error = "Could not create the chapter-model download lock.";
+    return false;
+  }
+  for (;;) {
+    const DWORD wait = WaitForSingleObject(lock->value, 100);
+    if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) {
+      lock->owned = true;
+      return true;
+    }
+    if (wait == WAIT_FAILED) {
+      if (error)
+        *error = "Could not wait for the chapter-model download lock.";
+      return false;
+    }
+    if (cancelled(control)) {
+      if (error)
+        *error = "Model installation cancelled while another Radioify "
+                 "process was updating the same model.";
+      return false;
+    }
+  }
+}
+
+bool exactFile(const std::filesystem::path &path, std::uintmax_t expected,
+               const char *digest, const OperationControl &control,
+               std::string *error) {
   std::error_code fileError;
   if (!std::filesystem::is_regular_file(path, fileError) || fileError ||
       std::filesystem::file_size(path, fileError) != expected || fileError) {
     return false;
   }
+  if (verifiedReceiptMatches(path, expected, digest))
+    return true;
   std::uintmax_t actualSize = 0;
   std::string actualDigest;
-  const auto interrupted = [&]() {
-    return cancelled(control) || gpuRevoked(control);
-  };
-  if (!sha256File(path, interrupted, &actualSize, &actualDigest, error)) {
+  if (!sha256File(path, control.cancelled, &actualSize, &actualDigest, error)) {
     return false;
   }
-  return actualSize == expected && actualDigest == digest;
+  const bool valid = actualSize == expected && actualDigest == digest;
+  if (valid)
+    publishVerifiedReceipt(path, expected, digest);
+  return valid;
 }
 
-std::wstring objectPath(const wchar_t* file) {
-  return std::wstring(kRepository) + kPinnedRevision + L"/" + file +
-         L"?download=true";
+std::wstring objectPath(const wchar_t *repository, const wchar_t *revision,
+                        const wchar_t *file) {
+  return std::wstring(repository) + revision + L"/" + file + L"?download=true";
 }
 
-bool queryStatus(HINTERNET request, DWORD* status) {
-  if (!request || !status) return false;
+bool queryStatus(HINTERNET request, DWORD *status) {
+  if (!request || !status)
+    return false;
   DWORD size = sizeof(*status);
   return WinHttpQueryHeaders(
              request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
@@ -88,19 +218,35 @@ bool queryStatus(HINTERNET request, DWORD* status) {
              WINHTTP_NO_HEADER_INDEX) != FALSE;
 }
 
-InstallResult downloadOne(const std::filesystem::path& destination,
-                          const wchar_t* remoteFile,
-                          std::uintmax_t expectedBytes,
-                          const char* expectedDigest,
-                          std::uintmax_t completedBefore,
-                          const OperationControl& control,
-                          bool allowFreshRetry = true) {
+InstallResult
+downloadOne(const std::filesystem::path &destination, const wchar_t *repository,
+            const wchar_t *revision, const wchar_t *remoteFile,
+            const char *progressLabel, std::uintmax_t expectedBytes,
+            const char *expectedDigest, std::uintmax_t completedBefore,
+            const OperationControl &control, bool allowFreshRetry = true) {
   InstallResult result;
   std::error_code filesystemError;
   std::filesystem::create_directories(destination.parent_path(),
                                       filesystemError);
   if (filesystemError) {
     result.detail = "Could not create the chapter-model directory.";
+    return result;
+  }
+  ModelFileLock downloadLock;
+  if (!acquireModelFileLock(expectedDigest, control, &downloadLock,
+                            &result.detail)) {
+    result.status = cancelled(control) ? OperationStatus::Cancelled
+                                       : OperationStatus::Failed;
+    return result;
+  }
+  std::string existingError;
+  if (exactFile(destination, expectedBytes, expectedDigest, control,
+                &existingError)) {
+    result.status = OperationStatus::Succeeded;
+    return result;
+  }
+  if (cancelled(control)) {
+    result.status = OperationStatus::Cancelled;
     return result;
   }
   std::filesystem::path staging = destination;
@@ -118,10 +264,9 @@ InstallResult downloadOne(const std::filesystem::path& destination,
 
   if (offset == expectedBytes) {
     if (control.progress) {
-      control.progress(
-          static_cast<double>(completedBefore + expectedBytes) /
-              static_cast<double>(kModelDownloadBytes),
-          "Verifying resumed model download");
+      control.progress(static_cast<double>(completedBefore + expectedBytes) /
+                           static_cast<double>(kModelDownloadBytes),
+                       "Verifying resumed model download");
     }
     std::uintmax_t actualSize = 0;
     std::string actualDigest;
@@ -135,11 +280,11 @@ InstallResult downloadOne(const std::filesystem::path& destination,
     }
     if (actualSize == expectedBytes && actualDigest == expectedDigest) {
       if (!MoveFileExW(staging.c_str(), destination.c_str(),
-                       MOVEFILE_REPLACE_EXISTING |
-                           MOVEFILE_WRITE_THROUGH)) {
+                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         result.detail = "Could not publish the verified chapter model.";
         return result;
       }
+      publishVerifiedReceipt(destination, expectedBytes, expectedDigest);
       result.status = OperationStatus::Succeeded;
       return result;
     }
@@ -155,24 +300,22 @@ InstallResult downloadOne(const std::filesystem::path& destination,
 
   InternetHandle session;
   session.value = WinHttpOpen(
-      L"Radioify chapter model/1.0",
-      WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
-      WINHTTP_NO_PROXY_BYPASS, 0);
+      L"Radioify chapter model/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+      WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
   if (session.value) {
     WinHttpSetTimeouts(session.value, 5000, 5000, 5000, 5000);
   }
   InternetHandle connection;
   if (session.value) {
-    connection.value = WinHttpConnect(session.value, kHost,
-                                      INTERNET_DEFAULT_HTTPS_PORT, 0);
+    connection.value =
+        WinHttpConnect(session.value, kHost, INTERNET_DEFAULT_HTTPS_PORT, 0);
   }
   InternetHandle request;
-  const std::wstring path = objectPath(remoteFile);
+  const std::wstring path = objectPath(repository, revision, remoteFile);
   if (connection.value) {
     request.value = WinHttpOpenRequest(
-        connection.value, L"GET", path.c_str(), nullptr,
-        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
-        WINHTTP_FLAG_SECURE);
+        connection.value, L"GET", path.c_str(), nullptr, WINHTTP_NO_REFERER,
+        WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
   }
   if (!request.value) {
     result.detail = "Could not open the secure model download.";
@@ -181,10 +324,9 @@ InstallResult downloadOne(const std::filesystem::path& destination,
   if (offset > 0) {
     const std::wstring range =
         L"Range: bytes=" + std::to_wstring(offset) + L"-\r\n";
-    WinHttpAddRequestHeaders(request.value, range.c_str(),
-                             static_cast<DWORD>(-1),
-                             WINHTTP_ADDREQ_FLAG_ADD |
-                                 WINHTTP_ADDREQ_FLAG_REPLACE);
+    WinHttpAddRequestHeaders(
+        request.value, range.c_str(), static_cast<DWORD>(-1),
+        WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
   }
   if (!WinHttpSendRequest(request.value, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                           WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
@@ -199,7 +341,8 @@ InstallResult downloadOne(const std::filesystem::path& destination,
                     std::to_string(status) + ".";
     return result;
   }
-  if (offset > 0 && status != 206) offset = 0;
+  if (offset > 0 && status != 206)
+    offset = 0;
   const bool resumedDownload = offset > 0;
   std::ofstream output(staging,
                        std::ios::binary |
@@ -223,7 +366,8 @@ InstallResult downloadOne(const std::filesystem::path& destination,
       result.detail = "The chapter-model download was interrupted.";
       return result;
     }
-    if (available == 0) break;
+    if (available == 0)
+      break;
     while (available > 0) {
       const DWORD requested = static_cast<DWORD>(std::min<std::size_t>(
           buffer.size(), static_cast<std::size_t>(available)));
@@ -233,7 +377,7 @@ InstallResult downloadOne(const std::filesystem::path& destination,
         result.detail = "The chapter-model download stopped unexpectedly.";
         return result;
       }
-      output.write(reinterpret_cast<const char*>(buffer.data()), read);
+      output.write(reinterpret_cast<const char *>(buffer.data()), read);
       if (!output) {
         result.detail = "Could not write the chapter-model staging file.";
         return result;
@@ -245,7 +389,7 @@ InstallResult downloadOne(const std::filesystem::path& destination,
             static_cast<double>(completedBefore +
                                 std::min(received, expectedBytes)) /
             static_cast<double>(kModelDownloadBytes);
-        control.progress(progress, "Downloading Qwen2.5-VL 7B");
+        control.progress(progress, progressLabel);
       }
       if (received > expectedBytes) {
         result.detail = "The chapter-model download exceeded its fixed size.";
@@ -261,10 +405,9 @@ InstallResult downloadOne(const std::filesystem::path& destination,
   output.close();
 
   if (control.progress) {
-    control.progress(
-        static_cast<double>(completedBefore + expectedBytes) /
-            static_cast<double>(kModelDownloadBytes),
-        "Verifying downloaded model");
+    control.progress(static_cast<double>(completedBefore + expectedBytes) /
+                         static_cast<double>(kModelDownloadBytes),
+                     "Verifying downloaded model");
   }
   std::uintmax_t actualSize = 0;
   std::string actualDigest;
@@ -281,16 +424,15 @@ InstallResult downloadOne(const std::filesystem::path& destination,
     std::filesystem::remove(staging, filesystemError);
     if (resumedDownload && allowFreshRetry && !filesystemError) {
       if (control.progress) {
-        control.progress(
-            static_cast<double>(completedBefore) /
-                static_cast<double>(kModelDownloadBytes),
-            "Restarting an invalid resumed model download");
+        control.progress(static_cast<double>(completedBefore) /
+                             static_cast<double>(kModelDownloadBytes),
+                         "Restarting an invalid resumed model download");
       }
-      return downloadOne(destination, remoteFile, expectedBytes,
-                         expectedDigest, completedBefore, control, false);
+      return downloadOne(destination, repository, revision, remoteFile,
+                         progressLabel, expectedBytes, expectedDigest,
+                         completedBefore, control, false);
     }
-    result.detail =
-        "The downloaded chapter model failed SHA-256 verification.";
+    result.detail = "The downloaded chapter model failed SHA-256 verification.";
     return result;
   }
   if (!MoveFileExW(staging.c_str(), destination.c_str(),
@@ -298,11 +440,12 @@ InstallResult downloadOne(const std::filesystem::path& destination,
     result.detail = "Could not publish the verified chapter model.";
     return result;
   }
+  publishVerifiedReceipt(destination, expectedBytes, expectedDigest);
   result.status = OperationStatus::Succeeded;
   return result;
 }
 
-}  // namespace
+} // namespace
 
 ModelPaths resolveModelPaths() {
   ModelPaths paths;
@@ -310,11 +453,23 @@ ModelPaths resolveModelPaths() {
       radioifyWritableDataDir() / "models" / "qwen2.5-vl-7b-instruct-q4-k-m";
   paths.model = paths.directory / kModelFile;
   paths.projector = paths.directory / kProjectorFile;
+  paths.plannerDirectory =
+      radioifyWritableDataDir() / "models" / "chapter-llama-8b-q4-k-m";
+  paths.plannerModel = paths.plannerDirectory / kPlannerModelFile;
+  for (const std::filesystem::path &root : radioifyResourceSearchRoots()) {
+    const std::filesystem::path candidate =
+        root / "models" / "chapter_analysis" / kPlannerAdapterFile;
+    std::error_code fileError;
+    if (std::filesystem::is_regular_file(candidate, fileError) && !fileError) {
+      paths.plannerAdapter = candidate;
+      break;
+    }
+  }
   return paths;
 }
 
-CapabilityResult inspectModelArtifacts(const ModelPaths& paths,
-                                       const OperationControl& control) {
+CapabilityResult inspectModelArtifacts(const ModelPaths &paths,
+                                       const OperationControl &control) {
   if (control.progress) {
     control.progress(std::nullopt, "Verifying Qwen2.5-VL model");
   }
@@ -324,33 +479,72 @@ CapabilityResult inspectModelArtifacts(const ModelPaths& paths,
   if (cancelled(control)) {
     return {CapabilityState::Cancelled, {}};
   }
-  if (gpuRevoked(control)) return {CapabilityState::Yielded, {}};
+  if (gpuRevoked(control))
+    return {CapabilityState::Yielded, {}};
   const bool projectorReady = exactFile(paths.projector, kProjectorBytes,
                                         kProjectorSha256, control, &error);
   if (cancelled(control)) {
     return {CapabilityState::Cancelled, {}};
   }
-  if (gpuRevoked(control)) return {CapabilityState::Yielded, {}};
-  if (!modelReady || !projectorReady) {
+  if (gpuRevoked(control))
+    return {CapabilityState::Yielded, {}};
+  const bool plannerReady = exactFile(paths.plannerModel, kPlannerModelBytes,
+                                      kPlannerModelSha256, control, &error);
+  if (cancelled(control)) {
+    return {CapabilityState::Cancelled, {}};
+  }
+  if (gpuRevoked(control))
+    return {CapabilityState::Yielded, {}};
+  const bool adapterReady =
+      exactFile(paths.plannerAdapter, kPlannerAdapterBytes,
+                kPlannerAdapterSha256, control, &error);
+  if (cancelled(control)) {
+    return {CapabilityState::Cancelled, {}};
+  }
+  if (gpuRevoked(control))
+    return {CapabilityState::Yielded, {}};
+  if (!adapterReady) {
+    return {CapabilityState::Unsupported,
+            "The packaged Chapter-Llama planner adapter is missing or "
+            "invalid."};
+  }
+  if (!modelReady || !projectorReady || !plannerReady) {
     return {CapabilityState::SetupRequired,
-            "Install the verified 5.54 GB Qwen2.5-VL model to enable automatic "
-            "video chapters."};
+            "Install the verified visual and chapter-planning models to "
+            "enable automatic video chapters."};
   }
   return {CapabilityState::Ready, {}};
 }
 
-InstallResult installModelArtifacts(const ModelPaths& paths,
-                                    const OperationControl& control) {
+InstallResult installModelArtifacts(const ModelPaths &paths,
+                                    const OperationControl &control) {
   std::string verificationError;
-  bool modelReady = exactFile(paths.model, kModelBytes, kModelSha256,
-                              control, &verificationError);
+  const bool adapterReady =
+      exactFile(paths.plannerAdapter, kPlannerAdapterBytes,
+                kPlannerAdapterSha256, control, &verificationError);
+  if (cancelled(control)) {
+    return {OperationStatus::Cancelled, "Model installation cancelled."};
+  }
+  if (gpuRevoked(control)) {
+    return {OperationStatus::Yielded, "Model installation yielded."};
+  }
+  if (!adapterReady) {
+    return {OperationStatus::Unsupported,
+            "The packaged Chapter-Llama planner adapter is missing or "
+            "invalid."};
+  }
+  bool modelReady = exactFile(paths.model, kModelBytes, kModelSha256, control,
+                              &verificationError);
   if (cancelled(control)) {
     return {OperationStatus::Cancelled, "Model installation cancelled."};
   }
   if (!modelReady) {
-    InstallResult model = downloadOne(paths.model, kModelFile, kModelBytes,
-                                      kModelSha256, 0, control);
-    if (model.status != OperationStatus::Succeeded) return model;
+    InstallResult model =
+        downloadOne(paths.model, kVisionRepository, kVisionRevision, kModelFile,
+                    "Downloading Qwen2.5-VL visual model", kModelBytes,
+                    kModelSha256, 0, control);
+    if (model.status != OperationStatus::Succeeded)
+      return model;
   } else if (control.progress) {
     control.progress(static_cast<double>(kModelBytes) /
                          static_cast<double>(kModelDownloadBytes),
@@ -365,12 +559,30 @@ InstallResult installModelArtifacts(const ModelPaths& paths,
   }
   if (!projectorReady) {
     InstallResult projector =
-        downloadOne(paths.projector, kProjectorFile, kProjectorBytes,
-                    kProjectorSha256, kModelBytes, control);
-    if (projector.status != OperationStatus::Succeeded) return projector;
+        downloadOne(paths.projector, kVisionRepository, kVisionRevision,
+                    kProjectorFile, "Downloading Qwen2.5-VL projector",
+                    kProjectorBytes, kProjectorSha256, kModelBytes, control);
+    if (projector.status != OperationStatus::Succeeded)
+      return projector;
   }
-  if (control.progress) control.progress(1.0, "Model installation complete");
+  bool plannerReady =
+      exactFile(paths.plannerModel, kPlannerModelBytes, kPlannerModelSha256,
+                control, &verificationError);
+  if (cancelled(control)) {
+    return {OperationStatus::Cancelled, "Model installation cancelled."};
+  }
+  if (!plannerReady) {
+    InstallResult planner =
+        downloadOne(paths.plannerModel, kPlannerRepository, kPlannerRevision,
+                    kPlannerModelFile, "Downloading Chapter-Llama base model",
+                    kPlannerModelBytes, kPlannerModelSha256,
+                    kModelBytes + kProjectorBytes, control);
+    if (planner.status != OperationStatus::Succeeded)
+      return planner;
+  }
+  if (control.progress)
+    control.progress(1.0, "Model installation complete");
   return {OperationStatus::Succeeded, {}};
 }
 
-}  // namespace playback_video_chapters
+} // namespace playback_video_chapters

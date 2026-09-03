@@ -360,6 +360,19 @@ function Publish-BuildArtifacts {
     Fail-Build "Build completed without producing a radioify executable in $($Context.Paths.BuildDir). Check the build output above."
   }
 
+  $chapterWorkerSource = Join-Path (Split-Path -Parent $builtExe) "radioify_chapter_worker.exe"
+  if (-not (Test-Path -LiteralPath $chapterWorkerSource -PathType Leaf)) {
+    Fail-Build "Build completed without the required isolated chapter worker at $chapterWorkerSource."
+  }
+  $chapterWorkerDestination = Join-Path $Context.Paths.DistDir "radioify_chapter_worker.exe"
+  $chapterWorkerPublish = Try-Copy-BuildArtifact `
+    -SourcePath $chapterWorkerSource `
+    -DestinationPath $chapterWorkerDestination
+  if (-not $chapterWorkerPublish.Success) {
+    Fail-Build "Could not publish the isolated chapter worker: $($chapterWorkerPublish.ErrorMessage)"
+  }
+  Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $chapterWorkerDestination
+
   # Copy radioify.ico to dist/ so it ends up in the Win11 Explorer external location.
   $icoSource = Join-Path $Context.Paths.Root "radioify.ico"
   if (Test-Path $icoSource) {
@@ -385,6 +398,29 @@ function Publish-BuildArtifacts {
   $llamaLicenseDestination = Join-Path $Context.Paths.DistDir "llama-cpp-LICENSE.txt"
   Copy-Item -LiteralPath $llamaLicenseSource -Destination $llamaLicenseDestination -Force
   Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $llamaLicenseDestination
+
+  $chapterPlannerBuildDir = Join-Path (Split-Path -Parent $builtExe) "models\chapter_analysis"
+  $chapterPlannerDistDir = Join-Path $Context.Paths.DistDir "models\chapter_analysis"
+  if (-not (Test-Path -LiteralPath $chapterPlannerBuildDir -PathType Container)) {
+    Fail-Build "Build completed without the required Chapter-Llama planner assets at $chapterPlannerBuildDir."
+  }
+  if (-not (Test-Path -LiteralPath $chapterPlannerDistDir)) {
+    New-Item -ItemType Directory -Force -Path $chapterPlannerDistDir | Out-Null
+  }
+  foreach ($chapterPlannerAsset in @(
+      "chapter-llama-captions-asr-10k-f16.gguf",
+      "CHAPTER-LLAMA-NOTICE.md",
+      "LLAMA-3.1-LICENSE",
+      "NOTICE")) {
+    $chapterPlannerSource = Join-Path $chapterPlannerBuildDir $chapterPlannerAsset
+    if (-not (Test-Path -LiteralPath $chapterPlannerSource -PathType Leaf)) {
+      Fail-Build "Build completed without the required Chapter-Llama asset at $chapterPlannerSource."
+    }
+    $chapterPlannerDestination = Join-Path $chapterPlannerDistDir $chapterPlannerAsset
+    Copy-Item -LiteralPath $chapterPlannerSource `
+      -Destination $chapterPlannerDestination -Force
+    Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $chapterPlannerDestination
+  }
 
   $whisperModelSource = Join-Path $Context.Paths.Root "models\ggml-base-q5_1.bin"
   if (-not (Test-Path -LiteralPath $whisperModelSource)) {

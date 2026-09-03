@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <utility>
 
 namespace {
 
@@ -12,7 +13,7 @@ struct Interval {
 };
 
 template <size_t N>
-bool bisearch(char32_t codepoint, const std::array<Interval, N>& table) {
+bool bisearch(char32_t codepoint, const std::array<Interval, N> &table) {
   size_t low = 0;
   size_t high = table.size();
   while (low < high) {
@@ -62,13 +63,12 @@ constexpr std::array<Interval, 125> kCombining = {{
     {0xFE20, 0xFE2F},
 }};
 
-bool isCombining(char32_t codepoint) {
-  return bisearch(codepoint, kCombining);
-}
+bool isCombining(char32_t codepoint) { return bisearch(codepoint, kCombining); }
 
-bool decodeUtf8(std::string_view text, size_t* offset, char32_t* outCodepoint,
-                size_t* outStart, size_t* outEnd) {
-  if (!offset || *offset >= text.size()) return false;
+bool decodeUtf8(std::string_view text, size_t *offset, char32_t *outCodepoint,
+                size_t *outStart, size_t *outEnd) {
+  if (!offset || *offset >= text.size())
+    return false;
   size_t start = *offset;
   unsigned char lead = static_cast<unsigned char>(text[start]);
   char32_t codepoint = 0;
@@ -81,16 +81,13 @@ bool decodeUtf8(std::string_view text, size_t* offset, char32_t* outCodepoint,
     length = 2;
   } else if ((lead & 0xF0) == 0xE0 && start + 2 < text.size()) {
     codepoint = (lead & 0x0F) << 12;
-    codepoint |=
-        (static_cast<unsigned char>(text[start + 1]) & 0x3F) << 6;
+    codepoint |= (static_cast<unsigned char>(text[start + 1]) & 0x3F) << 6;
     codepoint |= static_cast<unsigned char>(text[start + 2]) & 0x3F;
     length = 3;
   } else if ((lead & 0xF8) == 0xF0 && start + 3 < text.size()) {
     codepoint = (lead & 0x07) << 18;
-    codepoint |=
-        (static_cast<unsigned char>(text[start + 1]) & 0x3F) << 12;
-    codepoint |=
-        (static_cast<unsigned char>(text[start + 2]) & 0x3F) << 6;
+    codepoint |= (static_cast<unsigned char>(text[start + 1]) & 0x3F) << 12;
+    codepoint |= (static_cast<unsigned char>(text[start + 2]) & 0x3F) << 6;
     codepoint |= static_cast<unsigned char>(text[start + 3]) & 0x3F;
     length = 4;
   } else {
@@ -98,23 +95,28 @@ bool decodeUtf8(std::string_view text, size_t* offset, char32_t* outCodepoint,
   }
 
   *offset = start + length;
-  if (outCodepoint) *outCodepoint = codepoint;
-  if (outStart) *outStart = start;
-  if (outEnd) *outEnd = start + length;
+  if (outCodepoint)
+    *outCodepoint = codepoint;
+  if (outStart)
+    *outStart = start;
+  if (outEnd)
+    *outEnd = start + length;
   return true;
 }
 
-}  // namespace
+} // namespace
 
 int unicodeDisplayWidth(char32_t codepoint) {
-  if (codepoint == 0) return 0;
-  if (codepoint < 32 || (codepoint >= 0x7F && codepoint < 0xA0)) return 0;
-  if (isCombining(codepoint)) return 0;
+  if (codepoint == 0)
+    return 0;
+  if (codepoint < 32 || (codepoint >= 0x7F && codepoint < 0xA0))
+    return 0;
+  if (isCombining(codepoint))
+    return 0;
 
   if (codepoint >= 0x1100 &&
       (codepoint <= 0x115F || codepoint == 0x2329 || codepoint == 0x232A ||
-       (codepoint >= 0x2E80 && codepoint <= 0xA4CF &&
-        codepoint != 0x303F) ||
+       (codepoint >= 0x2E80 && codepoint <= 0xA4CF && codepoint != 0x303F) ||
        (codepoint >= 0xAC00 && codepoint <= 0xD7A3) ||
        (codepoint >= 0xF900 && codepoint <= 0xFAFF) ||
        (codepoint >= 0xFE10 && codepoint <= 0xFE19) ||
@@ -130,9 +132,9 @@ int unicodeDisplayWidth(char32_t codepoint) {
   return 1;
 }
 
-bool utf8DecodeCodepoint(std::string_view text, size_t* offset,
-                         char32_t* outCodepoint, size_t* outStart,
-                         size_t* outEnd) {
+bool utf8DecodeCodepoint(std::string_view text, size_t *offset,
+                         char32_t *outCodepoint, size_t *outStart,
+                         size_t *outEnd) {
   return decodeUtf8(text, offset, outCodepoint, outStart, outEnd);
 }
 
@@ -147,7 +149,8 @@ int utf8DisplayWidth(std::string_view text) {
 }
 
 std::string utf8TakeDisplayWidth(std::string_view text, int width) {
-  if (width <= 0) return "";
+  if (width <= 0)
+    return "";
   size_t offset = 0;
   size_t end = 0;
   int columns = 0;
@@ -167,7 +170,8 @@ std::string utf8TakeDisplayWidth(std::string_view text, int width) {
 
 std::string utf8SliceDisplayWidth(std::string_view text, int startWidth,
                                   int width) {
-  if (width <= 0) return "";
+  if (width <= 0)
+    return "";
   const int endWidth = startWidth + width;
   size_t offset = 0;
   size_t sliceStart = std::string_view::npos;
@@ -195,8 +199,47 @@ std::string utf8SliceDisplayWidth(std::string_view text, int startWidth,
     }
     columns = nextColumns;
   }
-  if (sliceStart == std::string_view::npos || sliceEnd == std::string_view::npos) {
+  if (sliceStart == std::string_view::npos ||
+      sliceEnd == std::string_view::npos) {
     return "";
   }
   return std::string(text.substr(sliceStart, sliceEnd - sliceStart));
+}
+
+std::vector<std::string> utf8WrapDisplayWidth(std::string_view text,
+                                              int width) {
+  std::vector<std::string> lines;
+  if (width <= 0 || text.empty())
+    return lines;
+  while (!text.empty()) {
+    if (utf8DisplayWidth(text) <= width) {
+      lines.emplace_back(text);
+      break;
+    }
+
+    std::string candidate = utf8TakeDisplayWidth(text, width);
+    if (candidate.empty()) {
+      size_t offset = 0;
+      size_t end = 0;
+      if (!utf8DecodeCodepoint(text, &offset, nullptr, nullptr, &end) ||
+          end == 0) {
+        break;
+      }
+      candidate.assign(text.substr(0, end));
+    }
+    std::size_t split = candidate.find_last_of(" \t");
+    if (split == std::string::npos || split == 0)
+      split = candidate.size();
+    std::string line(candidate.substr(0, split));
+    while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) {
+      line.pop_back();
+    }
+    if (!line.empty())
+      lines.push_back(std::move(line));
+    text.remove_prefix(split);
+    while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) {
+      text.remove_prefix(1);
+    }
+  }
+  return lines;
 }

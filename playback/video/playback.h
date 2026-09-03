@@ -8,9 +8,10 @@
 struct VideoPlaybackConfig {
   bool enableAscii = kDefaultAsciiPlaybackEnabled;
   bool enableAudio = kDefaultAudioPlaybackEnabled;
+  bool enableAutomaticChapterAnalysis = true;
   bool debugOverlay = false;
   SystemMediaCommandOwner systemMediaCommandOwner =
       SystemMediaCommandOwner::LocalInputFallback;
 };
 
-void configureFfmpegVideoLog(const std::filesystem::path& path);
+void configureFfmpegVideoLog(const std::filesystem::path &path);

@@ -42,35 +42,94 @@ silently falls back to CPU. The normal static build keeps the static MSVC
 runtime; it does not require a Visual C++ redistributable install on another
 PC.
 
-For each active video, Radioify also starts asynchronous chapter analysis after
+For each active video, Radioify starts asynchronous chapter analysis after
 subtitle discovery completes. This feature is deliberately GPU-only: source
-frames must decode through D3D11VA and the pinned Qwen2.5-VL 7B Q4_K_M model
-and Q8 multimodal projector must run through Vulkan. Playback remains the
-foreground GPU owner; analysis yields whenever playback buffers, seeks, or
-starves. There is no CPU fallback. Open `Chapters` in the playback controls to
-install the fixed, SHA-256-verified 5.54 GB model once.
-The model is stored in the per-user Radioify data directory and is never
-downloaded by the build or bundled in a release. English text subtitle tracks
-are used as optional dialogue evidence independently of the subtitle selected
-for presentation; visual analysis still works without them.
+frames must decode through D3D11VA, the pinned Qwen2.5-VL 7B visual model and
+projector must run through Vulkan, and the Meta Llama 3.1 8B planning model must
+fit completely on a Vulkan device. The llama.cpp adapter verifies the
+projector backend after initialization, so a library-level CPU fallback is
+rejected rather than merely requested away. Playback remains the foreground
+GPU owner. Model inference runs in a private Windows Job Object: complete stage
+boundaries are atomically checkpointed, and Radioify terminates the worker to
+reclaim all Vulkan allocations whenever playback buffers, seeks, or starves.
+Pass `--no-automatic-chapters` to disable automatic chapters for a launch.
+
+**Built with Llama.** The packaged `models/chapter_analysis` directory includes
+the Llama 3.1 Community License and Meta's required attribution notice. Use of
+the planner is also subject to the incorporated
+[Llama 3.1 Acceptable Use Policy](https://llama.meta.com/llama3_1/use-policy).
+
+Open `Chapters` in the playback controls to install the fixed,
+SHA-256-verified model artifacts once. Radioify downloads the Qwen model and
+projector plus the Chapter-Llama base model (about 10.46 GB total) into the
+per-user data directory. Releases include only the small, pinned Chapter-Llama
+planner adapter and its attribution notice; the base models are not bundled.
+English text subtitle tracks are optional dialogue evidence independently of
+the subtitle selected for presentation, and visual analysis still works
+without them.
+
+Automatic runtime analysis currently accepts videos from 30 seconds through
+60 minutes, matching Chapter-Llama's evaluated source-duration envelope. A
+bounded preflight rejects evidence that cannot fit the planner context before
+either inference model is loaded; longer media will require a separately
+validated hierarchical boundary planner rather than silently thinning the
+timeline.
 
 The inference backend links the vcpkg-baseline-pinned `llama` and `libmtmd`
 libraries directly. Their native objects live behind one RAII-owned Radioify
 adapter; libmtmd's published helper API owns multimodal batching, M-RoPE
 positions, and `llama_decode` orchestration instead of duplicating that vendor
-logic in Radioify. D3D11-decoded RGB samples stay in memory. The model first
-describes each sample independently, then plans the complete timeline and
-scores every candidate semantic change point. Radioify selects the strongest
-fixed-cardinality partition, labels every bounded section independently, and
-finally writes the overview. Every stage has a constrained JSON grammar; only
-the complete validated chapter domain object is published. No CLI
-executable, command-line protocol, temporary PNG, or diagnostic-log parsing
-participates in inference. Because llama.cpp marks `libmtmd` experimental, its
-version is pinned at the build boundary rather than allowed to drift at
-runtime. The model and projector come directly from the Apache-2.0-licensed
+logic in Radioify. Radioify first scans the complete source at two frames per
+second. It groups that dense timeline into roughly one-minute temporal windows
+and retains up to six chronological frames per window at Chapter-Llama's
+published ten-second caption cadence. Qwen observes each window as a sequence
+instead of captioning isolated thumbnails.
+
+Qwen returns one caption per selected frame. Those captions and optional
+English subtitle cues are interleaved at their original timestamps before they
+are fed to the pinned Chapter-Llama adapter using its native caption/ASR
+training contract. The adapter's approximate boundary times are accepted only
+inside the source duration and deterministically snapped to the nearest
+sampler-owned interval; unsorted, duplicate, or over-budget output is rejected.
+Chapter boundaries come only from that specialized complete-timeline planner.
+Radioify labels and summarizes each immutable bounded interval independently,
+then reduces small ordered groups into the final overview. Temporal
+observations, chapter metadata, and overviews use constrained JSON grammars;
+invalid metadata and incomplete partitions are rejected, and only the complete
+validated chapter domain object is published. The private helper
+uses a bounded, schema-versioned file protocol and atomically published
+checkpoints; no shell command, temporary PNG, or diagnostic-log parsing
+participates in inference.
+
+Because llama.cpp marks `libmtmd` experimental, its version is pinned at the
+build boundary rather than allowed to drift at runtime. The visual model and
+projector come directly from the Apache-2.0-licensed
 [ggml-org Qwen2.5-VL repository](https://huggingface.co/ggml-org/Qwen2.5-VL-7B-Instruct-GGUF)
 at a fixed revision and are accepted only at their compiled-in sizes and
-SHA-256 hashes.
+SHA-256 hashes. The planning adapter is the MIT-licensed
+[Chapter-Llama captions+ASR adapter](https://huggingface.co/lucas-ventura/chapter-llama)
+at a fixed revision, converted reproducibly for llama.cpp and paired with a
+pinned Meta Llama 3.1 8B Instruct GGUF subject to its community license.
+
+The architecture follows the timestamped visual-caption and ASR representation
+and specialized planner published by
+[Chapter-Llama](https://github.com/lucas-ventura/chapter-llama), applies the
+strict-output and lifecycle boundaries demonstrated by
+[Mux AI](https://github.com/muxinc/ai/blob/main/src/workflows/chapters.ts), and
+adopts the bounded recursive summarization pattern demonstrated by
+[Video ReCap](https://openaccess.thecvf.com/content/CVPR2024/html/Islam_Video_ReCap_Recursive_Captioning_of_Hour-Long_Videos_CVPR_2024_paper.html).
+
+A completed result is atomically cached under
+`%LOCALAPPDATA%\Radioify\cache\video-chapters`. Its identity includes the
+source file, selected stream, every model/adapter hash, and English text evidence,
+so reopening unchanged media publishes the result immediately while changed
+inputs are analyzed again. Private in-progress inference checkpoints use the
+same identity, so a foreground GPU yield resumes at a completed model-stage
+boundary instead of relabeling partial output. A transient cache-write failure keeps the completed
+in-memory result available for the active session and reports a non-fatal OSD
+warning. In-progress or unsupported analysis never opens an
+empty overview or timeline-metadata panel; failures remain visible through the
+normal playback status/retry surface.
 
 ## Windows Package
 Build a distributable Windows x64 bundle and zip:
@@ -240,9 +299,9 @@ to the browser.
   ready, chapter boundaries appear on the shared timeline in both ASCII and
   framebuffer presentation. Hovering anywhere on that timeline keeps the
   existing preview frame and adds the chapter title, time range, and summary;
-  setup or analysis progress appears in that popover and overview, never next
-  to the progress bar. Permanently unsupported analysis leaves the hover
-  preview frame-only instead of reserving an unusable metadata panel.
+  metadata wraps to the responsive panel width. Until usable chapter content
+  exists, the overview stays closed and the hover preview remains frame-only
+  instead of reserving an empty status panel.
 - Enter: open folder / play file
 - Backspace: up
 - Arrows: move selection

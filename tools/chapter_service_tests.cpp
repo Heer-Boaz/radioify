@@ -11,7 +11,7 @@ namespace {
 using namespace std::chrono_literals;
 using namespace playback_video_chapters;
 
-bool expect(bool condition, const char* message) {
+bool expect(bool condition, const char *message) {
   if (!condition) {
     std::cerr << "chapter_service_tests: " << message << '\n';
     return false;
@@ -33,30 +33,30 @@ AnalysisResult validResult(std::int64_t durationUs) {
   return result;
 }
 
-template <typename Predicate>
-bool waitUntil(Predicate predicate) {
+template <typename Predicate> bool waitUntil(Predicate predicate) {
   const auto deadline = std::chrono::steady_clock::now() + 3s;
   while (std::chrono::steady_clock::now() < deadline) {
-    if (predicate()) return true;
+    if (predicate())
+      return true;
     std::this_thread::sleep_for(5ms);
   }
   return predicate();
 }
 
 class CachedBackend final : public Backend {
- public:
-  std::optional<AnalysisResult> cached(
-      const AnalysisRequest& request) override {
+public:
+  std::optional<AnalysisResult>
+  cached(const AnalysisRequest &request) override {
     return validResult(request.durationUs);
   }
-  CapabilityResult inspect(const AnalysisRequest&,
-                           const OperationControl&) override {
+  CapabilityResult inspect(const AnalysisRequest &,
+                           const OperationControl &) override {
     ++inspectCalls;
     return {CapabilityState::Unsupported, "must not inspect"};
   }
-  InstallResult install(const OperationControl&) override { return {}; }
-  AnalysisResult analyze(const AnalysisRequest&,
-                         const OperationControl&) override {
+  InstallResult install(const OperationControl &) override { return {}; }
+  AnalysisResult analyze(const AnalysisRequest &,
+                         const OperationControl &) override {
     ++analyzeCalls;
     return {};
   }
@@ -66,26 +66,26 @@ class CachedBackend final : public Backend {
 };
 
 class SetupBackend final : public Backend {
- public:
-  std::optional<AnalysisResult> cached(const AnalysisRequest&) override {
+public:
+  std::optional<AnalysisResult> cached(const AnalysisRequest &) override {
     return std::nullopt;
   }
-  CapabilityResult inspect(const AnalysisRequest&,
-                           const OperationControl&) override {
+  CapabilityResult inspect(const AnalysisRequest &,
+                           const OperationControl &) override {
     ++inspectCalls;
-    return installed.load() ? CapabilityResult{CapabilityState::Ready, {}}
-                            : CapabilityResult{
-                                  CapabilityState::SetupRequired, "Install"};
+    return installed.load()
+               ? CapabilityResult{CapabilityState::Ready, {}}
+               : CapabilityResult{CapabilityState::SetupRequired, "Install"};
   }
-  InstallResult install(const OperationControl&) override {
+  InstallResult install(const OperationControl &) override {
     installed.store(true);
     return {OperationStatus::Succeeded, {}};
   }
-  AnalysisResult analyze(const AnalysisRequest& request,
-                         const OperationControl& control) override {
+  AnalysisResult analyze(const AnalysisRequest &request,
+                         const OperationControl &control) override {
     ++analyzeCalls;
     if (!control.backgroundGpuAllowed()) {
-      return {OperationStatus::Yielded, "foreground", {}, {}};
+      return {OperationStatus::Yielded, "foreground", {}, {}, {}};
     }
     return validResult(request.durationUs);
   }
@@ -96,17 +96,17 @@ class SetupBackend final : public Backend {
 };
 
 class YieldBackend final : public Backend {
- public:
-  std::optional<AnalysisResult> cached(const AnalysisRequest&) override {
+public:
+  std::optional<AnalysisResult> cached(const AnalysisRequest &) override {
     return std::nullopt;
   }
-  CapabilityResult inspect(const AnalysisRequest&,
-                           const OperationControl&) override {
+  CapabilityResult inspect(const AnalysisRequest &,
+                           const OperationControl &) override {
     return {CapabilityState::Ready, {}};
   }
-  InstallResult install(const OperationControl&) override { return {}; }
-  AnalysisResult analyze(const AnalysisRequest& request,
-                         const OperationControl& control) override {
+  InstallResult install(const OperationControl &) override { return {}; }
+  AnalysisResult analyze(const AnalysisRequest &request,
+                         const OperationControl &control) override {
     const int attempt = ++attempts;
     if (attempt == 1) {
       firstAttemptEntered.store(true);
@@ -115,7 +115,10 @@ class YieldBackend final : public Backend {
       }
       return {control.cancelled() ? OperationStatus::Cancelled
                                   : OperationStatus::Yielded,
-              {}, {}, {}};
+              {},
+              {},
+              {},
+              {}};
     }
     return validResult(request.durationUs);
   }
@@ -125,19 +128,19 @@ class YieldBackend final : public Backend {
 };
 
 class FailOnceBackend final : public Backend {
- public:
-  std::optional<AnalysisResult> cached(const AnalysisRequest&) override {
+public:
+  std::optional<AnalysisResult> cached(const AnalysisRequest &) override {
     return std::nullopt;
   }
-  CapabilityResult inspect(const AnalysisRequest&,
-                           const OperationControl&) override {
+  CapabilityResult inspect(const AnalysisRequest &,
+                           const OperationControl &) override {
     return {CapabilityState::Ready, {}};
   }
-  InstallResult install(const OperationControl&) override { return {}; }
-  AnalysisResult analyze(const AnalysisRequest& request,
-                         const OperationControl&) override {
+  InstallResult install(const OperationControl &) override { return {}; }
+  AnalysisResult analyze(const AnalysisRequest &request,
+                         const OperationControl &) override {
     if (++attempts == 1) {
-      return {OperationStatus::Failed, "invalid structured output", {}, {}};
+      return {OperationStatus::Failed, "invalid structured output", {}, {}, {}};
     }
     return validResult(request.durationUs);
   }
@@ -145,23 +148,42 @@ class FailOnceBackend final : public Backend {
   std::atomic<int> attempts{0};
 };
 
-class CancellableInstallBackend final : public Backend {
- public:
-  std::optional<AnalysisResult> cached(const AnalysisRequest&) override {
+class WarningBackend final : public Backend {
+public:
+  std::optional<AnalysisResult> cached(const AnalysisRequest &) override {
     return std::nullopt;
   }
-  CapabilityResult inspect(const AnalysisRequest&,
-                           const OperationControl&) override {
+  CapabilityResult inspect(const AnalysisRequest &,
+                           const OperationControl &) override {
+    return {CapabilityState::Ready, {}};
+  }
+  InstallResult install(const OperationControl &) override { return {}; }
+  AnalysisResult analyze(const AnalysisRequest &request,
+                         const OperationControl &) override {
+    AnalysisResult result = validResult(request.durationUs);
+    result.warning = "Analysis is ready but its cache could not be saved.";
+    return result;
+  }
+};
+
+class CancellableInstallBackend final : public Backend {
+public:
+  std::optional<AnalysisResult> cached(const AnalysisRequest &) override {
+    return std::nullopt;
+  }
+  CapabilityResult inspect(const AnalysisRequest &,
+                           const OperationControl &) override {
     return {CapabilityState::SetupRequired, "Install"};
   }
-  InstallResult install(const OperationControl& control) override {
+  InstallResult install(const OperationControl &control) override {
     installEntered.store(true);
-    while (!control.cancelled()) std::this_thread::sleep_for(2ms);
+    while (!control.cancelled())
+      std::this_thread::sleep_for(2ms);
     cancellationObserved.store(true);
     return {OperationStatus::Cancelled, "cancelled"};
   }
-  AnalysisResult analyze(const AnalysisRequest&,
-                         const OperationControl&) override {
+  AnalysisResult analyze(const AnalysisRequest &,
+                         const OperationControl &) override {
     return {};
   }
 
@@ -181,7 +203,7 @@ AnalysisRequest request() {
 
 bool runCachedResultTest() {
   auto backend = std::make_unique<CachedBackend>();
-  CachedBackend* observed = backend.get();
+  CachedBackend *observed = backend.get();
   Service service(std::move(backend));
   const Service::RequestId id = service.start(request());
   const bool ready = waitUntil([&]() { return service.snapshot(id).ready(); });
@@ -192,21 +214,21 @@ bool runCachedResultTest() {
 
 bool runExplicitSetupTest() {
   auto backend = std::make_unique<SetupBackend>();
-  SetupBackend* observed = backend.get();
+  SetupBackend *observed = backend.get();
   Service service(std::move(backend));
   const Service::RequestId id = service.start(request());
-  bool ok = expect(waitUntil([&]() {
-                     return service.snapshot(id).state ==
-                            AnalysisState::WaitingForPlayback;
-                   }) &&
-                       observed->inspectCalls.load() == 0,
-                   "hardware inspection must wait for foreground GPU ownership");
+  bool ok = expect(
+      waitUntil([&]() {
+        return service.snapshot(id).state == AnalysisState::WaitingForPlayback;
+      }) &&
+          observed->inspectCalls.load() == 0,
+      "hardware inspection must wait for foreground GPU ownership");
   service.setBackgroundGpuAllowed(id, true);
   ok &= expect(waitUntil([&]() {
-                     return service.snapshot(id).state ==
-                            AnalysisState::SetupRequired;
-                   }),
-                   "missing models must wait for explicit setup");
+                 return service.snapshot(id).state ==
+                        AnalysisState::SetupRequired;
+               }),
+               "missing models must wait for explicit setup");
   ok &= expect(observed->analyzeCalls.load() == 0,
                "setup-required state must not begin inference");
   ok &= expect(service.requestInstallation(id),
@@ -218,7 +240,7 @@ bool runExplicitSetupTest() {
 
 bool runInvalidSourceTest() {
   auto backend = std::make_unique<SetupBackend>();
-  SetupBackend* observed = backend.get();
+  SetupBackend *observed = backend.get();
   Service service(std::move(backend));
   AnalysisRequest invalid = request();
   invalid.durationUs = 0;
@@ -233,30 +255,30 @@ bool runInvalidSourceTest() {
 
 bool runPlaybackYieldTest() {
   auto backend = std::make_unique<YieldBackend>();
-  YieldBackend* observed = backend.get();
+  YieldBackend *observed = backend.get();
   Service service(std::move(backend));
   const Service::RequestId id = service.start(request());
   service.setBackgroundGpuAllowed(id, true);
-  bool ok = expect(waitUntil([&]() {
-                     return observed->firstAttemptEntered.load();
-                   }),
-                   "analysis must begin once the owner grants the GPU");
+  bool ok =
+      expect(waitUntil([&]() { return observed->firstAttemptEntered.load(); }),
+             "analysis must begin once the owner grants the GPU");
   service.setBackgroundGpuAllowed(id, false);
   ok &= expect(waitUntil([&]() {
-                   return service.snapshot(id).state ==
-                          AnalysisState::WaitingForPlayback;
-                 }),
+                 return service.snapshot(id).state ==
+                        AnalysisState::WaitingForPlayback;
+               }),
                "foreground playback must force analysis into a waiting state");
   service.setBackgroundGpuAllowed(id, true);
-  ok &= expect(waitUntil([&]() { return service.snapshot(id).ready(); }) &&
-                   observed->attempts.load() == 2,
-               "yielded analysis must restart only after GPU ownership returns");
+  ok &=
+      expect(waitUntil([&]() { return service.snapshot(id).ready(); }) &&
+                 observed->attempts.load() == 2,
+             "yielded analysis must restart only after GPU ownership returns");
   return ok;
 }
 
 bool runExplicitRetryTest() {
   auto backend = std::make_unique<FailOnceBackend>();
-  FailOnceBackend* observed = backend.get();
+  FailOnceBackend *observed = backend.get();
   Service service(std::move(backend));
   const Service::RequestId id = service.start(request());
   service.setBackgroundGpuAllowed(id, true);
@@ -274,9 +296,22 @@ bool runExplicitRetryTest() {
   return ok;
 }
 
+bool runNonFatalWarningTest() {
+  Service service(std::make_unique<WarningBackend>());
+  const Service::RequestId id = service.start(request());
+  service.setBackgroundGpuAllowed(id, true);
+  const bool ready = waitUntil([&]() { return service.snapshot(id).ready(); });
+  const Snapshot snapshot = service.snapshot(id);
+  return expect(ready && !snapshot.warning.empty() &&
+                    snapshot.state == AnalysisState::Ready &&
+                    snapshot.chapters.size() == 3,
+                "an ancillary persistence warning must retain and publish "
+                "the complete analysis");
+}
+
 bool runRequestOwnedInstallTest() {
   auto backend = std::make_unique<CancellableInstallBackend>();
-  CancellableInstallBackend* observed = backend.get();
+  CancellableInstallBackend *observed = backend.get();
   Service service(std::move(backend));
   const Service::RequestId id = service.start(request());
   service.setBackgroundGpuAllowed(id, true);
@@ -289,19 +324,20 @@ bool runRequestOwnedInstallTest() {
                    waitUntil([&]() { return observed->installEntered.load(); }),
                "the approved model install must start");
   service.cancel(id);
-  ok &= expect(waitUntil(
-                   [&]() { return observed->cancellationObserved.load(); }),
-               "closing the active request must cancel its model install "
-               "instead of leaving an invisible background download");
+  ok &=
+      expect(waitUntil([&]() { return observed->cancellationObserved.load(); }),
+             "closing the active request must cancel its model install "
+             "instead of leaving an invisible background download");
   return ok;
 }
 
-}  // namespace
+} // namespace
 
 int main() {
   return runCachedResultTest() && runInvalidSourceTest() &&
                  runExplicitSetupTest() && runPlaybackYieldTest() &&
-                 runExplicitRetryTest() && runRequestOwnedInstallTest()
+                 runExplicitRetryTest() && runNonFatalWarningTest() &&
+                 runRequestOwnedInstallTest()
              ? 0
              : 1;
 }

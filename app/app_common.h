@@ -17,8 +17,7 @@ struct Options {
   std::string radioSettingsPath;
   std::string radioPresetName;
   RadioReceiverProfile radioReceiverProfile = kDefaultRadioReceiverProfile;
-  RadioReceptionProfile radioReceptionProfile =
-      kDefaultRadioReceptionProfile;
+  RadioReceptionProfile radioReceptionProfile = kDefaultRadioReceptionProfile;
   int trackIndex = 0;
   bool splitLoop = false;
   bool extractSheet = false;
@@ -38,6 +37,7 @@ struct Options {
   bool enableAudio = kDefaultAudioPlaybackEnabled;
   bool enableRadio = kDefaultRadioFilterEnabled;
   bool enableWindow = kDefaultWindowPlaybackEnabled;
+  bool enableAutomaticChapterAnalysis = true;
   bool asciiDebugOverlay = false;
   bool shellOpen = false;
   std::optional<OpenPresentationDirective> shellOpenPresentationOverride;
@@ -45,9 +45,9 @@ struct Options {
   bool verbose = false;
 };
 
-void die(const std::string& message);
-void logLine(const std::string& message);
-void requireSupportedAudioInputFile(const std::filesystem::path& path);
-Options parseArgs(int argc, char** argv);
+void die(const std::string &message);
+void logLine(const std::string &message);
+void requireSupportedAudioInputFile(const std::filesystem::path &path);
+Options parseArgs(int argc, char **argv);
 
-#endif  // APP_COMMON_H
+#endif // APP_COMMON_H

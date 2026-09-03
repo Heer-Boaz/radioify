@@ -23,17 +23,20 @@
 namespace playback_video_chapters {
 namespace {
 
-constexpr int kSchema = 7;
+// Schema 17 identifies per-frame timestamped Qwen captions, native-timestamp
+// English dialogue, guarded complete-timeline planning, sampler-owned chapter
+// boundaries, and independently generated metadata for each immutable range.
+constexpr int kSchema = 17;
 
-void setError(std::string* error, std::string value) {
-  if (error) *error = std::move(value);
+void setError(std::string *error, std::string value) {
+  if (error)
+    *error = std::move(value);
 }
 
-std::string sourceIdentity(const AnalysisRequest& request) {
+std::string sourceIdentity(const AnalysisRequest &request) {
   std::error_code error;
   const PathIdentity path = makePathIdentity(request.file);
-  const std::uintmax_t size =
-      std::filesystem::file_size(request.file, error);
+  const std::uintmax_t size = std::filesystem::file_size(request.file, error);
   const std::uintmax_t stableSize = error ? 0 : size;
   error.clear();
   const auto modified = std::filesystem::last_write_time(request.file, error);
@@ -49,32 +52,36 @@ std::string sourceIdentity(const AnalysisRequest& request) {
            << request.durationUs << '\n'
            << request.sourceWidth << 'x' << request.sourceHeight << '\n'
            << kModelSha256 << '\n'
-           << kProjectorSha256 << '\n';
-  if (request.englishText) identity << request.englishText->identity;
+           << kProjectorSha256 << '\n'
+           << kPlannerModelSha256 << '\n'
+           << kPlannerAdapterSha256 << '\n';
+  if (request.englishText)
+    identity << request.englishText->identity;
   return identity.str();
 }
 
-std::filesystem::path cachePath(const AnalysisRequest& request) {
+std::filesystem::path cachePath(const AnalysisRequest &request) {
   const std::string hash = analysisSourceKey(request);
-  if (hash.empty()) return {};
+  if (hash.empty())
+    return {};
   return radioifyWritableDataDir() / "cache" / "video-chapters" /
          (hash + ".json");
 }
 
-bool decode(const nlohmann::json& document, std::int64_t durationUs,
-            AnalysisResult* result) {
+bool decode(const nlohmann::json &document, std::int64_t durationUs,
+            AnalysisResult *result) {
   if (!result || !document.is_object() ||
       document.value("schema", 0) != kSchema ||
       document.value("duration_us", std::int64_t{0}) != durationUs ||
-      !document.contains("chapters") ||
-      !document["chapters"].is_array()) {
+      !document.contains("chapters") || !document["chapters"].is_array()) {
     return false;
   }
   AnalysisResult decoded;
   decoded.status = OperationStatus::Succeeded;
   decoded.overview = document.value("overview", std::string{});
-  for (const nlohmann::json& item : document["chapters"]) {
-    if (!item.is_object()) return false;
+  for (const nlohmann::json &item : document["chapters"]) {
+    if (!item.is_object())
+      return false;
     Chapter chapter;
     chapter.id = item.value("id", std::uint64_t{0});
     chapter.startUs = item.value("start_us", std::int64_t{-1});
@@ -91,17 +98,18 @@ bool decode(const nlohmann::json& document, std::int64_t durationUs,
   return true;
 }
 
-}  // namespace
+} // namespace
 
-std::string analysisSourceKey(const AnalysisRequest& request) {
+std::string analysisSourceKey(const AnalysisRequest &request) {
   return sha256Text(sourceIdentity(request));
 }
 
-std::optional<AnalysisResult> loadCachedAnalysis(
-    const AnalysisRequest& request) {
+std::optional<AnalysisResult>
+loadCachedAnalysis(const AnalysisRequest &request) {
   const std::filesystem::path path = cachePath(request);
   std::ifstream input(path, std::ios::binary);
-  if (!input) return std::nullopt;
+  if (!input)
+    return std::nullopt;
   try {
     nlohmann::json document;
     input >> document;
@@ -110,15 +118,15 @@ std::optional<AnalysisResult> loadCachedAnalysis(
       return std::nullopt;
     }
     return result;
-  } catch (const nlohmann::json::exception&) {
+  } catch (const nlohmann::json::exception &) {
     return std::nullopt;
   }
 }
 
-bool storeCachedAnalysis(const AnalysisRequest& request,
-                         const AnalysisResult& result,
-                         std::string* error) {
-  if (error) error->clear();
+bool storeCachedAnalysis(const AnalysisRequest &request,
+                         const AnalysisResult &result, std::string *error) {
+  if (error)
+    error->clear();
   if (result.status != OperationStatus::Succeeded ||
       !validateAutomaticAnalysis(request.durationUs, result.overview,
                                  result.chapters, error)) {
@@ -139,18 +147,17 @@ bool storeCachedAnalysis(const AnalysisRequest& request,
   staging += L".partial-" + std::to_wstring(GetCurrentProcessId());
 
   nlohmann::json chapters = nlohmann::json::array();
-  for (const Chapter& chapter : result.chapters) {
+  for (const Chapter &chapter : result.chapters) {
     chapters.push_back({{"id", chapter.id},
                         {"start_us", chapter.startUs},
                         {"end_us", chapter.endUs},
                         {"title", chapter.title},
                         {"summary", chapter.summary}});
   }
-  const nlohmann::json document = {
-      {"schema", kSchema},
-      {"duration_us", request.durationUs},
-      {"overview", result.overview},
-      {"chapters", std::move(chapters)}};
+  const nlohmann::json document = {{"schema", kSchema},
+                                   {"duration_us", request.durationUs},
+                                   {"overview", result.overview},
+                                   {"chapters", std::move(chapters)}};
   std::ofstream output(staging, std::ios::binary | std::ios::trunc);
   if (!output) {
     setError(error, "Could not create the chapter cache staging file.");
@@ -159,16 +166,20 @@ bool storeCachedAnalysis(const AnalysisRequest& request,
   output << document.dump(2) << '\n';
   output.flush();
   if (!output) {
+    output.close();
+    std::filesystem::remove(staging, filesystemError);
     setError(error, "Could not finish the chapter cache staging file.");
     return false;
   }
   output.close();
   if (!MoveFileExW(staging.c_str(), path.c_str(),
                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    filesystemError.clear();
+    std::filesystem::remove(staging, filesystemError);
     setError(error, "Could not publish the chapter cache.");
     return false;
   }
   return true;
 }
 
-}  // namespace playback_video_chapters
+} // namespace playback_video_chapters

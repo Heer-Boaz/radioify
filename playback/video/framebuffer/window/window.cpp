@@ -1,44 +1,45 @@
 #include "window.h"
-#include "timing_log.h"
+#include "core/utf8.h"
 #include "core/windows_app_resources.h"
 #include "core/windows_console_window.h"
 #include "core/windows_message_pump.h"
-#include "core/utf8.h"
+#include "input_events.h"
+#include "internal.h"
+#include "playback/video/chapter/presentation.h"
 #include "playback/video/gpu/gpu_runtime.h"
 #include "playback/video/image.h"
-#include "internal.h"
-#include "input_events.h"
 #include "present.h"
-#include <d3d11_1.h>
-#include <dxgi1_6.h>
+#include "timing_log.h"
 #include <algorithm>
 #include <cassert>
-#include <cstddef>
-#include <cstdarg>
-#include <iostream>
-#include <limits>
-#include <vector>
-#include <mutex>
-#include <string>
-#include <utility>
-#include <unordered_set>
 #include <cmath>
+#include <cstdarg>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <d3d11_1.h>
+#include <dxgi1_6.h>
+#include <iostream>
+#include <limits>
+#include <mutex>
+#include <string>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 #include <chrono>
-#include <thread>
 #include <sstream>
+#include <thread>
 
-#include "window_render_vs.h"
-#include "window_render_ps.h"
-#include "window_overlay_ps.h"
-#include "window_gpu_text_grid_ps.h"
-#include "playback/overlay/overlay.h"
 #include "playback/input/media_keys.h"
-#include "playback/video/subtitle/caption_style.h"
+#include "playback/overlay/overlay.h"
 #include "playback/video/framebuffer/subtitle_pixel_compositor.h"
+#include "playback/video/subtitle/caption_style.h"
 #include "ui_helpers.h"
+#include "window_gpu_text_grid_ps.h"
+#include "window_overlay_ps.h"
+#include "window_render_ps.h"
+#include "window_render_vs.h"
 #if RADIOIFY_HAS_LIBASS
 extern "C" {
 #include <ass/ass.h>
@@ -46,661 +47,678 @@ extern "C" {
 #endif
 
 static inline std::string now_ms() {
-    using namespace std::chrono;
-    auto t = duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
-    std::ostringstream ss; ss << t; return ss.str();
+  using namespace std::chrono;
+  auto t = duration_cast<milliseconds>(steady_clock::now().time_since_epoch())
+               .count();
+  std::ostringstream ss;
+  ss << t;
+  return ss.str();
 }
 static inline std::string thread_id_str() {
-    std::ostringstream ss; ss << std::this_thread::get_id(); return ss.str();
+  std::ostringstream ss;
+  ss << std::this_thread::get_id();
+  return ss.str();
 }
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 
 namespace {
-    static bool windowPlacementIsMaximized(
-        const WINDOWPLACEMENT& placement) {
-        return placement.showCmd == SW_SHOWMAXIMIZED ||
-               (placement.flags & WPF_RESTORETOMAXIMIZED) != 0;
-    }
+static bool windowPlacementIsMaximized(const WINDOWPLACEMENT &placement) {
+  return placement.showCmd == SW_SHOWMAXIMIZED ||
+         (placement.flags & WPF_RESTORETOMAXIMIZED) != 0;
+}
 
-    static void normalizeWindowPlacement(WINDOWPLACEMENT& placement) {
-        const bool maximized = windowPlacementIsMaximized(placement);
-        placement.length = sizeof(WINDOWPLACEMENT);
-        placement.flags &= ~WPF_RESTORETOMAXIMIZED;
-        placement.showCmd = maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
-    }
+static void normalizeWindowPlacement(WINDOWPLACEMENT &placement) {
+  const bool maximized = windowPlacementIsMaximized(placement);
+  placement.length = sizeof(WINDOWPLACEMENT);
+  placement.flags &= ~WPF_RESTORETOMAXIMIZED;
+  placement.showCmd = maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
+}
 
-    enum class AssRenderStatus {
-        ok_no_glyph,
-        ok_with_glyph,
-        error_init_or_parse
-    };
+enum class AssRenderStatus { ok_no_glyph, ok_with_glyph, error_init_or_parse };
 
-    struct AssRenderResult {
-        AssRenderStatus status = AssRenderStatus::ok_no_glyph;
-        std::string errorMessage;
-    };
+struct AssRenderResult {
+  AssRenderStatus status = AssRenderStatus::ok_no_glyph;
+  std::string errorMessage;
+};
 
-    static uint64_t assScriptFingerprint(const std::string& script) {
-        constexpr uint64_t kFNVOffset = 1469598103934665603ull;
-        constexpr uint64_t kFNVPrime = 1099511628211ull;
-        uint64_t hash = kFNVOffset;
-        for (unsigned char ch : script) {
-            hash ^= static_cast<uint64_t>(ch);
-            hash *= kFNVPrime;
-        }
-        return hash;
-    }
+static uint64_t assScriptFingerprint(const std::string &script) {
+  constexpr uint64_t kFNVOffset = 1469598103934665603ull;
+  constexpr uint64_t kFNVPrime = 1099511628211ull;
+  uint64_t hash = kFNVOffset;
+  for (unsigned char ch : script) {
+    hash ^= static_cast<uint64_t>(ch);
+    hash *= kFNVPrime;
+  }
+  return hash;
+}
 
 #if RADIOIFY_HAS_LIBASS
-    class LibassOverlayRenderer {
-    public:
-        LibassOverlayRenderer() = default;
+class LibassOverlayRenderer {
+public:
+  LibassOverlayRenderer() = default;
 
-        ~LibassOverlayRenderer() {
-            resetAssState();
-        }
+  ~LibassOverlayRenderer() { resetAssState(); }
 
-        AssRenderResult render(const std::shared_ptr<const std::string>& assScript,
-                               const std::shared_ptr<const SubtitleFontAttachmentList>& assFonts,
-                               int64_t clockUs, int canvasW, int canvasH,
-                               std::vector<uint8_t>* outCanvas) {
-            if (!outCanvas || canvasW <= 0 || canvasH <= 0) {
-                return {AssRenderStatus::error_init_or_parse,
-                        "Invalid ASS canvas target."};
-            }
-
-            const size_t pixelBytes = static_cast<size_t>(canvasW) *
-                                      static_cast<size_t>(canvasH) * 4u;
-            if (outCanvas->size() != pixelBytes) {
-                outCanvas->assign(pixelBytes, static_cast<uint8_t>(0));
-            } else {
-                std::fill(outCanvas->begin(), outCanvas->end(),
-                          static_cast<uint8_t>(0));
-            }
-
-            if (!assScript || assScript->empty()) {
-                return {AssRenderStatus::ok_no_glyph, {}};
-            }
-
-            const uint64_t scriptHash = assScriptFingerprint(*assScript);
-            std::string parseError;
-            if (!ensureTrack(assScript, assFonts, &parseError)) {
-                if (parseError.empty()) {
-                    parseError = "Failed to parse ASS script.";
-                }
-                logErrorOnce(scriptHash, parseError);
-                return {AssRenderStatus::error_init_or_parse, parseError};
-            }
-
-            ass_set_frame_size(renderer_, canvasW, canvasH);
-            ass_set_storage_size(renderer_, canvasW, canvasH);
-
-            lastErrorMessage_.clear();
-            int detectChange = 0;
-            ASS_Image* img = ass_render_frame(
-                renderer_, track_,
-                static_cast<long long>(std::max<int64_t>(0, clockUs / 1000)),
-                &detectChange);
-            (void)detectChange;
-
-            if (!lastErrorMessage_.empty()) {
-                std::string renderError = "libass render error: " + lastErrorMessage_;
-                logErrorOnce(scriptHash, renderError);
-                return {AssRenderStatus::error_init_or_parse, renderError};
-            }
-
-            bool drewAny = false;
-            for (ASS_Image* cur = img; cur != nullptr; cur = cur->next) {
-                if (!cur->bitmap || cur->w <= 0 || cur->h <= 0) continue;
-                const uint8_t r = static_cast<uint8_t>((cur->color >> 24) & 0xFFu);
-                const uint8_t g = static_cast<uint8_t>((cur->color >> 16) & 0xFFu);
-                const uint8_t b = static_cast<uint8_t>((cur->color >> 8) & 0xFFu);
-                const float colorAlpha =
-                    static_cast<float>(255u - (cur->color & 0xFFu)) / 255.0f;
-                if (colorAlpha <= 0.0f) continue;
-                drewAny = true;
-
-                for (int y = 0; y < cur->h; ++y) {
-                    const int dstY = cur->dst_y + y;
-                    if (dstY < 0 || dstY >= canvasH) continue;
-                    const uint8_t* srcRow =
-                        cur->bitmap + static_cast<std::ptrdiff_t>(y) * cur->stride;
-                    for (int x = 0; x < cur->w; ++x) {
-                        const int dstX = cur->dst_x + x;
-                        if (dstX < 0 || dstX >= canvasW) continue;
-                        const float cov = static_cast<float>(srcRow[x]) / 255.0f;
-                        if (cov <= 0.0f) continue;
-
-                        const float srcA = std::clamp(cov * colorAlpha, 0.0f, 1.0f);
-                        const size_t dstIdx =
-                            (static_cast<size_t>(dstY) * static_cast<size_t>(canvasW) +
-                             static_cast<size_t>(dstX)) *
-                            4u;
-                        const float dstA =
-                            static_cast<float>((*outCanvas)[dstIdx + 3]) / 255.0f;
-                        const float outA = srcA + dstA * (1.0f - srcA);
-                        if (outA <= 0.0001f) continue;
-
-                        const float srcRgb[3] = {
-                            static_cast<float>(b) / 255.0f,
-                            static_cast<float>(g) / 255.0f,
-                            static_cast<float>(r) / 255.0f};
-                        for (int c = 0; c < 3; ++c) {
-                            const float dstC =
-                                static_cast<float>((*outCanvas)[dstIdx + static_cast<size_t>(c)]) / 255.0f;
-                            const float outC =
-                                (srcRgb[c] * srcA + dstC * dstA * (1.0f - srcA)) / outA;
-                            (*outCanvas)[dstIdx + static_cast<size_t>(c)] = static_cast<uint8_t>(
-                                std::lround(255.0f * std::clamp(outC, 0.0f, 1.0f)));
-                        }
-                        (*outCanvas)[dstIdx + 3] = static_cast<uint8_t>(
-                            std::lround(255.0f * std::clamp(outA, 0.0f, 1.0f)));
-                    }
-                }
-            }
-
-            if (drewAny) {
-                return {AssRenderStatus::ok_with_glyph, {}};
-            }
-            return {AssRenderStatus::ok_no_glyph, {}};
-        }
-
-    private:
-        bool ensureRenderer(
-            const std::shared_ptr<const SubtitleFontAttachmentList>& assFonts,
-            std::string* outError) {
-            std::shared_ptr<const SubtitleFontAttachmentList> loadedFonts =
-                loadedFonts_.lock();
-            if (library_ && renderer_ && loadedFonts.get() == assFonts.get()) {
-                return true;
-            }
-
-            resetAssState();
-
-            library_ = ass_library_init();
-            if (!library_) {
-                initError_ = "libass library initialization failed";
-                if (outError) *outError = initError_;
-                return false;
-            }
-            ass_set_message_cb(library_, &LibassOverlayRenderer::logCallback, this);
-
-            if (assFonts) {
-                for (const SubtitleFontAttachment& attachment : *assFonts) {
-                    if (attachment.filename.empty() || attachment.data.empty() ||
-                        attachment.data.size() >
-                            static_cast<size_t>((std::numeric_limits<int>::max)())) {
-                        continue;
-                    }
-                    ass_add_font(
-                        library_, attachment.filename.c_str(),
-                        reinterpret_cast<const char*>(attachment.data.data()),
-                        static_cast<int>(attachment.data.size()));
-                }
-            }
-
-            renderer_ = ass_renderer_init(library_);
-            if (!renderer_) {
-                initError_ = "libass renderer initialization failed";
-                if (outError) *outError = initError_;
-                return false;
-            }
-            ass_set_fonts(renderer_, nullptr, nullptr, 1, nullptr, 1);
-            loadedFonts_ = assFonts;
-            return true;
-        }
-
-        bool ensureTrack(const std::shared_ptr<const std::string>& assScript,
-                         const std::shared_ptr<const SubtitleFontAttachmentList>& assFonts,
-                         std::string* outError) {
-            if (!assScript) {
-                if (outError) *outError = "libass track input is invalid.";
-                return false;
-            }
-            if (!ensureRenderer(assFonts, outError)) {
-                return false;
-            }
-            if (track_) {
-                std::shared_ptr<const std::string> loaded = loadedScript_.lock();
-                if (loaded && loaded.get() == assScript.get()) return true;
-            }
-
-            if (track_) {
-                ass_free_track(track_);
-                track_ = nullptr;
-            }
-            loadedScript_.reset();
-            scriptCache_.clear();
-
-            scriptCache_ = *assScript;
-            if (scriptCache_.empty()) {
-                if (outError) *outError = "ASS script is empty.";
-                return false;
-            }
-
-            lastErrorMessage_.clear();
-            track_ = ass_read_memory(library_, scriptCache_.data(),
-                                     static_cast<int>(scriptCache_.size()), nullptr);
-            if (!track_) {
-                if (outError) {
-                    if (!lastErrorMessage_.empty()) {
-                        *outError = "libass parse error: " + lastErrorMessage_;
-                    } else {
-                        *outError = "libass failed to parse ASS script.";
-                    }
-                }
-                scriptCache_.clear();
-                return false;
-            }
-            if (track_->n_events <= 0) {
-                if (outError) {
-                    *outError = "libass parsed ASS script without dialogue events.";
-                }
-                ass_free_track(track_);
-                track_ = nullptr;
-                scriptCache_.clear();
-                return false;
-            }
-            loadedScript_ = assScript;
-            return true;
-        }
-
-        void resetAssState() {
-            if (track_) {
-                ass_free_track(track_);
-                track_ = nullptr;
-            }
-            if (renderer_) {
-                ass_renderer_done(renderer_);
-                renderer_ = nullptr;
-            }
-            if (library_) {
-                ass_library_done(library_);
-                library_ = nullptr;
-            }
-            loadedScript_.reset();
-            loadedFonts_.reset();
-            scriptCache_.clear();
-            initError_.clear();
-            lastErrorMessage_.clear();
-        }
-
-        void logErrorOnce(uint64_t scriptHash, const std::string& message) {
-            if (message.empty()) return;
-            if (loggedErrorHashes_.insert(scriptHash).second) {
-                std::fprintf(stderr,
-                             "[%s] [tid=%s] ASS renderer error [script=%016llx]: %s\n",
-                             now_ms().c_str(), thread_id_str().c_str(),
-                             static_cast<unsigned long long>(scriptHash),
-                             message.c_str());
-            }
-        }
-
-        static void logCallback(int level, const char* fmt, va_list va,
-                                void* data) {
-            if (level > 1 || !fmt || !data) return;
-            auto* self = static_cast<LibassOverlayRenderer*>(data);
-            if (!self) return;
-
-            char buffer[1024];
-            const int written =
-                std::vsnprintf(buffer, sizeof(buffer), fmt, va);
-            if (written <= 0) return;
-            self->lastErrorMessage_.assign(buffer);
-            while (!self->lastErrorMessage_.empty()) {
-                char tail = self->lastErrorMessage_.back();
-                if (tail == '\n' || tail == '\r' || tail == '\t' || tail == ' ') {
-                    self->lastErrorMessage_.pop_back();
-                } else {
-                    break;
-                }
-            }
-        }
-
-        ASS_Library* library_ = nullptr;
-        ASS_Renderer* renderer_ = nullptr;
-        ASS_Track* track_ = nullptr;
-        std::weak_ptr<const std::string> loadedScript_;
-        std::weak_ptr<const SubtitleFontAttachmentList> loadedFonts_;
-        std::string scriptCache_;
-        std::string initError_;
-        std::string lastErrorMessage_;
-        std::unordered_set<uint64_t> loggedErrorHashes_;
-    };
-
-    static AssRenderResult renderAssSubtitlesToCanvas(
-        const std::shared_ptr<const std::string>& assScript,
-        const std::shared_ptr<const SubtitleFontAttachmentList>& assFonts,
-        int64_t clockUs, int canvasW, int canvasH,
-        std::vector<uint8_t>* outCanvas) {
-        static LibassOverlayRenderer renderer;
-        return renderer.render(assScript, assFonts, clockUs, canvasW, canvasH,
-                               outCanvas);
-    }
-#else
-    static AssRenderResult renderAssSubtitlesToCanvas(
-        const std::shared_ptr<const std::string>& assScript,
-        const std::shared_ptr<const SubtitleFontAttachmentList>& assFonts,
-        int64_t clockUs, int canvasW, int canvasH,
-        std::vector<uint8_t>* outCanvas) {
-        (void)assScript;
-        (void)assFonts;
-        (void)clockUs;
-        (void)canvasW;
-        (void)canvasH;
-        (void)outCanvas;
-        return {AssRenderStatus::error_init_or_parse,
-                "ASS renderer unavailable: build without libass."};
-    }
-#endif
-
-    struct SubtitleBitmapLayout {
-        int width = 0;
-        int height = 0;
-        int fontPx = 16;
-        int marginPx = 0;
-        RECT textRect{0, 0, 0, 0};
-    };
-
-    class GdiBitmapSurface {
-    public:
-        GdiBitmapSurface() = default;
-        ~GdiBitmapSurface() { reset(); }
-
-        GdiBitmapSurface(const GdiBitmapSurface&) = delete;
-        GdiBitmapSurface& operator=(const GdiBitmapSurface&) = delete;
-
-        bool create(const BITMAPINFO& bitmapInfo, int width, int height,
-                    uint8_t background) {
-            reset();
-            dc_ = CreateCompatibleDC(nullptr);
-            if (!dc_) return false;
-
-            void* bits = nullptr;
-            bitmap_ = CreateDIBSection(dc_, &bitmapInfo, DIB_RGB_COLORS, &bits,
-                                       nullptr, 0);
-            if (!bitmap_ || !bits) {
-                reset();
-                return false;
-            }
-            oldBitmap_ = SelectObject(dc_, bitmap_);
-            if (!oldBitmap_ || oldBitmap_ == HGDI_ERROR) {
-                reset();
-                return false;
-            }
-            pixels_ = static_cast<uint8_t*>(bits);
-            const size_t pixelCount =
-                static_cast<size_t>(width) * static_cast<size_t>(height);
-            for (size_t index = 0; index < pixelCount; ++index) {
-                pixels_[index * 4u + 0] = background;
-                pixels_[index * 4u + 1] = background;
-                pixels_[index * 4u + 2] = background;
-                pixels_[index * 4u + 3] = 0;
-            }
-            return true;
-        }
-
-        HDC dc() const { return dc_; }
-        const uint8_t* pixels() const { return pixels_; }
-
-    private:
-        void reset() {
-            if (dc_ && oldBitmap_ && oldBitmap_ != HGDI_ERROR) {
-                SelectObject(dc_, oldBitmap_);
-            }
-            if (bitmap_) DeleteObject(bitmap_);
-            if (dc_) DeleteDC(dc_);
-            dc_ = nullptr;
-            bitmap_ = nullptr;
-            oldBitmap_ = nullptr;
-            pixels_ = nullptr;
-        }
-
-        HDC dc_ = nullptr;
-        HBITMAP bitmap_ = nullptr;
-        HGDIOBJ oldBitmap_ = nullptr;
-        uint8_t* pixels_ = nullptr;
-    };
-
-    static HFONT createCaptionFont(int fontPx, const CaptionStyleProfile& captionStyle,
-                                   const wchar_t* cueFontName, float cueScaleX,
-                                   bool cueBold, bool cueItalic,
-                                   bool cueUnderline) {
-        const float safeScaleX = std::clamp(cueScaleX, 0.40f, 3.5f);
-        int weight = cueBold ? FW_BOLD
-                             : ((captionStyle.fontStyle == 7) ? FW_SEMIBOLD
-                                                              : FW_NORMAL);
-        int widthPx = 0;
-        if (std::abs(safeScaleX - 1.0f) > 0.02f) {
-            widthPx = std::max(
-                1, static_cast<int>(std::lround(
-                       static_cast<double>(std::max(8, fontPx)) * 0.48 *
-                       static_cast<double>(safeScaleX))));
-        }
-        const wchar_t* face = (cueFontName && cueFontName[0] != L'\0')
-                                  ? cueFontName
-                                  : captionFontFaceForStyle(captionStyle.fontStyle);
-        return CreateFontW(-std::max(8, fontPx), widthPx, 0, 0, weight,
-                           cueItalic ? TRUE : FALSE,
-                           cueUnderline ? TRUE : FALSE, FALSE, DEFAULT_CHARSET,
-                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                           ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-                           face);
+  AssRenderResult
+  render(const std::shared_ptr<const std::string> &assScript,
+         const std::shared_ptr<const SubtitleFontAttachmentList> &assFonts,
+         int64_t clockUs, int canvasW, int canvasH,
+         std::vector<uint8_t> *outCanvas) {
+    if (!outCanvas || canvasW <= 0 || canvasH <= 0) {
+      return {AssRenderStatus::error_init_or_parse,
+              "Invalid ASS canvas target."};
     }
 
-    static bool computeSubtitleLayout(const std::wstring& text,
-                                      int viewportWidth,
-                                      int viewportHeight,
-                                      const CaptionStyleProfile& captionStyle,
-                                      const std::wstring& cueFontName,
-                                      float cueScaleX, bool cueBold,
-                                      bool cueItalic, bool cueUnderline,
-                                      SubtitleBitmapLayout* outLayout) {
-        if (!outLayout || text.empty() || viewportWidth <= 0 || viewportHeight <= 0) {
-            return false;
+    const size_t pixelBytes =
+        static_cast<size_t>(canvasW) * static_cast<size_t>(canvasH) * 4u;
+    if (outCanvas->size() != pixelBytes) {
+      outCanvas->assign(pixelBytes, static_cast<uint8_t>(0));
+    } else {
+      std::fill(outCanvas->begin(), outCanvas->end(), static_cast<uint8_t>(0));
+    }
+
+    if (!assScript || assScript->empty()) {
+      return {AssRenderStatus::ok_no_glyph, {}};
+    }
+
+    const uint64_t scriptHash = assScriptFingerprint(*assScript);
+    std::string parseError;
+    if (!ensureTrack(assScript, assFonts, &parseError)) {
+      if (parseError.empty()) {
+        parseError = "Failed to parse ASS script.";
+      }
+      logErrorOnce(scriptHash, parseError);
+      return {AssRenderStatus::error_init_or_parse, parseError};
+    }
+
+    ass_set_frame_size(renderer_, canvasW, canvasH);
+    ass_set_storage_size(renderer_, canvasW, canvasH);
+
+    lastErrorMessage_.clear();
+    int detectChange = 0;
+    ASS_Image *img = ass_render_frame(
+        renderer_, track_,
+        static_cast<long long>(std::max<int64_t>(0, clockUs / 1000)),
+        &detectChange);
+    (void)detectChange;
+
+    if (!lastErrorMessage_.empty()) {
+      std::string renderError = "libass render error: " + lastErrorMessage_;
+      logErrorOnce(scriptHash, renderError);
+      return {AssRenderStatus::error_init_or_parse, renderError};
+    }
+
+    bool drewAny = false;
+    for (ASS_Image *cur = img; cur != nullptr; cur = cur->next) {
+      if (!cur->bitmap || cur->w <= 0 || cur->h <= 0)
+        continue;
+      const uint8_t r = static_cast<uint8_t>((cur->color >> 24) & 0xFFu);
+      const uint8_t g = static_cast<uint8_t>((cur->color >> 16) & 0xFFu);
+      const uint8_t b = static_cast<uint8_t>((cur->color >> 8) & 0xFFu);
+      const float colorAlpha =
+          static_cast<float>(255u - (cur->color & 0xFFu)) / 255.0f;
+      if (colorAlpha <= 0.0f)
+        continue;
+      drewAny = true;
+
+      for (int y = 0; y < cur->h; ++y) {
+        const int dstY = cur->dst_y + y;
+        if (dstY < 0 || dstY >= canvasH)
+          continue;
+        const uint8_t *srcRow =
+            cur->bitmap + static_cast<std::ptrdiff_t>(y) * cur->stride;
+        for (int x = 0; x < cur->w; ++x) {
+          const int dstX = cur->dst_x + x;
+          if (dstX < 0 || dstX >= canvasW)
+            continue;
+          const float cov = static_cast<float>(srcRow[x]) / 255.0f;
+          if (cov <= 0.0f)
+            continue;
+
+          const float srcA = std::clamp(cov * colorAlpha, 0.0f, 1.0f);
+          const size_t dstIdx =
+              (static_cast<size_t>(dstY) * static_cast<size_t>(canvasW) +
+               static_cast<size_t>(dstX)) *
+              4u;
+          const float dstA =
+              static_cast<float>((*outCanvas)[dstIdx + 3]) / 255.0f;
+          const float outA = srcA + dstA * (1.0f - srcA);
+          if (outA <= 0.0001f)
+            continue;
+
+          const float srcRgb[3] = {static_cast<float>(b) / 255.0f,
+                                   static_cast<float>(g) / 255.0f,
+                                   static_cast<float>(r) / 255.0f};
+          for (int c = 0; c < 3; ++c) {
+            const float dstC =
+                static_cast<float>(
+                    (*outCanvas)[dstIdx + static_cast<size_t>(c)]) /
+                255.0f;
+            const float outC =
+                (srcRgb[c] * srcA + dstC * dstA * (1.0f - srcA)) / outA;
+            (*outCanvas)[dstIdx + static_cast<size_t>(c)] =
+                static_cast<uint8_t>(
+                    std::lround(255.0f * std::clamp(outC, 0.0f, 1.0f)));
+          }
+          (*outCanvas)[dstIdx + 3] = static_cast<uint8_t>(
+              std::lround(255.0f * std::clamp(outA, 0.0f, 1.0f)));
         }
+      }
+    }
 
-        const int areaHeight = std::min(viewportHeight, viewportWidth);
-        // VLC uses 6.25% relsize by default: i_font_size = area_height * 6.25 / 100.
-        int targetLinePx = static_cast<int>(
-            static_cast<double>(areaHeight) * 0.0625 *
-            std::max(0.60f, captionStyle.sizeScale));
-        targetLinePx = std::clamp(targetLinePx, 10, std::max(10, viewportHeight / 4));
-        int fontPx = targetLinePx;
+    if (drewAny) {
+      return {AssRenderStatus::ok_with_glyph, {}};
+    }
+    return {AssRenderStatus::ok_no_glyph, {}};
+  }
 
-        HDC hdc = CreateCompatibleDC(nullptr);
-        if (!hdc) return false;
-        HFONT font = createCaptionFont(fontPx, captionStyle, cueFontName.c_str(),
-                                       cueScaleX, cueBold, cueItalic,
-                                       cueUnderline);
-        HGDIOBJ oldFont = nullptr;
-        if (font) oldFont = SelectObject(hdc, font);
+private:
+  bool ensureRenderer(
+      const std::shared_ptr<const SubtitleFontAttachmentList> &assFonts,
+      std::string *outError) {
+    std::shared_ptr<const SubtitleFontAttachmentList> loadedFonts =
+        loadedFonts_.lock();
+    if (library_ && renderer_ && loadedFonts.get() == assFonts.get()) {
+      return true;
+    }
 
-        // GDI and VLC/freetype do not map "font size" identically. Normalize to
-        // the target line-height so visual size tracks VLC defaults more closely.
-        TEXTMETRICW tm{};
-        if (font && GetTextMetricsW(hdc, &tm) && tm.tmHeight > 0) {
-            const int correctedPx = std::max(
-                8, static_cast<int>(std::lround(
-                       static_cast<double>(fontPx) * targetLinePx / tm.tmHeight)));
-            if (correctedPx != fontPx) {
-                if (oldFont) SelectObject(hdc, oldFont);
-                DeleteObject(font);
-                fontPx = correctedPx;
-                font = createCaptionFont(fontPx, captionStyle, cueFontName.c_str(),
-                                         cueScaleX, cueBold, cueItalic,
-                                         cueUnderline);
-                oldFont = font ? SelectObject(hdc, font) : nullptr;
-            }
+    resetAssState();
+
+    library_ = ass_library_init();
+    if (!library_) {
+      initError_ = "libass library initialization failed";
+      if (outError)
+        *outError = initError_;
+      return false;
+    }
+    ass_set_message_cb(library_, &LibassOverlayRenderer::logCallback, this);
+
+    if (assFonts) {
+      for (const SubtitleFontAttachment &attachment : *assFonts) {
+        if (attachment.filename.empty() || attachment.data.empty() ||
+            attachment.data.size() >
+                static_cast<size_t>((std::numeric_limits<int>::max)())) {
+          continue;
         }
+        ass_add_font(library_, attachment.filename.c_str(),
+                     reinterpret_cast<const char *>(attachment.data.data()),
+                     static_cast<int>(attachment.data.size()));
+      }
+    }
 
-        const int maxTextWidth = std::max(24, static_cast<int>(std::lround(
-            static_cast<double>(viewportWidth) * 0.92)));
-        const int maxTextHeight = std::max(
-            16, static_cast<int>(std::lround(static_cast<double>(viewportHeight) * 0.80)));
+    renderer_ = ass_renderer_init(library_);
+    if (!renderer_) {
+      initError_ = "libass renderer initialization failed";
+      if (outError)
+        *outError = initError_;
+      return false;
+    }
+    ass_set_fonts(renderer_, nullptr, nullptr, 1, nullptr, 1);
+    loadedFonts_ = assFonts;
+    return true;
+  }
 
-        RECT measure{0, 0, maxTextWidth, maxTextHeight};
-        UINT measureFlags = DT_CENTER | DT_TOP | DT_WORDBREAK | DT_NOPREFIX |
-                            DT_CALCRECT;
-        DrawTextW(hdc, text.c_str(), static_cast<int>(text.size()), &measure,
-                  measureFlags);
-
-        int textW = (std::max)(1, static_cast<int>(measure.right - measure.left));
-        int textH = (std::max)(1, static_cast<int>(measure.bottom - measure.top));
-        int marginPx = (captionStyle.backgroundAlpha > 0.01f)
-                           ? std::max(2, fontPx / 4)  // VLC-like text bg margin
-                           : std::max(1, fontPx / 8);
-
-        outLayout->fontPx = fontPx;
-        outLayout->marginPx = marginPx;
-        outLayout->width =
-            std::clamp(textW + marginPx * 2, 8, std::max(8, viewportWidth));
-        outLayout->height =
-            std::clamp(textH + marginPx * 2, 8, std::max(8, viewportHeight));
-        outLayout->textRect = RECT{marginPx, marginPx,
-                                   std::max(marginPx + 1, outLayout->width - marginPx),
-                                   std::max(marginPx + 1, outLayout->height - marginPx)};
-
-        if (oldFont) SelectObject(hdc, oldFont);
-        if (font) DeleteObject(font);
-        DeleteDC(hdc);
+  bool
+  ensureTrack(const std::shared_ptr<const std::string> &assScript,
+              const std::shared_ptr<const SubtitleFontAttachmentList> &assFonts,
+              std::string *outError) {
+    if (!assScript) {
+      if (outError)
+        *outError = "libass track input is invalid.";
+      return false;
+    }
+    if (!ensureRenderer(assFonts, outError)) {
+      return false;
+    }
+    if (track_) {
+      std::shared_ptr<const std::string> loaded = loadedScript_.lock();
+      if (loaded && loaded.get() == assScript.get())
         return true;
     }
 
-    static bool renderSubtitleTextToBitmap(const std::string& text,
-                                           const SubtitleBitmapLayout& layout,
-                                           const CaptionStyleProfile& captionStyle,
-                                           const std::wstring& cueFontName,
-                                           float cueScaleX, bool cueBold,
-                                           bool cueItalic, bool cueUnderline,
-                                           std::vector<uint8_t>& outPixels) {
-        outPixels.clear();
-        if (layout.width <= 0 || layout.height <= 0 || text.empty()) return false;
+    if (track_) {
+      ass_free_track(track_);
+      track_ = nullptr;
+    }
+    loadedScript_.reset();
+    scriptCache_.clear();
 
-        std::wstring wide = utf8ToWideLossy(text);
-        if (wide.empty()) return false;
-
-        BITMAPINFO bmi = {};
-        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        bmi.bmiHeader.biWidth = layout.width;
-        bmi.bmiHeader.biHeight = -layout.height;  // top-down
-        bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 32;
-        bmi.bmiHeader.biCompression = BI_RGB;
-
-        GdiBitmapSurface blackSurface;
-        GdiBitmapSurface whiteSurface;
-        if (!blackSurface.create(bmi, layout.width, layout.height, 0) ||
-            !whiteSurface.create(bmi, layout.width, layout.height, 255)) {
-            return false;
-        }
-
-        HFONT font = createCaptionFont(layout.fontPx, captionStyle,
-                                       cueFontName.c_str(), cueScaleX, cueBold,
-                                       cueItalic, cueUnderline);
-        HGDIOBJ oldBlackFont = nullptr;
-        HGDIOBJ oldWhiteFont = nullptr;
-        if (font) {
-            oldBlackFont = SelectObject(blackSurface.dc(), font);
-            oldWhiteFont = SelectObject(whiteSurface.dc(), font);
-        }
-
-        const uint8_t bgR = captionStyle.backgroundR;
-        const uint8_t bgG = captionStyle.backgroundG;
-        const uint8_t bgB = captionStyle.backgroundB;
-        const uint8_t bgA = static_cast<uint8_t>(std::lround(
-            255.0f * std::clamp(captionStyle.backgroundAlpha, 0.0f, 1.0f)));
-        const uint8_t textA = static_cast<uint8_t>(std::lround(
-            255.0f * std::clamp(captionStyle.textAlpha, 0.0f, 1.0f)));
-
-        const size_t pixelBytes =
-            static_cast<size_t>(layout.width) * static_cast<size_t>(layout.height) * 4u;
-
-        SetBkMode(blackSurface.dc(), TRANSPARENT);
-        SetBkMode(whiteSurface.dc(), TRANSPARENT);
-        UINT drawFlags = DT_CENTER | DT_TOP | DT_WORDBREAK | DT_NOPREFIX;
-
-        auto drawTextOffset = [&](HDC dc, int dx, int dy, COLORREF color) {
-            RECT r = layout.textRect;
-            OffsetRect(&r, dx, dy);
-            SetTextColor(dc, color);
-            DrawTextW(dc, wide.c_str(), static_cast<int>(wide.size()), &r,
-                      drawFlags);
-        };
-        auto drawTextPair = [&](int dx, int dy, COLORREF color) {
-            drawTextOffset(blackSurface.dc(), dx, dy, color);
-            drawTextOffset(whiteSurface.dc(), dx, dy, color);
-        };
-
-        const int outlinePx =
-            std::max(1, static_cast<int>(std::lround(layout.fontPx * 0.04f)));
-        const int shadowPx =
-            std::max(1, static_cast<int>(std::lround(layout.fontPx * 0.06f)));
-        auto drawOutline = [&](int radius, COLORREF color) {
-            for (int dy = -radius; dy <= radius; ++dy) {
-                for (int dx = -radius; dx <= radius; ++dx) {
-                    if (dx == 0 && dy == 0) continue;
-                    if (dx * dx + dy * dy > radius * radius + radius) continue;
-                    drawTextPair(dx, dy, color);
-                }
-            }
-        };
-
-        switch (captionStyle.fontEffect) {
-            case 2:  // Raised
-                drawTextPair(-1, -1, RGB(245, 245, 245));
-                drawTextPair(1, 1, RGB(25, 25, 25));
-                break;
-            case 3:  // Depressed
-                drawTextPair(-1, -1, RGB(25, 25, 25));
-                drawTextPair(1, 1, RGB(245, 245, 245));
-                break;
-            case 4:  // Uniform outline
-                drawOutline(outlinePx, RGB(0, 0, 0));
-                break;
-            case 5:  // Drop shadow
-                drawTextPair(shadowPx, shadowPx, RGB(0, 0, 0));
-                break;
-            default:
-                break;  // None/default
-        }
-
-        drawTextPair(0, 0,
-                     RGB(captionStyle.textR, captionStyle.textG,
-                         captionStyle.textB));
-
-        outPixels.resize(pixelBytes);
-        bool hasText = false;
-        const uint8_t* black = blackSurface.pixels();
-        const uint8_t* white = whiteSurface.pixels();
-        const subtitle_pixel_compositor::Bgra8 background{
-            bgB, bgG, bgR, bgA};
-        for (size_t i = 0; i < outPixels.size(); i += 4) {
-            const auto composition =
-                subtitle_pixel_compositor::composeOpaqueTextPair(
-                    {black[i + 0], black[i + 1], black[i + 2], 0},
-                    {white[i + 0], white[i + 1], white[i + 2], 0},
-                    textA, background);
-            outPixels[i + 0] = composition.pixel.b;
-            outPixels[i + 1] = composition.pixel.g;
-            outPixels[i + 2] = composition.pixel.r;
-            outPixels[i + 3] = composition.pixel.a;
-            hasText = hasText || composition.textCoverage > 0;
-        }
-
-        if (oldBlackFont && oldBlackFont != HGDI_ERROR) {
-            SelectObject(blackSurface.dc(), oldBlackFont);
-        }
-        if (oldWhiteFont && oldWhiteFont != HGDI_ERROR) {
-            SelectObject(whiteSurface.dc(), oldWhiteFont);
-        }
-        if (font) DeleteObject(font);
-
-        return hasText;
+    scriptCache_ = *assScript;
+    if (scriptCache_.empty()) {
+      if (outError)
+        *outError = "ASS script is empty.";
+      return false;
     }
 
-    #if 0
+    lastErrorMessage_.clear();
+    track_ = ass_read_memory(library_, scriptCache_.data(),
+                             static_cast<int>(scriptCache_.size()), nullptr);
+    if (!track_) {
+      if (outError) {
+        if (!lastErrorMessage_.empty()) {
+          *outError = "libass parse error: " + lastErrorMessage_;
+        } else {
+          *outError = "libass failed to parse ASS script.";
+        }
+      }
+      scriptCache_.clear();
+      return false;
+    }
+    if (track_->n_events <= 0) {
+      if (outError) {
+        *outError = "libass parsed ASS script without dialogue events.";
+      }
+      ass_free_track(track_);
+      track_ = nullptr;
+      scriptCache_.clear();
+      return false;
+    }
+    loadedScript_ = assScript;
+    return true;
+  }
+
+  void resetAssState() {
+    if (track_) {
+      ass_free_track(track_);
+      track_ = nullptr;
+    }
+    if (renderer_) {
+      ass_renderer_done(renderer_);
+      renderer_ = nullptr;
+    }
+    if (library_) {
+      ass_library_done(library_);
+      library_ = nullptr;
+    }
+    loadedScript_.reset();
+    loadedFonts_.reset();
+    scriptCache_.clear();
+    initError_.clear();
+    lastErrorMessage_.clear();
+  }
+
+  void logErrorOnce(uint64_t scriptHash, const std::string &message) {
+    if (message.empty())
+      return;
+    if (loggedErrorHashes_.insert(scriptHash).second) {
+      std::fprintf(
+          stderr, "[%s] [tid=%s] ASS renderer error [script=%016llx]: %s\n",
+          now_ms().c_str(), thread_id_str().c_str(),
+          static_cast<unsigned long long>(scriptHash), message.c_str());
+    }
+  }
+
+  static void logCallback(int level, const char *fmt, va_list va, void *data) {
+    if (level > 1 || !fmt || !data)
+      return;
+    auto *self = static_cast<LibassOverlayRenderer *>(data);
+    if (!self)
+      return;
+
+    char buffer[1024];
+    const int written = std::vsnprintf(buffer, sizeof(buffer), fmt, va);
+    if (written <= 0)
+      return;
+    self->lastErrorMessage_.assign(buffer);
+    while (!self->lastErrorMessage_.empty()) {
+      char tail = self->lastErrorMessage_.back();
+      if (tail == '\n' || tail == '\r' || tail == '\t' || tail == ' ') {
+        self->lastErrorMessage_.pop_back();
+      } else {
+        break;
+      }
+    }
+  }
+
+  ASS_Library *library_ = nullptr;
+  ASS_Renderer *renderer_ = nullptr;
+  ASS_Track *track_ = nullptr;
+  std::weak_ptr<const std::string> loadedScript_;
+  std::weak_ptr<const SubtitleFontAttachmentList> loadedFonts_;
+  std::string scriptCache_;
+  std::string initError_;
+  std::string lastErrorMessage_;
+  std::unordered_set<uint64_t> loggedErrorHashes_;
+};
+
+static AssRenderResult renderAssSubtitlesToCanvas(
+    const std::shared_ptr<const std::string> &assScript,
+    const std::shared_ptr<const SubtitleFontAttachmentList> &assFonts,
+    int64_t clockUs, int canvasW, int canvasH,
+    std::vector<uint8_t> *outCanvas) {
+  static LibassOverlayRenderer renderer;
+  return renderer.render(assScript, assFonts, clockUs, canvasW, canvasH,
+                         outCanvas);
+}
+#else
+static AssRenderResult renderAssSubtitlesToCanvas(
+    const std::shared_ptr<const std::string> &assScript,
+    const std::shared_ptr<const SubtitleFontAttachmentList> &assFonts,
+    int64_t clockUs, int canvasW, int canvasH,
+    std::vector<uint8_t> *outCanvas) {
+  (void)assScript;
+  (void)assFonts;
+  (void)clockUs;
+  (void)canvasW;
+  (void)canvasH;
+  (void)outCanvas;
+  return {AssRenderStatus::error_init_or_parse,
+          "ASS renderer unavailable: build without libass."};
+}
+#endif
+
+struct SubtitleBitmapLayout {
+  int width = 0;
+  int height = 0;
+  int fontPx = 16;
+  int marginPx = 0;
+  RECT textRect{0, 0, 0, 0};
+};
+
+class GdiBitmapSurface {
+public:
+  GdiBitmapSurface() = default;
+  ~GdiBitmapSurface() { reset(); }
+
+  GdiBitmapSurface(const GdiBitmapSurface &) = delete;
+  GdiBitmapSurface &operator=(const GdiBitmapSurface &) = delete;
+
+  bool create(const BITMAPINFO &bitmapInfo, int width, int height,
+              uint8_t background) {
+    reset();
+    dc_ = CreateCompatibleDC(nullptr);
+    if (!dc_)
+      return false;
+
+    void *bits = nullptr;
+    bitmap_ =
+        CreateDIBSection(dc_, &bitmapInfo, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!bitmap_ || !bits) {
+      reset();
+      return false;
+    }
+    oldBitmap_ = SelectObject(dc_, bitmap_);
+    if (!oldBitmap_ || oldBitmap_ == HGDI_ERROR) {
+      reset();
+      return false;
+    }
+    pixels_ = static_cast<uint8_t *>(bits);
+    const size_t pixelCount =
+        static_cast<size_t>(width) * static_cast<size_t>(height);
+    for (size_t index = 0; index < pixelCount; ++index) {
+      pixels_[index * 4u + 0] = background;
+      pixels_[index * 4u + 1] = background;
+      pixels_[index * 4u + 2] = background;
+      pixels_[index * 4u + 3] = 0;
+    }
+    return true;
+  }
+
+  HDC dc() const { return dc_; }
+  const uint8_t *pixels() const { return pixels_; }
+
+private:
+  void reset() {
+    if (dc_ && oldBitmap_ && oldBitmap_ != HGDI_ERROR) {
+      SelectObject(dc_, oldBitmap_);
+    }
+    if (bitmap_)
+      DeleteObject(bitmap_);
+    if (dc_)
+      DeleteDC(dc_);
+    dc_ = nullptr;
+    bitmap_ = nullptr;
+    oldBitmap_ = nullptr;
+    pixels_ = nullptr;
+  }
+
+  HDC dc_ = nullptr;
+  HBITMAP bitmap_ = nullptr;
+  HGDIOBJ oldBitmap_ = nullptr;
+  uint8_t *pixels_ = nullptr;
+};
+
+static HFONT createCaptionFont(int fontPx,
+                               const CaptionStyleProfile &captionStyle,
+                               const wchar_t *cueFontName, float cueScaleX,
+                               bool cueBold, bool cueItalic,
+                               bool cueUnderline) {
+  const float safeScaleX = std::clamp(cueScaleX, 0.40f, 3.5f);
+  int weight = cueBold
+                   ? FW_BOLD
+                   : ((captionStyle.fontStyle == 7) ? FW_SEMIBOLD : FW_NORMAL);
+  int widthPx = 0;
+  if (std::abs(safeScaleX - 1.0f) > 0.02f) {
+    widthPx = std::max(1, static_cast<int>(std::lround(
+                              static_cast<double>(std::max(8, fontPx)) * 0.48 *
+                              static_cast<double>(safeScaleX))));
+  }
+  const wchar_t *face = (cueFontName && cueFontName[0] != L'\0')
+                            ? cueFontName
+                            : captionFontFaceForStyle(captionStyle.fontStyle);
+  return CreateFontW(-std::max(8, fontPx), widthPx, 0, 0, weight,
+                     cueItalic ? TRUE : FALSE, cueUnderline ? TRUE : FALSE,
+                     FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                     CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+                     DEFAULT_PITCH | FF_DONTCARE, face);
+}
+
+static bool computeSubtitleLayout(const std::wstring &text, int viewportWidth,
+                                  int viewportHeight,
+                                  const CaptionStyleProfile &captionStyle,
+                                  const std::wstring &cueFontName,
+                                  float cueScaleX, bool cueBold, bool cueItalic,
+                                  bool cueUnderline,
+                                  SubtitleBitmapLayout *outLayout) {
+  if (!outLayout || text.empty() || viewportWidth <= 0 || viewportHeight <= 0) {
+    return false;
+  }
+
+  const int areaHeight = std::min(viewportHeight, viewportWidth);
+  // VLC uses 6.25% relsize by default: i_font_size = area_height * 6.25 / 100.
+  int targetLinePx = static_cast<int>(static_cast<double>(areaHeight) * 0.0625 *
+                                      std::max(0.60f, captionStyle.sizeScale));
+  targetLinePx = std::clamp(targetLinePx, 10, std::max(10, viewportHeight / 4));
+  int fontPx = targetLinePx;
+
+  HDC hdc = CreateCompatibleDC(nullptr);
+  if (!hdc)
+    return false;
+  HFONT font = createCaptionFont(fontPx, captionStyle, cueFontName.c_str(),
+                                 cueScaleX, cueBold, cueItalic, cueUnderline);
+  HGDIOBJ oldFont = nullptr;
+  if (font)
+    oldFont = SelectObject(hdc, font);
+
+  // GDI and VLC/freetype do not map "font size" identically. Normalize to
+  // the target line-height so visual size tracks VLC defaults more closely.
+  TEXTMETRICW tm{};
+  if (font && GetTextMetricsW(hdc, &tm) && tm.tmHeight > 0) {
+    const int correctedPx =
+        std::max(8, static_cast<int>(std::lround(static_cast<double>(fontPx) *
+                                                 targetLinePx / tm.tmHeight)));
+    if (correctedPx != fontPx) {
+      if (oldFont)
+        SelectObject(hdc, oldFont);
+      DeleteObject(font);
+      fontPx = correctedPx;
+      font = createCaptionFont(fontPx, captionStyle, cueFontName.c_str(),
+                               cueScaleX, cueBold, cueItalic, cueUnderline);
+      oldFont = font ? SelectObject(hdc, font) : nullptr;
+    }
+  }
+
+  const int maxTextWidth = std::max(
+      24,
+      static_cast<int>(std::lround(static_cast<double>(viewportWidth) * 0.92)));
+  const int maxTextHeight =
+      std::max(16, static_cast<int>(std::lround(
+                       static_cast<double>(viewportHeight) * 0.80)));
+
+  RECT measure{0, 0, maxTextWidth, maxTextHeight};
+  UINT measureFlags =
+      DT_CENTER | DT_TOP | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT;
+  DrawTextW(hdc, text.c_str(), static_cast<int>(text.size()), &measure,
+            measureFlags);
+
+  int textW = (std::max)(1, static_cast<int>(measure.right - measure.left));
+  int textH = (std::max)(1, static_cast<int>(measure.bottom - measure.top));
+  int marginPx = (captionStyle.backgroundAlpha > 0.01f)
+                     ? std::max(2, fontPx / 4) // VLC-like text bg margin
+                     : std::max(1, fontPx / 8);
+
+  outLayout->fontPx = fontPx;
+  outLayout->marginPx = marginPx;
+  outLayout->width =
+      std::clamp(textW + marginPx * 2, 8, std::max(8, viewportWidth));
+  outLayout->height =
+      std::clamp(textH + marginPx * 2, 8, std::max(8, viewportHeight));
+  outLayout->textRect = RECT{
+      marginPx, marginPx, std::max(marginPx + 1, outLayout->width - marginPx),
+      std::max(marginPx + 1, outLayout->height - marginPx)};
+
+  if (oldFont)
+    SelectObject(hdc, oldFont);
+  if (font)
+    DeleteObject(font);
+  DeleteDC(hdc);
+  return true;
+}
+
+static bool renderSubtitleTextToBitmap(const std::string &text,
+                                       const SubtitleBitmapLayout &layout,
+                                       const CaptionStyleProfile &captionStyle,
+                                       const std::wstring &cueFontName,
+                                       float cueScaleX, bool cueBold,
+                                       bool cueItalic, bool cueUnderline,
+                                       std::vector<uint8_t> &outPixels) {
+  outPixels.clear();
+  if (layout.width <= 0 || layout.height <= 0 || text.empty())
+    return false;
+
+  std::wstring wide = utf8ToWideLossy(text);
+  if (wide.empty())
+    return false;
+
+  BITMAPINFO bmi = {};
+  bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  bmi.bmiHeader.biWidth = layout.width;
+  bmi.bmiHeader.biHeight = -layout.height; // top-down
+  bmi.bmiHeader.biPlanes = 1;
+  bmi.bmiHeader.biBitCount = 32;
+  bmi.bmiHeader.biCompression = BI_RGB;
+
+  GdiBitmapSurface blackSurface;
+  GdiBitmapSurface whiteSurface;
+  if (!blackSurface.create(bmi, layout.width, layout.height, 0) ||
+      !whiteSurface.create(bmi, layout.width, layout.height, 255)) {
+    return false;
+  }
+
+  HFONT font =
+      createCaptionFont(layout.fontPx, captionStyle, cueFontName.c_str(),
+                        cueScaleX, cueBold, cueItalic, cueUnderline);
+  HGDIOBJ oldBlackFont = nullptr;
+  HGDIOBJ oldWhiteFont = nullptr;
+  if (font) {
+    oldBlackFont = SelectObject(blackSurface.dc(), font);
+    oldWhiteFont = SelectObject(whiteSurface.dc(), font);
+  }
+
+  const uint8_t bgR = captionStyle.backgroundR;
+  const uint8_t bgG = captionStyle.backgroundG;
+  const uint8_t bgB = captionStyle.backgroundB;
+  const uint8_t bgA = static_cast<uint8_t>(std::lround(
+      255.0f * std::clamp(captionStyle.backgroundAlpha, 0.0f, 1.0f)));
+  const uint8_t textA = static_cast<uint8_t>(
+      std::lround(255.0f * std::clamp(captionStyle.textAlpha, 0.0f, 1.0f)));
+
+  const size_t pixelBytes = static_cast<size_t>(layout.width) *
+                            static_cast<size_t>(layout.height) * 4u;
+
+  SetBkMode(blackSurface.dc(), TRANSPARENT);
+  SetBkMode(whiteSurface.dc(), TRANSPARENT);
+  UINT drawFlags = DT_CENTER | DT_TOP | DT_WORDBREAK | DT_NOPREFIX;
+
+  auto drawTextOffset = [&](HDC dc, int dx, int dy, COLORREF color) {
+    RECT r = layout.textRect;
+    OffsetRect(&r, dx, dy);
+    SetTextColor(dc, color);
+    DrawTextW(dc, wide.c_str(), static_cast<int>(wide.size()), &r, drawFlags);
+  };
+  auto drawTextPair = [&](int dx, int dy, COLORREF color) {
+    drawTextOffset(blackSurface.dc(), dx, dy, color);
+    drawTextOffset(whiteSurface.dc(), dx, dy, color);
+  };
+
+  const int outlinePx =
+      std::max(1, static_cast<int>(std::lround(layout.fontPx * 0.04f)));
+  const int shadowPx =
+      std::max(1, static_cast<int>(std::lround(layout.fontPx * 0.06f)));
+  auto drawOutline = [&](int radius, COLORREF color) {
+    for (int dy = -radius; dy <= radius; ++dy) {
+      for (int dx = -radius; dx <= radius; ++dx) {
+        if (dx == 0 && dy == 0)
+          continue;
+        if (dx * dx + dy * dy > radius * radius + radius)
+          continue;
+        drawTextPair(dx, dy, color);
+      }
+    }
+  };
+
+  switch (captionStyle.fontEffect) {
+  case 2: // Raised
+    drawTextPair(-1, -1, RGB(245, 245, 245));
+    drawTextPair(1, 1, RGB(25, 25, 25));
+    break;
+  case 3: // Depressed
+    drawTextPair(-1, -1, RGB(25, 25, 25));
+    drawTextPair(1, 1, RGB(245, 245, 245));
+    break;
+  case 4: // Uniform outline
+    drawOutline(outlinePx, RGB(0, 0, 0));
+    break;
+  case 5: // Drop shadow
+    drawTextPair(shadowPx, shadowPx, RGB(0, 0, 0));
+    break;
+  default:
+    break; // None/default
+  }
+
+  drawTextPair(0, 0,
+               RGB(captionStyle.textR, captionStyle.textG, captionStyle.textB));
+
+  outPixels.resize(pixelBytes);
+  bool hasText = false;
+  const uint8_t *black = blackSurface.pixels();
+  const uint8_t *white = whiteSurface.pixels();
+  const subtitle_pixel_compositor::Bgra8 background{bgB, bgG, bgR, bgA};
+  for (size_t i = 0; i < outPixels.size(); i += 4) {
+    const auto composition = subtitle_pixel_compositor::composeOpaqueTextPair(
+        {black[i + 0], black[i + 1], black[i + 2], 0},
+        {white[i + 0], white[i + 1], white[i + 2], 0}, textA, background);
+    outPixels[i + 0] = composition.pixel.b;
+    outPixels[i + 1] = composition.pixel.g;
+    outPixels[i + 2] = composition.pixel.r;
+    outPixels[i + 3] = composition.pixel.a;
+    hasText = hasText || composition.textCoverage > 0;
+  }
+
+  if (oldBlackFont && oldBlackFont != HGDI_ERROR) {
+    SelectObject(blackSurface.dc(), oldBlackFont);
+  }
+  if (oldWhiteFont && oldWhiteFont != HGDI_ERROR) {
+    SelectObject(whiteSurface.dc(), oldWhiteFont);
+  }
+  if (font)
+    DeleteObject(font);
+
+  return hasText;
+}
+
+#if 0
     // Runtime shader sources retained for reference; build uses precompiled blobs.
     // Video frame rendering shader (combined from window/render.hlsl)
     const char* g_shaderSource = R"(
@@ -886,2267 +904,2366 @@ float4 PS_UI(PS_INPUT input) : SV_Target {
     return float4(0, 0, 0, 0);
 }
     )";
-    #endif
-}
+#endif
+} // namespace
 
-VideoWindow::VideoWindow(GpuRuntime& gpu,
+VideoWindow::VideoWindow(GpuRuntime &gpu,
                          SystemMediaCommandOwner systemMediaCommandOwner)
     : m_gpu(gpu), m_systemMediaCommandOwner(systemMediaCommandOwner) {}
 
-VideoWindow::~VideoWindow() {
-    Close();
-}
+VideoWindow::~VideoWindow() { Close(); }
 
 uint32_t VideoWindow::OutputColorSpaceShaderValue() const {
-    return static_cast<uint32_t>(m_outputColorState.encoding);
+  return static_cast<uint32_t>(m_outputColorState.encoding);
 }
 
 float VideoWindow::OutputSdrWhiteNits() const {
-    if (VideoOutputUsesHdr(m_outputColorState)) {
-        assert(std::isfinite(m_outputColorState.outputSdrWhiteNits));
-        assert(m_outputColorState.outputSdrWhiteNits > 0.0f);
-    }
-    return m_outputColorState.outputSdrWhiteNits;
+  if (VideoOutputUsesHdr(m_outputColorState)) {
+    assert(std::isfinite(m_outputColorState.outputSdrWhiteNits));
+    assert(m_outputColorState.outputSdrWhiteNits > 0.0f);
+  }
+  return m_outputColorState.outputSdrWhiteNits;
 }
 
 float VideoWindow::OutputPeakNits() const {
-    if (VideoOutputUsesHdr(m_outputColorState)) {
-        assert(std::isfinite(m_outputColorState.outputPeakNits));
-        assert(m_outputColorState.outputPeakNits > 0.0f);
-    }
-    return m_outputColorState.outputPeakNits;
+  if (VideoOutputUsesHdr(m_outputColorState)) {
+    assert(std::isfinite(m_outputColorState.outputPeakNits));
+    assert(m_outputColorState.outputPeakNits > 0.0f);
+  }
+  return m_outputColorState.outputPeakNits;
 }
 
 float VideoWindow::OutputFullFrameNits() const {
-    if (VideoOutputUsesHdr(m_outputColorState)) {
-        assert(std::isfinite(m_outputColorState.outputFullFrameNits));
-        assert(m_outputColorState.outputFullFrameNits > 0.0f);
-    }
-    return m_outputColorState.outputFullFrameNits;
+  if (VideoOutputUsesHdr(m_outputColorState)) {
+    assert(std::isfinite(m_outputColorState.outputFullFrameNits));
+    assert(m_outputColorState.outputFullFrameNits > 0.0f);
+  }
+  return m_outputColorState.outputFullFrameNits;
 }
 
 float VideoWindow::AsciiGlyphPeakNits() const {
-    if (VideoOutputUsesHdr(m_outputColorState)) {
-        assert(std::isfinite(m_outputColorState.asciiGlyphPeakNits));
-        assert(m_outputColorState.asciiGlyphPeakNits > 0.0f);
-    }
-    return m_outputColorState.asciiGlyphPeakNits;
+  if (VideoOutputUsesHdr(m_outputColorState)) {
+    assert(std::isfinite(m_outputColorState.asciiGlyphPeakNits));
+    assert(m_outputColorState.asciiGlyphPeakNits > 0.0f);
+  }
+  return m_outputColorState.asciiGlyphPeakNits;
 }
 
 void VideoWindow::FillOutputColorConstants(
-    ShaderConstants& constants,
-    const VideoOutputColorState& outputColor) const {
-    constants.outputColorSpace =
-        static_cast<uint32_t>(outputColor.encoding);
-    constants.outputSdrWhiteNits = outputColor.outputSdrWhiteNits;
-    constants.outputPeakNits = outputColor.outputPeakNits;
-    constants.outputFullFrameNits = outputColor.outputFullFrameNits;
-    constants.asciiGlyphPeakNits = outputColor.asciiGlyphPeakNits;
+    ShaderConstants &constants,
+    const VideoOutputColorState &outputColor) const {
+  constants.outputColorSpace = static_cast<uint32_t>(outputColor.encoding);
+  constants.outputSdrWhiteNits = outputColor.outputSdrWhiteNits;
+  constants.outputPeakNits = outputColor.outputPeakNits;
+  constants.outputFullFrameNits = outputColor.outputFullFrameNits;
+  constants.asciiGlyphPeakNits = outputColor.asciiGlyphPeakNits;
 }
 
-void VideoWindow::SetOutputColorAttemptStatus(const std::string& status) {
-    m_outputColorAttemptStatus = status;
+void VideoWindow::SetOutputColorAttemptStatus(const std::string &status) {
+  m_outputColorAttemptStatus = status;
 }
 
 std::string VideoWindow::OutputColorDebugLine() const {
-    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
-    return VideoOutputColorStateDebugLine(m_outputColorState,
-                                          m_outputColorAttemptStatus);
+  std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
+  return VideoOutputColorStateDebugLine(m_outputColorState,
+                                        m_outputColorAttemptStatus);
 }
 
 bool VideoWindow::OutputUsesHdr() const {
-    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
-    return VideoOutputUsesHdr(m_outputColorState);
+  std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
+  return VideoOutputUsesHdr(m_outputColorState);
 }
 
 void VideoWindow::SetCursorVisible(bool visible) {
-    bool old = m_cursorVisible.exchange(visible, std::memory_order_relaxed);
-    if (old == visible) {
-        return;
-    }
-    if (!m_hWnd) {
-        return;
-    }
-    if (visible) {
-        ::SetCursor(::LoadCursor(NULL, IDC_ARROW));
-    } else {
-        ::SetCursor(nullptr);
-    }
-    ::PostMessage(m_hWnd, WM_SETCURSOR, reinterpret_cast<WPARAM>(m_hWnd),
-                  MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
+  bool old = m_cursorVisible.exchange(visible, std::memory_order_relaxed);
+  if (old == visible) {
+    return;
+  }
+  if (!m_hWnd) {
+    return;
+  }
+  if (visible) {
+    ::SetCursor(::LoadCursor(NULL, IDC_ARROW));
+  } else {
+    ::SetCursor(nullptr);
+  }
+  ::PostMessage(m_hWnd, WM_SETCURSOR, reinterpret_cast<WPARAM>(m_hWnd),
+                MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
 }
 
 void VideoWindow::SetOverlayInteractionMap(
     playback_overlay::InteractionMap interactions) {
-    std::lock_guard<std::mutex> lock(m_overlayInteractionMutex);
-    m_overlayInteractions = std::move(interactions);
+  std::lock_guard<std::mutex> lock(m_overlayInteractionMutex);
+  m_overlayInteractions = std::move(interactions);
 }
 
-playback_overlay::InteractionHit VideoWindow::OverlayHitAt(
-    double x, double y, bool capturedProgress) const {
-    std::lock_guard<std::mutex> lock(m_overlayInteractionMutex);
-    return playback_overlay::interactionHitAt(
-        m_overlayInteractions, x, y, capturedProgress);
+playback_overlay::InteractionHit
+VideoWindow::OverlayHitAt(double x, double y, bool capturedProgress) const {
+  std::lock_guard<std::mutex> lock(m_overlayInteractionMutex);
+  return playback_overlay::interactionHitAt(m_overlayInteractions, x, y,
+                                            capturedProgress);
 }
 
 bool VideoWindow::OverlayEditBoundaryHandleAt(double x, double y) const {
-    std::lock_guard<std::mutex> lock(m_overlayInteractionMutex);
-    return playback_overlay::editBoundaryHandleAt(m_overlayInteractions, x, y);
+  std::lock_guard<std::mutex> lock(m_overlayInteractionMutex);
+  return playback_overlay::editBoundaryHandleAt(m_overlayInteractions, x, y);
 }
 
 bool VideoWindow::OverlayInteractionAt(double x, double y) const {
-    std::lock_guard<std::mutex> lock(m_overlayInteractionMutex);
-    return m_overlayInteractions.contains(x, y);
+  std::lock_guard<std::mutex> lock(m_overlayInteractionMutex);
+  return m_overlayInteractions.contains(x, y);
 }
 
 void VideoWindow::SetTextGridMinimumSize(int cols, int rows) {
-    m_textGridMinCols.store(std::max(0, cols),
-                                        std::memory_order_relaxed);
-    m_textGridMinRows.store(std::max(0, rows),
-                                        std::memory_order_relaxed);
+  m_textGridMinCols.store(std::max(0, cols), std::memory_order_relaxed);
+  m_textGridMinRows.store(std::max(0, rows), std::memory_order_relaxed);
 }
 
 double VideoWindow::PictureInPictureAspectRatio() const {
-    double aspect = 16.0 / 9.0;
-    if (m_videoWidth > 0 && m_videoHeight > 0) {
-        aspect = static_cast<double>(m_videoWidth) /
-                 static_cast<double>(m_videoHeight);
-    } else if (m_width > 0 && m_height > 0) {
-        aspect = static_cast<double>(m_width) / static_cast<double>(m_height);
-    }
-    if (m_textGridPresentationEnabled.load(std::memory_order_relaxed)) {
-        const SIZE cellSize = TextGridCellSize();
-        const double cellAspect =
-            static_cast<double>(std::max<LONG>(1, cellSize.cx)) /
-            static_cast<double>(std::max<LONG>(1, cellSize.cy));
-        aspect *= 2.0 * cellAspect;
-    }
-    return std::clamp(aspect, 0.50, 3.00);
+  double aspect = 16.0 / 9.0;
+  if (m_videoWidth > 0 && m_videoHeight > 0) {
+    aspect =
+        static_cast<double>(m_videoWidth) / static_cast<double>(m_videoHeight);
+  } else if (m_width > 0 && m_height > 0) {
+    aspect = static_cast<double>(m_width) / static_cast<double>(m_height);
+  }
+  if (m_textGridPresentationEnabled.load(std::memory_order_relaxed)) {
+    const SIZE cellSize = TextGridCellSize();
+    const double cellAspect =
+        static_cast<double>(std::max<LONG>(1, cellSize.cx)) /
+        static_cast<double>(std::max<LONG>(1, cellSize.cy));
+    aspect *= 2.0 * cellAspect;
+  }
+  return std::clamp(aspect, 0.50, 3.00);
 }
 
 SIZE VideoWindow::PictureInPictureMinimumSize() const {
-    const double aspect = PictureInPictureAspectRatio();
-    const bool textGridPresentation =
-        m_textGridPresentationEnabled.load(std::memory_order_relaxed);
-    const int kMinLongEdge = textGridPresentation ? 320 : 260;
-    const int kMinShortEdge = textGridPresentation ? 180 : 96;
-    int minWidth = aspect >= 1.0 ? kMinLongEdge : kMinShortEdge;
-    int minHeight = aspect >= 1.0 ? kMinShortEdge : kMinLongEdge;
+  const double aspect = PictureInPictureAspectRatio();
+  const bool textGridPresentation =
+      m_textGridPresentationEnabled.load(std::memory_order_relaxed);
+  const int kMinLongEdge = textGridPresentation ? 320 : 260;
+  const int kMinShortEdge = textGridPresentation ? 180 : 96;
+  int minWidth = aspect >= 1.0 ? kMinLongEdge : kMinShortEdge;
+  int minHeight = aspect >= 1.0 ? kMinShortEdge : kMinLongEdge;
 
-    if (textGridPresentation) {
-        const SIZE cellSize = TextGridCellSize();
-        const int cellWidth = std::max(1, static_cast<int>(cellSize.cx));
-        const int cellHeight = std::max(1, static_cast<int>(cellSize.cy));
-        minWidth = std::max(
-            minWidth, m_textGridMinCols.load(
-                          std::memory_order_relaxed) *
-                          cellWidth);
-        minHeight = std::max(
-            minHeight, m_textGridMinRows.load(
-                           std::memory_order_relaxed) *
-                           cellHeight);
-    }
+  if (textGridPresentation) {
+    const SIZE cellSize = TextGridCellSize();
+    const int cellWidth = std::max(1, static_cast<int>(cellSize.cx));
+    const int cellHeight = std::max(1, static_cast<int>(cellSize.cy));
+    minWidth =
+        std::max(minWidth,
+                 m_textGridMinCols.load(std::memory_order_relaxed) * cellWidth);
+    minHeight =
+        std::max(minHeight, m_textGridMinRows.load(std::memory_order_relaxed) *
+                                cellHeight);
+  }
 
-    SIZE size{};
-    size.cy = static_cast<LONG>(std::max(
-        minHeight,
-        static_cast<int>(std::ceil(static_cast<double>(minWidth) / aspect))));
-    size.cx = static_cast<LONG>(std::ceil(size.cy * aspect));
-    if (size.cx < minWidth) {
-        size.cx = minWidth;
-        size.cy = static_cast<LONG>(std::ceil(size.cx / aspect));
-    }
-    return size;
+  SIZE size{};
+  size.cy = static_cast<LONG>(std::max(
+      minHeight,
+      static_cast<int>(std::ceil(static_cast<double>(minWidth) / aspect))));
+  size.cx = static_cast<LONG>(std::ceil(size.cy * aspect));
+  if (size.cx < minWidth) {
+    size.cx = minWidth;
+    size.cy = static_cast<LONG>(std::ceil(size.cx / aspect));
+  }
+  return size;
 }
 
 int VideoWindow::PictureInPictureResizeBorderPx() const {
-    UINT dpi = 96;
-    if (m_hWnd) {
-        dpi = GetDpiForWindow(m_hWnd);
-    }
-    return std::clamp(static_cast<int>(MulDiv(6, static_cast<int>(dpi), 96)),
-                      4, 10);
+  UINT dpi = 96;
+  if (m_hWnd) {
+    dpi = GetDpiForWindow(m_hWnd);
+  }
+  return std::clamp(static_cast<int>(MulDiv(6, static_cast<int>(dpi), 96)), 4,
+                    10);
 }
 
 int VideoWindow::PictureInPictureVisualBorderPx() const {
-    UINT dpi = 96;
-    if (m_hWnd) {
-        dpi = GetDpiForWindow(m_hWnd);
-    }
-    return std::clamp(static_cast<int>(MulDiv(1, static_cast<int>(dpi), 96)),
-                      1, 2);
+  UINT dpi = 96;
+  if (m_hWnd) {
+    dpi = GetDpiForWindow(m_hWnd);
+  }
+  return std::clamp(static_cast<int>(MulDiv(1, static_cast<int>(dpi), 96)), 1,
+                    2);
 }
 
-void VideoWindow::DrawPictureInPictureBorder(ID3D11DeviceContext* context) {
-    if (!m_pictureInPicture.load(std::memory_order_relaxed) || !context ||
-        !m_renderTargetView || m_width <= 1 || m_height <= 1) {
-        return;
-    }
+void VideoWindow::DrawPictureInPictureBorder(ID3D11DeviceContext *context) {
+  if (!m_pictureInPicture.load(std::memory_order_relaxed) || !context ||
+      !m_renderTargetView || m_width <= 1 || m_height <= 1) {
+    return;
+  }
 
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext1> context1;
-    if (FAILED(context->QueryInterface(IID_PPV_ARGS(&context1))) ||
-        !context1) {
-        return;
-    }
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext1> context1;
+  if (FAILED(context->QueryInterface(IID_PPV_ARGS(&context1))) || !context1) {
+    return;
+  }
 
-    const LONG border = static_cast<LONG>(PictureInPictureVisualBorderPx());
-    const D3D11_RECT rects[] = {
-        {0, 0, static_cast<LONG>(m_width), border},
-        {0, static_cast<LONG>(m_height) - border,
-         static_cast<LONG>(m_width), static_cast<LONG>(m_height)},
-        {0, border, border, static_cast<LONG>(m_height) - border},
-        {static_cast<LONG>(m_width) - border, border,
-         static_cast<LONG>(m_width), static_cast<LONG>(m_height) - border},
-    };
-    const float color[4] = {0.20f, 0.22f, 0.25f, 1.0f};
-    context1->ClearView(
-        m_renderTargetView.Get(), color, rects,
-        static_cast<UINT>(sizeof(rects) / sizeof(rects[0])));
+  const LONG border = static_cast<LONG>(PictureInPictureVisualBorderPx());
+  const D3D11_RECT rects[] = {
+      {0, 0, static_cast<LONG>(m_width), border},
+      {0, static_cast<LONG>(m_height) - border, static_cast<LONG>(m_width),
+       static_cast<LONG>(m_height)},
+      {0, border, border, static_cast<LONG>(m_height) - border},
+      {static_cast<LONG>(m_width) - border, border, static_cast<LONG>(m_width),
+       static_cast<LONG>(m_height) - border},
+  };
+  const float color[4] = {0.20f, 0.22f, 0.25f, 1.0f};
+  context1->ClearView(m_renderTargetView.Get(), color, rects,
+                      static_cast<UINT>(sizeof(rects) / sizeof(rects[0])));
 }
 
 void VideoWindow::AdjustPictureInPictureSizingRect(WPARAM edge,
-                                                   RECT* rect) const {
-    if (!rect) return;
-    const double aspect = PictureInPictureAspectRatio();
-    const SIZE minSize = PictureInPictureMinimumSize();
+                                                   RECT *rect) const {
+  if (!rect)
+    return;
+  const double aspect = PictureInPictureAspectRatio();
+  const SIZE minSize = PictureInPictureMinimumSize();
 
-    const bool leftEdge = edge == WMSZ_LEFT || edge == WMSZ_TOPLEFT ||
-                          edge == WMSZ_BOTTOMLEFT;
-    const bool rightEdge = edge == WMSZ_RIGHT || edge == WMSZ_TOPRIGHT ||
-                           edge == WMSZ_BOTTOMRIGHT;
-    const bool topEdge = edge == WMSZ_TOP || edge == WMSZ_TOPLEFT ||
-                         edge == WMSZ_TOPRIGHT;
-    const bool bottomEdge = edge == WMSZ_BOTTOM || edge == WMSZ_BOTTOMLEFT ||
-                            edge == WMSZ_BOTTOMRIGHT;
-    const bool horizontalOnly = (leftEdge || rightEdge) && !topEdge && !bottomEdge;
-    const bool verticalOnly = (topEdge || bottomEdge) && !leftEdge && !rightEdge;
-    const bool corner = (leftEdge || rightEdge) && (topEdge || bottomEdge);
+  const bool leftEdge =
+      edge == WMSZ_LEFT || edge == WMSZ_TOPLEFT || edge == WMSZ_BOTTOMLEFT;
+  const bool rightEdge =
+      edge == WMSZ_RIGHT || edge == WMSZ_TOPRIGHT || edge == WMSZ_BOTTOMRIGHT;
+  const bool topEdge =
+      edge == WMSZ_TOP || edge == WMSZ_TOPLEFT || edge == WMSZ_TOPRIGHT;
+  const bool bottomEdge = edge == WMSZ_BOTTOM || edge == WMSZ_BOTTOMLEFT ||
+                          edge == WMSZ_BOTTOMRIGHT;
+  const bool horizontalOnly =
+      (leftEdge || rightEdge) && !topEdge && !bottomEdge;
+  const bool verticalOnly = (topEdge || bottomEdge) && !leftEdge && !rightEdge;
+  const bool corner = (leftEdge || rightEdge) && (topEdge || bottomEdge);
 
-    int width = std::max(1, static_cast<int>(rect->right - rect->left));
-    int height = std::max(1, static_cast<int>(rect->bottom - rect->top));
+  int width = std::max(1, static_cast<int>(rect->right - rect->left));
+  int height = std::max(1, static_cast<int>(rect->bottom - rect->top));
 
-    bool deriveWidthFromHeight = verticalOnly;
-    if (corner) {
-        const int currentW = std::max(1, m_width);
-        const int currentH = std::max(1, m_height);
-        const double horizontalDelta = std::abs(width - currentW);
-        const double verticalDelta = std::abs(height - currentH) * aspect;
-        deriveWidthFromHeight = verticalDelta > horizontalDelta;
+  bool deriveWidthFromHeight = verticalOnly;
+  if (corner) {
+    const int currentW = std::max(1, m_width);
+    const int currentH = std::max(1, m_height);
+    const double horizontalDelta = std::abs(width - currentW);
+    const double verticalDelta = std::abs(height - currentH) * aspect;
+    deriveWidthFromHeight = verticalDelta > horizontalDelta;
+  }
+
+  if (deriveWidthFromHeight) {
+    height = std::max<int>(height, minSize.cy);
+    width = static_cast<int>(std::lround(height * aspect));
+    if (width < minSize.cx) {
+      width = minSize.cx;
+      height = static_cast<int>(std::lround(width / aspect));
     }
+  } else {
+    width = std::max<int>(width, minSize.cx);
+    height = static_cast<int>(std::lround(width / aspect));
+    if (height < minSize.cy) {
+      height = minSize.cy;
+      width = static_cast<int>(std::lround(height * aspect));
+    }
+  }
 
-    if (deriveWidthFromHeight) {
-        height = std::max<int>(height, minSize.cy);
-        width = static_cast<int>(std::lround(height * aspect));
-        if (width < minSize.cx) {
-            width = minSize.cx;
-            height = static_cast<int>(std::lround(width / aspect));
-        }
+  if (corner) {
+    if (leftEdge) {
+      rect->left = rect->right - width;
     } else {
-        width = std::max<int>(width, minSize.cx);
-        height = static_cast<int>(std::lround(width / aspect));
-        if (height < minSize.cy) {
-            height = minSize.cy;
-            width = static_cast<int>(std::lround(height * aspect));
-        }
+      rect->right = rect->left + width;
     }
+    if (topEdge) {
+      rect->top = rect->bottom - height;
+    } else {
+      rect->bottom = rect->top + height;
+    }
+    return;
+  }
 
-    if (corner) {
-        if (leftEdge) {
-            rect->left = rect->right - width;
-        } else {
-            rect->right = rect->left + width;
-        }
-        if (topEdge) {
-            rect->top = rect->bottom - height;
-        } else {
-            rect->bottom = rect->top + height;
-        }
-        return;
+  if (horizontalOnly) {
+    const LONG centerY = rect->top + (rect->bottom - rect->top) / 2;
+    if (leftEdge) {
+      rect->left = rect->right - width;
+    } else {
+      rect->right = rect->left + width;
     }
+    rect->top = centerY - height / 2;
+    rect->bottom = rect->top + height;
+    return;
+  }
 
-    if (horizontalOnly) {
-        const LONG centerY = rect->top + (rect->bottom - rect->top) / 2;
-        if (leftEdge) {
-            rect->left = rect->right - width;
-        } else {
-            rect->right = rect->left + width;
-        }
-        rect->top = centerY - height / 2;
-        rect->bottom = rect->top + height;
-        return;
+  if (verticalOnly) {
+    const LONG centerX = rect->left + (rect->right - rect->left) / 2;
+    if (topEdge) {
+      rect->top = rect->bottom - height;
+    } else {
+      rect->bottom = rect->top + height;
     }
-
-    if (verticalOnly) {
-        const LONG centerX = rect->left + (rect->right - rect->left) / 2;
-        if (topEdge) {
-            rect->top = rect->bottom - height;
-        } else {
-            rect->bottom = rect->top + height;
-        }
-        rect->left = centerX - width / 2;
-        rect->right = rect->left + width;
-    }
+    rect->left = centerX - width / 2;
+    rect->right = rect->left + width;
+  }
 }
 
 RECT VideoWindow::CalculatePictureInPictureRect() const {
-    RECT work{0, 0, kDefaultVideoClientWidth, kDefaultVideoClientHeight};
-    HMONITOR monitor = MonitorFromWindow(m_hWnd, MONITOR_DEFAULTTONEAREST);
-    MONITORINFO monitorInfo{};
-    monitorInfo.cbSize = sizeof(monitorInfo);
-    if (monitor && GetMonitorInfo(monitor, &monitorInfo)) {
-        work = monitorInfo.rcWork;
+  RECT work{0, 0, kDefaultVideoClientWidth, kDefaultVideoClientHeight};
+  HMONITOR monitor = MonitorFromWindow(m_hWnd, MONITOR_DEFAULTTONEAREST);
+  MONITORINFO monitorInfo{};
+  monitorInfo.cbSize = sizeof(monitorInfo);
+  if (monitor && GetMonitorInfo(monitor, &monitorInfo)) {
+    work = monitorInfo.rcWork;
+  }
+
+  const int workLeft = static_cast<int>(work.left);
+  const int workTop = static_cast<int>(work.top);
+  const int workRight = static_cast<int>(work.right);
+  const int workBottom = static_cast<int>(work.bottom);
+  const int workW = std::max(1, workRight - workLeft);
+  const int workH = std::max(1, workBottom - workTop);
+  const int margin = std::clamp(std::min(workW, workH) / 40, 12, 32);
+  const int usableW = std::max(160, workW - margin * 2);
+  const int usableH = std::max(120, workH - margin * 2);
+  const SIZE minSize = PictureInPictureMinimumSize();
+  const int minW =
+      std::min(usableW, std::max(160, static_cast<int>(minSize.cx)));
+  const int maxW = std::max(minW, std::min(usableW, 720));
+
+  int targetW = std::clamp(workW * 28 / 100, minW, maxW);
+  const double aspect = PictureInPictureAspectRatio();
+
+  int targetH = std::max(1, static_cast<int>(std::lround(targetW / aspect)));
+  if (targetH > usableH) {
+    targetH = usableH;
+    targetW = std::max(1, static_cast<int>(std::lround(targetH * aspect)));
+    if (targetW < minW && minSize.cy <= usableH) {
+      targetW = minW;
+      targetH = std::max(1, static_cast<int>(std::lround(targetW / aspect)));
     }
+  }
 
-    const int workLeft = static_cast<int>(work.left);
-    const int workTop = static_cast<int>(work.top);
-    const int workRight = static_cast<int>(work.right);
-    const int workBottom = static_cast<int>(work.bottom);
-    const int workW = std::max(1, workRight - workLeft);
-    const int workH = std::max(1, workBottom - workTop);
-    const int margin = std::clamp(std::min(workW, workH) / 40, 12, 32);
-    const int usableW = std::max(160, workW - margin * 2);
-    const int usableH = std::max(120, workH - margin * 2);
-    const SIZE minSize = PictureInPictureMinimumSize();
-    const int minW =
-        std::min(usableW, std::max(160, static_cast<int>(minSize.cx)));
-    const int maxW = std::max(minW, std::min(usableW, 720));
-
-    int targetW = std::clamp(workW * 28 / 100, minW, maxW);
-    const double aspect = PictureInPictureAspectRatio();
-
-    int targetH = std::max(1, static_cast<int>(std::lround(targetW / aspect)));
-    if (targetH > usableH) {
-        targetH = usableH;
-        targetW = std::max(1, static_cast<int>(std::lround(targetH * aspect)));
-        if (targetW < minW && minSize.cy <= usableH) {
-            targetW = minW;
-            targetH =
-                std::max(1, static_cast<int>(std::lround(targetW / aspect)));
-        }
-    }
-
-    const int left = std::max(workLeft + margin,
-                              workRight - margin - targetW);
-    const int top = std::max(workTop + margin,
-                             workBottom - margin - targetH);
-    return RECT{left, top, left + targetW, top + targetH};
+  const int left = std::max(workLeft + margin, workRight - margin - targetW);
+  const int top = std::max(workTop + margin, workBottom - margin - targetH);
+  return RECT{left, top, left + targetW, top + targetH};
 }
 
 LRESULT VideoWindow::HitTestPictureInPicture(int x, int y) const {
-    if (!m_pictureInPicture.load(std::memory_order_relaxed)) return HTCLIENT;
-    if (m_width <= 0 || m_height <= 0) return HTCAPTION;
-
-    const int edge = PictureInPictureResizeBorderPx();
-    const bool left = x >= 0 && x < edge;
-    const bool right = x >= m_width - edge && x < m_width;
-    const bool top = y >= 0 && y < edge;
-    const bool bottom = y >= m_height - edge && y < m_height;
-
-    if (top && left) return HTTOPLEFT;
-    if (top && right) return HTTOPRIGHT;
-    if (bottom && left) return HTBOTTOMLEFT;
-    if (bottom && right) return HTBOTTOMRIGHT;
-    if (left) return HTLEFT;
-    if (right) return HTRIGHT;
-    if (top) return HTTOP;
-    if (bottom) return HTBOTTOM;
-
-    if (x >= 0 && x < m_width && y >= 0 && y < m_height) {
-        return OverlayInteractionAt(x, y) ? HTCLIENT : HTCAPTION;
-    }
+  if (!m_pictureInPicture.load(std::memory_order_relaxed))
     return HTCLIENT;
+  if (m_width <= 0 || m_height <= 0)
+    return HTCAPTION;
+
+  const int edge = PictureInPictureResizeBorderPx();
+  const bool left = x >= 0 && x < edge;
+  const bool right = x >= m_width - edge && x < m_width;
+  const bool top = y >= 0 && y < edge;
+  const bool bottom = y >= m_height - edge && y < m_height;
+
+  if (top && left)
+    return HTTOPLEFT;
+  if (top && right)
+    return HTTOPRIGHT;
+  if (bottom && left)
+    return HTBOTTOMLEFT;
+  if (bottom && right)
+    return HTBOTTOMRIGHT;
+  if (left)
+    return HTLEFT;
+  if (right)
+    return HTRIGHT;
+  if (top)
+    return HTTOP;
+  if (bottom)
+    return HTBOTTOM;
+
+  if (x >= 0 && x < m_width && y >= 0 && y < m_height) {
+    return OverlayInteractionAt(x, y) ? HTCLIENT : HTCAPTION;
+  }
+  return HTCLIENT;
 }
 
 bool VideoWindow::ActivateForegroundSurface() {
-    if (!m_hWnd) return false;
+  if (!m_hWnd)
+    return false;
 
-    if (::GetForegroundWindow() == m_hWnd) {
-        ::SetActiveWindow(m_hWnd);
-        ::SetFocus(m_hWnd);
-        return true;
-    }
-
-    HWND foreground = ::GetForegroundWindow();
-    const bool bridgeRadioifyConsole =
-        foreground && isRadioifyConsoleForegroundWindow();
-    const DWORD currentThread = ::GetCurrentThreadId();
-    const DWORD foregroundThread =
-        foreground ? ::GetWindowThreadProcessId(foreground, nullptr)
-                   : 0;
-    const bool attachForegroundInput =
-        bridgeRadioifyConsole && foregroundThread != 0 &&
-        foregroundThread != currentThread;
-
-    const BOOL attached =
-        attachForegroundInput
-            ? ::AttachThreadInput(currentThread, foregroundThread, TRUE)
-            : FALSE;
-
-    ::BringWindowToTop(m_hWnd);
-    ::SetForegroundWindow(m_hWnd);
+  if (::GetForegroundWindow() == m_hWnd) {
     ::SetActiveWindow(m_hWnd);
     ::SetFocus(m_hWnd);
+    return true;
+  }
 
-    if (attached) {
-        ::AttachThreadInput(currentThread, foregroundThread, FALSE);
-    }
+  HWND foreground = ::GetForegroundWindow();
+  const bool bridgeRadioifyConsole =
+      foreground && isRadioifyConsoleForegroundWindow();
+  const DWORD currentThread = ::GetCurrentThreadId();
+  const DWORD foregroundThread =
+      foreground ? ::GetWindowThreadProcessId(foreground, nullptr) : 0;
+  const bool attachForegroundInput = bridgeRadioifyConsole &&
+                                     foregroundThread != 0 &&
+                                     foregroundThread != currentThread;
 
-    return ::GetForegroundWindow() == m_hWnd;
+  const BOOL attached =
+      attachForegroundInput
+          ? ::AttachThreadInput(currentThread, foregroundThread, TRUE)
+          : FALSE;
+
+  ::BringWindowToTop(m_hWnd);
+  ::SetForegroundWindow(m_hWnd);
+  ::SetActiveWindow(m_hWnd);
+  ::SetFocus(m_hWnd);
+
+  if (attached) {
+    ::AttachThreadInput(currentThread, foregroundThread, FALSE);
+  }
+
+  return ::GetForegroundWindow() == m_hWnd;
 }
 
-bool VideoWindow::CaptureWindowRestoreState(WindowRestoreState& state) const {
-    if (!m_hWnd) {
-        return false;
-    }
+bool VideoWindow::CaptureWindowRestoreState(WindowRestoreState &state) const {
+  if (!m_hWnd) {
+    return false;
+  }
 
-    state.style = GetWindowLong(m_hWnd, GWL_STYLE);
-    state.exStyle = GetWindowLong(m_hWnd, GWL_EXSTYLE);
-    state.placement = {};
-    state.placement.length = sizeof(WINDOWPLACEMENT);
-    if (!GetWindowPlacement(m_hWnd, &state.placement)) {
-        return false;
-    }
-    normalizeWindowPlacement(state.placement);
-    const RECT& normalBounds = state.placement.rcNormalPosition;
-    return normalBounds.right > normalBounds.left &&
-           normalBounds.bottom > normalBounds.top;
+  state.style = GetWindowLong(m_hWnd, GWL_STYLE);
+  state.exStyle = GetWindowLong(m_hWnd, GWL_EXSTYLE);
+  state.placement = {};
+  state.placement.length = sizeof(WINDOWPLACEMENT);
+  if (!GetWindowPlacement(m_hWnd, &state.placement)) {
+    return false;
+  }
+  normalizeWindowPlacement(state.placement);
+  const RECT &normalBounds = state.placement.rcNormalPosition;
+  return normalBounds.right > normalBounds.left &&
+         normalBounds.bottom > normalBounds.top;
 }
 
 VideoWindow::WindowRestoreState VideoWindow::WindowRestoreStateFor(
-    const VideoWindowedPlacement& placement) const {
-    WindowRestoreState state;
-    if (m_pictureInPicture.load(std::memory_order_relaxed)) {
-        state = m_pictureInPictureRestoreState;
-    } else if (m_isFullscreen) {
-        state = m_fullscreenRestoreState;
-    } else if (!CaptureWindowRestoreState(state)) {
-        state.style = m_hWnd ? GetWindowLong(m_hWnd, GWL_STYLE)
-                             : WS_OVERLAPPEDWINDOW;
-        state.exStyle = m_hWnd ? GetWindowLong(m_hWnd, GWL_EXSTYLE) : 0;
-    }
-    state.placement.length = sizeof(WINDOWPLACEMENT);
-    state.placement.flags = 0;
-    state.placement.showCmd =
-        placement.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
-    state.placement.rcNormalPosition = placement.normalBounds;
-    return state;
+    const VideoWindowedPlacement &placement) const {
+  WindowRestoreState state;
+  if (m_pictureInPicture.load(std::memory_order_relaxed)) {
+    state = m_pictureInPictureRestoreState;
+  } else if (m_isFullscreen) {
+    state = m_fullscreenRestoreState;
+  } else if (!CaptureWindowRestoreState(state)) {
+    state.style =
+        m_hWnd ? GetWindowLong(m_hWnd, GWL_STYLE) : WS_OVERLAPPEDWINDOW;
+    state.exStyle = m_hWnd ? GetWindowLong(m_hWnd, GWL_EXSTYLE) : 0;
+  }
+  state.placement.length = sizeof(WINDOWPLACEMENT);
+  state.placement.flags = 0;
+  state.placement.showCmd =
+      placement.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
+  state.placement.rcNormalPosition = placement.normalBounds;
+  return state;
 }
 
-bool VideoWindow::ApplyWindowRestoreState(const WindowRestoreState& state,
+bool VideoWindow::ApplyWindowRestoreState(const WindowRestoreState &state,
                                           VideoWindowFocus focus) {
-    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
-    if (!m_hWnd || !m_swapChain) {
-        return false;
-    }
+  std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
+  if (!m_hWnd || !m_swapChain) {
+    return false;
+  }
 
-    const RECT& normalBounds = state.placement.rcNormalPosition;
-    if (normalBounds.right <= normalBounds.left ||
-        normalBounds.bottom <= normalBounds.top) {
-        return false;
-    }
+  const RECT &normalBounds = state.placement.rcNormalPosition;
+  if (normalBounds.right <= normalBounds.left ||
+      normalBounds.bottom <= normalBounds.top) {
+    return false;
+  }
 
-    auto displayTransition = m_displayLifecycle.ownerTransition();
-    SetWindowLong(m_hWnd, GWL_STYLE, state.style);
-    SetWindowLong(m_hWnd, GWL_EXSTYLE, state.exStyle);
-    SetWindowPos(m_hWnd,
-                 (state.exStyle & WS_EX_TOPMOST) ? HWND_TOPMOST
-                                                 : HWND_NOTOPMOST,
-                 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED |
-                     SWP_NOACTIVATE);
+  auto displayTransition = m_displayLifecycle.ownerTransition();
+  SetWindowLong(m_hWnd, GWL_STYLE, state.style);
+  SetWindowLong(m_hWnd, GWL_EXSTYLE, state.exStyle);
+  SetWindowPos(
+      m_hWnd, (state.exStyle & WS_EX_TOPMOST) ? HWND_TOPMOST : HWND_NOTOPMOST,
+      0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED | SWP_NOACTIVATE);
 
-    WINDOWPLACEMENT placement = state.placement;
-    normalizeWindowPlacement(placement);
-    const bool takeFocus =
-        focus == VideoWindowFocus::TakeForegroundFocus;
-    if (!takeFocus && !windowPlacementIsMaximized(placement)) {
-        placement.showCmd = SW_SHOWNOACTIVATE;
-    }
-    if (!SetWindowPlacement(m_hWnd, &placement)) {
-        return false;
-    }
-    if (takeFocus) {
-        (void)ActivateForegroundSurface();
-    }
-    UpdateWindow(m_hWnd);
+  WINDOWPLACEMENT placement = state.placement;
+  normalizeWindowPlacement(placement);
+  const bool takeFocus = focus == VideoWindowFocus::TakeForegroundFocus;
+  if (!takeFocus && !windowPlacementIsMaximized(placement)) {
+    placement.showCmd = SW_SHOWNOACTIVATE;
+  }
+  if (!SetWindowPlacement(m_hWnd, &placement)) {
+    return false;
+  }
+  if (takeFocus) {
+    (void)ActivateForegroundSurface();
+  }
+  UpdateWindow(m_hWnd);
 
-    RECT client{};
-    if (GetClientRect(m_hWnd, &client)) {
-        Resize(client.right - client.left, client.bottom - client.top);
-    }
-    return IsWindowVisible(m_hWnd) != FALSE;
+  RECT client{};
+  if (GetClientRect(m_hWnd, &client)) {
+    Resize(client.right - client.left, client.bottom - client.top);
+  }
+  return IsWindowVisible(m_hWnd) != FALSE;
 }
 
 bool VideoWindow::EnterPictureInPicture(
-    VideoWindowFocus focus, const WindowRestoreState* restoreState) {
-    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
-    if (!m_hWnd || !m_swapChain) return false;
-    if (m_pictureInPicture.load(std::memory_order_relaxed)) {
-        if (focus == VideoWindowFocus::TakeForegroundFocus) {
-            (void)ActivateForegroundSurface();
-        }
-        return true;
-    }
-
-    WindowRestoreState windowedState;
-    if (restoreState) {
-        windowedState = *restoreState;
-    } else if (m_isFullscreen) {
-        windowedState = m_fullscreenRestoreState;
-    } else if (!CaptureWindowRestoreState(windowedState)) {
-        return false;
-    }
-    normalizeWindowPlacement(windowedState.placement);
-    m_pictureInPictureRestoreState = windowedState;
-
-    RECT pipRect = CalculatePictureInPictureRect();
-    auto displayTransition = m_displayLifecycle.ownerTransition();
-    m_isFullscreen = false;
-    m_pictureInPicture.store(true, std::memory_order_relaxed);
-    SetWindowLong(m_hWnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
-    LONG pipExStyle =
-        (windowedState.exStyle | WS_EX_TOOLWINDOW | WS_EX_TOPMOST) &
-        ~WS_EX_APPWINDOW;
-    SetWindowLong(m_hWnd, GWL_EXSTYLE, pipExStyle);
-    const bool takeFocus = focus == VideoWindowFocus::TakeForegroundFocus;
-    SetWindowPos(m_hWnd, HWND_TOPMOST, pipRect.left, pipRect.top,
-                 pipRect.right - pipRect.left, pipRect.bottom - pipRect.top,
-                 SWP_SHOWWINDOW | SWP_FRAMECHANGED |
-                     (takeFocus ? 0 : SWP_NOACTIVATE));
-    ::ShowWindow(m_hWnd, takeFocus ? SW_SHOW : SW_SHOWNOACTIVATE);
-    if (takeFocus) {
-        (void)ActivateForegroundSurface();
-    }
-    UpdateWindow(m_hWnd);
-
-    RECT client{};
-    if (GetClientRect(m_hWnd, &client)) {
-        Resize(client.right - client.left, client.bottom - client.top);
+    VideoWindowFocus focus, const WindowRestoreState *restoreState) {
+  std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
+  if (!m_hWnd || !m_swapChain)
+    return false;
+  if (m_pictureInPicture.load(std::memory_order_relaxed)) {
+    if (focus == VideoWindowFocus::TakeForegroundFocus) {
+      (void)ActivateForegroundSurface();
     }
     return true;
+  }
+
+  WindowRestoreState windowedState;
+  if (restoreState) {
+    windowedState = *restoreState;
+  } else if (m_isFullscreen) {
+    windowedState = m_fullscreenRestoreState;
+  } else if (!CaptureWindowRestoreState(windowedState)) {
+    return false;
+  }
+  normalizeWindowPlacement(windowedState.placement);
+  m_pictureInPictureRestoreState = windowedState;
+
+  RECT pipRect = CalculatePictureInPictureRect();
+  auto displayTransition = m_displayLifecycle.ownerTransition();
+  m_isFullscreen = false;
+  m_pictureInPicture.store(true, std::memory_order_relaxed);
+  SetWindowLong(m_hWnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+  LONG pipExStyle = (windowedState.exStyle | WS_EX_TOOLWINDOW | WS_EX_TOPMOST) &
+                    ~WS_EX_APPWINDOW;
+  SetWindowLong(m_hWnd, GWL_EXSTYLE, pipExStyle);
+  const bool takeFocus = focus == VideoWindowFocus::TakeForegroundFocus;
+  SetWindowPos(m_hWnd, HWND_TOPMOST, pipRect.left, pipRect.top,
+               pipRect.right - pipRect.left, pipRect.bottom - pipRect.top,
+               SWP_SHOWWINDOW | SWP_FRAMECHANGED |
+                   (takeFocus ? 0 : SWP_NOACTIVATE));
+  ::ShowWindow(m_hWnd, takeFocus ? SW_SHOW : SW_SHOWNOACTIVATE);
+  if (takeFocus) {
+    (void)ActivateForegroundSurface();
+  }
+  UpdateWindow(m_hWnd);
+
+  RECT client{};
+  if (GetClientRect(m_hWnd, &client)) {
+    Resize(client.right - client.left, client.bottom - client.top);
+  }
+  return true;
 }
 
 bool VideoWindow::ExitPictureInPicture(PictureInPictureExitTarget target,
                                        VideoWindowFocus focus) {
-    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
-    if (!m_hWnd || !m_swapChain) return false;
-    if (!m_pictureInPicture.load(std::memory_order_relaxed)) {
-        return target == PictureInPictureExitTarget::Fullscreen && !m_isFullscreen
-                   ? MakeFullscreen(focus)
-                   : true;
-    }
+  std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
+  if (!m_hWnd || !m_swapChain)
+    return false;
+  if (!m_pictureInPicture.load(std::memory_order_relaxed)) {
+    return target == PictureInPictureExitTarget::Fullscreen && !m_isFullscreen
+               ? MakeFullscreen(focus)
+               : true;
+  }
 
-    const WindowRestoreState windowedState =
-        m_pictureInPictureRestoreState;
-    m_pictureInPicture.store(false, std::memory_order_relaxed);
-    if (target == PictureInPictureExitTarget::Fullscreen) {
-        return MakeFullscreen(focus, &windowedState);
-    }
-    return ApplyWindowRestoreState(windowedState, focus);
+  const WindowRestoreState windowedState = m_pictureInPictureRestoreState;
+  m_pictureInPicture.store(false, std::memory_order_relaxed);
+  if (target == PictureInPictureExitTarget::Fullscreen) {
+    return MakeFullscreen(focus, &windowedState);
+  }
+  return ApplyWindowRestoreState(windowedState, focus);
 }
 
-bool VideoWindow::SetPictureInPicture(bool enabled,
-                                      VideoWindowFocus focus) {
-    if (m_hWnd && m_windowThreadId != 0 &&
-        GetCurrentThreadId() != m_windowThreadId) {
-        return false;
-    }
-    return enabled
-               ? EnterPictureInPicture(focus)
-               : ExitPictureInPicture(PictureInPictureExitTarget::Windowed,
-                                      focus);
+bool VideoWindow::SetPictureInPicture(bool enabled, VideoWindowFocus focus) {
+  if (m_hWnd && m_windowThreadId != 0 &&
+      GetCurrentThreadId() != m_windowThreadId) {
+    return false;
+  }
+  return enabled ? EnterPictureInPicture(focus)
+                 : ExitPictureInPicture(PictureInPictureExitTarget::Windowed,
+                                        focus);
 }
 
-bool VideoWindow::ExitPictureInPictureToFullscreen(
-    VideoWindowFocus focus) {
-    if (m_hWnd && m_windowThreadId != 0 &&
-        GetCurrentThreadId() != m_windowThreadId) {
-        return false;
-    }
-    return ExitPictureInPicture(PictureInPictureExitTarget::Fullscreen,
-                                focus);
+bool VideoWindow::ExitPictureInPictureToFullscreen(VideoWindowFocus focus) {
+  if (m_hWnd && m_windowThreadId != 0 &&
+      GetCurrentThreadId() != m_windowThreadId) {
+    return false;
+  }
+  return ExitPictureInPicture(PictureInPictureExitTarget::Fullscreen, focus);
 }
 
 void VideoWindow::SetTextGridPresentationEnabled(bool enabled) {
-    m_textGridPresentationEnabled.store(enabled, std::memory_order_relaxed);
-    if (!enabled) {
-        m_textGridCols.store(0, std::memory_order_relaxed);
-        m_textGridRows.store(0, std::memory_order_relaxed);
-    }
+  m_textGridPresentationEnabled.store(enabled, std::memory_order_relaxed);
+  if (!enabled) {
+    m_textGridCols.store(0, std::memory_order_relaxed);
+    m_textGridRows.store(0, std::memory_order_relaxed);
+  }
 }
 
-bool VideoWindow::GetWindowBounds(RECT* outRect) const {
-    if (!outRect || !m_hWnd) {
-        return false;
-    }
-    return GetWindowRect(m_hWnd, outRect) != FALSE;
+bool VideoWindow::GetWindowBounds(RECT *outRect) const {
+  if (!outRect || !m_hWnd) {
+    return false;
+  }
+  return GetWindowRect(m_hWnd, outRect) != FALSE;
 }
 
 bool VideoWindow::GetWindowedPlacement(
-    VideoWindowedPlacement* outPlacement) const {
-    if (!outPlacement || !m_hWnd ||
-        (m_windowThreadId != 0 &&
-         GetCurrentThreadId() != m_windowThreadId)) {
-        return false;
-    }
+    VideoWindowedPlacement *outPlacement) const {
+  if (!outPlacement || !m_hWnd ||
+      (m_windowThreadId != 0 && GetCurrentThreadId() != m_windowThreadId)) {
+    return false;
+  }
 
-    WindowRestoreState state;
-    if (m_pictureInPicture.load(std::memory_order_relaxed)) {
-        state = m_pictureInPictureRestoreState;
-    } else if (m_isFullscreen) {
-        state = m_fullscreenRestoreState;
-    } else if (!CaptureWindowRestoreState(state)) {
-        return false;
-    }
+  WindowRestoreState state;
+  if (m_pictureInPicture.load(std::memory_order_relaxed)) {
+    state = m_pictureInPictureRestoreState;
+  } else if (m_isFullscreen) {
+    state = m_fullscreenRestoreState;
+  } else if (!CaptureWindowRestoreState(state)) {
+    return false;
+  }
 
-    outPlacement->normalBounds = state.placement.rcNormalPosition;
-    outPlacement->maximized = windowPlacementIsMaximized(state.placement);
-    return outPlacement->normalBounds.right >
-               outPlacement->normalBounds.left &&
-           outPlacement->normalBounds.bottom >
-               outPlacement->normalBounds.top;
+  outPlacement->normalBounds = state.placement.rcNormalPosition;
+  outPlacement->maximized = windowPlacementIsMaximized(state.placement);
+  return outPlacement->normalBounds.right > outPlacement->normalBounds.left &&
+         outPlacement->normalBounds.bottom > outPlacement->normalBounds.top;
 }
 
-bool VideoWindow::SetWindowBounds(const RECT& rect) {
-    if (m_hWnd && m_windowThreadId != 0 &&
-        GetCurrentThreadId() != m_windowThreadId) {
-        return false;
-    }
-    return ApplyWindowBounds(rect);
+bool VideoWindow::SetWindowBounds(const RECT &rect) {
+  if (m_hWnd && m_windowThreadId != 0 &&
+      GetCurrentThreadId() != m_windowThreadId) {
+    return false;
+  }
+  return ApplyWindowBounds(rect);
 }
 
-bool VideoWindow::ApplyWindowBounds(const RECT& rect) {
-    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
-    if (!m_hWnd) {
-        return false;
-    }
-    const int width = rect.right - rect.left;
-    const int height = rect.bottom - rect.top;
-    if (width <= 0 || height <= 0) {
-        return false;
-    }
-    auto displayTransition = m_displayLifecycle.ownerTransition();
-    SetWindowPos(m_hWnd, nullptr, rect.left, rect.top, width, height,
-                 SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE);
-    UpdateWindow(m_hWnd);
+bool VideoWindow::ApplyWindowBounds(const RECT &rect) {
+  std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
+  if (!m_hWnd) {
+    return false;
+  }
+  const int width = rect.right - rect.left;
+  const int height = rect.bottom - rect.top;
+  if (width <= 0 || height <= 0) {
+    return false;
+  }
+  auto displayTransition = m_displayLifecycle.ownerTransition();
+  SetWindowPos(m_hWnd, nullptr, rect.left, rect.top, width, height,
+               SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE);
+  UpdateWindow(m_hWnd);
 
-    RECT client{};
-    if (GetClientRect(m_hWnd, &client)) {
-        Resize(client.right - client.left, client.bottom - client.top);
-    }
-    return true;
+  RECT client{};
+  if (GetClientRect(m_hWnd, &client)) {
+    Resize(client.right - client.left, client.bottom - client.top);
+  }
+  return true;
 }
 
 bool VideoWindow::SetFullscreen(bool enabled, VideoWindowFocus focus) {
-    if (m_hWnd && m_windowThreadId != 0 &&
-        GetCurrentThreadId() != m_windowThreadId) {
-        return false;
-    }
-    if (enabled) {
-        return MakeFullscreen(focus);
-    }
-    if (!m_isFullscreen) {
-        return m_hWnd && m_swapChain;
-    }
-    return ExitFullscreen(focus);
+  if (m_hWnd && m_windowThreadId != 0 &&
+      GetCurrentThreadId() != m_windowThreadId) {
+    return false;
+  }
+  if (enabled) {
+    return MakeFullscreen(focus);
+  }
+  if (!m_isFullscreen) {
+    return m_hWnd && m_swapChain;
+  }
+  return ExitFullscreen(focus);
 }
 
-bool VideoWindow::RestoreWindowed(const VideoWindowedPlacement& placement,
+bool VideoWindow::RestoreWindowed(const VideoWindowedPlacement &placement,
                                   VideoWindowFocus focus) {
-    if (m_hWnd && m_windowThreadId != 0 &&
-        GetCurrentThreadId() != m_windowThreadId) {
-        return false;
-    }
-    const WindowRestoreState state = WindowRestoreStateFor(placement);
-    if (!ApplyWindowRestoreState(state, focus)) {
-        return false;
-    }
-    m_isFullscreen = false;
-    m_pictureInPicture.store(false, std::memory_order_relaxed);
-    return true;
+  if (m_hWnd && m_windowThreadId != 0 &&
+      GetCurrentThreadId() != m_windowThreadId) {
+    return false;
+  }
+  const WindowRestoreState state = WindowRestoreStateFor(placement);
+  if (!ApplyWindowRestoreState(state, focus)) {
+    return false;
+  }
+  m_isFullscreen = false;
+  m_pictureInPicture.store(false, std::memory_order_relaxed);
+  return true;
 }
 
-bool VideoWindow::RestoreFullscreen(const VideoWindowedPlacement& placement,
+bool VideoWindow::RestoreFullscreen(const VideoWindowedPlacement &placement,
                                     VideoWindowFocus focus) {
-    if (m_hWnd && m_windowThreadId != 0 &&
-        GetCurrentThreadId() != m_windowThreadId) {
-        return false;
-    }
-    const WindowRestoreState state = WindowRestoreStateFor(placement);
-    return MakeFullscreen(focus, &state);
+  if (m_hWnd && m_windowThreadId != 0 &&
+      GetCurrentThreadId() != m_windowThreadId) {
+    return false;
+  }
+  const WindowRestoreState state = WindowRestoreStateFor(placement);
+  return MakeFullscreen(focus, &state);
 }
 
 bool VideoWindow::RestorePictureInPicture(
-    const VideoWindowedPlacement& placement, VideoWindowFocus focus) {
-    if (m_hWnd && m_windowThreadId != 0 &&
-        GetCurrentThreadId() != m_windowThreadId) {
-        return false;
-    }
-    const WindowRestoreState state = WindowRestoreStateFor(placement);
-    return EnterPictureInPicture(focus, &state);
+    const VideoWindowedPlacement &placement, VideoWindowFocus focus) {
+  if (m_hWnd && m_windowThreadId != 0 &&
+      GetCurrentThreadId() != m_windowThreadId) {
+    return false;
+  }
+  const WindowRestoreState state = WindowRestoreStateFor(placement);
+  return EnterPictureInPicture(focus, &state);
 }
 
 bool VideoWindow::MakeFullscreen(VideoWindowFocus focus,
-                                 const WindowRestoreState* restoreState) {
-    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
-    if (!m_hWnd || !m_swapChain) return false;
-    if (m_isFullscreen) {
-        if (restoreState) {
-            m_fullscreenRestoreState = *restoreState;
-        }
-        if (focus == VideoWindowFocus::TakeForegroundFocus) {
-            (void)ActivateForegroundSurface();
-        }
-        return true;
-    }
-
-    WindowRestoreState windowedState;
-    if (restoreState) {
-        windowedState = *restoreState;
-    } else if (!CaptureWindowRestoreState(windowedState)) {
-        return false;
-    }
-    normalizeWindowPlacement(windowedState.placement);
-
-    HMONITOR monitor = MonitorFromRect(
-        &windowedState.placement.rcNormalPosition,
-        MONITOR_DEFAULTTONEAREST);
-    MONITORINFO mi{};
-    mi.cbSize = sizeof(mi);
-    if (GetMonitorInfo(monitor, &mi)) {
-        UINT monW = static_cast<UINT>(mi.rcMonitor.right - mi.rcMonitor.left);
-        UINT monH = static_cast<UINT>(mi.rcMonitor.bottom - mi.rcMonitor.top);
-
-        auto displayTransition = m_displayLifecycle.ownerTransition();
-        SetWindowLong(m_hWnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
-        LONG newEx = windowedState.exStyle &
-                     ~(WS_EX_LAYERED | WS_EX_NOACTIVATE |
-                       WS_EX_TOOLWINDOW | WS_EX_TOPMOST);
-        SetWindowLong(m_hWnd, GWL_EXSTYLE, newEx);
-
-        const bool takeFocus = focus == VideoWindowFocus::TakeForegroundFocus;
-        SetWindowPos(m_hWnd, HWND_NOTOPMOST, mi.rcMonitor.left,
-                     mi.rcMonitor.top, monW, monH,
-                     SWP_SHOWWINDOW | SWP_FRAMECHANGED |
-                         (takeFocus ? 0 : SWP_NOACTIVATE));
-        ::ShowWindow(m_hWnd, takeFocus ? SW_SHOW : SW_SHOWNOACTIVATE);
-        if (takeFocus) {
-            (void)ActivateForegroundSurface();
-        }
-        UpdateWindow(m_hWnd);
-
-        ReleaseSwapChainBackBufferReferences();
-
-        if (!CreateSwapChain(static_cast<int>(monW), static_cast<int>(monH))) {
-            std::fprintf(stderr, "VideoWindow: CreateSwapChain(borderless) failed\n");
-            return false;
-        }
-
-        Resize(static_cast<int>(monW), static_cast<int>(monH));
-        m_fullscreenRestoreState = windowedState;
-        m_pictureInPicture.store(false, std::memory_order_relaxed);
-        m_isFullscreen = true;
-        return true;
-    }
-
-    std::fprintf(stderr, "VideoWindow: failed to resolve monitor for fullscreen\n");
+                                 const WindowRestoreState *restoreState) {
+  std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
+  if (!m_hWnd || !m_swapChain)
     return false;
+  if (m_isFullscreen) {
+    if (restoreState) {
+      m_fullscreenRestoreState = *restoreState;
+    }
+    if (focus == VideoWindowFocus::TakeForegroundFocus) {
+      (void)ActivateForegroundSurface();
+    }
+    return true;
+  }
+
+  WindowRestoreState windowedState;
+  if (restoreState) {
+    windowedState = *restoreState;
+  } else if (!CaptureWindowRestoreState(windowedState)) {
+    return false;
+  }
+  normalizeWindowPlacement(windowedState.placement);
+
+  HMONITOR monitor = MonitorFromRect(&windowedState.placement.rcNormalPosition,
+                                     MONITOR_DEFAULTTONEAREST);
+  MONITORINFO mi{};
+  mi.cbSize = sizeof(mi);
+  if (GetMonitorInfo(monitor, &mi)) {
+    UINT monW = static_cast<UINT>(mi.rcMonitor.right - mi.rcMonitor.left);
+    UINT monH = static_cast<UINT>(mi.rcMonitor.bottom - mi.rcMonitor.top);
+
+    auto displayTransition = m_displayLifecycle.ownerTransition();
+    SetWindowLong(m_hWnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+    LONG newEx = windowedState.exStyle & ~(WS_EX_LAYERED | WS_EX_NOACTIVATE |
+                                           WS_EX_TOOLWINDOW | WS_EX_TOPMOST);
+    SetWindowLong(m_hWnd, GWL_EXSTYLE, newEx);
+
+    const bool takeFocus = focus == VideoWindowFocus::TakeForegroundFocus;
+    SetWindowPos(
+        m_hWnd, HWND_NOTOPMOST, mi.rcMonitor.left, mi.rcMonitor.top, monW, monH,
+        SWP_SHOWWINDOW | SWP_FRAMECHANGED | (takeFocus ? 0 : SWP_NOACTIVATE));
+    ::ShowWindow(m_hWnd, takeFocus ? SW_SHOW : SW_SHOWNOACTIVATE);
+    if (takeFocus) {
+      (void)ActivateForegroundSurface();
+    }
+    UpdateWindow(m_hWnd);
+
+    ReleaseSwapChainBackBufferReferences();
+
+    if (!CreateSwapChain(static_cast<int>(monW), static_cast<int>(monH))) {
+      std::fprintf(stderr, "VideoWindow: CreateSwapChain(borderless) failed\n");
+      return false;
+    }
+
+    Resize(static_cast<int>(monW), static_cast<int>(monH));
+    m_fullscreenRestoreState = windowedState;
+    m_pictureInPicture.store(false, std::memory_order_relaxed);
+    m_isFullscreen = true;
+    return true;
+  }
+
+  std::fprintf(stderr,
+               "VideoWindow: failed to resolve monitor for fullscreen\n");
+  return false;
 }
 
 bool VideoWindow::ExitFullscreen(VideoWindowFocus focus) {
-    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
-    if (!m_hWnd || !m_swapChain) return false;
-    m_isFullscreen = false;
-    return ApplyWindowRestoreState(m_fullscreenRestoreState, focus);
+  std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
+  if (!m_hWnd || !m_swapChain)
+    return false;
+  m_isFullscreen = false;
+  return ApplyWindowRestoreState(m_fullscreenRestoreState, focus);
 }
 
 void VideoWindow::Cleanup() {
-    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
-    ID3D11Device* device = m_gpu.device();
-    if (!device) return;
+  std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
+  ID3D11Device *device = m_gpu.device();
+  if (!device)
+    return;
 
-    ID3D11DeviceContext* context = nullptr;
-    device->GetImmediateContext(&context);
-    if (!context) return;
+  ID3D11DeviceContext *context = nullptr;
+  device->GetImmediateContext(&context);
+  if (!context)
+    return;
 
-    // Unbind shader resources / UAVs / RTVs and clear state to avoid driver pinning
-    ID3D11ShaderResourceView* nullSRVs[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
-    context->PSSetShaderResources(0, 5, nullSRVs);
-    context->CSSetShaderResources(0, 5, nullSRVs);
+  // Unbind shader resources / UAVs / RTVs and clear state to avoid driver
+  // pinning
+  ID3D11ShaderResourceView *nullSRVs[5] = {nullptr, nullptr, nullptr, nullptr,
+                                           nullptr};
+  context->PSSetShaderResources(0, 5, nullSRVs);
+  context->CSSetShaderResources(0, 5, nullSRVs);
 
-    ID3D11UnorderedAccessView* nullUAVs[3] = { nullptr, nullptr, nullptr };
-    context->CSSetUnorderedAccessViews(0, 3, nullUAVs, nullptr);
+  ID3D11UnorderedAccessView *nullUAVs[3] = {nullptr, nullptr, nullptr};
+  context->CSSetUnorderedAccessViews(0, 3, nullUAVs, nullptr);
 
-    ID3D11RenderTargetView* nullRTV = nullptr;
-    context->OMSetRenderTargets(0, &nullRTV, nullptr);
+  ID3D11RenderTargetView *nullRTV = nullptr;
+  context->OMSetRenderTargets(0, &nullRTV, nullptr);
 
-    context->VSSetShader(nullptr, nullptr, 0);
-    context->PSSetShader(nullptr, nullptr, 0);
+  context->VSSetShader(nullptr, nullptr, 0);
+  context->PSSetShader(nullptr, nullptr, 0);
 
-    // Force clear/flush to ensure driver releases any references
-    context->ClearState();
-    context->Flush();
-    context->Release();
+  // Force clear/flush to ensure driver releases any references
+  context->ClearState();
+  context->Flush();
+  context->Release();
 
-    // Reset COM objects we hold
-    m_renderTargetView.Reset();
-    m_pixelShader.Reset();
-    m_vertexShader.Reset();
-    m_uiShader.Reset();
-    m_gpuTextGridShader.Reset();
-    m_uiBlendState.Reset();
-    m_sampler.Reset();
-    m_constantBuffer.Reset();
-    // frame cache is now owned/managed externally
-    m_subtitleTexture.Reset();
-    m_subtitleSrv.Reset();
-    m_subtitleWidth = 0;
-    m_subtitleHeight = 0;
-    m_tuiTexture.Reset();
-    m_tuiSrv.Reset();
-    m_gpuTextGridTexture.Reset();
-    m_gpuTextGridSrv.Reset();
-    m_gpuTextGlyphAtlasTexture.Reset();
-    m_gpuTextGlyphAtlasSrv.Reset();
-    m_gpuTextGridConstants.Reset();
-    m_gpuTextGlyphAtlasCellWidth = 0;
-    m_gpuTextGlyphAtlasCellHeight = 0;
-    m_gpuTextGlyphAtlasDpi = 0;
-    m_gpuTextGlyphAtlasWeight = 0;
-    m_gpuTextGridCols = 0;
-    m_gpuTextGridRows = 0;
-    m_timelinePreviewFrameCache.Reset();
-    m_timelinePreviewImageId = 0;
-    m_windowMouseInputActive = false;
-    m_trackingMouseLeave = false;
+  // Reset COM objects we hold
+  m_renderTargetView.Reset();
+  m_pixelShader.Reset();
+  m_vertexShader.Reset();
+  m_uiShader.Reset();
+  m_gpuTextGridShader.Reset();
+  m_uiBlendState.Reset();
+  m_sampler.Reset();
+  m_constantBuffer.Reset();
+  // frame cache is now owned/managed externally
+  m_subtitleTexture.Reset();
+  m_subtitleSrv.Reset();
+  m_subtitleWidth = 0;
+  m_subtitleHeight = 0;
+  m_tuiTexture.Reset();
+  m_tuiSrv.Reset();
+  m_gpuTextGridTexture.Reset();
+  m_gpuTextGridSrv.Reset();
+  m_gpuTextGlyphAtlasTexture.Reset();
+  m_gpuTextGlyphAtlasSrv.Reset();
+  m_gpuTextGridConstants.Reset();
+  m_gpuTextGlyphAtlasCellWidth = 0;
+  m_gpuTextGlyphAtlasCellHeight = 0;
+  m_gpuTextGlyphAtlasDpi = 0;
+  m_gpuTextGlyphAtlasWeight = 0;
+  m_gpuTextGridCols = 0;
+  m_gpuTextGridRows = 0;
+  m_timelinePreviewFrameCache.Reset();
+  m_timelinePreviewImageId = 0;
+  m_windowMouseInputActive = false;
+  m_trackingMouseLeave = false;
 }
 
-bool VideoWindow::Open(int width, int height, const std::string& title) {
-    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
-    if (m_hWnd) {
-        return false;
+bool VideoWindow::Open(int width, int height, const std::string &title) {
+  std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
+  if (m_hWnd) {
+    return false;
+  }
+  if (!m_input.beginWindowThread()) {
+    return false;
+  }
+  m_displayLifecycle.clear();
+  m_closeRequest.clear();
+  HINSTANCE hInstance = GetModuleHandle(NULL);
+  const wchar_t *className = RADIOIFY_APP_NAME_W L"VideoWindow";
+
+  WNDCLASSEXW wc{};
+  wc.cbSize = sizeof(WNDCLASSEXW);
+  if (!GetClassInfoExW(hInstance, className, &wc)) {
+    wc.style = CS_DBLCLKS;
+    wc.lpfnWndProc = WindowProc;
+    wc.hInstance = hInstance;
+    wc.lpszClassName = className;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hIcon = static_cast<HICON>(
+        LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_RADIOIFY_APP_ICON),
+                   IMAGE_ICON, GetSystemMetrics(SM_CXICON),
+                   GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR | LR_SHARED));
+    wc.hIconSm = static_cast<HICON>(
+        LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_RADIOIFY_APP_ICON),
+                   IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                   GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR | LR_SHARED));
+    if (!RegisterClassExW(&wc) &&
+        GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+      m_input.endWindowThread();
+      return false;
     }
-    if (!m_input.beginWindowThread()) {
-        return false;
+  }
+
+  RECT wr = {0, 0, width, height};
+  AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE);
+
+  const std::wstring windowTitle = utf8ToWideLossy(title);
+  m_hWnd =
+      CreateWindowExW(0, className, windowTitle.c_str(), WS_OVERLAPPEDWINDOW,
+                      CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left,
+                      wr.bottom - wr.top, NULL, NULL, hInstance, this);
+
+  if (!m_hWnd) {
+    m_input.endWindowThread();
+    return false;
+  }
+  m_windowThreadId = GetCurrentThreadId();
+
+  if (!CreateSwapChain(width, height)) {
+    Close();
+    return false;
+  }
+
+  ID3D11Device *device = m_gpu.device();
+  if (!device) {
+    std::fprintf(stderr, "VideoWindow: no device in Open()\n");
+    Close();
+    return false;
+  }
+
+  // Ensure multithread protection if available (ascii renderer enables this)
+  {
+    Microsoft::WRL::ComPtr<ID3D10Multithread> mt;
+    if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&mt)))) {
+      mt->SetMultithreadProtected(TRUE);
     }
-    m_displayLifecycle.clear();
-    m_closeRequest.clear();
-    HINSTANCE hInstance = GetModuleHandle(NULL);
-    const wchar_t* className = RADIOIFY_APP_NAME_W L"VideoWindow";
+  }
 
-    WNDCLASSEXW wc{};
-    wc.cbSize = sizeof(WNDCLASSEXW);
-    if (!GetClassInfoExW(hInstance, className, &wc)) {
-        wc.style = CS_DBLCLKS;
-        wc.lpfnWndProc = WindowProc;
-        wc.hInstance = hInstance;
-        wc.lpszClassName = className;
-        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-        wc.hIcon = static_cast<HICON>(LoadImageW(
-            hInstance, MAKEINTRESOURCEW(IDI_RADIOIFY_APP_ICON), IMAGE_ICON,
-            GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON),
-            LR_DEFAULTCOLOR | LR_SHARED));
-        wc.hIconSm = static_cast<HICON>(LoadImageW(
-            hInstance, MAKEINTRESOURCEW(IDI_RADIOIFY_APP_ICON), IMAGE_ICON,
-            GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
-            LR_DEFAULTCOLOR | LR_SHARED));
-        if (!RegisterClassExW(&wc) &&
-            GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
-            m_input.endWindowThread();
-            return false;
-        }
-    }
+  HRESULT hr = device->CreateVertexShader(kWindowVs, kWindowVs_Size, NULL,
+                                          &m_vertexShader);
+  if (FAILED(hr)) {
+    std::fprintf(stderr, "VideoWindow: CreateVertexShader failed (0x%08X)\n",
+                 static_cast<unsigned int>(hr));
+    Close();
+    return false;
+  }
+  hr = device->CreatePixelShader(kWindowPs, kWindowPs_Size, NULL,
+                                 &m_pixelShader);
+  if (FAILED(hr)) {
+    std::fprintf(stderr, "VideoWindow: CreatePixelShader(PS) failed (0x%08X)\n",
+                 static_cast<unsigned int>(hr));
+    Close();
+    return false;
+  }
+  hr = device->CreatePixelShader(kWindowPsUi, kWindowPsUi_Size, NULL,
+                                 &m_uiShader);
+  if (FAILED(hr)) {
+    std::fprintf(stderr, "VideoWindow: CreatePixelShader(UI) failed (0x%08X)\n",
+                 static_cast<unsigned int>(hr));
+    Close();
+    return false;
+  }
+  hr =
+      device->CreatePixelShader(kWindowPsGpuTextGrid, kWindowPsGpuTextGrid_Size,
+                                NULL, &m_gpuTextGridShader);
+  if (FAILED(hr)) {
+    std::fprintf(
+        stderr,
+        "VideoWindow: CreatePixelShader(GPU text grid) failed (0x%08X)\n",
+        static_cast<unsigned int>(hr));
+    Close();
+    return false;
+  }
 
-    RECT wr = { 0, 0, width, height };
-    AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE);
+  D3D11_BUFFER_DESC cbDesc = {};
+  cbDesc.ByteWidth = sizeof(ShaderConstants);
+  cbDesc.Usage = D3D11_USAGE_DYNAMIC;
+  cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+  cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+  hr = device->CreateBuffer(&cbDesc, NULL, &m_constantBuffer);
+  if (FAILED(hr)) {
+    std::fprintf(stderr,
+                 "VideoWindow: CreateBuffer(constant) failed (0x%08X)\n",
+                 static_cast<unsigned int>(hr));
+    Close();
+    return false;
+  }
 
-    const std::wstring windowTitle = utf8ToWideLossy(title);
-    m_hWnd = CreateWindowExW(
-        0, className, windowTitle.c_str(),
-        WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT,
-        wr.right - wr.left, wr.bottom - wr.top,
-        NULL, NULL, hInstance, this);
+  D3D11_SAMPLER_DESC sampDesc = {};
+  sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+  sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+  sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+  sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+  sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+  sampDesc.MinLOD = 0;
+  sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
+  hr = device->CreateSamplerState(&sampDesc, &m_sampler);
+  if (FAILED(hr)) {
+    std::fprintf(stderr, "VideoWindow: CreateSamplerState failed (0x%08X)\n",
+                 static_cast<unsigned int>(hr));
+    Close();
+    return false;
+  }
 
-    if (!m_hWnd) {
-        m_input.endWindowThread();
-        return false;
-    }
-    m_windowThreadId = GetCurrentThreadId();
+  D3D11_BLEND_DESC blendDesc = {};
+  blendDesc.RenderTarget[0].BlendEnable = TRUE;
+  blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+  blendDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+  blendDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+  blendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+  blendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+  blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+  blendDesc.RenderTarget[0].RenderTargetWriteMask =
+      D3D11_COLOR_WRITE_ENABLE_ALL;
+  hr = device->CreateBlendState(&blendDesc, &m_uiBlendState);
+  if (FAILED(hr)) {
+    std::fprintf(stderr, "VideoWindow: CreateBlendState(UI) failed (0x%08X)\n",
+                 static_cast<unsigned int>(hr));
+    Close();
+    return false;
+  }
 
-    if (!CreateSwapChain(width, height)) {
-        Close();
-        return false;
-    }
+  m_width = width;
+  m_height = height;
 
-    ID3D11Device* device = m_gpu.device();
-    if (!device) {
-        std::fprintf(stderr, "VideoWindow: no device in Open()\n");
-        Close();
-        return false;
-    }
-
-    // Ensure multithread protection if available (ascii renderer enables this)
-    {
-        Microsoft::WRL::ComPtr<ID3D10Multithread> mt;
-        if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&mt)))) {
-            mt->SetMultithreadProtected(TRUE);
-        }
-    }
-
-    HRESULT hr = device->CreateVertexShader(kWindowVs, kWindowVs_Size, NULL, &m_vertexShader);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateVertexShader failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); return false; }
-    hr = device->CreatePixelShader(kWindowPs, kWindowPs_Size, NULL, &m_pixelShader);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(PS) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); return false; }
-    hr = device->CreatePixelShader(kWindowPsUi, kWindowPsUi_Size, NULL, &m_uiShader);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(UI) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); return false; }
-    hr = device->CreatePixelShader(kWindowPsGpuTextGrid,
-                                   kWindowPsGpuTextGrid_Size, NULL,
-                                   &m_gpuTextGridShader);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreatePixelShader(GPU text grid) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); return false; }
-
-    D3D11_BUFFER_DESC cbDesc = {};
-    cbDesc.ByteWidth = sizeof(ShaderConstants);
-    cbDesc.Usage = D3D11_USAGE_DYNAMIC;
-    cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-    hr = device->CreateBuffer(&cbDesc, NULL, &m_constantBuffer);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateBuffer(constant) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); return false; }
-
-    D3D11_SAMPLER_DESC sampDesc = {};
-    sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-    sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-    sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-    sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-    sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
-    sampDesc.MinLOD = 0;
-    sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
-    hr = device->CreateSamplerState(&sampDesc, &m_sampler);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateSamplerState failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); return false; }
-
-    D3D11_BLEND_DESC blendDesc = {};
-    blendDesc.RenderTarget[0].BlendEnable = TRUE;
-    blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
-    blendDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
-    blendDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
-    blendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
-    blendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
-    blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
-    blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-    hr = device->CreateBlendState(&blendDesc, &m_uiBlendState);
-    if (FAILED(hr)) { std::fprintf(stderr, "VideoWindow: CreateBlendState(UI) failed (0x%08X)\n", static_cast<unsigned int>(hr)); Close(); return false; }
-
-    m_width = width;
-    m_height = height;
-
-    return true;
+  return true;
 }
 
 void VideoWindow::ResetSwapChain() {
-    {
-        std::lock_guard<std::mutex> lock(m_frameLatencyMutex);
-        m_frameLatencyWaitableObject.reset();
-    }
-    m_renderTargetView.Reset();
-    m_swapChain2.Reset();
-    m_swapChain.Reset();
+  {
+    std::lock_guard<std::mutex> lock(m_frameLatencyMutex);
+    m_frameLatencyWaitableObject.reset();
+  }
+  m_renderTargetView.Reset();
+  m_swapChain2.Reset();
+  m_swapChain.Reset();
 }
 
 void VideoWindow::ReleaseSwapChainBackBufferReferences() {
-    ID3D11Device* device = m_gpu.device();
-    if (!device) {
-        m_renderTargetView.Reset();
-        return;
-    }
-
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
-    device->GetImmediateContext(&context);
-    if (context) {
-        ID3D11ShaderResourceView* nullSrvs[5] = {};
-        context->PSSetShaderResources(0, 5, nullSrvs);
-        context->OMSetRenderTargets(0, nullptr, nullptr);
-        context->VSSetShader(nullptr, nullptr, 0);
-        context->PSSetShader(nullptr, nullptr, 0);
-        context->ClearState();
-        context->Flush();
-    }
+  ID3D11Device *device = m_gpu.device();
+  if (!device) {
     m_renderTargetView.Reset();
+    return;
+  }
+
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+  device->GetImmediateContext(&context);
+  if (context) {
+    ID3D11ShaderResourceView *nullSrvs[5] = {};
+    context->PSSetShaderResources(0, 5, nullSrvs);
+    context->OMSetRenderTargets(0, nullptr, nullptr);
+    context->VSSetShader(nullptr, nullptr, 0);
+    context->PSSetShader(nullptr, nullptr, 0);
+    context->ClearState();
+    context->Flush();
+  }
+  m_renderTargetView.Reset();
 }
 
-bool VideoWindow::RecreateSwapChainForCurrentDisplay(const char* reason) {
-    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
-    if (!m_hWnd) return false;
-    RECT rect{};
-    if (!GetClientRect(m_hWnd, &rect)) return false;
-    const int width = rect.right - rect.left;
-    const int height = rect.bottom - rect.top;
-    if (width <= 0 || height <= 0) return false;
+bool VideoWindow::RecreateSwapChainForCurrentDisplay(const char *reason) {
+  std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
+  if (!m_hWnd)
+    return false;
+  RECT rect{};
+  if (!GetClientRect(m_hWnd, &rect))
+    return false;
+  const int width = rect.right - rect.left;
+  const int height = rect.bottom - rect.top;
+  if (width <= 0 || height <= 0)
+    return false;
 
-    ReleaseSwapChainBackBufferReferences();
-    m_width = width;
-    m_height = height;
-    if (!CreateSwapChain(width, height)) {
-        std::fprintf(stderr,
-                     "VideoWindow: recreate swapchain failed after %s\n",
-                     reason ? reason : "display change");
-        return false;
-    }
-    return true;
+  ReleaseSwapChainBackBufferReferences();
+  m_width = width;
+  m_height = height;
+  if (!CreateSwapChain(width, height)) {
+    std::fprintf(stderr, "VideoWindow: recreate swapchain failed after %s\n",
+                 reason ? reason : "display change");
+    return false;
+  }
+  return true;
 }
 
 void VideoWindow::OnClientResizedByWindow(int width, int height) {
-    if (m_leftMouseCaptureActive) {
-        const bool ownsCapture = GetCapture() == m_hWnd;
-        m_leftMouseCaptureActive = false;
-        m_editBoundaryCaptureActive = false;
-        if (ownsCapture) {
-            ReleaseCapture();
-        }
-        m_input.push(window_input_events::pointerLeaveEvent());
+  if (m_leftMouseCaptureActive) {
+    const bool ownsCapture = GetCapture() == m_hWnd;
+    m_leftMouseCaptureActive = false;
+    m_editBoundaryCaptureActive = false;
+    if (ownsCapture) {
+      ReleaseCapture();
     }
-    SetOverlayInteractionMap({});
-    m_displayLifecycle.clientResized(width, height);
-    const SIZE cellSize = TextGridCellSize();
-    if (std::optional<InputEvent> resize =
-            window_input_events::textGridResizeEvent(
-                width, height, static_cast<int>(cellSize.cx),
-                static_cast<int>(cellSize.cy))) {
-        m_input.push(std::move(*resize));
-    }
+    m_input.push(window_input_events::pointerLeaveEvent());
+  }
+  SetOverlayInteractionMap({});
+  m_displayLifecycle.clientResized(width, height);
+  const SIZE cellSize = TextGridCellSize();
+  if (std::optional<InputEvent> resize =
+          window_input_events::textGridResizeEvent(
+              width, height, static_cast<int>(cellSize.cx),
+              static_cast<int>(cellSize.cy))) {
+    m_input.push(std::move(*resize));
+  }
 }
 
 void VideoWindow::OnDisplayChangedByWindow(int width, int height) {
-    SetOverlayInteractionMap({});
-    m_displayLifecycle.displayChanged(width, height);
+  SetOverlayInteractionMap({});
+  m_displayLifecycle.displayChanged(width, height);
 }
 
-void VideoWindow::RequestCloseFromWindow() {
-    m_closeRequest.signal();
-}
+void VideoWindow::RequestCloseFromWindow() { m_closeRequest.signal(); }
 
 void VideoWindow::ApplyPendingDisplayChange() {
-    WindowDisplayLifecycle::Work work;
-    if (!m_displayLifecycle.consume(work)) {
-        return;
-    }
+  WindowDisplayLifecycle::Work work;
+  if (!m_displayLifecycle.consume(work)) {
+    return;
+  }
 
-    switch (work.kind) {
-        case WindowDisplayLifecycle::WorkKind::ClientResize:
-            Resize(work.width, work.height);
-            break;
-        case WindowDisplayLifecycle::WorkKind::DisplayChange:
-            (void)RecreateSwapChainForCurrentDisplay("display_change");
-            break;
-        case WindowDisplayLifecycle::WorkKind::None:
-            break;
-    }
+  switch (work.kind) {
+  case WindowDisplayLifecycle::WorkKind::ClientResize:
+    Resize(work.width, work.height);
+    break;
+  case WindowDisplayLifecycle::WorkKind::DisplayChange:
+    (void)RecreateSwapChainForCurrentDisplay("display_change");
+    break;
+  case WindowDisplayLifecycle::WorkKind::None:
+    break;
+  }
 }
 
-void VideoWindow::HandlePresentResult(HRESULT hr, const char* stage) {
-    if (SUCCEEDED(hr) || videoWindowPresentSkipped(hr)) return;
-    std::fprintf(stderr, "VideoWindow: %s Present failed (0x%08X)\n",
-                 stage ? stage : "window", static_cast<unsigned int>(hr));
-    if (videoWindowPresentRequiresDeviceRecovery(hr)) {
-        (void)RecreateSwapChainForCurrentDisplay(
-            stage ? stage : "present_device_recovery");
-    }
+void VideoWindow::HandlePresentResult(HRESULT hr, const char *stage) {
+  if (SUCCEEDED(hr) || videoWindowPresentSkipped(hr))
+    return;
+  std::fprintf(stderr, "VideoWindow: %s Present failed (0x%08X)\n",
+               stage ? stage : "window", static_cast<unsigned int>(hr));
+  if (videoWindowPresentRequiresDeviceRecovery(hr)) {
+    (void)RecreateSwapChainForCurrentDisplay(stage ? stage
+                                                   : "present_device_recovery");
+  }
 }
 
-HRESULT VideoWindow::PresentSwapChain(IDXGISwapChain* swapChain,
-                                      const VideoWindowPresentArgs& presentArgs,
-                                      const char* stage) {
-    if (!swapChain) return E_POINTER;
-    HRESULT hr = swapChain->Present(presentArgs.syncInterval, presentArgs.flags);
-    HandlePresentResult(hr, stage);
-    return hr;
+HRESULT VideoWindow::PresentSwapChain(IDXGISwapChain *swapChain,
+                                      const VideoWindowPresentArgs &presentArgs,
+                                      const char *stage) {
+  if (!swapChain)
+    return E_POINTER;
+  HRESULT hr = swapChain->Present(presentArgs.syncInterval, presentArgs.flags);
+  HandlePresentResult(hr, stage);
+  return hr;
 }
 
 bool VideoWindow::CreateSwapChain(int width, int height) {
-    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
-    ID3D11Device* device = m_gpu.device();
-    if (!device) {
-        std::fprintf(stderr, "VideoWindow: no shared GPU device available\n");
-        return false;
-    }
-    if (width <= 0 || height <= 0) {
-        std::fprintf(stderr, "VideoWindow: invalid swapchain dimensions %d x %d\n", width, height);
-        return false;
-    }
-
-    ResetSwapChain();
-    
-    Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
-    device->QueryInterface(IID_PPV_ARGS(&dxgiDevice));
-    
-    Microsoft::WRL::ComPtr<IDXGIAdapter> dxgiAdapter;
-    dxgiDevice->GetAdapter(&dxgiAdapter);
-
-    Microsoft::WRL::ComPtr<IDXGIFactory2> dxgiFactory2;
-    HRESULT factoryHr = dxgiAdapter->GetParent(IID_PPV_ARGS(&dxgiFactory2));
-    SetOutputColorAttemptStatus({});
-    std::string colorAttemptStatus;
-    if (SUCCEEDED(factoryHr) && dxgiFactory2) {
-        (void)dxgiFactory2->MakeWindowAssociation(m_hWnd,
-                                                  DXGI_MWA_NO_ALT_ENTER);
-        DXGI_SWAP_CHAIN_DESC1 scd1 = {};
-        scd1.Width = static_cast<UINT>(width);
-        scd1.Height = static_cast<UINT>(height);
-        scd1.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        scd1.SampleDesc.Count = 1;
-        scd1.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-        scd1.BufferCount = 2;
-        scd1.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-        scd1.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-        scd1.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
-
-        Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain1;
-        HRESULT hr = dxgiFactory2->CreateSwapChainForHwnd(
-            device, m_hWnd, &scd1, nullptr, nullptr, &swapChain1);
-        if (SUCCEEDED(hr)) {
-            m_swapChain = swapChain1;
-            if (ConfigureVideoOutputSwapChain(
-                    *m_swapChain.Get(), width, height,
-                    DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
-                    &m_outputColorState, &colorAttemptStatus)) {
-                SetOutputColorAttemptStatus(colorAttemptStatus);
-                HRESULT swapChain2Hr = swapChain1.As(&m_swapChain2);
-                if (SUCCEEDED(swapChain2Hr) && m_swapChain2) {
-                    HRESULT latencyHr = m_swapChain2->SetMaximumFrameLatency(1);
-                    HANDLE latencyHandle =
-                        SUCCEEDED(latencyHr)
-                            ? m_swapChain2->GetFrameLatencyWaitableObject()
-                            : nullptr;
-                    if (latencyHandle) {
-                        std::lock_guard<std::mutex> latencyLock(
-                            m_frameLatencyMutex);
-                        m_frameLatencyWaitableObject.reset(latencyHandle);
-                        Resize(width, height);
-                        return true;
-                    }
-                }
-                colorAttemptStatus = "failed=frame_latency_waitable_unavailable";
-                SetOutputColorAttemptStatus(colorAttemptStatus);
-                ResetSwapChain();
-                return false;
-            }
-            SetOutputColorAttemptStatus(colorAttemptStatus);
-            ResetSwapChain();
-        } else {
-            char status[96];
-            std::snprintf(status, sizeof(status), "failed=create_sdr:0x%08X",
-                          static_cast<unsigned int>(hr));
-            colorAttemptStatus = status;
-            SetOutputColorAttemptStatus(colorAttemptStatus);
-        }
-    } else {
-        colorAttemptStatus = "failed=dxgi_factory2_unavailable";
-        SetOutputColorAttemptStatus(colorAttemptStatus);
-    }
-
-    std::fprintf(stderr, "VideoWindow: CreateSwapChain failed");
-    if (!colorAttemptStatus.empty()) {
-        std::fprintf(stderr, " (%s)", colorAttemptStatus.c_str());
-    }
-    std::fprintf(stderr, "\n");
+  std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
+  ID3D11Device *device = m_gpu.device();
+  if (!device) {
+    std::fprintf(stderr, "VideoWindow: no shared GPU device available\n");
     return false;
+  }
+  if (width <= 0 || height <= 0) {
+    std::fprintf(stderr, "VideoWindow: invalid swapchain dimensions %d x %d\n",
+                 width, height);
+    return false;
+  }
+
+  ResetSwapChain();
+
+  Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
+  device->QueryInterface(IID_PPV_ARGS(&dxgiDevice));
+
+  Microsoft::WRL::ComPtr<IDXGIAdapter> dxgiAdapter;
+  dxgiDevice->GetAdapter(&dxgiAdapter);
+
+  Microsoft::WRL::ComPtr<IDXGIFactory2> dxgiFactory2;
+  HRESULT factoryHr = dxgiAdapter->GetParent(IID_PPV_ARGS(&dxgiFactory2));
+  SetOutputColorAttemptStatus({});
+  std::string colorAttemptStatus;
+  if (SUCCEEDED(factoryHr) && dxgiFactory2) {
+    (void)dxgiFactory2->MakeWindowAssociation(m_hWnd, DXGI_MWA_NO_ALT_ENTER);
+    DXGI_SWAP_CHAIN_DESC1 scd1 = {};
+    scd1.Width = static_cast<UINT>(width);
+    scd1.Height = static_cast<UINT>(height);
+    scd1.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    scd1.SampleDesc.Count = 1;
+    scd1.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    scd1.BufferCount = 2;
+    scd1.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    scd1.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+    scd1.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+
+    Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain1;
+    HRESULT hr = dxgiFactory2->CreateSwapChainForHwnd(
+        device, m_hWnd, &scd1, nullptr, nullptr, &swapChain1);
+    if (SUCCEEDED(hr)) {
+      m_swapChain = swapChain1;
+      if (ConfigureVideoOutputSwapChain(
+              *m_swapChain.Get(), width, height,
+              DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+              &m_outputColorState, &colorAttemptStatus)) {
+        SetOutputColorAttemptStatus(colorAttemptStatus);
+        HRESULT swapChain2Hr = swapChain1.As(&m_swapChain2);
+        if (SUCCEEDED(swapChain2Hr) && m_swapChain2) {
+          HRESULT latencyHr = m_swapChain2->SetMaximumFrameLatency(1);
+          HANDLE latencyHandle =
+              SUCCEEDED(latencyHr)
+                  ? m_swapChain2->GetFrameLatencyWaitableObject()
+                  : nullptr;
+          if (latencyHandle) {
+            std::lock_guard<std::mutex> latencyLock(m_frameLatencyMutex);
+            m_frameLatencyWaitableObject.reset(latencyHandle);
+            Resize(width, height);
+            return true;
+          }
+        }
+        colorAttemptStatus = "failed=frame_latency_waitable_unavailable";
+        SetOutputColorAttemptStatus(colorAttemptStatus);
+        ResetSwapChain();
+        return false;
+      }
+      SetOutputColorAttemptStatus(colorAttemptStatus);
+      ResetSwapChain();
+    } else {
+      char status[96];
+      std::snprintf(status, sizeof(status), "failed=create_sdr:0x%08X",
+                    static_cast<unsigned int>(hr));
+      colorAttemptStatus = status;
+      SetOutputColorAttemptStatus(colorAttemptStatus);
+    }
+  } else {
+    colorAttemptStatus = "failed=dxgi_factory2_unavailable";
+    SetOutputColorAttemptStatus(colorAttemptStatus);
+  }
+
+  std::fprintf(stderr, "VideoWindow: CreateSwapChain failed");
+  if (!colorAttemptStatus.empty()) {
+    std::fprintf(stderr, " (%s)", colorAttemptStatus.c_str());
+  }
+  std::fprintf(stderr, "\n");
+  return false;
 }
 
 void VideoWindow::Resize(int width, int height) {
-    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
-    if (!m_swapChain) return;
-    if (width == m_width && height == m_height && m_renderTargetView) {
-        return;
-    }
+  std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
+  if (!m_swapChain)
+    return;
+  if (width == m_width && height == m_height && m_renderTargetView) {
+    return;
+  }
+  m_renderTargetView.Reset();
+  UINT flags = 0;
+  if (m_swapChain2) {
+    flags |= DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+  }
+  HRESULT hr = m_swapChain->ResizeBuffers(
+      0, width, height, m_outputColorState.swapChainFormat, flags);
+  if (FAILED(hr))
+    return;
+  if (!ApplyVideoOutputColorSpace(*m_swapChain.Get(), m_outputColorState)) {
+    return;
+  }
+
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
+  hr = m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
+  if (FAILED(hr) || !backBuffer)
+    return;
+
+  ID3D11Device *device = m_gpu.device();
+  if (!device)
+    return;
+  hr = device->CreateRenderTargetView(backBuffer.Get(), NULL,
+                                      &m_renderTargetView);
+  if (FAILED(hr)) {
     m_renderTargetView.Reset();
-    UINT flags = 0;
-    if (m_swapChain2) {
-        flags |= DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
-    }
-    HRESULT hr = m_swapChain->ResizeBuffers(
-        0, width, height, m_outputColorState.swapChainFormat, flags);
-    if (FAILED(hr)) return;
-    if (!ApplyVideoOutputColorSpace(*m_swapChain.Get(), m_outputColorState)) {
-        return;
-    }
+    return;
+  }
 
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
-    hr = m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
-    if (FAILED(hr) || !backBuffer) return;
-
-    ID3D11Device* device = m_gpu.device();
-    if (!device) return;
-    hr = device->CreateRenderTargetView(backBuffer.Get(), NULL, &m_renderTargetView);
-    if (FAILED(hr)) {
-        m_renderTargetView.Reset();
-        return;
-    }
-
-    m_width = width;
-    m_height = height;
+  m_width = width;
+  m_height = height;
 }
 
 void VideoWindow::Close() {
-    m_closeRequest.clear();
-    SetCursorVisible(true);
-    m_input.endWindowThread();
-    // Hide the window first to release focus/ownership of the monitor
-    if (m_hWnd) {
-        ::ShowWindow(m_hWnd, SW_HIDE);
-    }
-    // Perform centralized cleanup (unbind, ClearState, flush, reset local resources)
-    Cleanup();
+  m_closeRequest.clear();
+  SetCursorVisible(true);
+  m_input.endWindowThread();
+  // Hide the window first to release focus/ownership of the monitor
+  if (m_hWnd) {
+    ::ShowWindow(m_hWnd, SW_HIDE);
+  }
+  // Perform centralized cleanup (unbind, ClearState, flush, reset local
+  // resources)
+  Cleanup();
 
-    // Release swapchain last
-    ResetSwapChain();
-    m_isFullscreen = false;
-    m_pictureInPicture.store(false, std::memory_order_relaxed);
-    m_textGridPresentationEnabled.store(false, std::memory_order_relaxed);
-    m_textGridCols.store(0, std::memory_order_relaxed);
-    m_textGridRows.store(0, std::memory_order_relaxed);
-    SetOverlayInteractionMap({});
-    m_displayLifecycle.clear();
+  // Release swapchain last
+  ResetSwapChain();
+  m_isFullscreen = false;
+  m_pictureInPicture.store(false, std::memory_order_relaxed);
+  m_textGridPresentationEnabled.store(false, std::memory_order_relaxed);
+  m_textGridCols.store(0, std::memory_order_relaxed);
+  m_textGridRows.store(0, std::memory_order_relaxed);
+  SetOverlayInteractionMap({});
+  m_displayLifecycle.clear();
 
-    if (m_hWnd) {
-        DestroyWindow(m_hWnd);
-        m_hWnd = nullptr;
-    }
-    m_windowThreadId = 0;
+  if (m_hWnd) {
+    DestroyWindow(m_hWnd);
+    m_hWnd = nullptr;
+  }
+  m_windowThreadId = 0;
 }
 
 bool VideoWindow::Show(VideoWindowFocus focus) {
-    if (m_hWnd && m_windowThreadId != 0 &&
-        GetCurrentThreadId() != m_windowThreadId) {
-        return false;
-    }
-    if (!m_hWnd) {
-        return false;
-    }
-    const bool takeFocus = focus == VideoWindowFocus::TakeForegroundFocus;
-    const int showCommand = IsIconic(m_hWnd)
-                                ? SW_RESTORE
-                                : (takeFocus ? SW_SHOW : SW_SHOWNOACTIVATE);
-    ::ShowWindow(m_hWnd, showCommand);
-    if (takeFocus) {
-        (void)ActivateForegroundSurface();
-    }
-    return IsWindowVisible(m_hWnd) != FALSE;
+  if (m_hWnd && m_windowThreadId != 0 &&
+      GetCurrentThreadId() != m_windowThreadId) {
+    return false;
+  }
+  if (!m_hWnd) {
+    return false;
+  }
+  const bool takeFocus = focus == VideoWindowFocus::TakeForegroundFocus;
+  const int showCommand =
+      IsIconic(m_hWnd) ? SW_RESTORE : (takeFocus ? SW_SHOW : SW_SHOWNOACTIVATE);
+  ::ShowWindow(m_hWnd, showCommand);
+  if (takeFocus) {
+    (void)ActivateForegroundSurface();
+  }
+  return IsWindowVisible(m_hWnd) != FALSE;
 }
 
 void VideoWindow::Activate() {
-    (void)Show(VideoWindowFocus::TakeForegroundFocus);
+  (void)Show(VideoWindowFocus::TakeForegroundFocus);
 }
 
 bool VideoWindow::PollEvents() {
-    MSG msg;
-    bool handled = false;
-    while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
-        handled = true;
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
-    }
-    ApplyPendingDisplayChange();
-    return handled;
+  MSG msg;
+  bool handled = false;
+  while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+    handled = true;
+    TranslateMessage(&msg);
+    DispatchMessage(&msg);
+  }
+  ApplyPendingDisplayChange();
+  return handled;
 }
 
-bool VideoWindow::PollInput(InputEvent& ev) {
-    return m_input.poll(ev);
-}
+bool VideoWindow::PollInput(InputEvent &ev) { return m_input.poll(ev); }
 
 NativeWaitHandle VideoWindow::InputWaitHandle() const {
-    return m_input.nativeWaitHandle();
+  return m_input.nativeWaitHandle();
 }
 
-bool VideoWindow::ConsumeCloseRequested() {
-    return m_closeRequest.consume();
-}
+bool VideoWindow::ConsumeCloseRequested() { return m_closeRequest.consume(); }
 
 NativeWaitHandle VideoWindow::CloseRequestedWaitHandle() const {
-    return m_closeRequest.nativeWaitHandle();
+  return m_closeRequest.nativeWaitHandle();
 }
 
 void VideoWindow::SetVsync(bool enabled) {
-    m_presentInterval.store(enabled ? 1u : 0u, std::memory_order_relaxed);
+  m_presentInterval.store(enabled ? 1u : 0u, std::memory_order_relaxed);
 }
 
 void VideoWindow::WaitForFramePacing(std::chrono::milliseconds timeout) const {
-    NativeWaitHandle waitHandle;
-    {
-        std::lock_guard<std::mutex> lock(m_frameLatencyMutex);
-        waitHandle = NativeWaitHandle(m_frameLatencyWaitableObject.get());
-    }
-    if (waitHandle) {
-      const auto timeoutCount = timeout.count();
-      const wake_schedule::Deadline deadline =
-          timeoutCount < 0
-              ? std::nullopt
-              : wake_schedule::Deadline(wake_schedule::Clock::now() + timeout);
-      waitForHandlesAndPumpThreadWindowMessages(1, &waitHandle, deadline);
-    }
+  NativeWaitHandle waitHandle;
+  {
+    std::lock_guard<std::mutex> lock(m_frameLatencyMutex);
+    waitHandle = NativeWaitHandle(m_frameLatencyWaitableObject.get());
+  }
+  if (waitHandle) {
+    const auto timeoutCount = timeout.count();
+    const wake_schedule::Deadline deadline =
+        timeoutCount < 0
+            ? std::nullopt
+            : wake_schedule::Deadline(wake_schedule::Clock::now() + timeout);
+    waitForHandlesAndPumpThreadWindowMessages(1, &waitHandle, deadline);
+  }
 }
 
 std::string VideoWindow::GetSubtitleRenderError() const {
-    std::lock_guard<std::mutex> lock(m_subtitleStateMutex);
-    return m_subtitleRenderError;
+  std::lock_guard<std::mutex> lock(m_subtitleStateMutex);
+  return m_subtitleRenderError;
 }
 
 void VideoWindow::setSubtitleRenderError(std::string error) {
-    std::lock_guard<std::mutex> lock(m_subtitleStateMutex);
-    if (m_subtitleRenderError == error) return;
-    m_subtitleRenderError = std::move(error);
+  std::lock_guard<std::mutex> lock(m_subtitleStateMutex);
+  if (m_subtitleRenderError == error)
+    return;
+  m_subtitleRenderError = std::move(error);
 }
 
 void VideoWindow::UpdateViewport(int width, int height) {
-    VideoViewport vp = calculateViewport(width, height, m_videoWidth, m_videoHeight);
-    m_viewportX = vp.x;
-    m_viewportY = vp.y;
-    m_viewportW = vp.w;
-    m_viewportH = vp.h;
+  VideoViewport vp =
+      calculateViewport(width, height, m_videoWidth, m_videoHeight);
+  m_viewportX = vp.x;
+  m_viewportY = vp.y;
+  m_viewportW = vp.w;
+  m_viewportH = vp.h;
 }
 
-bool VideoWindow::BindVideoFrame(
-    GpuVideoFrameCache& frameCache, ID3D11DeviceContext* context,
-    const D3D11_VIEWPORT& viewport,
-    const VideoOutputColorState& outputColor) {
-    if (!context || !m_constantBuffer || !frameCache.HasFrame() ||
-        viewport.Width <= 0.0f || viewport.Height <= 0.0f) {
-        return false;
-    }
+bool VideoWindow::BindVideoFrame(GpuVideoFrameCache &frameCache,
+                                 ID3D11DeviceContext *context,
+                                 const D3D11_VIEWPORT &viewport,
+                                 const VideoOutputColorState &outputColor) {
+  if (!context || !m_constantBuffer || !frameCache.HasFrame() ||
+      viewport.Width <= 0.0f || viewport.Height <= 0.0f) {
+    return false;
+  }
 
-    context->RSSetViewports(1, &viewport);
-    context->IASetInputLayout(nullptr);
-    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-    context->VSSetShader(m_vertexShader.Get(), nullptr, 0);
-    context->PSSetShader(m_pixelShader.Get(), nullptr, 0);
-    context->PSSetSamplers(0, 1, m_sampler.GetAddressOf());
-    context->PSSetConstantBuffers(0, 1, m_constantBuffer.GetAddressOf());
-    context->OMSetBlendState(nullptr, nullptr, 0xffffffffu);
+  context->RSSetViewports(1, &viewport);
+  context->IASetInputLayout(nullptr);
+  context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+  context->VSSetShader(m_vertexShader.Get(), nullptr, 0);
+  context->PSSetShader(m_pixelShader.Get(), nullptr, 0);
+  context->PSSetSamplers(0, 1, m_sampler.GetAddressOf());
+  context->PSSetConstantBuffers(0, 1, m_constantBuffer.GetAddressOf());
+  context->OMSetBlendState(nullptr, nullptr, 0xffffffffu);
 
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(context->Map(m_constantBuffer.Get(), 0,
-                            D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-        return false;
-    }
-    ShaderConstants constants{};
-    constants.isFullRange = frameCache.IsFullRange() ? 1u : 0u;
-    constants.yuvMatrix = static_cast<uint32_t>(frameCache.GetMatrix());
-    constants.yuvTransfer = static_cast<uint32_t>(frameCache.GetTransfer());
-    constants.bitDepth = static_cast<uint32_t>(frameCache.GetBitDepth());
-    constants.hasRGBA = frameCache.IsRgba() ? 1u : 0u;
-    constants.rotationQuarterTurns =
-        static_cast<uint32_t>(frameCache.GetRotationQuarterTurns() & 3);
-    FillOutputColorConstants(constants, outputColor);
-    std::memcpy(mapped.pData, &constants, sizeof(constants));
-    context->Unmap(m_constantBuffer.Get(), 0);
+  D3D11_MAPPED_SUBRESOURCE mapped{};
+  if (FAILED(context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0,
+                          &mapped))) {
+    return false;
+  }
+  ShaderConstants constants{};
+  constants.isFullRange = frameCache.IsFullRange() ? 1u : 0u;
+  constants.yuvMatrix = static_cast<uint32_t>(frameCache.GetMatrix());
+  constants.yuvTransfer = static_cast<uint32_t>(frameCache.GetTransfer());
+  constants.bitDepth = static_cast<uint32_t>(frameCache.GetBitDepth());
+  constants.hasRGBA = frameCache.IsRgba() ? 1u : 0u;
+  constants.rotationQuarterTurns =
+      static_cast<uint32_t>(frameCache.GetRotationQuarterTurns() & 3);
+  FillOutputColorConstants(constants, outputColor);
+  std::memcpy(mapped.pData, &constants, sizeof(constants));
+  context->Unmap(m_constantBuffer.Get(), 0);
 
-    ID3D11ShaderResourceView* frameResources[3] = {
-        frameCache.IsRgba() ? nullptr : frameCache.GetSrvY(),
-        frameCache.IsRgba() ? nullptr : frameCache.GetSrvUV(),
-        frameCache.IsRgba() ? frameCache.GetSrvRGBA() : nullptr};
-    context->PSSetShaderResources(0, 3, frameResources);
-    return true;
+  ID3D11ShaderResourceView *frameResources[3] = {
+      frameCache.IsRgba() ? nullptr : frameCache.GetSrvY(),
+      frameCache.IsRgba() ? nullptr : frameCache.GetSrvUV(),
+      frameCache.IsRgba() ? frameCache.GetSrvRGBA() : nullptr};
+  context->PSSetShaderResources(0, 3, frameResources);
+  return true;
 }
 
-void VideoWindow::UnbindVideoFrame(ID3D11DeviceContext* context) {
-    if (!context) return;
-    ID3D11ShaderResourceView* nullResources[3] = {nullptr, nullptr, nullptr};
-    context->PSSetShaderResources(0, 3, nullResources);
+void VideoWindow::UnbindVideoFrame(ID3D11DeviceContext *context) {
+  if (!context)
+    return;
+  ID3D11ShaderResourceView *nullResources[3] = {nullptr, nullptr, nullptr};
+  context->PSSetShaderResources(0, 3, nullResources);
 }
 
 bool VideoWindow::DrawVideoFrame(
-    GpuVideoFrameCache& frameCache, ID3D11Device* device,
-    ID3D11DeviceContext* context, ID3D11RenderTargetView* renderTarget,
-    const FrameRenderGeometry& geometry,
-    const VideoOutputColorState& outputColor, const WindowUiState& ui,
-    bool includePlaybackOverlay, const char* timingStage,
-    playback_overlay::InteractionMap* outInteractions) {
-    if (!device || !context || !renderTarget || !m_constantBuffer ||
-        !frameCache.HasFrame() || geometry.width <= 0 || geometry.height <= 0 ||
-        geometry.viewport.w <= 0.0f || geometry.viewport.h <= 0.0f) {
-        return false;
-    }
+    GpuVideoFrameCache &frameCache, ID3D11Device *device,
+    ID3D11DeviceContext *context, ID3D11RenderTargetView *renderTarget,
+    const FrameRenderGeometry &geometry,
+    const VideoOutputColorState &outputColor, const WindowUiState &ui,
+    bool includePlaybackOverlay, const char *timingStage,
+    playback_overlay::InteractionMap *outInteractions) {
+  if (!device || !context || !renderTarget || !m_constantBuffer ||
+      !frameCache.HasFrame() || geometry.width <= 0 || geometry.height <= 0 ||
+      geometry.viewport.w <= 0.0f || geometry.viewport.h <= 0.0f) {
+    return false;
+  }
 
-    const float clearColor[4] = {0, 0, 0, 1};
-    context->ClearRenderTargetView(renderTarget, clearColor);
-    context->OMSetRenderTargets(1, &renderTarget, nullptr);
+  const float clearColor[4] = {0, 0, 0, 1};
+  context->ClearRenderTargetView(renderTarget, clearColor);
+  context->OMSetRenderTargets(1, &renderTarget, nullptr);
 
-    const D3D11_VIEWPORT viewport = {
-        geometry.viewport.x, geometry.viewport.y, geometry.viewport.w,
-        geometry.viewport.h, 0.0f, 1.0f};
-    if (!BindVideoFrame(frameCache, context, viewport, outputColor)) {
-        return false;
-    }
+  const D3D11_VIEWPORT viewport = {geometry.viewport.x,
+                                   geometry.viewport.y,
+                                   geometry.viewport.w,
+                                   geometry.viewport.h,
+                                   0.0f,
+                                   1.0f};
+  if (!BindVideoFrame(frameCache, context, viewport, outputColor)) {
+    return false;
+  }
 
 #if defined(RADIOIFY_ENABLE_GPU_TIMING)
-    Microsoft::WRL::ComPtr<ID3D11Query> disjointQuery;
-    Microsoft::WRL::ComPtr<ID3D11Query> startQuery;
-    Microsoft::WRL::ComPtr<ID3D11Query> endQuery;
-    D3D11_QUERY_DESC queryDesc{D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
-    bool timingAvailable = SUCCEEDED(
-        device->CreateQuery(&queryDesc, disjointQuery.GetAddressOf()));
-    queryDesc.Query = D3D11_QUERY_TIMESTAMP;
-    timingAvailable =
-        timingAvailable &&
-        SUCCEEDED(device->CreateQuery(&queryDesc,
-                                      startQuery.GetAddressOf()));
-    timingAvailable =
-        timingAvailable &&
-        SUCCEEDED(device->CreateQuery(&queryDesc, endQuery.GetAddressOf()));
-    if (timingAvailable) {
-        context->Begin(disjointQuery.Get());
-        context->End(startQuery.Get());
-    }
+  Microsoft::WRL::ComPtr<ID3D11Query> disjointQuery;
+  Microsoft::WRL::ComPtr<ID3D11Query> startQuery;
+  Microsoft::WRL::ComPtr<ID3D11Query> endQuery;
+  D3D11_QUERY_DESC queryDesc{D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
+  bool timingAvailable =
+      SUCCEEDED(device->CreateQuery(&queryDesc, disjointQuery.GetAddressOf()));
+  queryDesc.Query = D3D11_QUERY_TIMESTAMP;
+  timingAvailable =
+      timingAvailable &&
+      SUCCEEDED(device->CreateQuery(&queryDesc, startQuery.GetAddressOf()));
+  timingAvailable =
+      timingAvailable &&
+      SUCCEEDED(device->CreateQuery(&queryDesc, endQuery.GetAddressOf()));
+  if (timingAvailable) {
+    context->Begin(disjointQuery.Get());
+    context->End(startQuery.Get());
+  }
 #else
-    (void)timingStage;
+  (void)timingStage;
 #endif
 
-    context->Draw(4, 0);
-    DrawOverlay(device, context, ui, geometry, outputColor,
-                includePlaybackOverlay, outInteractions);
+  context->Draw(4, 0);
+  DrawOverlay(device, context, ui, geometry, outputColor,
+              includePlaybackOverlay, outInteractions);
 
 #if defined(RADIOIFY_ENABLE_GPU_TIMING)
-    if (timingAvailable) {
-        context->End(endQuery.Get());
-        context->End(disjointQuery.Get());
+  if (timingAvailable) {
+    context->End(endQuery.Get());
+    context->End(disjointQuery.Get());
 
-        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjoint{};
-        UINT64 start = 0;
-        UINT64 end = 0;
-        if (context->GetData(disjointQuery.Get(), &disjoint, sizeof(disjoint),
-                             D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
-            context->GetData(startQuery.Get(), &start, sizeof(start),
-                             D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
-            context->GetData(endQuery.Get(), &end, sizeof(end),
-                             D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
-            !disjoint.Disjoint) {
-            const double gpuMs =
-                static_cast<double>(end - start) /
-                static_cast<double>(disjoint.Frequency) * 1000.0;
-            std::fprintf(stderr,
-                         "[%s] [tid=%s] VideoWindow::%s GPU "
-                         "draw+overlay time %.3f ms\n",
-                         now_ms().c_str(), thread_id_str().c_str(),
-                         timingStage, gpuMs);
-        }
+    D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjoint{};
+    UINT64 start = 0;
+    UINT64 end = 0;
+    if (context->GetData(disjointQuery.Get(), &disjoint, sizeof(disjoint),
+                         D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
+        context->GetData(startQuery.Get(), &start, sizeof(start),
+                         D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
+        context->GetData(endQuery.Get(), &end, sizeof(end),
+                         D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
+        !disjoint.Disjoint) {
+      const double gpuMs = static_cast<double>(end - start) /
+                           static_cast<double>(disjoint.Frequency) * 1000.0;
+      std::fprintf(stderr,
+                   "[%s] [tid=%s] VideoWindow::%s GPU "
+                   "draw+overlay time %.3f ms\n",
+                   now_ms().c_str(), thread_id_str().c_str(), timingStage,
+                   gpuMs);
     }
+  }
 #endif
 
-    UnbindVideoFrame(context);
-    return true;
+  UnbindVideoFrame(context);
+  return true;
 }
 
-void VideoWindow::Present(GpuVideoFrameCache& frameCache,
-                          const WindowUiState& ui) {
-    std::unique_lock<std::recursive_mutex> lock(m_gpu.mutex());
+void VideoWindow::Present(GpuVideoFrameCache &frameCache,
+                          const WindowUiState &ui) {
+  std::unique_lock<std::recursive_mutex> lock(m_gpu.mutex());
 #if RADIOIFY_ENABLE_TIMING_LOG
-    fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present enter (wnd=%p swap=%p visible=%d)\n", now_ms().c_str(), thread_id_str().c_str(), (void*)m_hWnd, (void*)m_swapChain.Get(), m_hWnd ? IsWindowVisible(m_hWnd) : 0);
+  fprintf(
+      stderr,
+      "[%s] [tid=%s] VideoWindow::Present enter (wnd=%p swap=%p visible=%d)\n",
+      now_ms().c_str(), thread_id_str().c_str(), (void *)m_hWnd,
+      (void *)m_swapChain.Get(), m_hWnd ? IsWindowVisible(m_hWnd) : 0);
 #endif
-    if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) {
+  if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) {
 #if RADIOIFY_ENABLE_TIMING_LOG
-        fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present early exit: window/swap not ready\n", now_ms().c_str(), thread_id_str().c_str());
+    fprintf(stderr,
+            "[%s] [tid=%s] VideoWindow::Present early exit: window/swap not "
+            "ready\n",
+            now_ms().c_str(), thread_id_str().c_str());
 #endif
-        return;
-    }
-    if (!frameCache.HasFrame()) {
+    return;
+  }
+  if (!frameCache.HasFrame()) {
 #if RADIOIFY_ENABLE_TIMING_LOG
-        fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present early exit: no frame in cache\n", now_ms().c_str(), thread_id_str().c_str());
+    fprintf(
+        stderr,
+        "[%s] [tid=%s] VideoWindow::Present early exit: no frame in cache\n",
+        now_ms().c_str(), thread_id_str().c_str());
 #endif
-        return;
-    }
+    return;
+  }
 
-    RECT rect{};
-    if (GetClientRect(m_hWnd, &rect)) {
-        m_width = rect.right - rect.left;
-        m_height = rect.bottom - rect.top;
-    }
+  RECT rect{};
+  if (GetClientRect(m_hWnd, &rect)) {
+    m_width = rect.right - rect.left;
+    m_height = rect.bottom - rect.top;
+  }
 
-    Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
-    ID3D11Device* device = m_gpu.device();
-    if (!device) return;
+  Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
+  ID3D11Device *device = m_gpu.device();
+  if (!device)
+    return;
 
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
-    device->GetImmediateContext(&context);
-    if (!context || !m_renderTargetView) return;
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+  device->GetImmediateContext(&context);
+  if (!context || !m_renderTargetView)
+    return;
 
-    m_videoWidth = frameCache.GetDisplayWidth();
-    m_videoHeight = frameCache.GetDisplayHeight();
-    UpdateViewport(m_width, m_height);
-    const FrameRenderGeometry geometry{
-        m_width, m_height,
-        VideoViewport{m_viewportX, m_viewportY, m_viewportW, m_viewportH}};
+  m_videoWidth = frameCache.GetDisplayWidth();
+  m_videoHeight = frameCache.GetDisplayHeight();
+  UpdateViewport(m_width, m_height);
+  const FrameRenderGeometry geometry{
+      m_width, m_height,
+      VideoViewport{m_viewportX, m_viewportY, m_viewportW, m_viewportH}};
 
 #if RADIOIFY_ENABLE_TIMING_LOG
-    fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present frame w=%d h=%d ui.displaySec=%.3f\n", now_ms().c_str(), thread_id_str().c_str(), m_videoWidth, m_videoHeight, ui.displaySec);
+  fprintf(
+      stderr,
+      "[%s] [tid=%s] VideoWindow::Present frame w=%d h=%d ui.displaySec=%.3f\n",
+      now_ms().c_str(), thread_id_str().c_str(), m_videoWidth, m_videoHeight,
+      ui.displaySec);
 #endif
 
-    playback_overlay::InteractionMap presentedInteractions;
-    if (!DrawVideoFrame(frameCache, device, context.Get(),
-                        m_renderTargetView.Get(), geometry,
-                        m_outputColorState, ui, true, "Present",
-                        &presentedInteractions)) {
-        return;
-    }
-    DrawPictureInPictureBorder(context.Get());
-    frameCache.MarkFrameInFlight(context.Get());
+  playback_overlay::InteractionMap presentedInteractions;
+  if (!DrawVideoFrame(frameCache, device, context.Get(),
+                      m_renderTargetView.Get(), geometry, m_outputColorState,
+                      ui, true, "Present", &presentedInteractions)) {
+    return;
+  }
+  DrawPictureInPictureBorder(context.Get());
+  frameCache.MarkFrameInFlight(context.Get());
 
 #if RADIOIFY_ENABLE_TIMING_LOG
-    fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present about to Present()\n", now_ms().c_str(), thread_id_str().c_str());
+  fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present about to Present()\n",
+          now_ms().c_str(), thread_id_str().c_str());
 #endif
-    lock.unlock();
-    if (!swapChain) return;
-    const VideoWindowPresentArgs presentArgs = liveVideoWindowPresentArgs();
-    HRESULT presHr = PresentSwapChain(swapChain.Get(), presentArgs, "video");
-    if (videoWindowPresentSkipped(presHr)) {
+  lock.unlock();
+  if (!swapChain)
+    return;
+  const VideoWindowPresentArgs presentArgs = liveVideoWindowPresentArgs();
+  HRESULT presHr = PresentSwapChain(swapChain.Get(), presentArgs, "video");
+  if (videoWindowPresentSkipped(presHr)) {
 #if RADIOIFY_ENABLE_TIMING_LOG
-        fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present skipped (0x%08X)\n", now_ms().c_str(), thread_id_str().c_str(), static_cast<unsigned int>(presHr));
+    fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present skipped (0x%08X)\n",
+            now_ms().c_str(), thread_id_str().c_str(),
+            static_cast<unsigned int>(presHr));
 #endif
-        return;
-    }
-    if (SUCCEEDED(presHr)) {
-        SetOverlayInteractionMap(std::move(presentedInteractions));
-    }
+    return;
+  }
+  if (SUCCEEDED(presHr)) {
+    SetOverlayInteractionMap(std::move(presentedInteractions));
+  }
 #if RADIOIFY_ENABLE_TIMING_LOG
-    if (FAILED(presHr)) {
-        fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present Present() FAILED 0x%08X\n", now_ms().c_str(), thread_id_str().c_str(), static_cast<unsigned int>(presHr));
-    } else {
-        fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present Present() OK\n", now_ms().c_str(), thread_id_str().c_str());
-    }
+  if (FAILED(presHr)) {
+    fprintf(stderr,
+            "[%s] [tid=%s] VideoWindow::Present Present() FAILED 0x%08X\n",
+            now_ms().c_str(), thread_id_str().c_str(),
+            static_cast<unsigned int>(presHr));
+  } else {
+    fprintf(stderr, "[%s] [tid=%s] VideoWindow::Present Present() OK\n",
+            now_ms().c_str(), thread_id_str().c_str());
+  }
 #endif
 }
 
-VideoFrameSnapshotResult VideoWindow::CaptureCurrentFrame(
-    GpuVideoFrameCache& frameCache, const WindowUiState& ui) {
-    assert(m_windowThreadId != 0 && GetCurrentThreadId() == m_windowThreadId);
-    std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
-    VideoFrameSnapshotResult result;
-    if (!m_hWnd || !frameCache.HasFrame()) {
-        result.error = "No rendered video frame is available.";
-        return result;
-    }
-
-    ID3D11Device* device = m_gpu.device();
-    if (!device) {
-        result.error = "The shared D3D11 device is unavailable.";
-        return result;
-    }
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
-    device->GetImmediateContext(&context);
-    if (!context || !m_constantBuffer || !m_vertexShader || !m_pixelShader) {
-        result.error = "The video renderer is not ready for frame capture.";
-        return result;
-    }
-
-    const int width = frameCache.GetDisplayWidth();
-    const int height = frameCache.GetDisplayHeight();
-    if (width <= 0 || height <= 0) {
-        result.error = "The rendered video frame has invalid dimensions.";
-        return result;
-    }
-    const size_t widthPixels = static_cast<size_t>(width);
-    const size_t heightPixels = static_cast<size_t>(height);
-    if (widthPixels > std::numeric_limits<size_t>::max() / 4u) {
-        result.error = "The rendered video frame row size overflows.";
-        return result;
-    }
-    const size_t rowBytes = widthPixels * 4u;
-    if (rowBytes > std::numeric_limits<uint32_t>::max() ||
-        heightPixels > std::numeric_limits<size_t>::max() / rowBytes) {
-        result.error = "The rendered video frame pixel size overflows.";
-        return result;
-    }
-    const size_t pixelBytes = rowBytes * heightPixels;
-    std::vector<uint8_t> pixels(pixelBytes);
-
-    D3D11_TEXTURE2D_DESC targetDesc{};
-    targetDesc.Width = static_cast<UINT>(width);
-    targetDesc.Height = static_cast<UINT>(height);
-    targetDesc.MipLevels = 1;
-    targetDesc.ArraySize = 1;
-    targetDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    targetDesc.SampleDesc.Count = 1;
-    targetDesc.Usage = D3D11_USAGE_DEFAULT;
-    targetDesc.BindFlags = D3D11_BIND_RENDER_TARGET;
-
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> target;
-    if (FAILED(device->CreateTexture2D(&targetDesc, nullptr, &target))) {
-        result.error = "Failed to create the frame capture render target.";
-        return result;
-    }
-    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> targetView;
-    if (FAILED(device->CreateRenderTargetView(target.Get(), nullptr,
-                                              &targetView))) {
-        result.error = "Failed to create the frame capture render view.";
-        return result;
-    }
-
-    D3D11_TEXTURE2D_DESC stagingDesc = targetDesc;
-    stagingDesc.Usage = D3D11_USAGE_STAGING;
-    stagingDesc.BindFlags = 0;
-    stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> staging;
-    if (FAILED(device->CreateTexture2D(&stagingDesc, nullptr, &staging))) {
-        result.error = "Failed to create the frame capture readback texture.";
-        return result;
-    }
-    VideoOutputColorState snapshotColor = m_outputColorState;
-    snapshotColor.swapChainFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
-    snapshotColor.colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
-    snapshotColor.encoding = VideoOutputColorEncoding::Sdr;
-    const FrameRenderGeometry geometry{
-        width, height,
-        VideoViewport{0.0f, 0.0f, static_cast<float>(width),
-                      static_cast<float>(height)}};
-    const auto restoreSwapChainTarget = [&]() {
-        if (m_renderTargetView) {
-            context->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(),
-                                        nullptr);
-        } else {
-            context->OMSetRenderTargets(0, nullptr, nullptr);
-        }
-    };
-    if (!DrawVideoFrame(frameCache, device, context.Get(), targetView.Get(),
-                        geometry, snapshotColor, ui, false,
-                        "CaptureCurrentFrame", nullptr)) {
-        restoreSwapChainTarget();
-        result.error = "Failed to render the current frame for capture.";
-        return result;
-    }
-    context->OMSetRenderTargets(0, nullptr, nullptr);
-    context->CopyResource(staging.Get(), target.Get());
-    restoreSwapChainTarget();
-
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
-        result.error = "Failed to read back the rendered video frame.";
-        return result;
-    }
-    if (!mapped.pData || static_cast<size_t>(mapped.RowPitch) < rowBytes) {
-        context->Unmap(staging.Get(), 0);
-        result.error = "The frame capture readback row is incomplete.";
-        return result;
-    }
-    for (int y = 0; y < height; ++y) {
-        std::memcpy(
-            pixels.data() + rowBytes * static_cast<size_t>(y),
-            static_cast<const uint8_t*>(mapped.pData) +
-                static_cast<size_t>(mapped.RowPitch) * static_cast<size_t>(y),
-            rowBytes);
-    }
-    context->Unmap(staging.Get(), 0);
-    result.snapshot.width = static_cast<uint32_t>(width);
-    result.snapshot.height = static_cast<uint32_t>(height);
-    result.snapshot.strideBytes = static_cast<uint32_t>(rowBytes);
-    result.snapshot.rgba = std::move(pixels);
+VideoFrameSnapshotResult
+VideoWindow::CaptureCurrentFrame(GpuVideoFrameCache &frameCache,
+                                 const WindowUiState &ui) {
+  assert(m_windowThreadId != 0 && GetCurrentThreadId() == m_windowThreadId);
+  std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());
+  VideoFrameSnapshotResult result;
+  if (!m_hWnd || !frameCache.HasFrame()) {
+    result.error = "No rendered video frame is available.";
     return result;
-}
+  }
 
-void VideoWindow::DrawOverlay(ID3D11Device* device,
-                              ID3D11DeviceContext* context,
-                              const WindowUiState& ui,
-                              const FrameRenderGeometry& geometry,
-                              const VideoOutputColorState& outputColor,
-                              bool includePlaybackOverlay,
-                              playback_overlay::InteractionMap*
-                                  outInteractions) {
-    if (outInteractions) {
-        *outInteractions = {};
-    }
-    const bool showTimelinePreview =
-        includePlaybackOverlay && ui.timelinePreview.hoverActive;
-    const bool showPlaybackChrome =
-        includePlaybackOverlay &&
-        (ui.chromeVisible || showTimelinePreview);
-    const bool showContextMenu =
-        includePlaybackOverlay && ui.contextMenu.visible;
-    const bool showOverlay = showPlaybackChrome || showContextMenu ||
-                             (includePlaybackOverlay && ui.transientMessage);
-    const bool hasAssScript =
-        static_cast<bool>(ui.subtitleAssScript) && !ui.subtitleAssScript->empty();
-    const bool hasPlaintextSubtitleCues = std::any_of(
-        ui.subtitleCues.begin(), ui.subtitleCues.end(),
-        [](const WindowUiState::SubtitleCue& cue) {
-            return !cue.assStyled && !cue.text.empty();
-        });
-    bool showSubtitle =
-        ui.subtitleAlpha > 0.01f && (hasPlaintextSubtitleCues || hasAssScript);
-    if (!hasAssScript && !ui.subtitleRenderError.empty()) {
-        setSubtitleRenderError({});
-    }
-    if (!showOverlay && !showSubtitle && !showTimelinePreview) return;
+  ID3D11Device *device = m_gpu.device();
+  if (!device) {
+    result.error = "The shared D3D11 device is unavailable.";
+    return result;
+  }
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+  device->GetImmediateContext(&context);
+  if (!context || !m_constantBuffer || !m_vertexShader || !m_pixelShader) {
+    result.error = "The video renderer is not ready for frame capture.";
+    return result;
+  }
 
-    if (!device || !context || !m_constantBuffer) return;
+  const int width = frameCache.GetDisplayWidth();
+  const int height = frameCache.GetDisplayHeight();
+  if (width <= 0 || height <= 0) {
+    result.error = "The rendered video frame has invalid dimensions.";
+    return result;
+  }
+  const size_t widthPixels = static_cast<size_t>(width);
+  const size_t heightPixels = static_cast<size_t>(height);
+  if (widthPixels > std::numeric_limits<size_t>::max() / 4u) {
+    result.error = "The rendered video frame row size overflows.";
+    return result;
+  }
+  const size_t rowBytes = widthPixels * 4u;
+  if (rowBytes > std::numeric_limits<uint32_t>::max() ||
+      heightPixels > std::numeric_limits<size_t>::max() / rowBytes) {
+    result.error = "The rendered video frame pixel size overflows.";
+    return result;
+  }
+  const size_t pixelBytes = rowBytes * heightPixels;
+  std::vector<uint8_t> pixels(pixelBytes);
 
-    const SIZE cellSize = TextGridCellSize();
-    const int cellWidth = std::max(1, static_cast<int>(cellSize.cx));
-    const int cellHeight = std::max(1, static_cast<int>(cellSize.cy));
-    const int cols = playback_overlay::overlayCellCountForPixels(
-        std::max(1, geometry.width), cellWidth);
-    const int rows = playback_overlay::overlayCellCountForPixels(
-        std::max(1, geometry.height), cellHeight);
-    const playback_overlay::OverlayCellLayout windowOverlayLayout =
-        playback_overlay::layoutWindowOverlayCells(ui, cols, rows);
-    const playback_overlay::ContextMenuCellLayout contextMenuLayout =
-        playback_overlay::layoutContextMenuCells(ui.contextMenu, cols, rows);
-    bool drawTimelinePreview = false;
-    D3D11_VIEWPORT timelinePreviewViewport{};
+  D3D11_TEXTURE2D_DESC targetDesc{};
+  targetDesc.Width = static_cast<UINT>(width);
+  targetDesc.Height = static_cast<UINT>(height);
+  targetDesc.MipLevels = 1;
+  targetDesc.ArraySize = 1;
+  targetDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  targetDesc.SampleDesc.Count = 1;
+  targetDesc.Usage = D3D11_USAGE_DEFAULT;
+  targetDesc.BindFlags = D3D11_BIND_RENDER_TARGET;
 
-    if (showTimelinePreview) {
-        const playback_video_image::RgbaImage* previewSurface =
-            ui.timelinePreview.hasImage()
-                ? &ui.timelinePreview.image->surface
-                : nullptr;
-        const int sourceWidth =
-            previewSurface
-                ? static_cast<int>(previewSurface->width)
-                : std::max(16, ui.timelinePreview.sourceWidth);
-        const int sourceHeight =
-            previewSurface
-                ? static_cast<int>(previewSurface->height)
-                : std::max(9, ui.timelinePreview.sourceHeight);
-        const auto previewLayout =
-            playback_video_timeline_preview::layoutCells(
-                cols, rows, windowOverlayLayout.progressBarY,
-                windowOverlayLayout.progressBarX,
-                windowOverlayLayout.progressBarWidth,
-                ui.timelinePreview.anchorRatio, sourceWidth, sourceHeight,
-                cellWidth, cellHeight,
-                playback_video_timeline_preview::formatTimestamp(
-                    ui.timelinePreview.targetUs),
-                ui.timelinePreview.metadataLines);
-        if (previewSurface && previewLayout.drawable()) {
-            if (m_timelinePreviewImageId != ui.timelinePreview.image->id &&
-                playback_video_image::validate(*previewSurface) &&
-                m_timelinePreviewFrameCache.Update(
-                    device, context, previewSurface->pixels.data(),
-                    static_cast<int>(previewSurface->strideBytes),
-                    static_cast<int>(previewSurface->width),
-                    static_cast<int>(previewSurface->height))) {
-                m_timelinePreviewImageId = ui.timelinePreview.image->id;
-            }
-            if (m_timelinePreviewImageId == ui.timelinePreview.image->id &&
-                m_timelinePreviewFrameCache.HasFrame()) {
-                const int previewLeft = std::clamp(
-                    previewLayout.imageX * cellWidth, 0,
-                    std::max(0, geometry.width - 1));
-                const int previewTop = std::clamp(
-                    previewLayout.imageY * cellHeight, 0,
-                    std::max(0, geometry.height - 1));
-                const float previewX = static_cast<float>(previewLeft);
-                const float previewY = static_cast<float>(previewTop);
-                const float previewWidth = static_cast<float>(std::max(
-                    1, std::min(geometry.width - previewLeft,
-                                previewLayout.imageWidth * cellWidth)));
-                const float previewHeight = static_cast<float>(std::max(
-                    1, std::min(geometry.height - previewTop,
-                                previewLayout.imageHeight * cellHeight)));
-                timelinePreviewViewport = D3D11_VIEWPORT{
-                    previewX, previewY, previewWidth, previewHeight, 0.0f, 1.0f};
-                drawTimelinePreview = true;
-            }
-        }
-    }
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> target;
+  if (FAILED(device->CreateTexture2D(&targetDesc, nullptr, &target))) {
+    result.error = "Failed to create the frame capture render target.";
+    return result;
+  }
+  Microsoft::WRL::ComPtr<ID3D11RenderTargetView> targetView;
+  if (FAILED(
+          device->CreateRenderTargetView(target.Get(), nullptr, &targetView))) {
+    result.error = "Failed to create the frame capture render view.";
+    return result;
+  }
 
-    // UI overlay is window-space: render it on the full client viewport,
-    // not the letterboxed video viewport.
-    D3D11_VIEWPORT overlayViewport = {
-        0.0f,
-        0.0f,
-        static_cast<float>(std::max(1, geometry.width)),
-        static_cast<float>(std::max(1, geometry.height)),
-        0.0f,
-        1.0f
-    };
-    context->RSSetViewports(1, &overlayViewport);
-    
-    context->PSSetShader(m_uiShader.Get(), NULL, 0);
-    context->VSSetShader(m_vertexShader.Get(), NULL, 0);
-    context->PSSetSamplers(0, 1, m_sampler.GetAddressOf());
-    context->PSSetConstantBuffers(0, 1, m_constantBuffer.GetAddressOf());
-    if (m_uiBlendState) {
-        const float blendFactor[4] = {0.f, 0.f, 0.f, 0.f};
-        context->OMSetBlendState(m_uiBlendState.Get(), blendFactor, 0xffffffffu);
-    }
-    
-    float subtitleTopNorm = 0.0f;
-    float subtitleHeightNorm = 0.0f;
-    float subtitleLeftNorm = 0.0f;
-    float subtitleWidthNorm = 0.0f;
-    bool drawOverlayTextGrid = false;
-    D3D11_VIEWPORT overlayTextGridViewport{};
-    int viewportX =
-        std::clamp(static_cast<int>(std::lround(geometry.viewport.x)), 0,
-                   std::max(0, geometry.width - 1));
-    int viewportY =
-        std::clamp(static_cast<int>(std::lround(geometry.viewport.y)), 0,
-                   std::max(0, geometry.height - 1));
-    int viewportW =
-        std::clamp(static_cast<int>(std::lround(geometry.viewport.w)), 1,
-                   std::max(1, geometry.width - viewportX));
-    int viewportH =
-        std::clamp(static_cast<int>(std::lround(geometry.viewport.h)), 1,
-                   std::max(1, geometry.height - viewportY));
-    if (viewportW <= 1 || viewportH <= 1) {
-        viewportX = 0;
-        viewportY = 0;
-        viewportW = std::max(1, geometry.width);
-        viewportH = std::max(1, geometry.height);
-    }
-
-    if (showOverlay) {
-        if (playback_overlay::renderWindowUiToGpuTextGrid(
-                ui, windowOverlayLayout, cellWidth, cellHeight,
-                drawTimelinePreview
-                    ? playback_overlay::TimelinePreviewPresentation::
-                          ImageAndTimestamp
-                    : playback_overlay::TimelinePreviewPresentation::
-                          TimestampOnly,
-                playback_overlay::OverlayRenderStyles{},
-                m_windowOverlayTextGrid)) {
-            const int textPxW =
-                std::min(geometry.width,
-                         m_windowOverlayTextGrid.cols * cellWidth);
-            const int textPxH =
-                std::min(geometry.height,
-                         m_windowOverlayTextGrid.rows * cellHeight);
-            overlayTextGridViewport = D3D11_VIEWPORT{
-                0.0f, 0.0f, static_cast<float>(textPxW),
-                static_cast<float>(textPxH), 0.0f, 1.0f};
-            drawOverlayTextGrid = textPxW > 0 && textPxH > 0;
-            const bool controlsRendered = showPlaybackChrome;
-            if (drawOverlayTextGrid &&
-                (controlsRendered || contextMenuLayout.drawable())) {
-                playback_overlay::InteractionMap cellInteractions =
-                    contextMenuLayout.drawable()
-                        ? playback_overlay::buildContextMenuInteractionMap(
-                              contextMenuLayout)
-                        : playback_overlay::buildOverlayInteractionMap(
-                              windowOverlayLayout, &ui.videoEdit,
-                              ui.videoEditPrompt,
-                              ui.mediaActionConfirmationPrompt.has_value());
-                if (outInteractions) {
-                    *outInteractions =
-                        playback_overlay::transformInteractionMap(
-                            cellInteractions, 0.0, 0.0,
-                            static_cast<double>(textPxW) /
-                                static_cast<double>(std::max(1, cols)),
-                            static_cast<double>(textPxH) /
-                                static_cast<double>(std::max(1, rows)));
-                }
-            }
-        }
-    }
-
-    if (showSubtitle) {
-        const CaptionStyleProfile baseCaptionStyle = getWindowsCaptionStyleProfile();
-        const int canvasW = std::max(1, viewportW);
-        const int canvasH = std::max(1, viewportH);
-        if (!m_subtitleTexture || m_subtitleWidth != canvasW ||
-            m_subtitleHeight != canvasH) {
-            m_subtitleWidth = canvasW;
-            m_subtitleHeight = canvasH;
-            m_subtitleTexture.Reset();
-            m_subtitleSrv.Reset();
-
-            D3D11_TEXTURE2D_DESC texDesc = {};
-            texDesc.Width = static_cast<UINT>(canvasW);
-            texDesc.Height = static_cast<UINT>(canvasH);
-            texDesc.MipLevels = 1;
-            texDesc.ArraySize = 1;
-            texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-            texDesc.SampleDesc.Count = 1;
-            texDesc.Usage = D3D11_USAGE_DEFAULT;
-            texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-            if (SUCCEEDED(device->CreateTexture2D(
-                    &texDesc, NULL, &m_subtitleTexture))) {
-                device->CreateShaderResourceView(
-                    m_subtitleTexture.Get(), NULL, &m_subtitleSrv);
-            }
-        }
-
-        if (m_subtitleTexture) {
-            std::vector<uint8_t> canvas(
-                static_cast<size_t>(canvasW) * static_cast<size_t>(canvasH) * 4u, 0u);
-            std::vector<RECT> occupiedRects;
-            std::string assRenderErrorText = ui.subtitleRenderError;
-            const bool useAssScript =
-                static_cast<bool>(ui.subtitleAssScript) && !ui.subtitleAssScript->empty();
-            if (useAssScript) {
-                const AssRenderResult assResult =
-                    renderAssSubtitlesToCanvas(ui.subtitleAssScript,
-                                               ui.subtitleAssFonts,
-                                               ui.subtitleClockUs, canvasW, canvasH,
-                                               &canvas);
-                if (assResult.status == AssRenderStatus::error_init_or_parse) {
-                    assRenderErrorText = assResult.errorMessage;
-                    if (assRenderErrorText.empty()) {
-                        assRenderErrorText =
-                            "Unknown ASS renderer error while parsing or rendering.";
-                    }
-                    setSubtitleRenderError(assRenderErrorText);
-                } else {
-                    assRenderErrorText.clear();
-                    setSubtitleRenderError({});
-                }
-            } else if (!assRenderErrorText.empty()) {
-                assRenderErrorText.clear();
-                setSubtitleRenderError({});
-            }
-
-            auto rectsOverlap = [](const RECT& a, const RECT& b) {
-                return a.left < b.right && a.right > b.left && a.top < b.bottom &&
-                       a.bottom > b.top;
-            };
-
-            auto blendBitmapIntoCanvas = [&](const std::vector<uint8_t>& srcBitmap,
-                                             int srcW, int srcH, int dstX0,
-                                             int dstY0) {
-                if (srcBitmap.empty() || srcW <= 0 || srcH <= 0) return;
-                for (int y = 0; y < srcH; ++y) {
-                    const int dstY = dstY0 + y;
-                    if (dstY < 0 || dstY >= canvasH) continue;
-                    for (int x = 0; x < srcW; ++x) {
-                        const int dstX = dstX0 + x;
-                        if (dstX < 0 || dstX >= canvasW) continue;
-
-                        const size_t srcIdx =
-                            (static_cast<size_t>(y) * static_cast<size_t>(srcW) +
-                             static_cast<size_t>(x)) *
-                            4u;
-                        const uint8_t srcA8 = srcBitmap[srcIdx + 3];
-                        if (srcA8 == 0) continue;
-                        const float srcA = static_cast<float>(srcA8) / 255.0f;
-
-                        const size_t dstIdx =
-                            (static_cast<size_t>(dstY) * static_cast<size_t>(canvasW) +
-                             static_cast<size_t>(dstX)) *
-                            4u;
-                        const float dstA =
-                            static_cast<float>(canvas[dstIdx + 3]) / 255.0f;
-                        const float outA = srcA + dstA * (1.0f - srcA);
-                        if (outA <= 0.0001f) continue;
-
-                        for (int c = 0; c < 3; ++c) {
-                            const float srcC =
-                                static_cast<float>(srcBitmap[srcIdx + static_cast<size_t>(c)]) /
-                                255.0f;
-                            const float dstC =
-                                static_cast<float>(canvas[dstIdx + static_cast<size_t>(c)]) /
-                                255.0f;
-                            const float outC =
-                                (srcC * srcA + dstC * dstA * (1.0f - srcA)) / outA;
-                            canvas[dstIdx + static_cast<size_t>(c)] = static_cast<uint8_t>(
-                                std::lround(255.0f * std::clamp(outC, 0.0f, 1.0f)));
-                        }
-                        canvas[dstIdx + 3] = static_cast<uint8_t>(
-                            std::lround(255.0f * std::clamp(outA, 0.0f, 1.0f)));
-                    }
-                }
-            };
-
-            for (const auto& cue : ui.subtitleCues) {
-                if (cue.assStyled) continue;
-                if (cue.text.empty()) continue;
-
-                CaptionStyleProfile cueStyle = baseCaptionStyle;
-                cueStyle.sizeScale = std::clamp(
-                    baseCaptionStyle.sizeScale * std::max(0.40f, cue.sizeScale), 0.35f,
-                    3.0f);
-                const std::wstring cueTextWide = utf8ToWideLossy(cue.text);
-                if (cueTextWide.empty()) continue;
-                const std::wstring cueFontNameWide =
-                    utf8ToWideLossy(cue.fontName);
-
-                SubtitleBitmapLayout layout{};
-                if (!computeSubtitleLayout(
-                        cueTextWide, canvasW, canvasH, cueStyle, cueFontNameWide,
-                        std::clamp(cue.scaleX, 0.40f, 3.5f), cue.bold, cue.italic,
-                        cue.underline, &layout)) {
-                    continue;
-                }
-
-                int align = std::clamp(cue.alignment, 1, 9);
-                const int alignCol = ((align - 1) % 3) + 1;  // 1:left, 2:center, 3:right
-                const int alignRow = ((align - 1) / 3) + 1;  // 1:bottom, 2:middle, 3:top
-
-                int marginL = std::max(
-                    0, static_cast<int>(std::lround(cue.marginLNorm * canvasW)));
-                int marginR = std::max(
-                    0, static_cast<int>(std::lround(cue.marginRNorm * canvasW)));
-                int marginV = std::max(
-                    0, static_cast<int>(std::lround(cue.marginVNorm * canvasH)));
-                if (!cue.hasPosition && marginV == 0) {
-                    marginV = std::max(2, layout.fontPx / 6);
-                }
-
-                int anchorX = canvasW / 2;
-                int anchorY = canvasH - marginV;
-                if (cue.hasPosition) {
-                    anchorX = static_cast<int>(std::lround(cue.posX * canvasW));
-                    anchorY = static_cast<int>(std::lround(cue.posY * canvasH));
-                } else {
-                    if (alignCol == 1) {
-                        anchorX = marginL;
-                    } else if (alignCol == 2) {
-                        anchorX = canvasW / 2;
-                    } else {
-                        anchorX = canvasW - marginR;
-                    }
-
-                    if (alignRow == 1) {
-                        anchorY = canvasH - marginV;
-                    } else if (alignRow == 2) {
-                        anchorY = canvasH / 2;
-                    } else {
-                        anchorY = marginV;
-                    }
-                }
-
-                int drawX = anchorX;
-                if (alignCol == 2) drawX -= layout.width / 2;
-                if (alignCol == 3) drawX -= layout.width;
-
-                int drawY = anchorY;
-                if (alignRow == 1) drawY -= layout.height;
-                if (alignRow == 2) drawY -= layout.height / 2;
-
-                drawX = std::clamp(drawX, 0, std::max(0, canvasW - layout.width));
-                drawY = std::clamp(drawY, 0, std::max(0, canvasH - layout.height));
-
-                RECT rect{drawX, drawY, drawX + layout.width, drawY + layout.height};
-                if (!cue.hasPosition) {
-                    const int moveStep = std::max(2, layout.fontPx / 3);
-                    for (int tries = 0; tries < 64; ++tries) {
-                        bool overlaps = false;
-                        for (const RECT& occupied : occupiedRects) {
-                            if (rectsOverlap(rect, occupied)) {
-                                overlaps = true;
-                                break;
-                            }
-                        }
-                        if (!overlaps) break;
-
-                        if (alignRow == 1) {
-                            drawY -= moveStep;
-                        } else if (alignRow == 3) {
-                            drawY += moveStep;
-                        } else {
-                            drawY += moveStep;
-                        }
-                        drawY =
-                            std::clamp(drawY, 0, std::max(0, canvasH - layout.height));
-                        rect = RECT{drawX, drawY, drawX + layout.width,
-                                    drawY + layout.height};
-                    }
-                }
-
-                std::vector<uint8_t> cueBitmap;
-                if (!renderSubtitleTextToBitmap(
-                        cue.text, layout, cueStyle, cueFontNameWide,
-                        std::clamp(cue.scaleX, 0.40f, 3.5f), cue.bold, cue.italic,
-                        cue.underline, cueBitmap) ||
-                    cueBitmap.empty()) {
-                    continue;
-                }
-
-                blendBitmapIntoCanvas(cueBitmap, layout.width, layout.height, drawX,
-                                      drawY);
-
-                occupiedRects.push_back(rect);
-            }
-
-            if (useAssScript && !assRenderErrorText.empty()) {
-                CaptionStyleProfile errorStyle = baseCaptionStyle;
-                errorStyle.sizeScale =
-                    std::clamp(baseCaptionStyle.sizeScale * 0.82f, 0.45f, 2.4f);
-                errorStyle.textR = 255;
-                errorStyle.textG = 224;
-                errorStyle.textB = 224;
-                errorStyle.textAlpha = 1.0f;
-                errorStyle.backgroundR = 16;
-                errorStyle.backgroundG = 16;
-                errorStyle.backgroundB = 16;
-                errorStyle.backgroundAlpha = 0.84f;
-                errorStyle.fontEffect = 4;  // outline
-
-                const std::string errorText =
-                    "ASS subtitle render error: " + assRenderErrorText;
-                const std::wstring errorWide = utf8ToWideLossy(errorText);
-                SubtitleBitmapLayout errorLayout{};
-                if (!errorWide.empty() &&
-                    computeSubtitleLayout(errorWide, canvasW, canvasH, errorStyle,
-                                          std::wstring(), 1.0f, false, false,
-                                          false, &errorLayout)) {
-                    std::vector<uint8_t> errorBitmap;
-                    if (renderSubtitleTextToBitmap(errorText, errorLayout, errorStyle,
-                                                   std::wstring(), 1.0f, false,
-                                                   false, false, errorBitmap)) {
-                        const int errorX = std::clamp(
-                            (canvasW - errorLayout.width) / 2, 0,
-                            std::max(0, canvasW - errorLayout.width));
-                        const int errorY = std::clamp(
-                            std::max(4, canvasH / 24), 0,
-                            std::max(0, canvasH - errorLayout.height));
-                        blendBitmapIntoCanvas(errorBitmap, errorLayout.width,
-                                              errorLayout.height, errorX, errorY);
-                    }
-                }
-            }
-
-            D3D11_BOX box{0, 0, 0, static_cast<UINT>(canvasW),
-                          static_cast<UINT>(canvasH), 1};
-            context->UpdateSubresource(m_subtitleTexture.Get(), 0, &box,
-                                       canvas.data(), canvasW * 4, 0);
-
-            subtitleHeightNorm =
-                static_cast<float>(canvasH) /
-                std::max(1, geometry.height);
-            subtitleWidthNorm =
-                static_cast<float>(canvasW) /
-                std::max(1, geometry.width);
-            subtitleLeftNorm =
-                static_cast<float>(viewportX) /
-                std::max(1, geometry.width);
-            subtitleTopNorm =
-                static_cast<float>(viewportY) /
-                std::max(1, geometry.height);
-        }
-    }
-
-    {
-        D3D11_MAPPED_SUBRESOURCE mapped;
-        if (SUCCEEDED(context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-            ShaderConstants sc{};
-            sc.progress = ui.progress;
-            sc.overlayAlpha = 0.0f;
-            sc.isPaused = ui.isPaused ? 1 : 0;
-            sc.volPct = (uint32_t)std::clamp(ui.volPct, 0, 100);
-            sc.textTop = 0.0f;
-            sc.textHeight = 0.0f;
-            sc.textLeft = 0.0f;
-            sc.textWidth = 0.0f;
-            sc.subtitleTop = subtitleTopNorm;
-            sc.subtitleHeight = subtitleHeightNorm;
-            sc.subtitleLeft = subtitleLeftNorm;
-            sc.subtitleWidth = subtitleWidthNorm;
-            sc.subtitleAlpha =
-                showSubtitle ? std::clamp(ui.subtitleAlpha, 0.0f, 1.0f) : 0.0f;
-            FillOutputColorConstants(sc, outputColor);
-            std::memcpy(mapped.pData, &sc, sizeof(ShaderConstants));
-            context->Unmap(m_constantBuffer.Get(), 0);
-        }
-    }
-
-    if (showSubtitle) {
-        ID3D11ShaderResourceView* srvs[5] = {
-            nullptr, nullptr, nullptr, nullptr, m_subtitleSrv.Get()};
-        context->PSSetShaderResources(0, 5, srvs);
-        context->Draw(4, 0);
-    }
-    if (drawTimelinePreview &&
-        BindVideoFrame(m_timelinePreviewFrameCache, context,
-                       timelinePreviewViewport, outputColor)) {
-        context->Draw(4, 0);
-        UnbindVideoFrame(context);
-        m_timelinePreviewFrameCache.MarkFrameInFlight(context);
-    }
-    if (drawOverlayTextGrid) {
-        const bool overlayDrawn = DrawGpuTextGridFrame(
-            device, context, m_windowOverlayTextGrid,
-            overlayTextGridViewport, GpuTextGridComposition::AlphaOverlay);
-        if (!overlayDrawn && outInteractions) {
-            *outInteractions = {};
-        }
-    }
-    context->OMSetBlendState(nullptr, nullptr, 0xffffffffu);
-
-    if (showSubtitle) {
-        ID3D11ShaderResourceView* nullSRVs[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
-        context->PSSetShaderResources(0, 5, nullSRVs);
-    }
-}
-
-void VideoWindow::PresentOverlay(GpuVideoFrameCache& frameCache, const WindowUiState& ui) {
-    std::unique_lock<std::recursive_mutex> lock(m_gpu.mutex());
-#if RADIOIFY_ENABLE_TIMING_LOG
-    fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay enter (wnd=%p swap=%p visible=%d)\n", now_ms().c_str(), thread_id_str().c_str(), (void*)m_hWnd, (void*)m_swapChain.Get(), m_hWnd ? IsWindowVisible(m_hWnd) : 0);
-#endif
-    if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) {
-#if RADIOIFY_ENABLE_TIMING_LOG
-        fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay early exit: window/swap not ready\n", now_ms().c_str(), thread_id_str().c_str());
-#endif
-        return;
-    }
-    if (!frameCache.HasFrame()) {
-#if RADIOIFY_ENABLE_TIMING_LOG
-        fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay early exit: no frame in cache\n", now_ms().c_str(), thread_id_str().c_str());
-#endif
-        return;
-    }
-
-    RECT rect{};
-    if (GetClientRect(m_hWnd, &rect)) {
-        m_width = rect.right - rect.left;
-        m_height = rect.bottom - rect.top;
-    }
-
-    Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
-
-    ID3D11Device* device = m_gpu.device();
-    if (!device) return;
-
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
-    device->GetImmediateContext(&context);
-    if (!context || !m_renderTargetView) return;
-
-    m_videoWidth = frameCache.GetDisplayWidth();
-    m_videoHeight = frameCache.GetDisplayHeight();
-    UpdateViewport(m_width, m_height);
-    const FrameRenderGeometry geometry{
-        m_width, m_height,
-        VideoViewport{m_viewportX, m_viewportY, m_viewportW, m_viewportH}};
-    playback_overlay::InteractionMap presentedInteractions;
-    if (!DrawVideoFrame(frameCache, device, context.Get(),
-                        m_renderTargetView.Get(), geometry,
-                        m_outputColorState, ui, true, "PresentOverlay",
-                        &presentedInteractions)) {
-        return;
-    }
-    DrawPictureInPictureBorder(context.Get());
-    frameCache.MarkFrameInFlight(context.Get());
-
-#if RADIOIFY_ENABLE_TIMING_LOG
-    fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay about to Present()\n", now_ms().c_str(), thread_id_str().c_str());
-#endif
-    lock.unlock();
-    if (!swapChain) return;
-    const VideoWindowPresentArgs presentArgs = liveVideoWindowPresentArgs();
-    HRESULT presHr = PresentSwapChain(swapChain.Get(), presentArgs, "overlay");
-    if (videoWindowPresentSkipped(presHr)) {
-#if RADIOIFY_ENABLE_TIMING_LOG
-        fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay skipped (0x%08X)\n", now_ms().c_str(), thread_id_str().c_str(), static_cast<unsigned int>(presHr));
-#endif
-        return;
-    }
-    if (SUCCEEDED(presHr)) {
-        SetOverlayInteractionMap(std::move(presentedInteractions));
-    }
-#if RADIOIFY_ENABLE_TIMING_LOG
-    if (FAILED(presHr)) {
-        fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay Present() FAILED 0x%08X\n", now_ms().c_str(), thread_id_str().c_str(), static_cast<unsigned int>(presHr));
+  D3D11_TEXTURE2D_DESC stagingDesc = targetDesc;
+  stagingDesc.Usage = D3D11_USAGE_STAGING;
+  stagingDesc.BindFlags = 0;
+  stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> staging;
+  if (FAILED(device->CreateTexture2D(&stagingDesc, nullptr, &staging))) {
+    result.error = "Failed to create the frame capture readback texture.";
+    return result;
+  }
+  VideoOutputColorState snapshotColor = m_outputColorState;
+  snapshotColor.swapChainFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+  snapshotColor.colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+  snapshotColor.encoding = VideoOutputColorEncoding::Sdr;
+  const FrameRenderGeometry geometry{width, height,
+                                     VideoViewport{0.0f, 0.0f,
+                                                   static_cast<float>(width),
+                                                   static_cast<float>(height)}};
+  const auto restoreSwapChainTarget = [&]() {
+    if (m_renderTargetView) {
+      context->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(),
+                                  nullptr);
     } else {
-        fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay Present() OK\n", now_ms().c_str(), thread_id_str().c_str());
+      context->OMSetRenderTargets(0, nullptr, nullptr);
     }
+  };
+  if (!DrawVideoFrame(frameCache, device, context.Get(), targetView.Get(),
+                      geometry, snapshotColor, ui, false, "CaptureCurrentFrame",
+                      nullptr)) {
+    restoreSwapChainTarget();
+    result.error = "Failed to render the current frame for capture.";
+    return result;
+  }
+  context->OMSetRenderTargets(0, nullptr, nullptr);
+  context->CopyResource(staging.Get(), target.Get());
+  restoreSwapChainTarget();
+
+  D3D11_MAPPED_SUBRESOURCE mapped{};
+  if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+    result.error = "Failed to read back the rendered video frame.";
+    return result;
+  }
+  if (!mapped.pData || static_cast<size_t>(mapped.RowPitch) < rowBytes) {
+    context->Unmap(staging.Get(), 0);
+    result.error = "The frame capture readback row is incomplete.";
+    return result;
+  }
+  for (int y = 0; y < height; ++y) {
+    std::memcpy(pixels.data() + rowBytes * static_cast<size_t>(y),
+                static_cast<const uint8_t *>(mapped.pData) +
+                    static_cast<size_t>(mapped.RowPitch) *
+                        static_cast<size_t>(y),
+                rowBytes);
+  }
+  context->Unmap(staging.Get(), 0);
+  result.snapshot.width = static_cast<uint32_t>(width);
+  result.snapshot.height = static_cast<uint32_t>(height);
+  result.snapshot.strideBytes = static_cast<uint32_t>(rowBytes);
+  result.snapshot.rgba = std::move(pixels);
+  return result;
+}
+
+void VideoWindow::DrawOverlay(
+    ID3D11Device *device, ID3D11DeviceContext *context, const WindowUiState &ui,
+    const FrameRenderGeometry &geometry,
+    const VideoOutputColorState &outputColor, bool includePlaybackOverlay,
+    playback_overlay::InteractionMap *outInteractions) {
+  if (outInteractions) {
+    *outInteractions = {};
+  }
+  const bool showTimelinePreview =
+      includePlaybackOverlay && ui.timelinePreview.hoverActive;
+  const bool showPlaybackChrome =
+      includePlaybackOverlay && (ui.chromeVisible || showTimelinePreview);
+  const bool showContextMenu = includePlaybackOverlay && ui.contextMenu.visible;
+  const bool showOverlay = showPlaybackChrome || showContextMenu ||
+                           (includePlaybackOverlay && ui.transientMessage);
+  const bool hasAssScript =
+      static_cast<bool>(ui.subtitleAssScript) && !ui.subtitleAssScript->empty();
+  const bool hasPlaintextSubtitleCues =
+      std::any_of(ui.subtitleCues.begin(), ui.subtitleCues.end(),
+                  [](const WindowUiState::SubtitleCue &cue) {
+                    return !cue.assStyled && !cue.text.empty();
+                  });
+  bool showSubtitle =
+      ui.subtitleAlpha > 0.01f && (hasPlaintextSubtitleCues || hasAssScript);
+  if (!hasAssScript && !ui.subtitleRenderError.empty()) {
+    setSubtitleRenderError({});
+  }
+  if (!showOverlay && !showSubtitle && !showTimelinePreview)
+    return;
+
+  if (!device || !context || !m_constantBuffer)
+    return;
+
+  const SIZE cellSize = TextGridCellSize();
+  const int cellWidth = std::max(1, static_cast<int>(cellSize.cx));
+  const int cellHeight = std::max(1, static_cast<int>(cellSize.cy));
+  const int cols = playback_overlay::overlayCellCountForPixels(
+      std::max(1, geometry.width), cellWidth);
+  const int rows = playback_overlay::overlayCellCountForPixels(
+      std::max(1, geometry.height), cellHeight);
+  const playback_overlay::OverlayCellLayout windowOverlayLayout =
+      playback_overlay::layoutWindowOverlayCells(ui, cols, rows);
+  const playback_overlay::ContextMenuCellLayout contextMenuLayout =
+      playback_overlay::layoutContextMenuCells(ui.contextMenu, cols, rows);
+  bool drawTimelinePreview = false;
+  D3D11_VIEWPORT timelinePreviewViewport{};
+
+  if (showTimelinePreview) {
+    const playback_video_image::RgbaImage *previewSurface =
+        ui.timelinePreview.hasImage() ? &ui.timelinePreview.image->surface
+                                      : nullptr;
+    const int sourceWidth = previewSurface
+                                ? static_cast<int>(previewSurface->width)
+                                : std::max(16, ui.timelinePreview.sourceWidth);
+    const int sourceHeight = previewSurface
+                                 ? static_cast<int>(previewSurface->height)
+                                 : std::max(9, ui.timelinePreview.sourceHeight);
+    const auto previewLayout = playback_video_timeline_preview::layoutCells(
+        cols, rows, windowOverlayLayout.progressBarY,
+        windowOverlayLayout.progressBarX, windowOverlayLayout.progressBarWidth,
+        ui.timelinePreview.anchorRatio, sourceWidth, sourceHeight, cellWidth,
+        cellHeight,
+        playback_video_timeline_preview::formatTimestamp(
+            ui.timelinePreview.targetUs),
+        ui.timelinePreview.metadataLines);
+    if (previewSurface && previewLayout.drawable()) {
+      if (m_timelinePreviewImageId != ui.timelinePreview.image->id &&
+          playback_video_image::validate(*previewSurface) &&
+          m_timelinePreviewFrameCache.Update(
+              device, context, previewSurface->pixels.data(),
+              static_cast<int>(previewSurface->strideBytes),
+              static_cast<int>(previewSurface->width),
+              static_cast<int>(previewSurface->height))) {
+        m_timelinePreviewImageId = ui.timelinePreview.image->id;
+      }
+      if (m_timelinePreviewImageId == ui.timelinePreview.image->id &&
+          m_timelinePreviewFrameCache.HasFrame()) {
+        const int previewLeft = std::clamp(previewLayout.imageX * cellWidth, 0,
+                                           std::max(0, geometry.width - 1));
+        const int previewTop = std::clamp(previewLayout.imageY * cellHeight, 0,
+                                          std::max(0, geometry.height - 1));
+        const float previewX = static_cast<float>(previewLeft);
+        const float previewY = static_cast<float>(previewTop);
+        const float previewWidth = static_cast<float>(
+            std::max(1, std::min(geometry.width - previewLeft,
+                                 previewLayout.imageWidth * cellWidth)));
+        const float previewHeight = static_cast<float>(
+            std::max(1, std::min(geometry.height - previewTop,
+                                 previewLayout.imageHeight * cellHeight)));
+        timelinePreviewViewport = D3D11_VIEWPORT{
+            previewX, previewY, previewWidth, previewHeight, 0.0f, 1.0f};
+        drawTimelinePreview = true;
+      }
+    }
+  }
+
+  // UI overlay is window-space: render it on the full client viewport,
+  // not the letterboxed video viewport.
+  D3D11_VIEWPORT overlayViewport = {
+      0.0f,
+      0.0f,
+      static_cast<float>(std::max(1, geometry.width)),
+      static_cast<float>(std::max(1, geometry.height)),
+      0.0f,
+      1.0f};
+  context->RSSetViewports(1, &overlayViewport);
+
+  context->PSSetShader(m_uiShader.Get(), NULL, 0);
+  context->VSSetShader(m_vertexShader.Get(), NULL, 0);
+  context->PSSetSamplers(0, 1, m_sampler.GetAddressOf());
+  context->PSSetConstantBuffers(0, 1, m_constantBuffer.GetAddressOf());
+  if (m_uiBlendState) {
+    const float blendFactor[4] = {0.f, 0.f, 0.f, 0.f};
+    context->OMSetBlendState(m_uiBlendState.Get(), blendFactor, 0xffffffffu);
+  }
+
+  float subtitleTopNorm = 0.0f;
+  float subtitleHeightNorm = 0.0f;
+  float subtitleLeftNorm = 0.0f;
+  float subtitleWidthNorm = 0.0f;
+  bool drawOverlayTextGrid = false;
+  D3D11_VIEWPORT overlayTextGridViewport{};
+  int viewportX = std::clamp(static_cast<int>(std::lround(geometry.viewport.x)),
+                             0, std::max(0, geometry.width - 1));
+  int viewportY = std::clamp(static_cast<int>(std::lround(geometry.viewport.y)),
+                             0, std::max(0, geometry.height - 1));
+  int viewportW = std::clamp(static_cast<int>(std::lround(geometry.viewport.w)),
+                             1, std::max(1, geometry.width - viewportX));
+  int viewportH = std::clamp(static_cast<int>(std::lround(geometry.viewport.h)),
+                             1, std::max(1, geometry.height - viewportY));
+  if (viewportW <= 1 || viewportH <= 1) {
+    viewportX = 0;
+    viewportY = 0;
+    viewportW = std::max(1, geometry.width);
+    viewportH = std::max(1, geometry.height);
+  }
+
+  if (showOverlay) {
+    if (playback_overlay::renderWindowUiToGpuTextGrid(
+            ui, windowOverlayLayout, cellWidth, cellHeight,
+            drawTimelinePreview
+                ? playback_overlay::TimelinePreviewPresentation::
+                      ImageAndTimestamp
+                : playback_overlay::TimelinePreviewPresentation::TimestampOnly,
+            playback_overlay::OverlayRenderStyles{}, m_windowOverlayTextGrid)) {
+      const int textPxW =
+          std::min(geometry.width, m_windowOverlayTextGrid.cols * cellWidth);
+      const int textPxH =
+          std::min(geometry.height, m_windowOverlayTextGrid.rows * cellHeight);
+      overlayTextGridViewport = D3D11_VIEWPORT{
+          0.0f, 0.0f, static_cast<float>(textPxW), static_cast<float>(textPxH),
+          0.0f, 1.0f};
+      drawOverlayTextGrid = textPxW > 0 && textPxH > 0;
+      const bool controlsRendered = showPlaybackChrome;
+      if (drawOverlayTextGrid &&
+          (controlsRendered || contextMenuLayout.drawable())) {
+        std::optional<playback_overlay::ChapterOverviewRegion> overviewRegion;
+        if (!contextMenuLayout.drawable() && ui.chapterOverviewOpen) {
+          const auto panel = playback_video_chapters::layoutOverviewPanel(
+              ui.chapters, windowOverlayLayout.width,
+              windowOverlayLayout.height, windowOverlayLayout.progressBarY,
+              ui.chapterOverviewScrollOffset);
+          if (panel.drawable()) {
+            playback_overlay::ChapterOverviewRegion region{
+                {static_cast<double>(panel.x), static_cast<double>(panel.y),
+                 static_cast<double>(panel.x + panel.width),
+                 static_cast<double>(panel.y + panel.height)},
+                panel.scrollOffset, panel.maximumScrollOffset, {}};
+            for (const auto &row : panel.chapterRows) {
+              region.items.push_back(
+                  {{static_cast<double>(panel.x + 1),
+                    static_cast<double>(panel.y + 1 + row.line),
+                    static_cast<double>(panel.x + panel.width - 1),
+                    static_cast<double>(panel.y + 2 + row.line)},
+                   row.startUs});
+            }
+            overviewRegion = std::move(region);
+          }
+        }
+        playback_overlay::InteractionMap cellInteractions =
+            contextMenuLayout.drawable()
+                ? playback_overlay::buildContextMenuInteractionMap(
+                      contextMenuLayout)
+                : playback_overlay::buildOverlayInteractionMap(
+                      windowOverlayLayout, &ui.videoEdit, ui.videoEditPrompt,
+                      ui.mediaActionConfirmationPrompt.has_value(),
+                      overviewRegion ? &*overviewRegion : nullptr);
+        if (outInteractions) {
+          *outInteractions = playback_overlay::transformInteractionMap(
+              cellInteractions, 0.0, 0.0,
+              static_cast<double>(textPxW) /
+                  static_cast<double>(std::max(1, cols)),
+              static_cast<double>(textPxH) /
+                  static_cast<double>(std::max(1, rows)));
+        }
+      }
+    }
+  }
+
+  if (showSubtitle) {
+    const CaptionStyleProfile baseCaptionStyle =
+        getWindowsCaptionStyleProfile();
+    const int canvasW = std::max(1, viewportW);
+    const int canvasH = std::max(1, viewportH);
+    if (!m_subtitleTexture || m_subtitleWidth != canvasW ||
+        m_subtitleHeight != canvasH) {
+      m_subtitleWidth = canvasW;
+      m_subtitleHeight = canvasH;
+      m_subtitleTexture.Reset();
+      m_subtitleSrv.Reset();
+
+      D3D11_TEXTURE2D_DESC texDesc = {};
+      texDesc.Width = static_cast<UINT>(canvasW);
+      texDesc.Height = static_cast<UINT>(canvasH);
+      texDesc.MipLevels = 1;
+      texDesc.ArraySize = 1;
+      texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+      texDesc.SampleDesc.Count = 1;
+      texDesc.Usage = D3D11_USAGE_DEFAULT;
+      texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+      if (SUCCEEDED(
+              device->CreateTexture2D(&texDesc, NULL, &m_subtitleTexture))) {
+        device->CreateShaderResourceView(m_subtitleTexture.Get(), NULL,
+                                         &m_subtitleSrv);
+      }
+    }
+
+    if (m_subtitleTexture) {
+      std::vector<uint8_t> canvas(
+          static_cast<size_t>(canvasW) * static_cast<size_t>(canvasH) * 4u, 0u);
+      std::vector<RECT> occupiedRects;
+      std::string assRenderErrorText = ui.subtitleRenderError;
+      const bool useAssScript = static_cast<bool>(ui.subtitleAssScript) &&
+                                !ui.subtitleAssScript->empty();
+      if (useAssScript) {
+        const AssRenderResult assResult = renderAssSubtitlesToCanvas(
+            ui.subtitleAssScript, ui.subtitleAssFonts, ui.subtitleClockUs,
+            canvasW, canvasH, &canvas);
+        if (assResult.status == AssRenderStatus::error_init_or_parse) {
+          assRenderErrorText = assResult.errorMessage;
+          if (assRenderErrorText.empty()) {
+            assRenderErrorText =
+                "Unknown ASS renderer error while parsing or rendering.";
+          }
+          setSubtitleRenderError(assRenderErrorText);
+        } else {
+          assRenderErrorText.clear();
+          setSubtitleRenderError({});
+        }
+      } else if (!assRenderErrorText.empty()) {
+        assRenderErrorText.clear();
+        setSubtitleRenderError({});
+      }
+
+      auto rectsOverlap = [](const RECT &a, const RECT &b) {
+        return a.left < b.right && a.right > b.left && a.top < b.bottom &&
+               a.bottom > b.top;
+      };
+
+      auto blendBitmapIntoCanvas = [&](const std::vector<uint8_t> &srcBitmap,
+                                       int srcW, int srcH, int dstX0,
+                                       int dstY0) {
+        if (srcBitmap.empty() || srcW <= 0 || srcH <= 0)
+          return;
+        for (int y = 0; y < srcH; ++y) {
+          const int dstY = dstY0 + y;
+          if (dstY < 0 || dstY >= canvasH)
+            continue;
+          for (int x = 0; x < srcW; ++x) {
+            const int dstX = dstX0 + x;
+            if (dstX < 0 || dstX >= canvasW)
+              continue;
+
+            const size_t srcIdx =
+                (static_cast<size_t>(y) * static_cast<size_t>(srcW) +
+                 static_cast<size_t>(x)) *
+                4u;
+            const uint8_t srcA8 = srcBitmap[srcIdx + 3];
+            if (srcA8 == 0)
+              continue;
+            const float srcA = static_cast<float>(srcA8) / 255.0f;
+
+            const size_t dstIdx =
+                (static_cast<size_t>(dstY) * static_cast<size_t>(canvasW) +
+                 static_cast<size_t>(dstX)) *
+                4u;
+            const float dstA = static_cast<float>(canvas[dstIdx + 3]) / 255.0f;
+            const float outA = srcA + dstA * (1.0f - srcA);
+            if (outA <= 0.0001f)
+              continue;
+
+            for (int c = 0; c < 3; ++c) {
+              const float srcC =
+                  static_cast<float>(
+                      srcBitmap[srcIdx + static_cast<size_t>(c)]) /
+                  255.0f;
+              const float dstC =
+                  static_cast<float>(canvas[dstIdx + static_cast<size_t>(c)]) /
+                  255.0f;
+              const float outC =
+                  (srcC * srcA + dstC * dstA * (1.0f - srcA)) / outA;
+              canvas[dstIdx + static_cast<size_t>(c)] = static_cast<uint8_t>(
+                  std::lround(255.0f * std::clamp(outC, 0.0f, 1.0f)));
+            }
+            canvas[dstIdx + 3] = static_cast<uint8_t>(
+                std::lround(255.0f * std::clamp(outA, 0.0f, 1.0f)));
+          }
+        }
+      };
+
+      for (const auto &cue : ui.subtitleCues) {
+        if (cue.assStyled)
+          continue;
+        if (cue.text.empty())
+          continue;
+
+        CaptionStyleProfile cueStyle = baseCaptionStyle;
+        cueStyle.sizeScale = std::clamp(baseCaptionStyle.sizeScale *
+                                            std::max(0.40f, cue.sizeScale),
+                                        0.35f, 3.0f);
+        const std::wstring cueTextWide = utf8ToWideLossy(cue.text);
+        if (cueTextWide.empty())
+          continue;
+        const std::wstring cueFontNameWide = utf8ToWideLossy(cue.fontName);
+
+        SubtitleBitmapLayout layout{};
+        if (!computeSubtitleLayout(
+                cueTextWide, canvasW, canvasH, cueStyle, cueFontNameWide,
+                std::clamp(cue.scaleX, 0.40f, 3.5f), cue.bold, cue.italic,
+                cue.underline, &layout)) {
+          continue;
+        }
+
+        int align = std::clamp(cue.alignment, 1, 9);
+        const int alignCol = ((align - 1) % 3) + 1; // 1:left, 2:center, 3:right
+        const int alignRow = ((align - 1) / 3) + 1; // 1:bottom, 2:middle, 3:top
+
+        int marginL = std::max(
+            0, static_cast<int>(std::lround(cue.marginLNorm * canvasW)));
+        int marginR = std::max(
+            0, static_cast<int>(std::lround(cue.marginRNorm * canvasW)));
+        int marginV = std::max(
+            0, static_cast<int>(std::lround(cue.marginVNorm * canvasH)));
+        if (!cue.hasPosition && marginV == 0) {
+          marginV = std::max(2, layout.fontPx / 6);
+        }
+
+        int anchorX = canvasW / 2;
+        int anchorY = canvasH - marginV;
+        if (cue.hasPosition) {
+          anchorX = static_cast<int>(std::lround(cue.posX * canvasW));
+          anchorY = static_cast<int>(std::lround(cue.posY * canvasH));
+        } else {
+          if (alignCol == 1) {
+            anchorX = marginL;
+          } else if (alignCol == 2) {
+            anchorX = canvasW / 2;
+          } else {
+            anchorX = canvasW - marginR;
+          }
+
+          if (alignRow == 1) {
+            anchorY = canvasH - marginV;
+          } else if (alignRow == 2) {
+            anchorY = canvasH / 2;
+          } else {
+            anchorY = marginV;
+          }
+        }
+
+        int drawX = anchorX;
+        if (alignCol == 2)
+          drawX -= layout.width / 2;
+        if (alignCol == 3)
+          drawX -= layout.width;
+
+        int drawY = anchorY;
+        if (alignRow == 1)
+          drawY -= layout.height;
+        if (alignRow == 2)
+          drawY -= layout.height / 2;
+
+        drawX = std::clamp(drawX, 0, std::max(0, canvasW - layout.width));
+        drawY = std::clamp(drawY, 0, std::max(0, canvasH - layout.height));
+
+        RECT rect{drawX, drawY, drawX + layout.width, drawY + layout.height};
+        if (!cue.hasPosition) {
+          const int moveStep = std::max(2, layout.fontPx / 3);
+          for (int tries = 0; tries < 64; ++tries) {
+            bool overlaps = false;
+            for (const RECT &occupied : occupiedRects) {
+              if (rectsOverlap(rect, occupied)) {
+                overlaps = true;
+                break;
+              }
+            }
+            if (!overlaps)
+              break;
+
+            if (alignRow == 1) {
+              drawY -= moveStep;
+            } else if (alignRow == 3) {
+              drawY += moveStep;
+            } else {
+              drawY += moveStep;
+            }
+            drawY = std::clamp(drawY, 0, std::max(0, canvasH - layout.height));
+            rect =
+                RECT{drawX, drawY, drawX + layout.width, drawY + layout.height};
+          }
+        }
+
+        std::vector<uint8_t> cueBitmap;
+        if (!renderSubtitleTextToBitmap(
+                cue.text, layout, cueStyle, cueFontNameWide,
+                std::clamp(cue.scaleX, 0.40f, 3.5f), cue.bold, cue.italic,
+                cue.underline, cueBitmap) ||
+            cueBitmap.empty()) {
+          continue;
+        }
+
+        blendBitmapIntoCanvas(cueBitmap, layout.width, layout.height, drawX,
+                              drawY);
+
+        occupiedRects.push_back(rect);
+      }
+
+      if (useAssScript && !assRenderErrorText.empty()) {
+        CaptionStyleProfile errorStyle = baseCaptionStyle;
+        errorStyle.sizeScale =
+            std::clamp(baseCaptionStyle.sizeScale * 0.82f, 0.45f, 2.4f);
+        errorStyle.textR = 255;
+        errorStyle.textG = 224;
+        errorStyle.textB = 224;
+        errorStyle.textAlpha = 1.0f;
+        errorStyle.backgroundR = 16;
+        errorStyle.backgroundG = 16;
+        errorStyle.backgroundB = 16;
+        errorStyle.backgroundAlpha = 0.84f;
+        errorStyle.fontEffect = 4; // outline
+
+        const std::string errorText =
+            "ASS subtitle render error: " + assRenderErrorText;
+        const std::wstring errorWide = utf8ToWideLossy(errorText);
+        SubtitleBitmapLayout errorLayout{};
+        if (!errorWide.empty() &&
+            computeSubtitleLayout(errorWide, canvasW, canvasH, errorStyle,
+                                  std::wstring(), 1.0f, false, false, false,
+                                  &errorLayout)) {
+          std::vector<uint8_t> errorBitmap;
+          if (renderSubtitleTextToBitmap(errorText, errorLayout, errorStyle,
+                                         std::wstring(), 1.0f, false, false,
+                                         false, errorBitmap)) {
+            const int errorX =
+                std::clamp((canvasW - errorLayout.width) / 2, 0,
+                           std::max(0, canvasW - errorLayout.width));
+            const int errorY =
+                std::clamp(std::max(4, canvasH / 24), 0,
+                           std::max(0, canvasH - errorLayout.height));
+            blendBitmapIntoCanvas(errorBitmap, errorLayout.width,
+                                  errorLayout.height, errorX, errorY);
+          }
+        }
+      }
+
+      D3D11_BOX box{
+          0, 0, 0, static_cast<UINT>(canvasW), static_cast<UINT>(canvasH), 1};
+      context->UpdateSubresource(m_subtitleTexture.Get(), 0, &box,
+                                 canvas.data(), canvasW * 4, 0);
+
+      subtitleHeightNorm =
+          static_cast<float>(canvasH) / std::max(1, geometry.height);
+      subtitleWidthNorm =
+          static_cast<float>(canvasW) / std::max(1, geometry.width);
+      subtitleLeftNorm =
+          static_cast<float>(viewportX) / std::max(1, geometry.width);
+      subtitleTopNorm =
+          static_cast<float>(viewportY) / std::max(1, geometry.height);
+    }
+  }
+
+  {
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    if (SUCCEEDED(context->Map(m_constantBuffer.Get(), 0,
+                               D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+      ShaderConstants sc{};
+      sc.progress = ui.progress;
+      sc.overlayAlpha = 0.0f;
+      sc.isPaused = ui.isPaused ? 1 : 0;
+      sc.volPct = (uint32_t)std::clamp(ui.volPct, 0, 100);
+      sc.textTop = 0.0f;
+      sc.textHeight = 0.0f;
+      sc.textLeft = 0.0f;
+      sc.textWidth = 0.0f;
+      sc.subtitleTop = subtitleTopNorm;
+      sc.subtitleHeight = subtitleHeightNorm;
+      sc.subtitleLeft = subtitleLeftNorm;
+      sc.subtitleWidth = subtitleWidthNorm;
+      sc.subtitleAlpha =
+          showSubtitle ? std::clamp(ui.subtitleAlpha, 0.0f, 1.0f) : 0.0f;
+      FillOutputColorConstants(sc, outputColor);
+      std::memcpy(mapped.pData, &sc, sizeof(ShaderConstants));
+      context->Unmap(m_constantBuffer.Get(), 0);
+    }
+  }
+
+  if (showSubtitle) {
+    ID3D11ShaderResourceView *srvs[5] = {nullptr, nullptr, nullptr, nullptr,
+                                         m_subtitleSrv.Get()};
+    context->PSSetShaderResources(0, 5, srvs);
+    context->Draw(4, 0);
+  }
+  if (drawTimelinePreview &&
+      BindVideoFrame(m_timelinePreviewFrameCache, context,
+                     timelinePreviewViewport, outputColor)) {
+    context->Draw(4, 0);
+    UnbindVideoFrame(context);
+    m_timelinePreviewFrameCache.MarkFrameInFlight(context);
+  }
+  if (drawOverlayTextGrid) {
+    const bool overlayDrawn = DrawGpuTextGridFrame(
+        device, context, m_windowOverlayTextGrid, overlayTextGridViewport,
+        GpuTextGridComposition::AlphaOverlay);
+    if (!overlayDrawn && outInteractions) {
+      *outInteractions = {};
+    }
+  }
+  context->OMSetBlendState(nullptr, nullptr, 0xffffffffu);
+
+  if (showSubtitle) {
+    ID3D11ShaderResourceView *nullSRVs[5] = {nullptr, nullptr, nullptr, nullptr,
+                                             nullptr};
+    context->PSSetShaderResources(0, 5, nullSRVs);
+  }
+}
+
+void VideoWindow::PresentOverlay(GpuVideoFrameCache &frameCache,
+                                 const WindowUiState &ui) {
+  std::unique_lock<std::recursive_mutex> lock(m_gpu.mutex());
+#if RADIOIFY_ENABLE_TIMING_LOG
+  fprintf(stderr,
+          "[%s] [tid=%s] VideoWindow::PresentOverlay enter (wnd=%p swap=%p "
+          "visible=%d)\n",
+          now_ms().c_str(), thread_id_str().c_str(), (void *)m_hWnd,
+          (void *)m_swapChain.Get(), m_hWnd ? IsWindowVisible(m_hWnd) : 0);
+#endif
+  if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) {
+#if RADIOIFY_ENABLE_TIMING_LOG
+    fprintf(stderr,
+            "[%s] [tid=%s] VideoWindow::PresentOverlay early exit: window/swap "
+            "not ready\n",
+            now_ms().c_str(), thread_id_str().c_str());
+#endif
+    return;
+  }
+  if (!frameCache.HasFrame()) {
+#if RADIOIFY_ENABLE_TIMING_LOG
+    fprintf(stderr,
+            "[%s] [tid=%s] VideoWindow::PresentOverlay early exit: no frame in "
+            "cache\n",
+            now_ms().c_str(), thread_id_str().c_str());
+#endif
+    return;
+  }
+
+  RECT rect{};
+  if (GetClientRect(m_hWnd, &rect)) {
+    m_width = rect.right - rect.left;
+    m_height = rect.bottom - rect.top;
+  }
+
+  Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
+
+  ID3D11Device *device = m_gpu.device();
+  if (!device)
+    return;
+
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+  device->GetImmediateContext(&context);
+  if (!context || !m_renderTargetView)
+    return;
+
+  m_videoWidth = frameCache.GetDisplayWidth();
+  m_videoHeight = frameCache.GetDisplayHeight();
+  UpdateViewport(m_width, m_height);
+  const FrameRenderGeometry geometry{
+      m_width, m_height,
+      VideoViewport{m_viewportX, m_viewportY, m_viewportW, m_viewportH}};
+  playback_overlay::InteractionMap presentedInteractions;
+  if (!DrawVideoFrame(frameCache, device, context.Get(),
+                      m_renderTargetView.Get(), geometry, m_outputColorState,
+                      ui, true, "PresentOverlay", &presentedInteractions)) {
+    return;
+  }
+  DrawPictureInPictureBorder(context.Get());
+  frameCache.MarkFrameInFlight(context.Get());
+
+#if RADIOIFY_ENABLE_TIMING_LOG
+  fprintf(stderr,
+          "[%s] [tid=%s] VideoWindow::PresentOverlay about to Present()\n",
+          now_ms().c_str(), thread_id_str().c_str());
+#endif
+  lock.unlock();
+  if (!swapChain)
+    return;
+  const VideoWindowPresentArgs presentArgs = liveVideoWindowPresentArgs();
+  HRESULT presHr = PresentSwapChain(swapChain.Get(), presentArgs, "overlay");
+  if (videoWindowPresentSkipped(presHr)) {
+#if RADIOIFY_ENABLE_TIMING_LOG
+    fprintf(stderr,
+            "[%s] [tid=%s] VideoWindow::PresentOverlay skipped (0x%08X)\n",
+            now_ms().c_str(), thread_id_str().c_str(),
+            static_cast<unsigned int>(presHr));
+#endif
+    return;
+  }
+  if (SUCCEEDED(presHr)) {
+    SetOverlayInteractionMap(std::move(presentedInteractions));
+  }
+#if RADIOIFY_ENABLE_TIMING_LOG
+  if (FAILED(presHr)) {
+    fprintf(
+        stderr,
+        "[%s] [tid=%s] VideoWindow::PresentOverlay Present() FAILED 0x%08X\n",
+        now_ms().c_str(), thread_id_str().c_str(),
+        static_cast<unsigned int>(presHr));
+  } else {
+    fprintf(stderr, "[%s] [tid=%s] VideoWindow::PresentOverlay Present() OK\n",
+            now_ms().c_str(), thread_id_str().c_str());
+  }
 #endif
 }
 
 void VideoWindow::PresentBackbuffer() {
-    std::unique_lock<std::recursive_mutex> lock(m_gpu.mutex());
-    if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd)) return;
-    Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
-    UINT presentInterval = m_presentInterval.load(std::memory_order_relaxed);
-    lock.unlock();
-    if (!swapChain) return;
-    const VideoWindowPresentArgs presentArgs =
-        synchronizedVideoWindowPresentArgs(presentInterval);
-    (void)PresentSwapChain(swapChain.Get(), presentArgs, "backbuffer");
+  std::unique_lock<std::recursive_mutex> lock(m_gpu.mutex());
+  if (!m_hWnd || !m_swapChain || !IsWindowVisible(m_hWnd))
+    return;
+  Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain = m_swapChain;
+  UINT presentInterval = m_presentInterval.load(std::memory_order_relaxed);
+  lock.unlock();
+  if (!swapChain)
+    return;
+  const VideoWindowPresentArgs presentArgs =
+      synchronizedVideoWindowPresentArgs(presentInterval);
+  (void)PresentSwapChain(swapChain.Get(), presentArgs, "backbuffer");
 }

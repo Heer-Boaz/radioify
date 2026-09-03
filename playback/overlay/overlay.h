@@ -10,16 +10,16 @@
 
 #include "consolescreen.h"
 #include "gpu_text_grid.h"
+#include "playback/media_processing_service.h"
 #include "playback/overlay/context_menu.h"
 #include "playback/overlay/interaction.h"
 #include "playback/overlay/media_action_confirmation_presentation.h"
 #include "playback/overlay/osd_state.h"
-#include "playback/media_processing_service.h"
-#include "playback/video/edit/command.h"
-#include "playback/video/subtitle/manager.h"
-#include "playback/video/framebuffer/window/window.h"
-#include "playback/video/edit/view.h"
 #include "playback/video/chapter/chapter.h"
+#include "playback/video/edit/command.h"
+#include "playback/video/edit/view.h"
+#include "playback/video/framebuffer/window/window.h"
+#include "playback/video/subtitle/manager.h"
 
 namespace playback_overlay {
 
@@ -192,11 +192,11 @@ struct PlaybackOverlayInputs {
   playback_video_edit::ExportProgress videoEditExport;
   playback_video_edit::Prompt videoEditPrompt =
       playback_video_edit::Prompt::None;
-  std::optional<MediaActionConfirmationDialog>
-      mediaActionConfirmationPrompt;
+  std::optional<MediaActionConfirmationDialog> mediaActionConfirmationPrompt;
   std::optional<playback_media_processing::Activity> mediaTaskActivity;
   playback_video_chapters::Snapshot chapters;
   bool chapterOverviewOpen = false;
+  int chapterOverviewScrollOffset = 0;
 };
 
 struct PlaybackOverlayState {
@@ -238,67 +238,69 @@ struct PlaybackOverlayState {
   playback_video_edit::ExportProgress videoEditExport;
   playback_video_edit::Prompt videoEditPrompt =
       playback_video_edit::Prompt::None;
-  std::optional<MediaActionConfirmationDialog>
-      mediaActionConfirmationPrompt;
+  std::optional<MediaActionConfirmationDialog> mediaActionConfirmationPrompt;
   std::optional<playback_media_processing::Activity> mediaTaskActivity;
   playback_video_chapters::Snapshot chapters;
   bool chapterOverviewOpen = false;
+  int chapterOverviewScrollOffset = 0;
 };
 
-PlaybackOverlayState buildPlaybackOverlayState(
-    const PlaybackOverlayInputs& inputs);
+PlaybackOverlayState
+buildPlaybackOverlayState(const PlaybackOverlayInputs &inputs);
 
-SubtitlePresentation projectSubtitlePresentation(
-    const SubtitleManager& subtitleManager, bool subtitlesEnabled,
-    bool seekingOverlay, int64_t clockUs, bool hasSubtitles);
+SubtitlePresentation
+projectSubtitlePresentation(const SubtitleManager &subtitleManager,
+                            bool subtitlesEnabled, bool seekingOverlay,
+                            int64_t clockUs, bool hasSubtitles);
 
-std::vector<WindowUiState::SubtitleCue> collectSubtitleCues(
-    const SubtitleManager& subtitleManager, bool subtitlesEnabled,
-    bool seekingOverlay, int64_t clockUs, bool hasSubtitles);
+std::vector<WindowUiState::SubtitleCue>
+collectSubtitleCues(const SubtitleManager &subtitleManager,
+                    bool subtitlesEnabled, bool seekingOverlay, int64_t clockUs,
+                    bool hasSubtitles);
 
-std::string buildSubtitleText(const SubtitleManager& subtitleManager,
-                             bool subtitlesEnabled, bool seekingOverlay,
-                             int64_t clockUs, bool hasSubtitles);
+std::string buildSubtitleText(const SubtitleManager &subtitleManager,
+                              bool subtitlesEnabled, bool seekingOverlay,
+                              int64_t clockUs, bool hasSubtitles);
 
-std::vector<OverlayControlSpec> buildOverlayControlSpecs(
-    const PlaybackOverlayState& state, int hoverControlToken);
-std::vector<OverlayControlSpec> buildOverlayControlSpecs(
-    const PlaybackOverlayState& state, int hoverControlToken,
-    const OverlayControlSpecOptions& options);
+std::vector<OverlayControlSpec>
+buildOverlayControlSpecs(const PlaybackOverlayState &state,
+                         int hoverControlToken);
+std::vector<OverlayControlSpec>
+buildOverlayControlSpecs(const PlaybackOverlayState &state,
+                         int hoverControlToken,
+                         const OverlayControlSpecOptions &options);
 
 OverlayControlSpec makeOverlayTextControlSpec(OverlayControlId id,
-                                              const std::string& label,
-                                              bool active,
-                                              bool enabled = true);
-std::vector<OverlayCellControlInput> buildOverlayCellControlInputs(
-    const std::vector<OverlayControlSpec>& specs, int hoverControlToken);
-std::vector<OverlayDialogButtonInput>
-buildMediaActionConfirmationDialogButtons(
-    const MediaActionConfirmationDialog& prompt,
-    int hoverControlToken);
+                                              const std::string &label,
+                                              bool active, bool enabled = true);
+std::vector<OverlayCellControlInput>
+buildOverlayCellControlInputs(const std::vector<OverlayControlSpec> &specs,
+                              int hoverControlToken);
+std::vector<OverlayDialogButtonInput> buildMediaActionConfirmationDialogButtons(
+    const MediaActionConfirmationDialog &prompt, int hoverControlToken);
 OverlayControlIntent intentForOverlayControl(OverlayControlId id);
 
-OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input);
-OverlayCellLayout layoutOverlayControlCells(
-    const std::vector<OverlayCellControlInput>& controls, int width);
-OverlayCellLayout layoutOverlayDialogCells(
-    const OverlayDialogLayoutInput& input);
+OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput &input);
+OverlayCellLayout
+layoutOverlayControlCells(const std::vector<OverlayCellControlInput> &controls,
+                          int width);
+OverlayCellLayout
+layoutOverlayDialogCells(const OverlayDialogLayoutInput &input);
 OverlayCellLayout layoutMediaActionConfirmationDialogCells(
-    const MediaActionConfirmationDialog& prompt, int width,
-    int height, int hoverControlToken = -1);
-OverlayCellLayout layoutPlaybackOverlayCells(
-    const PlaybackOverlayState& state, int width, int height,
-    int hoverControlToken);
-OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
+    const MediaActionConfirmationDialog &prompt, int width, int height,
+    int hoverControlToken = -1);
+OverlayCellLayout layoutPlaybackOverlayCells(const PlaybackOverlayState &state,
+                                             int width, int height,
+                                             int hoverControlToken);
+OverlayCellLayout layoutWindowOverlayCells(const WindowUiState &ui, int width,
                                            int height);
 
-std::string buildWindowOverlayProgressSuffix(
-    const PlaybackOverlayState& state);
+std::string buildWindowOverlayProgressSuffix(const PlaybackOverlayState &state);
 
-std::string buildWindowOverlayTopLine(const PlaybackOverlayState& state);
+std::string buildWindowOverlayTopLine(const PlaybackOverlayState &state);
 
-WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
-                                int hoverControlToken);
+WindowUiState buildWindowUiState(const PlaybackOverlayState &state,
+                                 int hoverControlToken);
 
 struct OverlayRenderStyles {
   Style baseStyle{{219, 224, 230}, {5, 6, 7}};
@@ -314,44 +316,39 @@ enum class TimelinePreviewPresentation {
   ImageAndTimestamp,
 };
 
-void renderOverlayToScreen(ConsoleScreen& screen,
-                           const OverlayCellLayout& layout,
-                           const OverlayRenderStyles& styles,
-                           double progress,
-                           const playback_video_edit::EditSnapshot* videoEdit,
-                           const playback_video_edit::ExportProgress*
-                               videoEditExport,
-                           playback_video_edit::Prompt videoEditPrompt,
-                           const std::optional<MediaActionConfirmationDialog>&
-                               mediaActionConfirmationPrompt,
-                           const playback_video_chapters::Snapshot* chapters,
-                           bool chapterOverviewOpen,
-                           int minY,
-                           int maxY);
+void renderOverlayToScreen(
+    ConsoleScreen &screen, const OverlayCellLayout &layout,
+    const OverlayRenderStyles &styles, double progress,
+    const playback_video_edit::EditSnapshot *videoEdit,
+    const playback_video_edit::ExportProgress *videoEditExport,
+    playback_video_edit::Prompt videoEditPrompt,
+    const std::optional<MediaActionConfirmationDialog>
+        &mediaActionConfirmationPrompt,
+    const playback_video_chapters::Snapshot *chapters, bool chapterOverviewOpen,
+    int chapterOverviewScrollOffset, int minY, int maxY);
 
-void renderTransientMessageToScreen(ConsoleScreen& screen,
-                                    const std::string& message,
-                                    const Style& style);
+void renderTransientMessageToScreen(ConsoleScreen &screen,
+                                    const std::string &message,
+                                    const Style &style);
 
-void renderContextMenuToScreen(ConsoleScreen& screen,
-                               const ContextMenuCellLayout& layout,
-                               const OverlayRenderStyles& styles);
+void renderContextMenuToScreen(ConsoleScreen &screen,
+                               const ContextMenuCellLayout &layout,
+                               const OverlayRenderStyles &styles);
 
 void renderTimelinePreviewChromeToScreen(
-    ConsoleScreen& screen,
-    const playback_video_timeline_preview::CellLayout& layout,
-    const OverlayRenderStyles& styles);
+    ConsoleScreen &screen,
+    const playback_video_timeline_preview::CellLayout &layout,
+    const OverlayRenderStyles &styles);
 
 void renderTimelinePreviewTimestampToScreen(
-    ConsoleScreen& screen,
-    const playback_video_timeline_preview::CellLayout& layout,
-    const OverlayRenderStyles& styles);
+    ConsoleScreen &screen,
+    const playback_video_timeline_preview::CellLayout &layout,
+    const OverlayRenderStyles &styles);
 
-bool renderWindowUiToGpuTextGrid(const WindowUiState& ui,
-                                 const OverlayCellLayout& overlayLayout,
-                                 int cellPixelWidth, int cellPixelHeight,
-                                 TimelinePreviewPresentation previewPresentation,
-                                 const OverlayRenderStyles& styles,
-                                 GpuTextGridFrame& outFrame);
+bool renderWindowUiToGpuTextGrid(
+    const WindowUiState &ui, const OverlayCellLayout &overlayLayout,
+    int cellPixelWidth, int cellPixelHeight,
+    TimelinePreviewPresentation previewPresentation,
+    const OverlayRenderStyles &styles, GpuTextGridFrame &outFrame);
 
-}  // namespace playback_overlay
+} // namespace playback_overlay

@@ -11,7 +11,7 @@ namespace playback_session {
 
 playback_overlay::MediaActionConfirmationDialog
 projectMediaActionConfirmationDialog(
-    const MediaActionConfirmationPrompt& prompt) {
+    const MediaActionConfirmationPrompt &prompt) {
   playback_overlay::MediaActionConfirmationDialog dialog;
   playback_media_confirmation::Content content =
       mediaActionConfirmationContent(prompt);
@@ -26,11 +26,11 @@ projectMediaActionConfirmationDialog(
   return dialog;
 }
 
-playback_screen_renderer::PlaybackMediaPresentation capturePlaybackMedia(
-    const Player& player, const AudioPlaybackSnapshot& audio,
-    PlayerTimelineSnapshot timeline, std::string windowTitle, bool audioOk,
-    bool hasSubtitles, bool subtitlesEnabled,
-    playback_overlay::SubtitlePresentation subtitle) {
+playback_screen_renderer::PlaybackMediaPresentation
+capturePlaybackMedia(const Player &player, const AudioPlaybackSnapshot &audio,
+                     PlayerTimelineSnapshot timeline, std::string windowTitle,
+                     bool audioOk, bool hasSubtitles, bool subtitlesEnabled,
+                     playback_overlay::SubtitlePresentation subtitle) {
   playback_screen_renderer::PlaybackMediaPresentation media;
   media.windowTitle = std::move(windowTitle);
   media.timeline = std::move(timeline);
@@ -58,17 +58,16 @@ playback_screen_renderer::PlaybackMediaPresentation capturePlaybackMedia(
   return media;
 }
 
-playback_overlay::PlaybackOverlayState projectPlaybackOverlay(
-    OverlayProjection projection) {
-  const auto& media = projection.media;
-  double displaySec = media.timeline.positionUs > 0
-                          ? static_cast<double>(media.timeline.positionUs) /
-                                1000000.0
-                          : 0.0;
-  double totalSec =
-      media.durationUs > 0
-          ? static_cast<double>(media.durationUs) / 1000000.0
-          : (projection.audioOk ? media.audio.durationSec : -1.0);
+playback_overlay::PlaybackOverlayState
+projectPlaybackOverlay(OverlayProjection projection) {
+  const auto &media = projection.media;
+  double displaySec =
+      media.timeline.positionUs > 0
+          ? static_cast<double>(media.timeline.positionUs) / 1000000.0
+          : 0.0;
+  double totalSec = media.durationUs > 0
+                        ? static_cast<double>(media.durationUs) / 1000000.0
+                        : (projection.audioOk ? media.audio.durationSec : -1.0);
   if (totalSec > 0.0) {
     displaySec = std::clamp(displaySec, 0.0, totalSec);
   }
@@ -90,8 +89,7 @@ playback_overlay::PlaybackOverlayState projectPlaybackOverlay(
   inputs.radioEnabled = media.audio.radioEnabled;
   inputs.radioLabel = media.audio.radioFilterLabel;
   inputs.hz50Enabled = media.audio.hz50Enabled;
-  inputs.canCycleAudioTracks =
-      projection.audioOk && media.canCycleAudioTracks;
+  inputs.canCycleAudioTracks = projection.audioOk && media.canCycleAudioTracks;
   inputs.activeAudioTrackLabel = media.activeAudioTrackLabel;
   inputs.subtitle = media.subtitle;
   inputs.hasSubtitles = media.hasSubtitles;
@@ -100,18 +98,14 @@ playback_overlay::PlaybackOverlayState projectPlaybackOverlay(
   inputs.seekingOverlay = media.timeline.seekPending();
   inputs.displaySec = displaySec;
   inputs.totalSec = totalSec;
-  inputs.volPct =
-      static_cast<int>(std::round(media.audio.volume * 100.0f));
+  inputs.volPct = static_cast<int>(std::round(media.audio.volume * 100.0f));
   inputs.osd = std::move(projection.osd);
-  inputs.paused =
-      projection.playbackState == PlaybackSessionState::Paused ||
-      projection.playbackState == PlaybackSessionState::Ended ||
-      media.ended || playerPaused;
-  inputs.pictureInPictureAvailable =
-      projection.pictureInPictureAvailable;
+  inputs.paused = projection.playbackState == PlaybackSessionState::Paused ||
+                  projection.playbackState == PlaybackSessionState::Ended ||
+                  media.ended || playerPaused;
+  inputs.pictureInPictureAvailable = projection.pictureInPictureAvailable;
   inputs.pictureInPictureActive = projection.pictureInPictureActive;
-  inputs.subtitleRenderError =
-      std::move(projection.subtitleRenderError);
+  inputs.subtitleRenderError = std::move(projection.subtitleRenderError);
   inputs.debugLines = std::move(projection.debugLines);
   inputs.contextMenu = std::move(projection.contextMenu);
   inputs.videoEdit = std::move(projection.videoEdit);
@@ -123,6 +117,7 @@ playback_overlay::PlaybackOverlayState projectPlaybackOverlay(
   inputs.mediaTaskActivity = std::move(projection.mediaTaskActivity);
   inputs.chapters = std::move(projection.chapters);
   inputs.chapterOverviewOpen = projection.chapterOverviewOpen;
+  inputs.chapterOverviewScrollOffset = projection.chapterOverviewScrollOffset;
   if (projection.mediaActionConfirmationPrompt) {
     inputs.mediaActionConfirmationPrompt = projectMediaActionConfirmationDialog(
         *projection.mediaActionConfirmationPrompt);
@@ -130,4 +125,4 @@ playback_overlay::PlaybackOverlayState projectPlaybackOverlay(
   return playback_overlay::buildPlaybackOverlayState(inputs);
 }
 
-}  // namespace playback_session
+} // namespace playback_session

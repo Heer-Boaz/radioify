@@ -1,2 +1,4 @@
 *.sh text eol=lf
+*.diff whitespace=-blank-at-eol
 models/audio_separation/*.onnx filter=lfs diff=lfs merge=lfs -text
+models/chapter_analysis/*.gguf filter=lfs diff=lfs merge=lfs -text

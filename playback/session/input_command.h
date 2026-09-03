@@ -80,6 +80,10 @@ struct ChapterNavigationRequest {
       playback_video_chapters::NavigationDirection::Next;
 };
 
+struct SetChapterOverviewScroll {
+  int offset = 0;
+};
+
 struct VideoEditRequest {
   playback_video_edit::Command command = playback_video_edit::Command::Open;
 };
@@ -112,12 +116,11 @@ struct ClearTimelinePreview {
 
 using Command =
     std::variant<CommandAction, TransportRequest, ChapterNavigationRequest,
-                 VideoEditRequest,
-                 ContextMenuRequest, MoveVideoEditBoundary,
-                 PlaybackExitRequest, TimelinePreviewRequest,
-                 ClearTimelinePreview, ShowPlaybackControls,
-                 SetOverlayControlHover, SetPaused, SeekTo, SeekBy,
-                 StepFrame, AdjustVolume>;
+                 SetChapterOverviewScroll, VideoEditRequest, ContextMenuRequest,
+                 MoveVideoEditBoundary, PlaybackExitRequest,
+                 TimelinePreviewRequest, ClearTimelinePreview,
+                 ShowPlaybackControls, SetOverlayControlHover, SetPaused,
+                 SeekTo, SeekBy, StepFrame, AdjustVolume>;
 
 struct SessionSnapshot {
   TransportSnapshot transport;
@@ -144,13 +147,13 @@ struct InteractionRequest {
 };
 
 class SessionPort {
- public:
+public:
   virtual ~SessionPort() = default;
 
   virtual bool dispatch(Command command) = 0;
   virtual SessionSnapshot snapshot() const = 0;
-  virtual playback_overlay::InteractionHit hitTest(
-      const InteractionRequest& request) const = 0;
+  virtual playback_overlay::InteractionHit
+  hitTest(const InteractionRequest &request) const = 0;
 };
 
-}  // namespace playback_session_input
+} // namespace playback_session_input

@@ -1,7 +1,6 @@
 #include "playback/video/chapter/presentation.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstdio>
 
 #include "core/unicode_display_width.h"
@@ -10,84 +9,61 @@
 namespace playback_video_chapters {
 namespace {
 
-std::string percentage(double value) {
-  const int percent = static_cast<int>(
-      std::lround(std::clamp(value, 0.0, 1.0) * 100.0));
-  return std::to_string(percent) + "%";
-}
-
-std::string rangeLabel(const Chapter& chapter) {
+std::string rangeLabel(const Chapter &chapter) {
   return playback_video_timeline_preview::formatTimestamp(chapter.startUs) +
          " - " +
          playback_video_timeline_preview::formatTimestamp(chapter.endUs);
 }
 
-std::vector<std::string> wrapLine(const std::string& text, int width) {
-  std::vector<std::string> lines;
-  if (width <= 0 || text.empty()) return lines;
-  std::string remaining = text;
-  while (!remaining.empty()) {
-    if (utf8DisplayWidth(remaining) <= width) {
-      lines.push_back(std::move(remaining));
-      break;
-    }
-    std::string candidate = utf8TakeDisplayWidth(remaining, width);
-    std::size_t split = candidate.find_last_of(" \t");
-    if (split == std::string::npos || split == 0) {
-      split = candidate.size();
-    }
-    std::string line = candidate.substr(0, split);
-    while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) {
-      line.pop_back();
-    }
-    if (!line.empty()) lines.push_back(std::move(line));
-    remaining.erase(0, split);
-    while (!remaining.empty() &&
-           (remaining.front() == ' ' || remaining.front() == '\t')) {
-      remaining.erase(remaining.begin());
-    }
-  }
-  return lines;
-}
-
-void appendWrapped(std::vector<std::string>* lines, const std::string& text,
-                   int width, int limit = 0) {
-  if (!lines) return;
-  std::vector<std::string> wrapped = wrapLine(text, width);
-  if (limit > 0 && static_cast<int>(wrapped.size()) > limit) {
-    wrapped.resize(static_cast<std::size_t>(limit));
-    if (!wrapped.empty() && width > 1) {
-      std::string& last = wrapped.back();
-      last = utf8TakeDisplayWidth(last, width - 1) + "…";
-    }
-  }
+void appendWrapped(std::vector<std::string> *lines, const std::string &text,
+                   int width) {
+  if (!lines)
+    return;
+  std::vector<std::string> wrapped = utf8WrapDisplayWidth(text, width);
   lines->insert(lines->end(), wrapped.begin(), wrapped.end());
 }
 
-}  // namespace
-
-std::string stateStatusLine(const Snapshot& snapshot) {
-  const std::string label = analysisStateLabel(snapshot.state);
-  std::string line = label;
-  if (snapshot.progress) line += " · " + percentage(*snapshot.progress);
-  if (!snapshot.phase.empty() && snapshot.phase != label) {
-    line += " · " + snapshot.phase;
+void appendChapterRow(std::vector<std::string> *lines, const Chapter &chapter,
+                      int width) {
+  if (!lines || width <= 0)
+    return;
+  const std::string timestamp =
+      playback_video_timeline_preview::formatTimestamp(chapter.startUs);
+  const std::string prefix = timestamp + "  ";
+  const int prefixWidth = utf8DisplayWidth(prefix);
+  if (prefixWidth >= width) {
+    lines->push_back(utf8TakeDisplayWidth(prefix, width));
+    return;
   }
-  return line;
+  std::vector<std::string> titleLines =
+      utf8WrapDisplayWidth(chapter.title, width - prefixWidth);
+  if (titleLines.empty()) {
+    lines->push_back(timestamp);
+    return;
+  }
+  lines->push_back(prefix + titleLines.front());
+  const std::string indent(static_cast<std::size_t>(prefixWidth), ' ');
+  for (std::size_t index = 1; index < titleLines.size(); ++index) {
+    lines->push_back(indent + titleLines[index]);
+  }
 }
 
-std::vector<std::string> previewMetadata(const Snapshot& snapshot,
+} // namespace
+
+std::vector<std::string> previewMetadata(const Snapshot &snapshot,
                                          std::int64_t targetUs) {
   // A timeline hover exists to explain a generated marker. Capability,
   // progress and failure states have no marker metadata and must preserve the
   // existing frame-only preview geometry.
-  if (!snapshot.ready()) return {};
+  if (!snapshot.ready())
+    return {};
 
-  const Chapter* chapter = chapterAt(snapshot, targetUs);
-  if (!chapter) return {};
+  const Chapter *chapter = chapterAt(snapshot, targetUs);
+  if (!chapter)
+    return {};
   const auto found =
       std::find_if(snapshot.chapters.begin(), snapshot.chapters.end(),
-                   [&](const Chapter& item) { return item.id == chapter->id; });
+                   [&](const Chapter &item) { return item.id == chapter->id; });
   const std::size_t index = found == snapshot.chapters.end()
                                 ? 0
                                 : static_cast<std::size_t>(std::distance(
@@ -97,20 +73,22 @@ std::vector<std::string> previewMetadata(const Snapshot& snapshot,
                   std::to_string(snapshot.chapters.size()) + " · " +
                   chapter->title);
   lines.push_back(rangeLabel(*chapter));
-  if (!chapter->summary.empty()) lines.push_back(chapter->summary);
+  if (!chapter->summary.empty())
+    lines.push_back(chapter->summary);
   return lines;
 }
 
-OverviewPanelLayout layoutOverviewPanel(const Snapshot& snapshot,
-                                        int columns, int rows,
-                                        int progressBarY) {
+OverviewPanelLayout layoutOverviewPanel(const Snapshot &snapshot, int columns,
+                                        int rows, int progressBarY,
+                                        int requestedScrollOffset) {
   OverviewPanelLayout out;
   // The overview is a content surface, not an operation-status surface.
-  if (!snapshot.ready()) return out;
-  const int availableBottom =
-      std::clamp(progressBarY > 0 ? progressBarY - 1 : rows - 2, 3,
-                 std::max(3, rows - 1));
-  if (columns < 24 || rows < 8 || availableBottom < 5) return out;
+  if (!snapshot.ready())
+    return out;
+  const int availableBottom = std::clamp(
+      progressBarY > 0 ? progressBarY - 1 : rows - 2, 3, std::max(3, rows - 1));
+  if (columns < 24 || rows < 8 || availableBottom < 5)
+    return out;
 
   out.drawer = columns >= 96 && rows >= 16;
   if (out.drawer) {
@@ -122,38 +100,54 @@ OverviewPanelLayout layoutOverviewPanel(const Snapshot& snapshot,
     out.x = 1;
     out.y = 1;
     out.width = columns - 2;
-    out.height = std::min(availableBottom - out.y + 1,
-                          std::max(5, rows / 2));
+    out.height = std::min(availableBottom - out.y + 1, std::max(5, rows / 2));
   }
-  if (!out.drawable()) return OverviewPanelLayout{};
+  if (!out.drawable())
+    return OverviewPanelLayout{};
 
   const int contentWidth = std::max(1, out.width - 4);
-  out.lines.push_back("Video overview");
-  out.lines.push_back(stateStatusLine(snapshot));
+  std::vector<std::string> documentLines;
+  std::vector<std::size_t> documentHeadings;
+  std::vector<OverviewPanelLayout::ChapterRow> documentChapterRows;
+  documentLines.push_back("Video overview");
+  documentHeadings.push_back(0);
   if (!snapshot.overview.empty()) {
-    out.lines.push_back({});
-    appendWrapped(&out.lines, snapshot.overview, contentWidth,
-                  out.drawer ? 4 : 2);
+    documentLines.push_back({});
+    appendWrapped(&documentLines, snapshot.overview, contentWidth);
   }
-  if (snapshot.ready()) {
-    out.lines.push_back({});
-    for (const Chapter& chapter : snapshot.chapters) {
-      const std::string row =
-          playback_video_timeline_preview::formatTimestamp(chapter.startUs) +
-          "  " + chapter.title;
-      appendWrapped(&out.lines, row, contentWidth, 1);
+  documentLines.push_back({});
+  documentHeadings.push_back(documentLines.size());
+  documentLines.push_back("Chapters");
+  for (const Chapter &chapter : snapshot.chapters) {
+    const std::size_t firstChapterLine = documentLines.size();
+    appendChapterRow(&documentLines, chapter, contentWidth);
+    for (std::size_t line = firstChapterLine; line < documentLines.size();
+         ++line) {
+      documentChapterRows.push_back({line, chapter.startUs});
     }
   }
 
-  const int lineCapacity = std::max(0, out.height - 2);
-  if (static_cast<int>(out.lines.size()) > lineCapacity) {
-    out.lines.resize(static_cast<std::size_t>(lineCapacity));
-    if (!out.lines.empty() && contentWidth > 1) {
-      out.lines.back() = utf8TakeDisplayWidth(out.lines.back(),
-                                              contentWidth - 1) + "…";
+  out.pageLineCount = std::max(0, out.height - 2);
+  out.maximumScrollOffset =
+      std::max(0, static_cast<int>(documentLines.size()) - out.pageLineCount);
+  out.scrollOffset =
+      std::clamp(requestedScrollOffset, 0, out.maximumScrollOffset);
+  const std::size_t first = static_cast<std::size_t>(out.scrollOffset);
+  const std::size_t after =
+      std::min(documentLines.size(),
+               first + static_cast<std::size_t>(out.pageLineCount));
+  out.lines.assign(documentLines.begin() + static_cast<std::ptrdiff_t>(first),
+                   documentLines.begin() + static_cast<std::ptrdiff_t>(after));
+  for (const std::size_t heading : documentHeadings) {
+    if (heading >= first && heading < after) {
+      out.headingLines.push_back(heading - first);
     }
+  }
+  for (const OverviewPanelLayout::ChapterRow &row : documentChapterRows) {
+    if (row.line >= first && row.line < after)
+      out.chapterRows.push_back({row.line - first, row.startUs});
   }
   return out;
 }
 
-}  // namespace playback_video_chapters
+} // namespace playback_video_chapters

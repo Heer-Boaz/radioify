@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "playback/debug/lines.h"
+#include "playback/video/chapter/presentation.h"
 #include "playback/video/gpu/gpu_runtime.h"
 #include "playback/video/image.h"
 #include "playback/video/state/machine.h"
@@ -18,49 +19,49 @@
 namespace playback_screen_renderer {
 namespace {
 
-[[maybe_unused]] const char* playerStateLabel(PlayerState state) {
+[[maybe_unused]] const char *playerStateLabel(PlayerState state) {
   switch (state) {
-    case PlayerState::Idle:
-      return "Idle";
-    case PlayerState::Opening:
-      return "Opening";
-    case PlayerState::Prefill:
-      return "Prefill";
-    case PlayerState::Priming:
-      return "Priming";
-    case PlayerState::Playing:
-      return "Playing";
-    case PlayerState::Paused:
-      return "Paused";
-    case PlayerState::FrameStep:
-      return "FrameStep";
-    case PlayerState::Seeking:
-      return "Seeking";
-    case PlayerState::Draining:
-      return "Draining";
-    case PlayerState::Ended:
-      return "Ended";
-    case PlayerState::Error:
-      return "Error";
-    case PlayerState::Closing:
-      return "Closing";
+  case PlayerState::Idle:
+    return "Idle";
+  case PlayerState::Opening:
+    return "Opening";
+  case PlayerState::Prefill:
+    return "Prefill";
+  case PlayerState::Priming:
+    return "Priming";
+  case PlayerState::Playing:
+    return "Playing";
+  case PlayerState::Paused:
+    return "Paused";
+  case PlayerState::FrameStep:
+    return "FrameStep";
+  case PlayerState::Seeking:
+    return "Seeking";
+  case PlayerState::Draining:
+    return "Draining";
+  case PlayerState::Ended:
+    return "Ended";
+  case PlayerState::Error:
+    return "Error";
+  case PlayerState::Closing:
+    return "Closing";
   }
   return "Unknown";
 }
 
-[[maybe_unused]] const char* clockSourceLabel(PlayerClockSource source) {
+[[maybe_unused]] const char *clockSourceLabel(PlayerClockSource source) {
   switch (source) {
-    case PlayerClockSource::None:
-      return "none";
-    case PlayerClockSource::Audio:
-      return "audio";
-    case PlayerClockSource::Video:
-      return "video";
+  case PlayerClockSource::None:
+    return "none";
+  case PlayerClockSource::Audio:
+    return "audio";
+  case PlayerClockSource::Video:
+    return "video";
   }
   return "none";
 }
 
-std::pair<int, int> frameDisplaySize(const VideoFrame* frame) {
+std::pair<int, int> frameDisplaySize(const VideoFrame *frame) {
   if (!frame) {
     return {0, 0};
   }
@@ -71,22 +72,24 @@ std::pair<int, int> frameDisplaySize(const VideoFrame* frame) {
 }
 
 bool updateTimelinePreviewArt(
-    const playback_video_timeline_preview::Image& image, int width, int height,
-    TimelinePreviewAsciiCache* cache) {
-  if (!cache || width <= 0 || height <= 0) return false;
+    const playback_video_timeline_preview::Image &image, int width, int height,
+    TimelinePreviewAsciiCache *cache) {
+  if (!cache || width <= 0 || height <= 0)
+    return false;
   if (cache->imageId == image.id && cache->width == width &&
       cache->height == height && cache->art.width == width &&
       cache->art.height == height) {
     return true;
   }
 
-  const auto& surface = image.surface;
+  const auto &surface = image.surface;
   cache->renderer.resetHistory();
   const bool rendered = playback_video_image::validate(surface) &&
                         cache->renderer.renderRgbaExact(
                             surface.pixels.data(), surface.width,
                             surface.height, width, height, cache->art, true);
-  if (!rendered) return false;
+  if (!rendered)
+    return false;
   cache->imageId = image.id;
   cache->width = width;
   cache->height = height;
@@ -94,18 +97,17 @@ bool updateTimelinePreviewArt(
 }
 
 void renderTimelinePreview(
-    ConsoleScreen& screen,
-    const playback_video_timeline_preview::Snapshot& snapshot,
-    const playback_video_timeline_preview::CellLayout& layout,
-    TimelinePreviewAsciiCache* cache,
-    const playback_overlay::OverlayRenderStyles& styles) {
-  if (!snapshot.hoverActive || !layout.drawable()) return;
+    ConsoleScreen &screen,
+    const playback_video_timeline_preview::Snapshot &snapshot,
+    const playback_video_timeline_preview::CellLayout &layout,
+    TimelinePreviewAsciiCache *cache,
+    const playback_overlay::OverlayRenderStyles &styles) {
+  if (!snapshot.hoverActive || !layout.drawable())
+    return;
 
   if (!snapshot.metadataLines.empty()) {
-    for (int y = layout.outerY;
-         y < layout.outerY + layout.outerHeight; ++y) {
-      for (int x = layout.outerX;
-           x < layout.outerX + layout.outerWidth; ++x) {
+    for (int y = layout.outerY; y < layout.outerY + layout.outerHeight; ++y) {
+      for (int x = layout.outerX; x < layout.outerX + layout.outerWidth; ++x) {
         screen.writeChar(x, y, L' ', styles.baseStyle);
       }
     }
@@ -116,44 +118,43 @@ void renderTimelinePreview(
                                 layout.imageHeight, cache)) {
     if (snapshot.metadataLines.empty()) {
       playback_overlay::renderTimelinePreviewTimestampToScreen(screen, layout,
-                                                                styles);
+                                                               styles);
     } else {
       playback_overlay::renderTimelinePreviewChromeToScreen(screen, layout,
-                                                             styles);
+                                                            styles);
     }
     return;
   }
 
-  const AsciiArt& art = cache->art;
+  const AsciiArt &art = cache->art;
   for (int y = 0; y < layout.imageHeight; ++y) {
     for (int x = 0; x < layout.imageWidth; ++x) {
-      const auto& cell = art.cells[static_cast<size_t>(y * art.width + x)];
-      screen.writeChar(layout.imageX + x, layout.imageY + y, cell.ch,
-                       Style{cell.fg,
-                             cell.hasBg ? cell.bg : styles.baseStyle.bg});
+      const auto &cell = art.cells[static_cast<size_t>(y * art.width + x)];
+      screen.writeChar(
+          layout.imageX + x, layout.imageY + y, cell.ch,
+          Style{cell.fg, cell.hasBg ? cell.bg : styles.baseStyle.bg});
     }
   }
-  playback_overlay::renderTimelinePreviewChromeToScreen(
-      screen, layout, styles);
+  playback_overlay::renderTimelinePreviewChromeToScreen(screen, layout, styles);
 }
 
-}  // namespace
+} // namespace
 
-void renderPlaybackScreen(const PlaybackScreenResources& resources,
-                          PlaybackScreenTarget& target,
-                          const PlaybackScreenModel& model) {
-  auto& screen = target.screen;
-  auto& gpuRenderer = resources.gpu.asciiRenderer();
-  auto& frameCache = target.frameCache;
-  auto& art = target.art;
-  VideoFrame* frame = &target.frame;
-  const Style& baseStyle = resources.baseStyle;
-  const Style& accentStyle = resources.accentStyle;
-  const Style& dimStyle = resources.dimStyle;
-  const Style& progressEmptyStyle = resources.progressEmptyStyle;
-  const Style& progressFrameStyle = resources.progressFrameStyle;
-  const Color& progressStart = resources.progressStart;
-  const Color& progressEnd = resources.progressEnd;
+void renderPlaybackScreen(const PlaybackScreenResources &resources,
+                          PlaybackScreenTarget &target,
+                          const PlaybackScreenModel &model) {
+  auto &screen = target.screen;
+  auto &gpuRenderer = resources.gpu.asciiRenderer();
+  auto &frameCache = target.frameCache;
+  auto &art = target.art;
+  VideoFrame *frame = &target.frame;
+  const Style &baseStyle = resources.baseStyle;
+  const Style &accentStyle = resources.accentStyle;
+  const Style &dimStyle = resources.dimStyle;
+  const Style &progressEmptyStyle = resources.progressEmptyStyle;
+  const Style &progressFrameStyle = resources.progressFrameStyle;
+  const Color &progressStart = resources.progressStart;
+  const Color &progressEnd = resources.progressEnd;
   const bool debugOverlay = model.debugOverlay;
   const PlaybackVisualMode visualMode = model.visualMode;
   const PlaybackSessionState playbackState = model.playbackState;
@@ -168,12 +169,12 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
   const bool frameAvailable = model.frameAvailable;
   const double cellPixelWidth = model.cellPixelWidth;
   const double cellPixelHeight = model.cellPixelHeight;
-  const std::string& cellPixelSourceLabel = model.cellPixelSourceLabel;
-  const PlaybackMediaPresentation& media = model.media;
-  const PlaybackAudioPresentation& audio = media.audio;
-  playback_frame_output::FrameOutputState& frameOutput = target.frameOutput;
-  const auto& warningSink = resources.warningSink;
-  const auto& timingSink = resources.timingSink;
+  const std::string &cellPixelSourceLabel = model.cellPixelSourceLabel;
+  const PlaybackMediaPresentation &media = model.media;
+  const PlaybackAudioPresentation &audio = media.audio;
+  playback_frame_output::FrameOutputState &frameOutput = target.frameOutput;
+  const auto &warningSink = resources.warningSink;
+  const auto &timingSink = resources.timingSink;
   screen.updateSize();
   int width = screen.width();
   int height = screen.height();
@@ -188,7 +189,7 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
   auto [frameDisplayW, frameDisplayH] = frameDisplaySize(frame);
   int layoutSourceW = media.sourceWidth;
   int layoutSourceH = media.sourceHeight;
-  const char* layoutSourceKind = "player";
+  const char *layoutSourceKind = "player";
   if (layoutSourceW <= 0 || layoutSourceH <= 0) {
     layoutSourceW = frameDisplayW;
     layoutSourceH = frameDisplayH;
@@ -204,10 +205,9 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
         playback_debug_lines::videoFrameDebugLine(media.debug));
 
     char buf[512];
-    const char* cellSource =
+    const char *cellSource =
         cellPixelSourceLabel.empty() ? "unknown" : cellPixelSourceLabel.c_str();
-    std::snprintf(buf, sizeof(buf),
-                  "DBG cell=%.2fx%.2f/%s cols=%d rows=%d",
+    std::snprintf(buf, sizeof(buf), "DBG cell=%.2fx%.2f/%s cols=%d rows=%d",
                   cellPixelWidth, cellPixelHeight, cellSource, width, height);
     debugLines.emplace_back(buf);
 
@@ -217,19 +217,18 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
     int plannedArtH = 0;
     if (layoutSourceW > 0 && layoutSourceH > 0 && plannedMaxHeight > 0) {
       auto plannedArt = playback_frame_output::computeAsciiOutputSize(
-          width, plannedMaxHeight, layoutSourceW, layoutSourceH,
-          cellPixelWidth, cellPixelHeight);
+          width, plannedMaxHeight, layoutSourceW, layoutSourceH, cellPixelWidth,
+          cellPixelHeight);
       plannedArtW = plannedArt.first;
       plannedArtH = plannedArt.second;
     }
     const double physW = plannedArtW * cellPixelWidth;
     const double physH = plannedArtH * cellPixelHeight;
     const double physAspect = physH > 0.0 ? physW / physH : 0.0;
-    const double sourceAspect =
-        layoutSourceH > 0
-            ? static_cast<double>(layoutSourceW) /
-                  static_cast<double>(layoutSourceH)
-            : 0.0;
+    const double sourceAspect = layoutSourceH > 0
+                                    ? static_cast<double>(layoutSourceW) /
+                                          static_cast<double>(layoutSourceH)
+                                    : 0.0;
     char buf2[256];
     std::snprintf(buf2, sizeof(buf2),
                   "DBG ascii src=%dx%d(%s) frame=%dx%d r=%d art=%dx%d "
@@ -245,7 +244,7 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
   }
 #if RADIOIFY_ENABLE_TIMING_LOG
   if (debugOverlay) {
-    const PlayerDebugInfo& dbg = media.debug;
+    const PlayerDebugInfo &dbg = media.debug;
     char buf1[256];
     char buf2[256];
     double masterSec = static_cast<double>(dbg.masterClockUs) / 1000000.0;
@@ -279,7 +278,7 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
 
   double currentSec = 0.0;
   double totalSec = -1.0;
-  const PlayerTimelineSnapshot& timeline = media.timeline;
+  const PlayerTimelineSnapshot &timeline = media.timeline;
   const int64_t clockUs = timeline.positionUs;
   if (clockUs > 0) {
     currentSec = static_cast<double>(clockUs) / 1000000.0;
@@ -295,8 +294,7 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
   }
   double displaySec = currentSec;
   const bool seekingOverlay = timeline.seekPending();
-  const bool hasVideoStream =
-      media.sourceWidth > 0 && media.sourceHeight > 0;
+  const bool hasVideoStream = media.sourceWidth > 0 && media.sourceHeight > 0;
   const bool waitingForAudio =
       audioOk && !audio.streamClockReady && !audio.finished;
   const bool audioStarved = audioOk && audio.streamStarved;
@@ -310,15 +308,24 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
   bool allowFrame = frameOutput.haveFrame && !nativeWindowActive;
 
   auto waitingLabel = [&]() -> std::string {
-    if (playbackState == PlaybackSessionState::Ended) return "Ended";
-    if (seekingOverlay) return "Seeking...";
-    if (isPaused) return "Paused";
-    if (media.debug.state == PlayerState::Opening) return "Opening...";
-    if (media.debug.state == PlayerState::Prefill) return "Prefilling...";
-    if (waitingForAudio) return "Waiting for audio...";
-    if (audioStarved) return "Buffering audio...";
-    if (waitingForVideo) return "Buffering video...";
-    if (!hasVideoStream && audioOk) return "Audio playback";
+    if (playbackState == PlaybackSessionState::Ended)
+      return "Ended";
+    if (seekingOverlay)
+      return "Seeking...";
+    if (isPaused)
+      return "Paused";
+    if (media.debug.state == PlayerState::Opening)
+      return "Opening...";
+    if (media.debug.state == PlayerState::Prefill)
+      return "Prefilling...";
+    if (waitingForAudio)
+      return "Waiting for audio...";
+    if (audioStarved)
+      return "Buffering audio...";
+    if (waitingForVideo)
+      return "Buffering video...";
+    if (!hasVideoStream && audioOk)
+      return "Audio playback";
     return "Waiting for video...";
   };
 
@@ -357,15 +364,15 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
     playback_frame_output::prepareAsciiModeFrame(resources.gpu, asciiInput);
   } else {
     playback_frame_output::prepareNonAsciiModeFrame(
-        allowFrame, width, maxHeight, frame->width, frame->height,
-        frameOutput, warningSink);
+        allowFrame, width, maxHeight, frame->width, frame->height, frameOutput,
+        warningSink);
   }
 
   if (visualMode == PlaybackVisualMode::AsciiGrid && allowFrame &&
       art.width > 0 && art.height > 0) {
     const int visibleArtHeight = std::min(art.height, maxHeight);
-    asciiArtTop = playback_frame_output::centerContentTop(
-        artTop, maxHeight, visibleArtHeight);
+    asciiArtTop = playback_frame_output::centerContentTop(artTop, maxHeight,
+                                                          visibleArtHeight);
   }
 
   frameOutput.overlayInteractions = {};
@@ -433,11 +440,35 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
       ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
     }
     if (showPlaybackChrome) {
+      std::optional<playback_overlay::ChapterOverviewRegion> overviewRegion;
+      if (overlayState.chapterOverviewOpen) {
+        const auto panel = playback_video_chapters::layoutOverviewPanel(
+            overlayState.chapters, overlayLayout.width, overlayLayout.height,
+            overlayLayout.progressBarY,
+            overlayState.chapterOverviewScrollOffset);
+        if (panel.drawable()) {
+          playback_overlay::ChapterOverviewRegion region{
+              {static_cast<double>(panel.x), static_cast<double>(panel.y),
+               static_cast<double>(panel.x + panel.width),
+               static_cast<double>(panel.y + panel.height)},
+              panel.scrollOffset, panel.maximumScrollOffset, {}};
+          for (const auto &row : panel.chapterRows) {
+            region.items.push_back(
+                {{static_cast<double>(panel.x + 1),
+                  static_cast<double>(panel.y + 1 + row.line),
+                  static_cast<double>(panel.x + panel.width - 1),
+                  static_cast<double>(panel.y + 2 + row.line)},
+                 row.startUs});
+          }
+          overviewRegion = std::move(region);
+        }
+      }
       frameOutput.overlayInteractions =
           playback_overlay::buildOverlayInteractionMap(
               overlayLayout, &overlayState.videoEdit,
               overlayState.videoEditPrompt,
-              overlayState.mediaActionConfirmationPrompt.has_value());
+              overlayState.mediaActionConfirmationPrompt.has_value(),
+              overviewRegion ? &*overviewRegion : nullptr);
     }
     if (showContextMenu && contextMenuLayout.drawable()) {
       frameOutput.overlayInteractions =
@@ -453,39 +484,35 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
     if (showPlaybackChrome) {
       playback_overlay::renderOverlayToScreen(
           screen, overlayLayout, overlayStyles, ratio, &overlayState.videoEdit,
-          &overlayState.videoEditExport,
-          overlayState.videoEditPrompt,
+          &overlayState.videoEditExport, overlayState.videoEditPrompt,
           overlayState.mediaActionConfirmationPrompt, &overlayState.chapters,
-          overlayState.chapterOverviewOpen, artTop, height);
+          overlayState.chapterOverviewOpen,
+          overlayState.chapterOverviewScrollOffset, artTop, height);
     }
   }
 
   if (model.timelinePreview.hoverActive) {
-    const playback_video_image::RgbaImage* previewSurface =
-        model.timelinePreview.hasImage()
-            ? &model.timelinePreview.image->surface
-            : nullptr;
+    const playback_video_image::RgbaImage *previewSurface =
+        model.timelinePreview.hasImage() ? &model.timelinePreview.image->surface
+                                         : nullptr;
     const int previewSourceWidth =
-        previewSurface
-            ? static_cast<int>(previewSurface->width)
-            : std::max(16, model.timelinePreview.sourceWidth > 0
-                               ? model.timelinePreview.sourceWidth
-                               : layoutSourceW);
+        previewSurface ? static_cast<int>(previewSurface->width)
+                       : std::max(16, model.timelinePreview.sourceWidth > 0
+                                          ? model.timelinePreview.sourceWidth
+                                          : layoutSourceW);
     const int previewSourceHeight =
-        previewSurface
-            ? static_cast<int>(previewSurface->height)
-            : std::max(9, model.timelinePreview.sourceHeight > 0
-                              ? model.timelinePreview.sourceHeight
-                              : layoutSourceH);
-    const auto previewLayout =
-        playback_video_timeline_preview::layoutCells(
-            width, height, overlayLayout.progressBarY,
-            overlayLayout.progressBarX, overlayLayout.progressBarWidth,
-            model.timelinePreview.anchorRatio, previewSourceWidth,
-            previewSourceHeight, cellPixelWidth, cellPixelHeight,
-            playback_video_timeline_preview::formatTimestamp(
-                model.timelinePreview.targetUs),
-            model.timelinePreview.metadataLines);
+        previewSurface ? static_cast<int>(previewSurface->height)
+                       : std::max(9, model.timelinePreview.sourceHeight > 0
+                                         ? model.timelinePreview.sourceHeight
+                                         : layoutSourceH);
+    const auto previewLayout = playback_video_timeline_preview::layoutCells(
+        width, height, overlayLayout.progressBarY, overlayLayout.progressBarX,
+        overlayLayout.progressBarWidth, model.timelinePreview.anchorRatio,
+        previewSourceWidth, previewSourceHeight, cellPixelWidth,
+        cellPixelHeight,
+        playback_video_timeline_preview::formatTimestamp(
+            model.timelinePreview.targetUs),
+        model.timelinePreview.metadataLines);
     playback_overlay::OverlayRenderStyles previewStyles;
     previewStyles.baseStyle = baseStyle;
     previewStyles.accentStyle = accentStyle;
@@ -513,4 +540,4 @@ void renderPlaybackScreen(const PlaybackScreenResources& resources,
   screen.draw();
 }
 
-}  // namespace playback_screen_renderer
+} // namespace playback_screen_renderer

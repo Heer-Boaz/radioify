@@ -6,9 +6,9 @@
 #include <utility>
 
 #include "core/utf8.h"
-#include "playback/video/edit/overlay_model.h"
 #include "playback/media_processing_presentation.h"
 #include "playback/video/chapter/presentation.h"
+#include "playback/video/edit/overlay_model.h"
 #include "playback/video/image.h"
 #include "subtitle_effects.h"
 #include "ui_helpers.h"
@@ -16,12 +16,14 @@
 namespace playback_overlay {
 namespace {
 
-std::string fitCellText(const std::string& text, int width) {
-  if (width <= 0) return {};
+std::string fitCellText(const std::string &text, int width) {
+  if (width <= 0)
+    return {};
   std::string filtered;
   filtered.reserve(text.size());
   for (char c : text) {
-    if (c == '\r' || c == '\n') continue;
+    if (c == '\r' || c == '\n')
+      continue;
     filtered.push_back(c);
   }
 
@@ -35,57 +37,59 @@ std::string fitCellText(const std::string& text, int width) {
   return filtered;
 }
 
-std::string overlayTitleWithDebugLines(const std::vector<std::string>& debugLines,
-                                       const std::string& title) {
+std::string
+overlayTitleWithDebugLines(const std::vector<std::string> &debugLines,
+                           const std::string &title) {
   std::string out;
-  for (const std::string& line : debugLines) {
-    if (line.empty()) continue;
-    if (!out.empty()) out.push_back('\n');
+  for (const std::string &line : debugLines) {
+    if (line.empty())
+      continue;
+    if (!out.empty())
+      out.push_back('\n');
     out += line;
   }
-  if (!out.empty()) out.push_back('\n');
+  if (!out.empty())
+    out.push_back('\n');
   out += " " + title;
   return out;
 }
 
-uint32_t overlayGpuRgb(const Color& color) {
+uint32_t overlayGpuRgb(const Color &color) {
   return gpuTextGridRgb(color.r, color.g, color.b);
 }
 
-GpuTextGridCell overlayGpuCell(wchar_t ch, const Style& style,
+GpuTextGridCell overlayGpuCell(wchar_t ch, const Style &style,
                                uint32_t flags = 0) {
-  return GpuTextGridCell{static_cast<uint32_t>(ch),
-                         overlayGpuRgb(style.fg),
+  return GpuTextGridCell{static_cast<uint32_t>(ch), overlayGpuRgb(style.fg),
                          overlayGpuRgb(style.bg), flags};
 }
 
-std::wstring overlayUtf8ToWide(const std::string& text) {
+std::wstring overlayUtf8ToWide(const std::string &text) {
   std::wstring out = utf8ToWideLossy(text);
-  out.erase(std::remove_if(out.begin(), out.end(),
-                           [](wchar_t ch) {
-                             return ch == L'\r' || ch == L'\n';
-                           }),
-            out.end());
+  out.erase(
+      std::remove_if(out.begin(), out.end(),
+                     [](wchar_t ch) { return ch == L'\r' || ch == L'\n'; }),
+      out.end());
   return out;
 }
 
-}  // namespace
+} // namespace
 
 OverlayCellLayout layoutMediaActionConfirmationDialogCells(
-    const MediaActionConfirmationDialog& prompt, int width,
-    int height, int hoverControlToken) {
+    const MediaActionConfirmationDialog &prompt, int width, int height,
+    int hoverControlToken) {
   OverlayDialogLayoutInput input;
   input.width = width;
   input.height = height;
   input.title = prompt.title;
   input.text = prompt.text;
-  input.buttons = buildMediaActionConfirmationDialogButtons(
-      prompt, hoverControlToken);
+  input.buttons =
+      buildMediaActionConfirmationDialogButtons(prompt, hoverControlToken);
   return layoutOverlayDialogCells(input);
 }
 
-PlaybackOverlayState buildPlaybackOverlayState(
-    const PlaybackOverlayInputs& inputs) {
+PlaybackOverlayState
+buildPlaybackOverlayState(const PlaybackOverlayInputs &inputs) {
   PlaybackOverlayState state;
   state.windowTitle = inputs.windowTitle;
   state.audioOk = inputs.audioOk;
@@ -125,32 +129,30 @@ PlaybackOverlayState buildPlaybackOverlayState(
   state.mediaTaskActivity = inputs.mediaTaskActivity;
   state.chapters = inputs.chapters;
   state.chapterOverviewOpen = inputs.chapterOverviewOpen;
-  state.chromeVisible = state.overlayVisible || !state.debugLines.empty() ||
-                        state.mediaActionConfirmationPrompt.has_value() ||
-                        state.mediaTaskActivity.has_value() ||
-                        state.chapterOverviewOpen ||
-                        playback_video_edit::needsOverlayPresentation(
-                            state.videoEdit, state.videoEditExport,
-                            state.videoEditPrompt);
+  state.chapterOverviewScrollOffset = inputs.chapterOverviewScrollOffset;
+  state.chromeVisible =
+      state.overlayVisible || !state.debugLines.empty() ||
+      state.mediaActionConfirmationPrompt.has_value() ||
+      state.mediaTaskActivity.has_value() || state.chapterOverviewOpen ||
+      playback_video_edit::needsOverlayPresentation(
+          state.videoEdit, state.videoEditExport, state.videoEditPrompt);
 
   return state;
 }
 
-SubtitlePresentation projectSubtitlePresentation(
-    const SubtitleManager& subtitleManager, bool subtitlesEnabled,
-    bool seekingOverlay, int64_t clockUs, bool hasSubtitles) {
+SubtitlePresentation
+projectSubtitlePresentation(const SubtitleManager &subtitleManager,
+                            bool subtitlesEnabled, bool seekingOverlay,
+                            int64_t clockUs, bool hasSubtitles) {
   SubtitlePresentation presentation;
   presentation.activeTrackLabel =
       hasSubtitles ? subtitleManager.activeTrackLabel() : "N/A";
-  presentation.text = buildSubtitleText(
-      subtitleManager, subtitlesEnabled, seekingOverlay, clockUs,
-      hasSubtitles);
+  presentation.text = buildSubtitleText(subtitleManager, subtitlesEnabled,
+                                        seekingOverlay, clockUs, hasSubtitles);
   presentation.cues = collectSubtitleCues(
-      subtitleManager, subtitlesEnabled, seekingOverlay, clockUs,
-      hasSubtitles);
-  if (subtitlesEnabled && !seekingOverlay && clockUs >= 0 &&
-      hasSubtitles) {
-    if (const SubtitleTrack* activeTrack = subtitleManager.activeTrack()) {
+      subtitleManager, subtitlesEnabled, seekingOverlay, clockUs, hasSubtitles);
+  if (subtitlesEnabled && !seekingOverlay && clockUs >= 0 && hasSubtitles) {
+    if (const SubtitleTrack *activeTrack = subtitleManager.activeTrack()) {
       presentation.assScript = activeTrack->assScript;
       presentation.assFonts = activeTrack->assFonts;
     }
@@ -158,34 +160,40 @@ SubtitlePresentation projectSubtitlePresentation(
   return presentation;
 }
 
-std::vector<WindowUiState::SubtitleCue> collectSubtitleCues(
-    const SubtitleManager& subtitleManager, bool subtitlesEnabled,
-    bool seekingOverlay, int64_t clockUs, bool hasSubtitles) {
+std::vector<WindowUiState::SubtitleCue>
+collectSubtitleCues(const SubtitleManager &subtitleManager,
+                    bool subtitlesEnabled, bool seekingOverlay, int64_t clockUs,
+                    bool hasSubtitles) {
   std::vector<WindowUiState::SubtitleCue> out;
   if (!subtitlesEnabled || seekingOverlay || clockUs < 0 || !hasSubtitles) {
     return out;
   }
-  const SubtitleTrack* activeTrack = subtitleManager.activeTrack();
+  const SubtitleTrack *activeTrack = subtitleManager.activeTrack();
   if (!activeTrack) {
     return out;
   }
 
-  std::vector<const SubtitleCue*> active;
+  std::vector<const SubtitleCue *> active;
   activeTrack->cuesAt(clockUs, &active);
-  if (active.empty()) return out;
+  if (active.empty())
+    return out;
   out.reserve(active.size());
-  for (const SubtitleCue* cue : active) {
-    if (!cue) continue;
+  for (const SubtitleCue *cue : active) {
+    if (!cue)
+      continue;
     const float fadeOpacity = subtitleFadeOpacity(*cue, clockUs);
-    if (fadeOpacity <= 0.001f) continue;
+    if (fadeOpacity <= 0.001f)
+      continue;
     const bool hasRenderableAss = cue->assStyled && !cue->rawText.empty();
-    if (cue->text.empty() && !hasRenderableAss) continue;
+    if (cue->text.empty() && !hasRenderableAss)
+      continue;
     WindowUiState::SubtitleCue item;
     item.text = cue->text;
     item.rawText = cue->rawText;
     item.textRuns.reserve(cue->textRuns.size());
-    for (const SubtitleTextRun& run : cue->textRuns) {
-      if (run.text.empty()) continue;
+    for (const SubtitleTextRun &run : cue->textRuns) {
+      if (run.text.empty())
+        continue;
       WindowUiState::SubtitleCue::TextRun itemRun;
       itemRun.text = run.text;
       itemRun.hasPrimaryColor = run.hasPrimaryColor;
@@ -236,12 +244,10 @@ std::vector<WindowUiState::SubtitleCue> collectSubtitleCues(
         t = 1.0;
       }
       t = std::clamp(t, 0.0, 1.0);
-      item.posX =
-          static_cast<float>(cue->moveStartXNorm +
-                             (cue->moveEndXNorm - cue->moveStartXNorm) * t);
-      item.posY =
-          static_cast<float>(cue->moveStartYNorm +
-                             (cue->moveEndYNorm - cue->moveStartYNorm) * t);
+      item.posX = static_cast<float>(
+          cue->moveStartXNorm + (cue->moveEndXNorm - cue->moveStartXNorm) * t);
+      item.posY = static_cast<float>(
+          cue->moveStartYNorm + (cue->moveEndYNorm - cue->moveStartYNorm) * t);
     }
     item.marginVNorm = cue->marginVNorm;
     item.marginLNorm = cue->marginLNorm;
@@ -251,9 +257,10 @@ std::vector<WindowUiState::SubtitleCue> collectSubtitleCues(
   }
 
   std::stable_sort(out.begin(), out.end(),
-                   [](const WindowUiState::SubtitleCue& a,
-                      const WindowUiState::SubtitleCue& b) {
-                     if (a.layer != b.layer) return a.layer < b.layer;
+                   [](const WindowUiState::SubtitleCue &a,
+                      const WindowUiState::SubtitleCue &b) {
+                     if (a.layer != b.layer)
+                       return a.layer < b.layer;
                      if (a.sizeScale != b.sizeScale)
                        return a.sizeScale > b.sizeScale;
                      return a.text < b.text;
@@ -261,46 +268,51 @@ std::vector<WindowUiState::SubtitleCue> collectSubtitleCues(
   return out;
 }
 
-std::string buildSubtitleText(const SubtitleManager& subtitleManager,
-                             bool subtitlesEnabled, bool seekingOverlay,
-                             int64_t clockUs, bool hasSubtitles) {
+std::string buildSubtitleText(const SubtitleManager &subtitleManager,
+                              bool subtitlesEnabled, bool seekingOverlay,
+                              int64_t clockUs, bool hasSubtitles) {
   if (!subtitlesEnabled || seekingOverlay || clockUs < 0 || !hasSubtitles) {
     return {};
   }
-  const SubtitleTrack* activeTrack = subtitleManager.activeTrack();
+  const SubtitleTrack *activeTrack = subtitleManager.activeTrack();
   if (!activeTrack) {
     return {};
   }
-  std::vector<const SubtitleCue*> active;
+  std::vector<const SubtitleCue *> active;
   activeTrack->cuesAt(clockUs, &active);
-  if (active.empty()) return {};
+  if (active.empty())
+    return {};
 
   std::stable_sort(active.begin(), active.end(),
-                   [](const SubtitleCue* a, const SubtitleCue* b) {
-                     if (!a || !b) return a < b;
-                     if (a->layer != b->layer) return a->layer < b->layer;
+                   [](const SubtitleCue *a, const SubtitleCue *b) {
+                     if (!a || !b)
+                       return a < b;
+                     if (a->layer != b->layer)
+                       return a->layer < b->layer;
                      if (a->sizeScale != b->sizeScale)
                        return a->sizeScale > b->sizeScale;
-                     if (a->startUs != b->startUs) return a->startUs < b->startUs;
+                     if (a->startUs != b->startUs)
+                       return a->startUs < b->startUs;
                      return a->text < b->text;
                    });
 
   std::string merged;
-  for (const SubtitleCue* cue : active) {
-    if (!cue || cue->text.empty()) continue;
-    if (!merged.empty()) merged.push_back('\n');
+  for (const SubtitleCue *cue : active) {
+    if (!cue || cue->text.empty())
+      continue;
+    if (!merged.empty())
+      merged.push_back('\n');
     merged += cue->text;
   }
   return merged;
 }
 
-OverlayCellLayout layoutPlaybackOverlayCells(
-    const PlaybackOverlayState& state, int width, int height,
-    int hoverControlToken) {
+OverlayCellLayout layoutPlaybackOverlayCells(const PlaybackOverlayState &state,
+                                             int width, int height,
+                                             int hoverControlToken) {
   if (state.mediaActionConfirmationPrompt) {
     return layoutMediaActionConfirmationDialogCells(
-        *state.mediaActionConfirmationPrompt, width, height,
-        hoverControlToken);
+        *state.mediaActionConfirmationPrompt, width, height, hoverControlToken);
   }
   std::vector<OverlayControlSpec> specs =
       buildOverlayControlSpecs(state, hoverControlToken);
@@ -308,33 +320,32 @@ OverlayCellLayout layoutPlaybackOverlayCells(
   OverlayCellLayoutInput input;
   input.width = width;
   input.height = height;
-  input.title =
-      overlayTitleWithDebugLines(state.debugLines,
-                                 buildWindowOverlayTopLine(state));
+  input.title = overlayTitleWithDebugLines(state.debugLines,
+                                           buildWindowOverlayTopLine(state));
   input.suffix = buildWindowOverlayProgressSuffix(state);
   input.reservedRowsAboveProgress =
       (state.mediaActionConfirmationPrompt ||
-       playback_video_edit::needsOverlayPresentation(
-          state.videoEdit, state.videoEditExport, state.videoEditPrompt)
+               playback_video_edit::needsOverlayPresentation(
+                   state.videoEdit, state.videoEditExport,
+                   state.videoEditPrompt)
            ? 1
            : 0);
   input.controls = buildOverlayCellControlInputs(specs, hoverControlToken);
   return layoutOverlayCells(input);
 }
 
-OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
+OverlayCellLayout layoutWindowOverlayCells(const WindowUiState &ui, int width,
                                            int height) {
   if (ui.mediaActionConfirmationPrompt) {
     int hoverControlToken = -1;
-    for (const WindowUiState::ControlButton& control : ui.controlButtons) {
+    for (const WindowUiState::ControlButton &control : ui.controlButtons) {
       if (control.hovered) {
         hoverControlToken = overlayControlToken(control.id);
         break;
       }
     }
     return layoutMediaActionConfirmationDialogCells(
-        *ui.mediaActionConfirmationPrompt, width, height,
-        hoverControlToken);
+        *ui.mediaActionConfirmationPrompt, width, height, hoverControlToken);
   }
   OverlayCellLayoutInput input;
   input.width = width;
@@ -343,8 +354,8 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
   input.suffix = ui.progressSuffix;
   input.reservedRowsAboveProgress =
       (ui.mediaActionConfirmationPrompt ||
-       playback_video_edit::needsOverlayPresentation(
-          ui.videoEdit, ui.videoEditExport, ui.videoEditPrompt)
+               playback_video_edit::needsOverlayPresentation(
+                   ui.videoEdit, ui.videoEditExport, ui.videoEditPrompt)
            ? 1
            : 0);
   input.controls.reserve(ui.controlButtons.size());
@@ -360,24 +371,25 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState& ui, int width,
   return layoutOverlayCells(input);
 }
 
-std::string buildWindowOverlayTopLine(const PlaybackOverlayState& state) {
+std::string buildWindowOverlayTopLine(const PlaybackOverlayState &state) {
   const std::string badge =
       playback_video_edit::retainedProgramBadge(state.videoEdit);
   const std::string playbackTitle =
       badge.empty() ? state.windowTitle : badge + " " + state.windowTitle;
-  if (!state.mediaTaskActivity) return playbackTitle;
-  const std::string task = playback_media_processing::activityStatusLine(
-      *state.mediaTaskActivity);
+  if (!state.mediaTaskActivity)
+    return playbackTitle;
+  const std::string task =
+      playback_media_processing::activityStatusLine(*state.mediaTaskActivity);
   return task.empty() ? playbackTitle : task + "\n" + playbackTitle;
 }
 
-WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
-                                int hoverControlToken) {
+WindowUiState buildWindowUiState(const PlaybackOverlayState &state,
+                                 int hoverControlToken) {
   WindowUiState ui;
-  ui.progress =
-      (state.totalSec > 0.0 && std::isfinite(state.totalSec))
-          ? static_cast<float>(std::clamp(state.displaySec / state.totalSec, 0.0, 1.0))
-          : 0.0f;
+  ui.progress = (state.totalSec > 0.0 && std::isfinite(state.totalSec))
+                    ? static_cast<float>(std::clamp(
+                          state.displaySec / state.totalSec, 0.0, 1.0))
+                    : 0.0f;
   ui.overlayAlpha = state.overlayVisible ? 1.0f : 0.0f;
   ui.chromeVisible = state.chromeVisible;
   ui.isPaused = state.paused;
@@ -395,7 +407,7 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
     btn.active = controlSpecs[i].active;
     btn.enabled = controlSpecs[i].enabled;
     btn.hovered = controlSpecs[i].enabled &&
-        overlayControlToken(controlSpecs[i].id) == hoverControlToken;
+                  overlayControlToken(controlSpecs[i].id) == hoverControlToken;
     ui.controlButtons.push_back(std::move(btn));
   }
   ui.subtitleClockUs = state.subtitleClockUs;
@@ -415,17 +427,16 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState& state,
   ui.mediaActionConfirmationPrompt = state.mediaActionConfirmationPrompt;
   ui.chapters = state.chapters;
   ui.chapterOverviewOpen = state.chapterOverviewOpen;
+  ui.chapterOverviewScrollOffset = state.chapterOverviewScrollOffset;
   return ui;
 }
 
 namespace {
 
 class ScreenOverlayTarget {
- public:
-  ScreenOverlayTarget(ConsoleScreen& screen, int minY, int maxY)
-      : screen_(screen),
-        width_(screen.width()),
-        firstY_(std::max(0, minY)),
+public:
+  ScreenOverlayTarget(ConsoleScreen &screen, int minY, int maxY)
+      : screen_(screen), width_(screen.width()), firstY_(std::max(0, minY)),
         lastY_(std::min(screen.height(), maxY)) {}
 
   bool isDrawable() const { return width_ > 0 && firstY_ < lastY_; }
@@ -434,12 +445,13 @@ class ScreenOverlayTarget {
 
   bool rowVisible(int y) const { return y >= firstY_ && y < lastY_; }
 
-  void writeText(int x, int y, const std::string& text,
-                 const Style& style) {
-    if (!rowVisible(y) || text.empty() || x >= width_) return;
+  void writeText(int x, int y, const std::string &text, const Style &style) {
+    if (!rowVisible(y) || text.empty() || x >= width_)
+      return;
     const int drawX = std::max(0, x);
     const int available = width_ - drawX;
-    if (available <= 0) return;
+    if (available <= 0)
+      return;
     std::string clipped =
         x < 0 ? utf8SliceDisplayWidth(text, -x, available) : text;
     if (utf8DisplayWidth(clipped) > available) {
@@ -448,24 +460,24 @@ class ScreenOverlayTarget {
     screen_.writeText(drawX, y, clipped, style);
   }
 
-  void writeControlText(const std::string& text, int y, int x, int width,
-                        const Style& style) {
-    if (width <= 0) return;
+  void writeControlText(const std::string &text, int y, int x, int width,
+                        const Style &style) {
+    if (width <= 0)
+      return;
     writeText(x, y, text, style);
   }
 
-  void writeChar(int x, int y, wchar_t ch, const Style& style) {
-    if (!rowVisible(y) || x < 0 || x >= width_) return;
+  void writeChar(int x, int y, wchar_t ch, const Style &style) {
+    if (!rowVisible(y) || x < 0 || x >= width_)
+      return;
     screen_.writeChar(x, y, ch, style);
   }
 
-  void clearRect(int x, int y, int width, int height,
-                 const Style& style) {
+  void clearRect(int x, int y, int width, int height, const Style &style) {
     const int left = std::clamp(x, 0, width_);
     const int top = std::clamp(y, firstY_, lastY_);
     const int right = std::clamp(x + std::max(0, width), 0, width_);
-    const int bottom =
-        std::clamp(y + std::max(0, height), firstY_, lastY_);
+    const int bottom = std::clamp(y + std::max(0, height), firstY_, lastY_);
     for (int row = top; row < bottom; ++row) {
       for (int column = left; column < right; ++column) {
         screen_.writeChar(column, row, L' ', style);
@@ -473,20 +485,20 @@ class ScreenOverlayTarget {
     }
   }
 
- private:
-  ConsoleScreen& screen_;
+private:
+  ConsoleScreen &screen_;
   int width_ = 0;
   int firstY_ = 0;
   int lastY_ = 0;
 };
 
 class GpuTextGridOverlayTarget {
- public:
-  GpuTextGridOverlayTarget(GpuTextGridFrame& frame, int cols, int rows,
-                           const Style& baseStyle)
+public:
+  GpuTextGridOverlayTarget(GpuTextGridFrame &frame, int cols, int rows,
+                           const Style &baseStyle)
       : frame_(frame),
-        transparentSpace_(overlayGpuCell(
-            L' ', baseStyle, kGpuTextGridCellFlagTransparentBg)) {
+        transparentSpace_(overlayGpuCell(L' ', baseStyle,
+                                         kGpuTextGridCellFlagTransparentBg)) {
     frame_.cols = std::max(1, cols);
     frame_.rows = std::max(1, rows);
     const size_t cellCount =
@@ -500,15 +512,16 @@ class GpuTextGridOverlayTarget {
 
   bool rowVisible(int y) const { return y >= 0 && y < frame_.rows; }
 
-  void writeText(int x, int y, const std::string& text,
-                 const Style& style) {
-    if (!rowVisible(y) || text.empty() || x >= frame_.cols) return;
+  void writeText(int x, int y, const std::string &text, const Style &style) {
+    if (!rowVisible(y) || text.empty() || x >= frame_.cols)
+      return;
     const int drawX = std::max(0, x);
     const int available = frame_.cols - drawX;
-    if (available <= 0) return;
-    const std::string clipped =
-        x < 0 ? utf8SliceDisplayWidth(text, -x, available)
-              : utf8TakeDisplayWidth(text, available);
+    if (available <= 0)
+      return;
+    const std::string clipped = x < 0
+                                    ? utf8SliceDisplayWidth(text, -x, available)
+                                    : utf8TakeDisplayWidth(text, available);
     const std::wstring wide = overlayUtf8ToWide(clipped);
     int dstX = drawX;
     for (size_t i = 0; i < wide.size() && dstX < frame_.cols; ++i, ++dstX) {
@@ -517,29 +530,31 @@ class GpuTextGridOverlayTarget {
     }
   }
 
-  void writeControlText(const std::string& text, int y, int x, int width,
-                        const Style& style) {
-    if (!rowVisible(y) || width <= 0 || x >= frame_.cols) return;
+  void writeControlText(const std::string &text, int y, int x, int width,
+                        const Style &style) {
+    if (!rowVisible(y) || width <= 0 || x >= frame_.cols)
+      return;
     const int startX = std::max(0, x);
     const int endX = std::min(frame_.cols, x + width);
-    if (startX >= endX) return;
+    if (startX >= endX)
+      return;
     const std::string clipped =
         x < 0 ? utf8SliceDisplayWidth(text, -x, endX - startX)
               : utf8TakeDisplayWidth(text, endX - startX);
     const std::wstring wide = overlayUtf8ToWide(clipped);
     for (int dstX = startX; dstX < endX; ++dstX) {
       const int srcX = dstX - startX;
-      const wchar_t ch =
-          srcX >= 0 && srcX < static_cast<int>(wide.size())
-              ? wide[static_cast<size_t>(srcX)]
-              : L' ';
+      const wchar_t ch = srcX >= 0 && srcX < static_cast<int>(wide.size())
+                             ? wide[static_cast<size_t>(srcX)]
+                             : L' ';
       frame_.cells[static_cast<size_t>(y * frame_.cols + dstX)] =
           overlayGpuCell(ch, style);
     }
   }
 
-  void writeChar(int x, int y, wchar_t ch, const Style& style) {
-    if (!rowVisible(y) || x < 0 || x >= frame_.cols) return;
+  void writeChar(int x, int y, wchar_t ch, const Style &style) {
+    if (!rowVisible(y) || x < 0 || x >= frame_.cols)
+      return;
     frame_.cells[static_cast<size_t>(y * frame_.cols + x)] =
         overlayGpuCell(ch, style);
   }
@@ -557,8 +572,7 @@ class GpuTextGridOverlayTarget {
     }
   }
 
-  void clearRect(int x, int y, int width, int height,
-                 const Style& style) {
+  void clearRect(int x, int y, int width, int height, const Style &style) {
     const int left = std::clamp(x, 0, frame_.cols);
     const int top = std::clamp(y, 0, frame_.rows);
     const int right = std::clamp(x + std::max(0, width), 0, frame_.cols);
@@ -572,42 +586,39 @@ class GpuTextGridOverlayTarget {
     }
   }
 
- private:
-  GpuTextGridFrame& frame_;
+private:
+  GpuTextGridFrame &frame_;
   GpuTextGridCell transparentSpace_;
 };
 
-OverlayCellTextLine layoutTransientMessageLine(const std::string& message,
+OverlayCellTextLine layoutTransientMessageLine(const std::string &message,
                                                int width, int height) {
   OverlayCellTextLine line;
   const int safeWidth = std::max(1, width);
   const int horizontalInset = safeWidth > 2 ? 1 : 0;
-  const int availableWidth =
-      std::max(1, safeWidth - horizontalInset * 2);
+  const int availableWidth = std::max(1, safeWidth - horizontalInset * 2);
   line.text = " " + message + " ";
   if (utf8DisplayWidth(line.text) > availableWidth) {
     line.text = utf8TakeDisplayWidth(line.text, availableWidth);
   }
   line.x = std::max(horizontalInset,
-                    safeWidth - horizontalInset -
-                        utf8DisplayWidth(line.text));
+                    safeWidth - horizontalInset - utf8DisplayWidth(line.text));
   line.y = std::min(1, std::max(0, height - 1));
   return line;
 }
 
 template <typename Target>
 void renderChapterMarkersToTarget(
-    Target& target, const OverlayCellLayout& layout,
-    const OverlayRenderStyles& styles,
-    const playback_video_chapters::Snapshot* chapters) {
+    Target &target, const OverlayCellLayout &layout,
+    const OverlayRenderStyles &styles,
+    const playback_video_chapters::Snapshot *chapters) {
   if (!chapters || !chapters->ready() || layout.progressBarY < 0 ||
-      layout.progressBarWidth <= 0 ||
-      !target.rowVisible(layout.progressBarY)) {
+      layout.progressBarWidth <= 0 || !target.rowVisible(layout.progressBarY)) {
     return;
   }
   const playback_video_chapters::MarkerProjection projection =
       playback_video_chapters::projectMarkers(*chapters,
-                                               layout.progressBarWidth);
+                                              layout.progressBarWidth);
   const Style markerStyle{{177, 143, 255}, styles.progressEmptyStyle.bg};
   for (const int cell : projection.boundaryCells) {
     const bool collision =
@@ -620,13 +631,14 @@ void renderChapterMarkersToTarget(
 
 template <typename Target>
 void renderVideoEditTimelineToTarget(
-    Target& target, const OverlayCellLayout& layout,
-    const OverlayRenderStyles& styles, double progress,
-    const playback_video_edit::EditSnapshot& edit,
-    const playback_video_edit::ExportProgress* editExport,
+    Target &target, const OverlayCellLayout &layout,
+    const OverlayRenderStyles &styles, double progress,
+    const playback_video_edit::EditSnapshot &edit,
+    const playback_video_edit::ExportProgress *editExport,
     playback_video_edit::Prompt editPrompt,
-    const std::optional<MediaActionConfirmationDialog>&
-        mediaActionConfirmationPrompt) {
+    const std::optional<MediaActionConfirmationDialog>
+        &mediaActionConfirmationPrompt,
+    const playback_video_chapters::Snapshot *chapters) {
   if ((!edit.active && editPrompt == playback_video_edit::Prompt::None &&
        !(editExport && editExport->visible()) &&
        !mediaActionConfirmationPrompt) ||
@@ -637,9 +649,8 @@ void renderVideoEditTimelineToTarget(
 
   const int width = layout.progressBarWidth;
   const playback_video_edit::OverlayModel model =
-      playback_video_edit::buildOverlayModel(edit, editExport,
-                                              editPrompt, width,
-                                              progress);
+      playback_video_edit::buildOverlayModel(edit, editExport, editPrompt,
+                                             width, progress);
   const Style keptStyle{styles.progressStart, styles.progressEmptyStyle.bg};
   const Style alternateKeptStyle{styles.progressEnd,
                                  styles.progressEmptyStyle.bg};
@@ -661,49 +672,52 @@ void renderVideoEditTimelineToTarget(
     const bool alternate =
         kind == playback_video_edit::TimelineCellKind::KeptAlternate;
     const wchar_t glyph = selected ? L'=' : (alternate ? L'━' : L'─');
-    const Style& style = selected
-                             ? selectedStyle
-                             : (alternate ? alternateKeptStyle : keptStyle);
+    const Style &style =
+        selected ? selectedStyle : (alternate ? alternateKeptStyle : keptStyle);
     target.writeChar(layout.progressBarX + cell, layout.progressBarY, glyph,
                      style);
   }
 
-  for (int cell = 0;
-       cell < static_cast<int>(model.sceneSuggestionCells.size()); ++cell) {
+  for (int cell = 0; cell < static_cast<int>(model.sceneSuggestionCells.size());
+       ++cell) {
     const playback_video_edit::SceneSuggestionCellKind kind =
         model.sceneSuggestionCells[static_cast<size_t>(cell)];
     wchar_t glyph = L' ';
-    const Style* style = nullptr;
+    const Style *style = nullptr;
     switch (kind) {
-      case playback_video_edit::SceneSuggestionCellKind::Dialogue:
-        glyph = L'┄';
-        style = &dialogueStyle;
-        break;
-      case playback_video_edit::SceneSuggestionCellKind::Cutscene:
-        glyph = L'━';
-        style = &cutsceneStyle;
-        break;
-      case playback_video_edit::SceneSuggestionCellKind::MenuOrLoading:
-        glyph = L'░';
-        style = &menuStyle;
-        break;
-      case playback_video_edit::SceneSuggestionCellKind::Selected:
-        glyph = L'═';
-        style = &selectedSuggestionStyle;
-        break;
-      case playback_video_edit::SceneSuggestionCellKind::None:
-        break;
+    case playback_video_edit::SceneSuggestionCellKind::Dialogue:
+      glyph = L'┄';
+      style = &dialogueStyle;
+      break;
+    case playback_video_edit::SceneSuggestionCellKind::Cutscene:
+      glyph = L'━';
+      style = &cutsceneStyle;
+      break;
+    case playback_video_edit::SceneSuggestionCellKind::MenuOrLoading:
+      glyph = L'░';
+      style = &menuStyle;
+      break;
+    case playback_video_edit::SceneSuggestionCellKind::Selected:
+      glyph = L'═';
+      style = &selectedSuggestionStyle;
+      break;
+    case playback_video_edit::SceneSuggestionCellKind::None:
+      break;
     }
     if (style) {
-      target.writeChar(layout.progressBarX + cell, layout.progressBarY,
-                       glyph, *style);
+      target.writeChar(layout.progressBarX + cell, layout.progressBarY, glyph,
+                       *style);
     }
   }
 
   for (const int boundaryCell : model.sceneSuggestionBoundaryCells) {
-    target.writeChar(layout.progressBarX + boundaryCell,
-                     layout.progressBarY, L'┊', chapterStyle);
+    target.writeChar(layout.progressBarX + boundaryCell, layout.progressBarY,
+                     L'┊', chapterStyle);
   }
+
+  // Automatic chapter markers share the transport bar with the edit model,
+  // but transport-critical edit handles retain visual precedence below.
+  renderChapterMarkersToTarget(target, layout, styles, chapters);
 
   for (const int cutCell : model.cutCells) {
     target.writeChar(layout.progressBarX + cutCell, layout.progressBarY, L'|',
@@ -719,18 +733,17 @@ void renderVideoEditTimelineToTarget(
                      layout.progressBarY, L'│', playheadStyle);
   }
   if (edit.active && model.inCell) {
-    target.writeChar(layout.progressBarX + *model.inCell,
-                     layout.progressBarY, L'[',
-                     styles.accentStyle);
+    target.writeChar(layout.progressBarX + *model.inCell, layout.progressBarY,
+                     L'[', styles.accentStyle);
   }
   if (edit.active && model.outCell) {
-    target.writeChar(layout.progressBarX + *model.outCell,
-                     layout.progressBarY, L']',
-                     styles.accentStyle);
+    target.writeChar(layout.progressBarX + *model.outCell, layout.progressBarY,
+                     L']', styles.accentStyle);
   }
 
   const int statusY = layout.progressBarY - 1;
-  if (!target.rowVisible(statusY)) return;
+  if (!target.rowVisible(statusY))
+    return;
   std::string status = model.status;
   if (mediaActionConfirmationPrompt) {
     status = mediaActionConfirmationPrompt->title;
@@ -740,20 +753,21 @@ void renderVideoEditTimelineToTarget(
 }
 
 template <typename Target>
-void renderTransientMessageToTarget(Target& target,
-                                    const std::string& message,
-                                    const Style& style) {
-  if (!target.isDrawable()) return;
-  const OverlayCellTextLine line = layoutTransientMessageLine(
-      message, target.width(), target.height());
+void renderTransientMessageToTarget(Target &target, const std::string &message,
+                                    const Style &style) {
+  if (!target.isDrawable())
+    return;
+  const OverlayCellTextLine line =
+      layoutTransientMessageLine(message, target.width(), target.height());
   target.writeText(line.x, line.y, line.text, style);
 }
 
 template <typename Target>
-void renderContextMenuToTarget(Target& target,
-                               const ContextMenuCellLayout& layout,
-                               const OverlayRenderStyles& styles) {
-  if (!target.isDrawable() || !layout.drawable()) return;
+void renderContextMenuToTarget(Target &target,
+                               const ContextMenuCellLayout &layout,
+                               const OverlayRenderStyles &styles) {
+  if (!target.isDrawable() || !layout.drawable())
+    return;
 
   const int left = layout.x;
   const int right = layout.x + layout.width - 1;
@@ -769,8 +783,8 @@ void renderContextMenuToTarget(Target& target,
   target.writeChar(right, bottom, L'┘', styles.accentStyle);
 
   const Style selectedStyle{styles.accentStyle.bg, styles.accentStyle.fg};
-  for (const ContextMenuCellItem& item : layout.items) {
-    const Style& rowStyle = item.selected ? selectedStyle : styles.baseStyle;
+  for (const ContextMenuCellItem &item : layout.items) {
+    const Style &rowStyle = item.selected ? selectedStyle : styles.baseStyle;
     const std::string row = fitCellText(" " + item.text, item.width);
     target.writeControlText(row, item.y, item.x, item.width, rowStyle);
     target.writeChar(left, item.y, L'│', styles.accentStyle);
@@ -779,10 +793,10 @@ void renderContextMenuToTarget(Target& target,
 }
 
 template <typename Target>
-void renderDialogToTarget(Target& target,
-                          const OverlayCellDialogLayout& dialog,
-                          const OverlayRenderStyles& styles) {
-  if (!target.isDrawable() || !dialog.valid()) return;
+void renderDialogToTarget(Target &target, const OverlayCellDialogLayout &dialog,
+                          const OverlayRenderStyles &styles) {
+  if (!target.isDrawable() || !dialog.valid())
+    return;
 
   const int left = dialog.x;
   const int right = dialog.x + dialog.width - 1;
@@ -808,23 +822,25 @@ void renderDialogToTarget(Target& target,
 
   target.writeText(dialog.titleX, dialog.titleY, dialog.title,
                    styles.accentStyle);
-  for (const OverlayCellTextLine& line : dialog.contentLines) {
+  for (const OverlayCellTextLine &line : dialog.contentLines) {
     target.writeText(line.x, line.y, line.text, styles.baseStyle);
   }
 }
 
 template <typename Target>
 void renderChapterOverviewToTarget(
-    Target& target, const OverlayCellLayout& overlayLayout,
-    const OverlayRenderStyles& styles,
-    const playback_video_chapters::Snapshot* chapters,
-    bool chapterOverviewOpen) {
-  if (!chapters || !chapterOverviewOpen || !target.isDrawable()) return;
+    Target &target, const OverlayCellLayout &overlayLayout,
+    const OverlayRenderStyles &styles,
+    const playback_video_chapters::Snapshot *chapters, bool chapterOverviewOpen,
+    int chapterOverviewScrollOffset) {
+  if (!chapters || !chapterOverviewOpen || !target.isDrawable())
+    return;
   const playback_video_chapters::OverviewPanelLayout panel =
       playback_video_chapters::layoutOverviewPanel(
           *chapters, target.width(), target.height(),
-          overlayLayout.progressBarY);
-  if (!panel.drawable()) return;
+          overlayLayout.progressBarY, chapterOverviewScrollOffset);
+  if (!panel.drawable())
+    return;
 
   target.clearRect(panel.x, panel.y, panel.width, panel.height,
                    styles.baseStyle);
@@ -844,53 +860,63 @@ void renderChapterOverviewToTarget(
   target.writeChar(right, top, L'┐', styles.accentStyle);
   target.writeChar(left, bottom, L'└', styles.accentStyle);
   target.writeChar(right, bottom, L'┘', styles.accentStyle);
+  if (panel.scrollOffset > 0 && top + 1 < bottom) {
+    target.writeChar(right, top + 1, L'↑', styles.accentStyle);
+  }
+  if (panel.scrollOffset < panel.maximumScrollOffset && bottom - 1 > top) {
+    target.writeChar(right, bottom - 1, L'↓', styles.accentStyle);
+  }
 
   const int contentWidth = std::max(1, panel.width - 4);
-  const int lineCount = std::min<int>(
-      panel.height - 2, static_cast<int>(panel.lines.size()));
+  const int lineCount =
+      std::min<int>(panel.height - 2, static_cast<int>(panel.lines.size()));
   for (int index = 0; index < lineCount; ++index) {
-    target.writeText(panel.x + 2, panel.y + 1 + index,
-                     utf8TakeDisplayWidth(
-                         panel.lines[static_cast<std::size_t>(index)],
-                         contentWidth),
-                     index <= 1 ? styles.accentStyle : styles.baseStyle);
+    const bool heading =
+        std::find(panel.headingLines.begin(), panel.headingLines.end(),
+                  static_cast<std::size_t>(index)) != panel.headingLines.end();
+    target.writeText(
+        panel.x + 2, panel.y + 1 + index,
+        utf8TakeDisplayWidth(panel.lines[static_cast<std::size_t>(index)],
+                             contentWidth),
+        heading ? styles.accentStyle : styles.baseStyle);
   }
 }
 
 template <typename Target>
-void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
-                           const OverlayRenderStyles& styles,
-                           double progress,
-                           const playback_video_edit::EditSnapshot* videoEdit,
-                           const playback_video_edit::ExportProgress*
-                               videoEditExport,
-                           playback_video_edit::Prompt videoEditPrompt,
-                           const std::optional<MediaActionConfirmationDialog>&
-                               mediaActionConfirmationPrompt,
-                           const playback_video_chapters::Snapshot* chapters,
-                           bool chapterOverviewOpen) {
-  if (!target.isDrawable()) return;
+void renderOverlayToTarget(
+    Target &target, const OverlayCellLayout &layout,
+    const OverlayRenderStyles &styles, double progress,
+    const playback_video_edit::EditSnapshot *videoEdit,
+    const playback_video_edit::ExportProgress *videoEditExport,
+    playback_video_edit::Prompt videoEditPrompt,
+    const std::optional<MediaActionConfirmationDialog>
+        &mediaActionConfirmationPrompt,
+    const playback_video_chapters::Snapshot *chapters, bool chapterOverviewOpen,
+    int chapterOverviewScrollOffset) {
+  if (!target.isDrawable())
+    return;
 
   const bool modalDialog = layout.dialog && layout.dialog->valid();
   if (modalDialog) {
     renderDialogToTarget(target, *layout.dialog, styles);
   }
 
-  for (const auto& item : layout.controls) {
-    Style style = item.enabled
-                      ? (item.active ? styles.accentStyle : styles.baseStyle)
-                      : Style{lerpColor(styles.baseStyle.fg,
-                                        styles.baseStyle.bg, 0.55f),
-                              styles.baseStyle.bg};
+  for (const auto &item : layout.controls) {
+    Style style =
+        item.enabled
+            ? (item.active ? styles.accentStyle : styles.baseStyle)
+            : Style{lerpColor(styles.baseStyle.fg, styles.baseStyle.bg, 0.55f),
+                    styles.baseStyle.bg};
     if (item.enabled && item.hovered) {
       style = {style.bg, style.fg};
     }
     target.writeControlText(item.text, item.y, item.x, item.width, style);
   }
 
-  if (modalDialog) return;
+  if (modalDialog)
+    return;
 
-  for (const auto& titleLine : layout.titleLines) {
+  for (const auto &titleLine : layout.titleLines) {
     target.writeText(titleLine.x, titleLine.y, titleLine.text,
                      styles.accentStyle);
   }
@@ -905,7 +931,7 @@ void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
         std::clamp(progress, 0.0, 1.0), layout.progressBarWidth,
         styles.progressEmptyStyle, styles.progressStart, styles.progressEnd);
     for (int i = 0; i < layout.progressBarWidth; ++i) {
-      const auto& cell = barCells[static_cast<size_t>(i)];
+      const auto &cell = barCells[static_cast<size_t>(i)];
       target.writeChar(layout.progressBarX + i, layout.progressBarY, cell.ch,
                        cell.style);
     }
@@ -913,28 +939,28 @@ void renderOverlayToTarget(Target& target, const OverlayCellLayout& layout,
                      styles.progressFrameStyle);
   }
 
-  renderChapterMarkersToTarget(target, layout, styles, chapters);
-
   if (videoEdit) {
-    renderVideoEditTimelineToTarget(target, layout, styles, progress,
-                                    *videoEdit, videoEditExport,
-                                    videoEditPrompt,
-                                    mediaActionConfirmationPrompt);
+    renderVideoEditTimelineToTarget(
+        target, layout, styles, progress, *videoEdit, videoEditExport,
+        videoEditPrompt, mediaActionConfirmationPrompt, chapters);
+  } else {
+    renderChapterMarkersToTarget(target, layout, styles, chapters);
   }
 
   target.writeText(layout.suffixX, layout.suffixY, layout.suffixText,
                    styles.baseStyle);
 
   renderChapterOverviewToTarget(target, layout, styles, chapters,
-                                chapterOverviewOpen);
+                                chapterOverviewOpen,
+                                chapterOverviewScrollOffset);
 }
 
 template <typename Target>
 void renderTimelinePreviewTimestampToTarget(
-    Target& target,
-    const playback_video_timeline_preview::CellLayout& layout,
-    const OverlayRenderStyles& styles) {
-  if (!target.isDrawable() || !layout.drawable()) return;
+    Target &target, const playback_video_timeline_preview::CellLayout &layout,
+    const OverlayRenderStyles &styles) {
+  if (!target.isDrawable() || !layout.drawable())
+    return;
 
   const int availableLabelWidth = std::max(0, layout.outerWidth - 4);
   const std::string label =
@@ -947,16 +973,14 @@ void renderTimelinePreviewTimestampToTarget(
 
 template <typename Target>
 void renderTimelinePreviewMetadataToTarget(
-    Target& target,
-    const playback_video_timeline_preview::CellLayout& layout,
-    const OverlayRenderStyles& styles) {
-  if (!target.isDrawable() || !layout.drawable() ||
-      layout.metadataWidth <= 0 || layout.metadataHeight <= 0) {
+    Target &target, const playback_video_timeline_preview::CellLayout &layout,
+    const OverlayRenderStyles &styles) {
+  if (!target.isDrawable() || !layout.drawable() || layout.metadataWidth <= 0 ||
+      layout.metadataHeight <= 0) {
     return;
   }
   const int lineCount = std::min<int>(
-      layout.metadataHeight,
-      static_cast<int>(layout.metadataLines.size()));
+      layout.metadataHeight, static_cast<int>(layout.metadataLines.size()));
   for (int index = 0; index < lineCount; ++index) {
     const std::string text = utf8TakeDisplayWidth(
         layout.metadataLines[static_cast<std::size_t>(index)],
@@ -968,10 +992,10 @@ void renderTimelinePreviewMetadataToTarget(
 
 template <typename Target>
 void renderTimelinePreviewChromeToTarget(
-    Target& target,
-    const playback_video_timeline_preview::CellLayout& layout,
-    const OverlayRenderStyles& styles) {
-  if (!target.isDrawable() || !layout.drawable()) return;
+    Target &target, const playback_video_timeline_preview::CellLayout &layout,
+    const OverlayRenderStyles &styles) {
+  if (!target.isDrawable() || !layout.drawable())
+    return;
 
   const int left = layout.outerX;
   const int right = layout.outerX + layout.outerWidth - 1;
@@ -994,94 +1018,88 @@ void renderTimelinePreviewChromeToTarget(
   renderTimelinePreviewMetadataToTarget(target, layout, styles);
 }
 
-}  // namespace
+} // namespace
 
-void renderOverlayToScreen(ConsoleScreen& screen,
-                           const OverlayCellLayout& layout,
-                           const OverlayRenderStyles& styles,
-                           double progress,
-                           const playback_video_edit::EditSnapshot* videoEdit,
-                           const playback_video_edit::ExportProgress*
-                               videoEditExport,
-                           playback_video_edit::Prompt videoEditPrompt,
-    const std::optional<MediaActionConfirmationDialog>&
-        mediaActionConfirmationPrompt,
-                           const playback_video_chapters::Snapshot* chapters,
-                           bool chapterOverviewOpen,
-                           int minY,
-                           int maxY) {
+void renderOverlayToScreen(
+    ConsoleScreen &screen, const OverlayCellLayout &layout,
+    const OverlayRenderStyles &styles, double progress,
+    const playback_video_edit::EditSnapshot *videoEdit,
+    const playback_video_edit::ExportProgress *videoEditExport,
+    playback_video_edit::Prompt videoEditPrompt,
+    const std::optional<MediaActionConfirmationDialog>
+        &mediaActionConfirmationPrompt,
+    const playback_video_chapters::Snapshot *chapters, bool chapterOverviewOpen,
+    int chapterOverviewScrollOffset, int minY, int maxY) {
   ScreenOverlayTarget target(screen, minY, maxY);
   renderOverlayToTarget(target, layout, styles, progress, videoEdit,
                         videoEditExport, videoEditPrompt,
                         mediaActionConfirmationPrompt, chapters,
-                        chapterOverviewOpen);
+                        chapterOverviewOpen, chapterOverviewScrollOffset);
 }
 
-void renderTransientMessageToScreen(ConsoleScreen& screen,
-                                    const std::string& message,
-                                    const Style& style) {
+void renderTransientMessageToScreen(ConsoleScreen &screen,
+                                    const std::string &message,
+                                    const Style &style) {
   ScreenOverlayTarget target(screen, 0, screen.height());
   renderTransientMessageToTarget(target, message, style);
 }
 
-void renderContextMenuToScreen(ConsoleScreen& screen,
-                               const ContextMenuCellLayout& layout,
-                               const OverlayRenderStyles& styles) {
+void renderContextMenuToScreen(ConsoleScreen &screen,
+                               const ContextMenuCellLayout &layout,
+                               const OverlayRenderStyles &styles) {
   ScreenOverlayTarget target(screen, 0, screen.height());
   renderContextMenuToTarget(target, layout, styles);
 }
 
 void renderTimelinePreviewChromeToScreen(
-    ConsoleScreen& screen,
-    const playback_video_timeline_preview::CellLayout& layout,
-    const OverlayRenderStyles& styles) {
+    ConsoleScreen &screen,
+    const playback_video_timeline_preview::CellLayout &layout,
+    const OverlayRenderStyles &styles) {
   ScreenOverlayTarget target(screen, 0, screen.height());
   renderTimelinePreviewChromeToTarget(target, layout, styles);
 }
 
 void renderTimelinePreviewTimestampToScreen(
-    ConsoleScreen& screen,
-    const playback_video_timeline_preview::CellLayout& layout,
-    const OverlayRenderStyles& styles) {
+    ConsoleScreen &screen,
+    const playback_video_timeline_preview::CellLayout &layout,
+    const OverlayRenderStyles &styles) {
   ScreenOverlayTarget target(screen, 0, screen.height());
   renderTimelinePreviewTimestampToTarget(target, layout, styles);
 }
 
-bool renderWindowUiToGpuTextGrid(const WindowUiState& ui,
-                                 const OverlayCellLayout& overlayLayout,
-                                 int cellPixelWidth, int cellPixelHeight,
-                                 TimelinePreviewPresentation previewPresentation,
-                                 const OverlayRenderStyles& styles,
-                                 GpuTextGridFrame& outFrame) {
+bool renderWindowUiToGpuTextGrid(
+    const WindowUiState &ui, const OverlayCellLayout &overlayLayout,
+    int cellPixelWidth, int cellPixelHeight,
+    TimelinePreviewPresentation previewPresentation,
+    const OverlayRenderStyles &styles, GpuTextGridFrame &outFrame) {
   GpuTextGridOverlayTarget target(outFrame, overlayLayout.width,
                                   overlayLayout.height, styles.baseStyle);
   bool rendered = false;
   if (ui.chromeVisible) {
     renderOverlayToTarget(target, overlayLayout, styles, ui.progress,
                           &ui.videoEdit, &ui.videoEditExport,
-                          ui.videoEditPrompt,
-                          ui.mediaActionConfirmationPrompt, &ui.chapters,
-                          ui.chapterOverviewOpen);
+                          ui.videoEditPrompt, ui.mediaActionConfirmationPrompt,
+                          &ui.chapters, ui.chapterOverviewOpen,
+                          ui.chapterOverviewScrollOffset);
     rendered = true;
   }
   if (ui.timelinePreview.hoverActive) {
     const bool imageReady =
-        previewPresentation ==
-            TimelinePreviewPresentation::ImageAndTimestamp &&
+        previewPresentation == TimelinePreviewPresentation::ImageAndTimestamp &&
         ui.timelinePreview.hasImage();
-    const playback_video_image::RgbaImage* previewSurface =
+    const playback_video_image::RgbaImage *previewSurface =
         imageReady ? &ui.timelinePreview.image->surface : nullptr;
-    const int sourceWidth =
-        previewSurface ? static_cast<int>(previewSurface->width)
-                       : std::max(16, ui.timelinePreview.sourceWidth);
-    const int sourceHeight =
-        previewSurface ? static_cast<int>(previewSurface->height)
-                       : std::max(9, ui.timelinePreview.sourceHeight);
+    const int sourceWidth = previewSurface
+                                ? static_cast<int>(previewSurface->width)
+                                : std::max(16, ui.timelinePreview.sourceWidth);
+    const int sourceHeight = previewSurface
+                                 ? static_cast<int>(previewSurface->height)
+                                 : std::max(9, ui.timelinePreview.sourceHeight);
     const auto previewLayout = playback_video_timeline_preview::layoutCells(
-        overlayLayout.width, overlayLayout.height,
-        overlayLayout.progressBarY, overlayLayout.progressBarX,
-        overlayLayout.progressBarWidth, ui.timelinePreview.anchorRatio,
-        sourceWidth, sourceHeight, cellPixelWidth, cellPixelHeight,
+        overlayLayout.width, overlayLayout.height, overlayLayout.progressBarY,
+        overlayLayout.progressBarX, overlayLayout.progressBarWidth,
+        ui.timelinePreview.anchorRatio, sourceWidth, sourceHeight,
+        cellPixelWidth, cellPixelHeight,
         playback_video_timeline_preview::formatTimestamp(
             ui.timelinePreview.targetUs),
         ui.timelinePreview.metadataLines);
@@ -1108,4 +1126,4 @@ bool renderWindowUiToGpuTextGrid(const WindowUiState& ui,
   return rendered;
 }
 
-}  // namespace playback_overlay
+} // namespace playback_overlay

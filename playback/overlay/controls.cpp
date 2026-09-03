@@ -11,19 +11,21 @@
 namespace playback_overlay {
 namespace {
 
-int visibleWidth(const std::string& text) {
+int visibleWidth(const std::string &text) {
   std::string filtered;
   filtered.reserve(text.size());
   for (char c : text) {
-    if (c != '\r' && c != '\n') filtered.push_back(c);
+    if (c != '\r' && c != '\n')
+      filtered.push_back(c);
   }
   return utf8DisplayWidth(filtered);
 }
 
-void finishControlSpecs(std::vector<OverlayControlSpec>* specs,
+void finishControlSpecs(std::vector<OverlayControlSpec> *specs,
                         int hoverControlToken) {
-  if (!specs) return;
-  for (OverlayControlSpec& spec : *specs) {
+  if (!specs)
+    return;
+  for (OverlayControlSpec &spec : *specs) {
     const bool hovered =
         spec.enabled && overlayControlToken(spec.id) == hoverControlToken;
     spec.renderText = hovered ? spec.hoverText : spec.normalText;
@@ -36,38 +38,38 @@ void finishControlSpecs(std::vector<OverlayControlSpec>* specs,
   }
 }
 
-OverlayControlSpec makePlayPauseSpec(const PlaybackOverlayState& state) {
+OverlayControlSpec makePlayPauseSpec(const PlaybackOverlayState &state) {
   OverlayControlSpec spec = makeOverlayTextControlSpec(
       OverlayControlId::PlayPause, state.paused ? "Play" : "Pause",
       state.paused, state.playPauseAvailable);
-  const OverlayControlSpec widest = makeOverlayTextControlSpec(
-      OverlayControlId::PlayPause, "Pause", false);
+  const OverlayControlSpec widest =
+      makeOverlayTextControlSpec(OverlayControlId::PlayPause, "Pause", false);
   spec.width = std::max(spec.width, widest.width);
   return spec;
 }
 
-}  // namespace
+} // namespace
 
 OverlayControlSpec makeOverlayTextControlSpec(OverlayControlId id,
-                                              const std::string& label,
+                                              const std::string &label,
                                               bool active, bool enabled) {
   OverlayControlSpec spec;
   spec.id = id;
   spec.normalText = " [" + label + "] ";
   spec.hoverText = "[ " + label + " ]";
-  spec.width =
-      std::max(utf8DisplayWidth(spec.normalText),
-               utf8DisplayWidth(spec.hoverText));
+  spec.width = std::max(utf8DisplayWidth(spec.normalText),
+                        utf8DisplayWidth(spec.hoverText));
   spec.active = active;
   spec.enabled = enabled;
   return spec;
 }
 
-std::vector<OverlayCellControlInput> buildOverlayCellControlInputs(
-    const std::vector<OverlayControlSpec>& specs, int hoverControlToken) {
+std::vector<OverlayCellControlInput>
+buildOverlayCellControlInputs(const std::vector<OverlayControlSpec> &specs,
+                              int hoverControlToken) {
   std::vector<OverlayCellControlInput> controls;
   controls.reserve(specs.size());
-  for (const OverlayControlSpec& spec : specs) {
+  for (const OverlayControlSpec &spec : specs) {
     const bool hovered =
         spec.enabled && overlayControlToken(spec.id) == hoverControlToken;
     OverlayCellControlInput control;
@@ -82,114 +84,109 @@ std::vector<OverlayCellControlInput> buildOverlayCellControlInputs(
   return controls;
 }
 
-std::vector<OverlayDialogButtonInput>
-buildMediaActionConfirmationDialogButtons(
-    const MediaActionConfirmationDialog& prompt,
-    int hoverControlToken) {
+std::vector<OverlayDialogButtonInput> buildMediaActionConfirmationDialogButtons(
+    const MediaActionConfirmationDialog &prompt, int hoverControlToken) {
   using Selection = MediaActionConfirmationSelection;
   return {
       {OverlayControlId::MediaActionPrimary, prompt.primaryLabel,
-       prompt.primaryLabel,
-       prompt.selected == Selection::Primary,
+       prompt.primaryLabel, prompt.selected == Selection::Primary,
        hoverControlToken ==
-            overlayControlToken(OverlayControlId::MediaActionPrimary),
+           overlayControlToken(OverlayControlId::MediaActionPrimary),
        true},
       {OverlayControlId::MediaActionSecondary, prompt.secondaryLabel,
-       prompt.secondaryLabel,
-       prompt.selected == Selection::Secondary,
+       prompt.secondaryLabel, prompt.selected == Selection::Secondary,
        hoverControlToken ==
-            overlayControlToken(OverlayControlId::MediaActionSecondary),
+           overlayControlToken(OverlayControlId::MediaActionSecondary),
        true},
   };
 }
 
 OverlayControlIntent intentForOverlayControl(OverlayControlId id) {
   switch (id) {
-    case OverlayControlId::Previous:
-      return OverlayAction::Previous;
-    case OverlayControlId::PlayPause:
-      return OverlayAction::TogglePlayPause;
-    case OverlayControlId::Next:
-      return OverlayAction::Next;
-    case OverlayControlId::Radio:
-      return OverlayAction::ToggleRadio;
-    case OverlayControlId::Hz50:
-      return OverlayAction::Toggle50Hz;
-    case OverlayControlId::AudioTrack:
-      return OverlayAction::CycleAudioTrack;
-    case OverlayControlId::Subtitles:
-      return OverlayAction::ToggleSubtitles;
-    case OverlayControlId::Chapters:
-      return OverlayAction::ToggleChapterOverview;
-    case OverlayControlId::ChapterInstall:
-      return OverlayAction::InstallChapterModel;
-    case OverlayControlId::ChapterCancel:
-      return OverlayAction::CancelChapterOperation;
-    case OverlayControlId::ChapterRetry:
-      return OverlayAction::RetryChapterAnalysis;
-    case OverlayControlId::PictureInPicture:
-      return OverlayAction::TogglePictureInPicture;
-    case OverlayControlId::EditMarkIn:
-      return playback_video_edit::Command::ToggleIn;
-    case OverlayControlId::EditMarkOut:
-      return playback_video_edit::Command::ToggleOut;
-    case OverlayControlId::EditClearSelection:
-      return playback_video_edit::Command::ClearInAndOut;
-    case OverlayControlId::EditRippleDelete:
-      return playback_video_edit::Command::RippleDelete;
-    case OverlayControlId::EditTrim:
-      return playback_video_edit::Command::Trim;
-    case OverlayControlId::EditSuggestions:
-      return playback_video_edit::Command::ToggleSceneSuggestions;
-    case OverlayControlId::EditSuggestionFilter:
-      return playback_video_edit::Command::CycleSceneSuggestionFilter;
-    case OverlayControlId::EditPreviousSuggestion:
-      return playback_video_edit::Command::PreviousSceneSuggestion;
-    case OverlayControlId::EditNextSuggestion:
-      return playback_video_edit::Command::NextSceneSuggestion;
-    case OverlayControlId::EditSelectSuggestion:
-      return playback_video_edit::Command::SelectSceneSuggestion;
-    case OverlayControlId::EditHideSuggestion:
-      return playback_video_edit::Command::DismissSceneSuggestion;
-    case OverlayControlId::EditUndoHideSuggestion:
-      return playback_video_edit::Command::UndoDismissSceneSuggestion;
-    case OverlayControlId::EditDone:
-      return playback_video_edit::Command::Finish;
-    case OverlayControlId::EditStartExport:
-      return playback_video_edit::Command::StartExport;
-    case OverlayControlId::EditWaitForExport:
-      return OverlayAction::WaitForVideoEditExport;
-    case OverlayControlId::EditCancelExport:
-      return playback_video_edit::Command::CancelExport;
-    case OverlayControlId::EditConfirmPrompt:
-      return playback_video_edit::Command::ConfirmPrompt;
-    case OverlayControlId::EditCancelPrompt:
-      return playback_video_edit::Command::CancelPrompt;
-    case OverlayControlId::EditDiscardAndExit:
-      return OverlayAction::ConfirmPendingExit;
-    case OverlayControlId::EditCancelExit:
-      return OverlayAction::CancelPendingExit;
-    case OverlayControlId::MediaTaskCancel:
-      return OverlayAction::CancelMediaTask;
-    case OverlayControlId::MediaActionPrimary:
-      return OverlayAction::ConfirmMediaAction;
-    case OverlayControlId::MediaActionSecondary:
-      return OverlayAction::DismissMediaAction;
+  case OverlayControlId::Previous:
+    return OverlayAction::Previous;
+  case OverlayControlId::PlayPause:
+    return OverlayAction::TogglePlayPause;
+  case OverlayControlId::Next:
+    return OverlayAction::Next;
+  case OverlayControlId::Radio:
+    return OverlayAction::ToggleRadio;
+  case OverlayControlId::Hz50:
+    return OverlayAction::Toggle50Hz;
+  case OverlayControlId::AudioTrack:
+    return OverlayAction::CycleAudioTrack;
+  case OverlayControlId::Subtitles:
+    return OverlayAction::ToggleSubtitles;
+  case OverlayControlId::Chapters:
+    return OverlayAction::ToggleChapterOverview;
+  case OverlayControlId::ChapterInstall:
+    return OverlayAction::InstallChapterModel;
+  case OverlayControlId::ChapterCancel:
+    return OverlayAction::CancelChapterOperation;
+  case OverlayControlId::ChapterRetry:
+    return OverlayAction::RetryChapterAnalysis;
+  case OverlayControlId::PictureInPicture:
+    return OverlayAction::TogglePictureInPicture;
+  case OverlayControlId::EditMarkIn:
+    return playback_video_edit::Command::ToggleIn;
+  case OverlayControlId::EditMarkOut:
+    return playback_video_edit::Command::ToggleOut;
+  case OverlayControlId::EditClearSelection:
+    return playback_video_edit::Command::ClearInAndOut;
+  case OverlayControlId::EditRippleDelete:
+    return playback_video_edit::Command::RippleDelete;
+  case OverlayControlId::EditTrim:
+    return playback_video_edit::Command::Trim;
+  case OverlayControlId::EditSuggestions:
+    return playback_video_edit::Command::ToggleSceneSuggestions;
+  case OverlayControlId::EditSuggestionFilter:
+    return playback_video_edit::Command::CycleSceneSuggestionFilter;
+  case OverlayControlId::EditPreviousSuggestion:
+    return playback_video_edit::Command::PreviousSceneSuggestion;
+  case OverlayControlId::EditNextSuggestion:
+    return playback_video_edit::Command::NextSceneSuggestion;
+  case OverlayControlId::EditSelectSuggestion:
+    return playback_video_edit::Command::SelectSceneSuggestion;
+  case OverlayControlId::EditHideSuggestion:
+    return playback_video_edit::Command::DismissSceneSuggestion;
+  case OverlayControlId::EditUndoHideSuggestion:
+    return playback_video_edit::Command::UndoDismissSceneSuggestion;
+  case OverlayControlId::EditDone:
+    return playback_video_edit::Command::Finish;
+  case OverlayControlId::EditStartExport:
+    return playback_video_edit::Command::StartExport;
+  case OverlayControlId::EditWaitForExport:
+    return OverlayAction::WaitForVideoEditExport;
+  case OverlayControlId::EditCancelExport:
+    return playback_video_edit::Command::CancelExport;
+  case OverlayControlId::EditConfirmPrompt:
+    return playback_video_edit::Command::ConfirmPrompt;
+  case OverlayControlId::EditCancelPrompt:
+    return playback_video_edit::Command::CancelPrompt;
+  case OverlayControlId::EditDiscardAndExit:
+    return OverlayAction::ConfirmPendingExit;
+  case OverlayControlId::EditCancelExit:
+    return OverlayAction::CancelPendingExit;
+  case OverlayControlId::MediaTaskCancel:
+    return OverlayAction::CancelMediaTask;
+  case OverlayControlId::MediaActionPrimary:
+    return OverlayAction::ConfirmMediaAction;
+  case OverlayControlId::MediaActionSecondary:
+    return OverlayAction::DismissMediaAction;
   }
   throw std::invalid_argument("Unknown playback overlay control.");
 }
 
-std::vector<OverlayControlSpec> buildOverlayControlSpecs(
-    const PlaybackOverlayState& state, int hoverControlToken,
-    const OverlayControlSpecOptions& options) {
+std::vector<OverlayControlSpec>
+buildOverlayControlSpecs(const PlaybackOverlayState &state,
+                         int hoverControlToken,
+                         const OverlayControlSpecOptions &options) {
   std::vector<OverlayControlSpec> out;
-  const auto add = [&](OverlayControlId id, const std::string& label,
+  const auto add = [&](OverlayControlId id, const std::string &label,
                        bool active, bool enabled = true) {
     out.push_back(makeOverlayTextControlSpec(id, label, active, enabled));
   };
-  const auto finish = [&]() {
-    finishControlSpecs(&out, hoverControlToken);
-  };
+  const auto finish = [&]() { finishControlSpecs(&out, hoverControlToken); };
   const auto addMediaTaskCancellation = [&]() {
     if (state.mediaTaskActivity && state.mediaTaskActivity->cancellable) {
       add(OverlayControlId::MediaTaskCancel, "Cancel task", false,
@@ -198,7 +195,7 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
   };
 
   if (state.mediaActionConfirmationPrompt) {
-    for (const OverlayDialogButtonInput& button :
+    for (const OverlayDialogButtonInput &button :
          buildMediaActionConfirmationDialogButtons(
              *state.mediaActionConfirmationPrompt, hoverControlToken)) {
       add(button.id, button.label, button.selected, button.enabled);
@@ -229,17 +226,17 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
             state.videoEditExport.targetsCurrentRevision,
         });
     switch (exportAction) {
-      case playback_video_edit::ExitExportAction::ExportCurrent:
-        add(OverlayControlId::EditStartExport,
-            state.videoEditExport.failed() ? "Retry" : "Export", false);
-        break;
-      case playback_video_edit::ExitExportAction::WaitForExport:
-        add(OverlayControlId::EditWaitForExport, "Wait", true);
-        break;
-      case playback_video_edit::ExitExportAction::CancelBlockingExport:
-        break;
-      case playback_video_edit::ExitExportAction::None:
-        break;
+    case playback_video_edit::ExitExportAction::ExportCurrent:
+      add(OverlayControlId::EditStartExport,
+          state.videoEditExport.failed() ? "Retry" : "Export", false);
+      break;
+    case playback_video_edit::ExitExportAction::WaitForExport:
+      add(OverlayControlId::EditWaitForExport, "Wait", true);
+      break;
+    case playback_video_edit::ExitExportAction::CancelBlockingExport:
+      break;
+    case playback_video_edit::ExitExportAction::None:
+      break;
     }
     if (state.videoEditExport.running()) {
       add(OverlayControlId::EditCancelExport, "Cancel export", false);
@@ -261,8 +258,7 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     const bool hasMarks = hasStart || hasEnd;
     const bool completeRange = hasStart && hasEnd;
     const bool showPictureInPicture =
-        options.includePictureInPicture &&
-        state.pictureInPictureAvailable;
+        options.includePictureInPicture && state.pictureInPictureAvailable;
 
     addMediaTaskCancellation();
     if (showPictureInPicture && state.pictureInPictureActive) {
@@ -295,17 +291,16 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     } else if (suggestionsFailed) {
       suggestionsLabel = "Retry suggestions";
     } else if (suggestionsReady) {
-      suggestionsLabel = "Suggestions " +
-                         std::to_string(
-                             state.videoEdit.suggestionReview.totalCount);
+      suggestionsLabel =
+          "Suggestions " +
+          std::to_string(state.videoEdit.suggestionReview.totalCount);
     } else {
       suggestionsLabel = "Suggestions";
     }
     add(OverlayControlId::EditSuggestions, suggestionsLabel,
         detectingSegments || state.videoEdit.suggestionReview.visible);
 
-    if (suggestionsReady &&
-        state.videoEdit.suggestionReview.visible) {
+    if (suggestionsReady && state.videoEdit.suggestionReview.visible) {
       add(OverlayControlId::EditSuggestionFilter,
           std::string("Filter: ") +
               playback_video_edit::sceneSuggestionFilterLabel(
@@ -316,12 +311,10 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
           state.videoEdit.suggestionReview.selectedId.has_value();
       add(OverlayControlId::EditPreviousSuggestion, "Previous", false,
           hasSuggestion);
-      add(OverlayControlId::EditNextSuggestion, "Next", false,
-          hasSuggestion);
+      add(OverlayControlId::EditNextSuggestion, "Next", false, hasSuggestion);
       add(OverlayControlId::EditSelectSuggestion, "Select range", false,
           hasSuggestion);
-      add(OverlayControlId::EditHideSuggestion, "Hide", false,
-          hasSuggestion);
+      add(OverlayControlId::EditHideSuggestion, "Hide", false, hasSuggestion);
       if (state.videoEdit.suggestionReview.canUndoHide) {
         add(OverlayControlId::EditUndoHideSuggestion, "Undo hide", false);
       }
@@ -358,7 +351,8 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     std::string audioLabel = "Audio: N/A";
     if (state.canCycleAudioTracks && state.audioOk) {
       std::string activeAudio = state.activeAudioTrackLabel;
-      if (activeAudio.empty()) activeAudio = "N/A";
+      if (activeAudio.empty())
+        activeAudio = "N/A";
       if (utf8DisplayWidth(activeAudio) > 14) {
         activeAudio = utf8TakeDisplayWidth(activeAudio, 14);
       }
@@ -383,24 +377,21 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
     add(OverlayControlId::Subtitles, subtitleLabel, subtitlesActive);
   }
 
+  // Automatic background work owns no permanent toolbar space. A control
+  // appears only when it represents content or a user decision.
   if (state.chapters.ready()) {
     add(OverlayControlId::Chapters,
         "Chapters " + std::to_string(state.chapters.chapters.size()),
         state.chapterOverviewOpen);
   } else if (state.chapters.state ==
              playback_video_chapters::AnalysisState::SetupRequired) {
-    add(OverlayControlId::ChapterInstall, "Install model (5.54 GB)", false);
+    add(OverlayControlId::ChapterInstall, "Install chapter models", false);
   } else if (state.chapters.state ==
              playback_video_chapters::AnalysisState::Installing) {
     add(OverlayControlId::ChapterCancel, "Cancel install", false);
   } else if (state.chapters.state ==
              playback_video_chapters::AnalysisState::Failed) {
     add(OverlayControlId::ChapterRetry, "Retry chapters", false);
-  } else if (state.chapters.state ==
-             playback_video_chapters::AnalysisState::Unsupported) {
-    add(OverlayControlId::Chapters, "Chapters unavailable", false, false);
-  } else {
-    add(OverlayControlId::Chapters, "Chapters…", false, false);
   }
 
   if (options.includePictureInPicture && state.pictureInPictureAvailable) {
@@ -412,10 +403,11 @@ std::vector<OverlayControlSpec> buildOverlayControlSpecs(
   return out;
 }
 
-std::vector<OverlayControlSpec> buildOverlayControlSpecs(
-    const PlaybackOverlayState& state, int hoverControlToken) {
+std::vector<OverlayControlSpec>
+buildOverlayControlSpecs(const PlaybackOverlayState &state,
+                         int hoverControlToken) {
   return buildOverlayControlSpecs(state, hoverControlToken,
                                   OverlayControlSpecOptions{});
 }
 
-}  // namespace playback_overlay
+} // namespace playback_overlay

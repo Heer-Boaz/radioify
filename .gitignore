@@ -116,6 +116,7 @@ models/*.download
 !README.md
 !BUILD_WINDOWS.md
 !docs/radio1938-realism-audit.md
+!models/chapter_analysis/CHAPTER-LLAMA-NOTICE.md
 
 # Output files
 **.melody

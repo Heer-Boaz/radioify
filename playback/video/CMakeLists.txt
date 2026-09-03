@@ -89,13 +89,18 @@ radioify_add_module_object_library(radioify_scene_analysis
   ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_analysis_job.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_analysis_job_default.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_transcript_evidence.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/visual_timeline_checkpoint.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/visual_timeline_scan.cpp
 )
 
 radioify_add_module_object_library(radioify_video_chapters
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/backend.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/cache.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/chapter.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/evidence_plan.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/generated_document.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/inference_worker_client.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/inference_worker_protocol.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/sampled_evidence.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/inference.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/integrity.cpp

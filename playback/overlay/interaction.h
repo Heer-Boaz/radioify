@@ -86,6 +86,18 @@ struct EditBoundaryRegion {
       playback_video_edit::EditBoundary::In;
 };
 
+struct ChapterOverviewRegion {
+  struct Item {
+    InteractionRect bounds;
+    std::int64_t startUs = 0;
+  };
+
+  InteractionRect bounds;
+  int scrollOffset = 0;
+  int maximumScrollOffset = 0;
+  std::vector<Item> items;
+};
+
 struct InteractionMap {
   // Immutable-by-convention snapshot of one rendered overlay.
   bool modal = false;
@@ -93,6 +105,7 @@ struct InteractionMap {
   std::vector<OverlayControlRegion> controls;
   std::vector<ContextMenuItemRegion> contextMenuItems;
   std::vector<EditBoundaryRegion> editBoundaries;
+  std::optional<ChapterOverviewRegion> chapterOverview;
 
   bool contains(double x, double y) const;
 };
@@ -107,34 +120,40 @@ struct InteractionHit {
   std::optional<OverlayControlId> control;
   std::optional<ContextMenuItemToken> contextMenuItem;
   std::optional<playback_video_edit::EditBoundary> editBoundary;
+  std::optional<ChapterOverviewRegion> chapterOverview;
+  std::optional<std::int64_t> chapterStartUs;
 };
 
-std::optional<ProgressBarHit> progressBarHitAt(
-    const ProgressBarRegion& region, double x, double y,
-    bool captured = false);
-std::optional<ProgressBarHit> progressBarHitAt(
-    const InteractionMap& map, double x, double y, bool captured = false);
-std::optional<OverlayControlId> overlayControlAt(
-    const InteractionMap& map, double x, double y);
-std::optional<ContextMenuItemToken> contextMenuItemAt(
-    const InteractionMap& map, double x, double y);
-std::optional<playback_video_edit::EditBoundary> editBoundaryAt(
-    const InteractionMap& map, double x, double y);
-bool editBoundaryHandleAt(const InteractionMap& map, double x, double y);
-InteractionHit interactionHitAt(const InteractionMap& map, double x, double y,
+std::optional<ProgressBarHit> progressBarHitAt(const ProgressBarRegion &region,
+                                               double x, double y,
+                                               bool captured = false);
+std::optional<ProgressBarHit> progressBarHitAt(const InteractionMap &map,
+                                               double x, double y,
+                                               bool captured = false);
+std::optional<OverlayControlId> overlayControlAt(const InteractionMap &map,
+                                                 double x, double y);
+std::optional<ContextMenuItemToken> contextMenuItemAt(const InteractionMap &map,
+                                                      double x, double y);
+std::optional<playback_video_edit::EditBoundary>
+editBoundaryAt(const InteractionMap &map, double x, double y);
+bool editBoundaryHandleAt(const InteractionMap &map, double x, double y);
+InteractionHit interactionHitAt(const InteractionMap &map, double x, double y,
                                 bool capturedProgress = false);
-InteractionHit interactionHitAtTransformed(
-    const InteractionMap& map, double offsetX, double offsetY, double scaleX,
-    double scaleY, double x, double y, bool capturedProgress = false);
+InteractionHit interactionHitAtTransformed(const InteractionMap &map,
+                                           double offsetX, double offsetY,
+                                           double scaleX, double scaleY,
+                                           double x, double y,
+                                           bool capturedProgress = false);
 
-InteractionMap transformInteractionMap(const InteractionMap& map,
+InteractionMap transformInteractionMap(const InteractionMap &map,
                                        double offsetX, double offsetY,
                                        double scaleX, double scaleY);
 InteractionMap buildOverlayInteractionMap(
-    const OverlayCellLayout& layout,
-    const playback_video_edit::EditSnapshot* videoEdit = nullptr,
+    const OverlayCellLayout &layout,
+    const playback_video_edit::EditSnapshot *videoEdit = nullptr,
     playback_video_edit::Prompt videoEditPrompt =
         playback_video_edit::Prompt::None,
-    bool mediaActionConfirmationPrompt = false);
+    bool mediaActionConfirmationPrompt = false,
+    const ChapterOverviewRegion *chapterOverview = nullptr);
 
-}  // namespace playback_overlay
+} // namespace playback_overlay

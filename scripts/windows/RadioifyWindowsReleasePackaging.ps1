@@ -162,6 +162,13 @@ function New-RadioifyWindowsDistributionBundle {
     New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
 
     Copy-Item -LiteralPath $resolvedExecutablePath -Destination (Join-Path $stageDir "radioify.exe") -Force
+    $chapterWorkerPath = Join-Path $resolvedRepoRoot "dist\radioify_chapter_worker.exe"
+    if (-not (Test-Path -LiteralPath $chapterWorkerPath -PathType Leaf)) {
+        throw "Isolated chapter worker not found at '$chapterWorkerPath'. Run .\build.ps1 -Static first."
+    }
+    Copy-Item -LiteralPath $chapterWorkerPath `
+        -Destination (Join-Path $stageDir "radioify_chapter_worker.exe") `
+        -Force
 
     $llamaLicensePath = Join-Path $resolvedRepoRoot "dist\llama-cpp-LICENSE.txt"
     if (-not (Test-Path -LiteralPath $llamaLicensePath)) {
@@ -185,6 +192,24 @@ function New-RadioifyWindowsDistributionBundle {
     Copy-Item -LiteralPath $whisperModelPath `
         -Destination (Join-Path $modelStageDir "ggml-base-q5_1.bin") `
         -Force
+
+    $chapterPlannerSourceDir = Join-Path $resolvedRepoRoot "dist\models\chapter_analysis"
+    $chapterPlannerStageDir = Join-Path $modelStageDir "chapter_analysis"
+    New-Item -ItemType Directory -Force -Path $chapterPlannerStageDir | Out-Null
+    foreach ($chapterPlannerFile in @(
+        "chapter-llama-captions-asr-10k-f16.gguf",
+        "CHAPTER-LLAMA-NOTICE.md",
+        "LLAMA-3.1-LICENSE",
+        "NOTICE"
+    )) {
+        $sourcePath = Join-Path $chapterPlannerSourceDir $chapterPlannerFile
+        if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+            throw "Chapter-Llama planner asset not found at '$sourcePath'. Run .\build.ps1 -Static first."
+        }
+        Copy-Item -LiteralPath $sourcePath `
+            -Destination (Join-Path $chapterPlannerStageDir $chapterPlannerFile) `
+            -Force
+    }
 
     $windowsMlRuntimeContract = Get-RadioifyWindowsMlRuntimeContract
     foreach ($runtimeName in $windowsMlRuntimeContract.ProductionRuntimeFiles) {

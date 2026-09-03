@@ -3,7 +3,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <limits>
+
+#include "core/unicode_display_width.h"
 
 namespace playback_video_timeline_preview {
 namespace {
@@ -18,10 +21,29 @@ int makeEvenAtLeastTwo(int value) {
   return value & 1 ? value + 1 : value;
 }
 
-}  // namespace
+std::vector<std::string> wrapMetadata(const std::vector<std::string> &source,
+                                      int width) {
+  std::vector<std::string> wrapped;
+  if (width <= 0)
+    return wrapped;
+  for (const std::string &sourceLine : source) {
+    if (sourceLine.empty()) {
+      wrapped.push_back({});
+      continue;
+    }
+    std::vector<std::string> sourceLines =
+        utf8WrapDisplayWidth(sourceLine, width);
+    wrapped.insert(wrapped.end(), std::make_move_iterator(sourceLines.begin()),
+                   std::make_move_iterator(sourceLines.end()));
+  }
+  return wrapped;
+}
+
+} // namespace
 
 int64_t bucketDurationUs(int64_t durationUs, int progressUnits) {
-  if (durationUs <= 0) return kMinimumBucketUs;
+  if (durationUs <= 0)
+    return kMinimumBucketUs;
   const int units =
       std::clamp(progressUnits, kMinimumProgressUnits, kMaximumProgressUnits);
   const int64_t perUnit = std::max<int64_t>(
@@ -29,16 +51,18 @@ int64_t bucketDurationUs(int64_t durationUs, int progressUnits) {
   return std::clamp(perUnit, kMinimumBucketUs, kMaximumBucketUs);
 }
 
-int64_t bucketTargetUs(int64_t targetUs, int64_t durationUs,
-                       int64_t bucketUs) {
-  if (durationUs <= 0) return 0;
+int64_t bucketTargetUs(int64_t targetUs, int64_t durationUs, int64_t bucketUs) {
+  if (durationUs <= 0)
+    return 0;
   const int64_t lastUs = std::max<int64_t>(0, durationUs - 1);
   targetUs = std::clamp(targetUs, int64_t{0}, lastUs);
-  if (targetUs == 0 || targetUs == lastUs) return targetUs;
+  if (targetUs == 0 || targetUs == lastUs)
+    return targetUs;
   bucketUs = std::max<int64_t>(1, bucketUs);
   const int64_t bucketStart = (targetUs / bucketUs) * bucketUs;
   const int64_t half = bucketUs / 2;
-  if (bucketStart > lastUs - std::min(lastUs, half)) return lastUs;
+  if (bucketStart > lastUs - std::min(lastUs, half))
+    return lastUs;
   return std::min(lastUs, bucketStart + half);
 }
 
@@ -48,9 +72,8 @@ std::pair<int, int> fitDecodeSize(int sourceWidth, int sourceHeight,
   sourceHeight = std::max(2, sourceHeight);
   maxWidth = makeEvenAtLeastTwo(maxWidth);
   maxHeight = makeEvenAtLeastTwo(maxHeight);
-  const double scale =
-      std::min(static_cast<double>(maxWidth) / sourceWidth,
-               static_cast<double>(maxHeight) / sourceHeight);
+  const double scale = std::min(static_cast<double>(maxWidth) / sourceWidth,
+                                static_cast<double>(maxHeight) / sourceHeight);
   int width = makeEvenAtLeastTwo(
       static_cast<int>(std::floor(sourceWidth * std::min(1.0, scale))));
   int height = makeEvenAtLeastTwo(
@@ -85,7 +108,8 @@ std::string formatTimestamp(int64_t timestampUs) {
 std::vector<int64_t> prefetchTargets(int64_t targetUs, int64_t bucketUs,
                                      int64_t durationUs, int direction) {
   std::vector<int64_t> targets;
-  if (durationUs <= 0) return targets;
+  if (durationUs <= 0)
+    return targets;
   const int64_t lastUs = durationUs - 1;
   targetUs = std::clamp(targetUs, int64_t{0}, lastUs);
   bucketUs = std::max<int64_t>(1, bucketUs);
@@ -126,14 +150,17 @@ CellLayout layoutCells(int columns, int rows, int progressBarY,
                        int progressBarX, int progressBarWidth,
                        double anchorRatio, int sourceWidth, int sourceHeight,
                        double cellPixelWidth, double cellPixelHeight,
-                       const std::string& label,
-                       const std::vector<std::string>& metadataLines) {
+                       const std::string &label,
+                       const std::vector<std::string> &metadataLines) {
   CellLayout out;
-  if (columns < 10 || rows < 6) return out;
+  if (columns < 10 || rows < 6)
+    return out;
 
-  if (progressBarY <= 0 || progressBarY >= rows) return out;
+  if (progressBarY <= 0 || progressBarY >= rows)
+    return out;
   const int availableRows = progressBarY;
-  if (availableRows < 4) return out;
+  if (availableRows < 4)
+    return out;
 
   const double safeCellWidth = cellPixelWidth > 0.0 ? cellPixelWidth : 9.0;
   const double safeCellHeight = cellPixelHeight > 0.0 ? cellPixelHeight : 21.0;
@@ -146,39 +173,40 @@ CellLayout layoutCells(int columns, int rows, int progressBarY,
       !metadataLines.empty() && columns >= 72 && availableRows >= 7;
   const int reservedMetadataColumns =
       placeMetadataBeside ? std::clamp(columns / 3, 24, 38) + 1 : 0;
-  const int requestedMetadataRows = metadataLines.empty()
-                                        ? 0
-                                        : std::min({4,
-                                                    static_cast<int>(
-                                                        metadataLines.size()),
-                                                    std::max(
-                                                        0,
-                                                        availableRows - 4)});
+  const int provisionalImageColumns =
+      std::max(6, std::min({40, columns - 2 - reservedMetadataColumns,
+                            std::max(12, columns / 3)}));
+  const int metadataWidth = placeMetadataBeside ? reservedMetadataColumns - 1
+                                                : provisionalImageColumns;
+  std::vector<std::string> wrappedMetadata =
+      wrapMetadata(metadataLines, metadataWidth);
+  const int metadataRowLimit =
+      placeMetadataBeside ? std::min(10, std::max(0, availableRows - 2))
+                          : std::min(6, std::max(0, availableRows - 4));
+  const int requestedMetadataRows =
+      std::min(static_cast<int>(wrappedMetadata.size()), metadataRowLimit);
   const int reservedMetadataRows =
-      !metadataLines.empty() && !placeMetadataBeside
-          ? requestedMetadataRows
-          : 0;
-  const int maxImageColumns = std::max(
-      6, std::min({40, columns - 2 - reservedMetadataColumns,
-                   std::max(12, columns / 3)}));
-  const int maxImageRows = std::max(
-      2, std::min(12, availableRows - 2 - reservedMetadataRows));
+      !metadataLines.empty() && !placeMetadataBeside ? requestedMetadataRows
+                                                     : 0;
+  const int maxImageColumns = provisionalImageColumns;
+  const int maxImageRows =
+      std::max(2, std::min(12, availableRows - 2 - reservedMetadataRows));
   int imageColumns = maxImageColumns;
   int imageRows = std::max(
-      2, static_cast<int>(std::lround(
-             imageColumns * safeCellWidth / (sourceAspect * safeCellHeight))));
+      2, static_cast<int>(std::lround(imageColumns * safeCellWidth /
+                                      (sourceAspect * safeCellHeight))));
   if (imageRows > maxImageRows) {
     imageRows = maxImageRows;
     imageColumns = std::max(
-        6, static_cast<int>(std::lround(
-               imageRows * sourceAspect * safeCellHeight / safeCellWidth)));
+        6, static_cast<int>(std::lround(imageRows * sourceAspect *
+                                        safeCellHeight / safeCellWidth)));
     imageColumns = std::min(imageColumns, maxImageColumns);
   }
 
   if (placeMetadataBeside) {
     out.metadataPlacement = CellLayout::MetadataPlacement::BesideImage;
     out.metadataWidth = reservedMetadataColumns - 1;
-    out.metadataHeight = std::min(requestedMetadataRows, imageRows);
+    out.metadataHeight = requestedMetadataRows;
     out.outerWidth = imageColumns + 1 + out.metadataWidth + 2;
     out.outerHeight = std::max(imageRows, out.metadataHeight) + 2;
   } else if (!metadataLines.empty()) {
@@ -199,8 +227,8 @@ CellLayout layoutCells(int columns, int rows, int progressBarY,
   const int barWidth =
       progressBarWidth > 0 ? progressBarWidth : std::max(1, columns - 2);
   const double ratio = std::clamp(anchorRatio, 0.0, 1.0);
-  const int anchorX = barX + static_cast<int>(
-                                std::lround(ratio * std::max(0, barWidth - 1)));
+  const int anchorX =
+      barX + static_cast<int>(std::lround(ratio * std::max(0, barWidth - 1)));
   out.outerX =
       std::clamp(anchorX - out.outerWidth / 2, 0, columns - out.outerWidth);
   // The preview is one seek-bar-owned popover: image first, then its time
@@ -211,8 +239,7 @@ CellLayout layoutCells(int columns, int rows, int progressBarY,
   out.imageY = out.outerY + 1;
   out.imageWidth = imageColumns;
   out.imageHeight = imageRows;
-  if (out.metadataPlacement ==
-      CellLayout::MetadataPlacement::BesideImage) {
+  if (out.metadataPlacement == CellLayout::MetadataPlacement::BesideImage) {
     out.metadataX = out.imageX + out.imageWidth + 1;
     out.metadataY = out.imageY;
   } else if (out.metadataPlacement ==
@@ -221,11 +248,16 @@ CellLayout layoutCells(int columns, int rows, int progressBarY,
     out.metadataY = out.imageY + out.imageHeight;
   }
   out.metadataLines.assign(
-      metadataLines.begin(),
-      metadataLines.begin() +
-          std::min<std::size_t>(metadataLines.size(),
-                                static_cast<std::size_t>(
-                                    out.metadataHeight)));
+      wrappedMetadata.begin(),
+      wrappedMetadata.begin() +
+          std::min<std::size_t>(wrappedMetadata.size(),
+                                static_cast<std::size_t>(out.metadataHeight)));
+  if (out.metadataLines.size() < wrappedMetadata.size() &&
+      !out.metadataLines.empty() && out.metadataWidth > 1) {
+    out.metadataLines.back() =
+        utf8TakeDisplayWidth(out.metadataLines.back(), out.metadataWidth - 1) +
+        "…";
+  }
   out.label = label;
   const int labelWidth = static_cast<int>(out.label.size());
   out.labelX = out.outerX + std::max(1, (out.outerWidth - labelWidth) / 2);
@@ -233,4 +265,4 @@ CellLayout layoutCells(int columns, int rows, int progressBarY,
   return out;
 }
 
-}  // namespace playback_video_timeline_preview
+} // namespace playback_video_timeline_preview

@@ -22,7 +22,7 @@
 namespace playback_video_chapters {
 namespace {
 
-Snapshot initialSnapshot(const AnalysisRequest& request) {
+Snapshot initialSnapshot(const AnalysisRequest &request) {
   Snapshot snapshot;
   snapshot.state = AnalysisState::CheckingSupport;
   snapshot.durationUs = request.durationUs;
@@ -30,7 +30,7 @@ Snapshot initialSnapshot(const AnalysisRequest& request) {
   return snapshot;
 }
 
-}  // namespace
+} // namespace
 
 struct Service::Impl {
   explicit Impl(std::unique_ptr<Backend> implementation)
@@ -41,7 +41,8 @@ struct Service::Impl {
     generation.fetch_add(1, std::memory_order_acq_rel);
     installCancelled.store(true, std::memory_order_release);
     condition.notify_all();
-    if (worker.joinable()) worker.join();
+    if (worker.joinable())
+      worker.join();
   }
 
   struct ActiveRequest {
@@ -73,7 +74,8 @@ struct Service::Impl {
   void publish(std::uint64_t expectedGeneration, Snapshot snapshot) {
     {
       std::lock_guard<std::mutex> lock(mutex);
-      if (!active || !current(expectedGeneration)) return;
+      if (!active || !current(expectedGeneration))
+        return;
       snapshot.durationUs = active->request.durationUs;
       snapshot.revision = nextRevision++;
       published = std::move(snapshot);
@@ -91,8 +93,7 @@ struct Service::Impl {
              gpuAllowed.load(std::memory_order_acquire);
     };
     control.progress = [this, expectedGeneration](
-                           std::optional<double> progress,
-                           std::string phase) {
+                           std::optional<double> progress, std::string phase) {
       Snapshot snapshot;
       snapshot.state = AnalysisState::Analyzing;
       snapshot.progress = progress;
@@ -105,8 +106,7 @@ struct Service::Impl {
   OperationControl inspectionControl(std::uint64_t expectedGeneration) {
     OperationControl control = analysisControl(expectedGeneration);
     control.progress = [this, expectedGeneration](
-                           std::optional<double> progress,
-                           std::string phase) {
+                           std::optional<double> progress, std::string phase) {
       Snapshot snapshot;
       snapshot.state = AnalysisState::CheckingSupport;
       snapshot.progress = progress;
@@ -124,8 +124,7 @@ struct Service::Impl {
     };
     control.backgroundGpuAllowed = []() { return true; };
     control.progress = [this, expectedGeneration](
-                           std::optional<double> progress,
-                           std::string phase) {
+                           std::optional<double> progress, std::string phase) {
       Snapshot snapshot;
       snapshot.state = AnalysisState::Installing;
       snapshot.progress = progress;
@@ -135,8 +134,8 @@ struct Service::Impl {
     return control;
   }
 
-  bool waitForRequest(std::uint64_t* observedGeneration,
-                      ActiveRequest* request) {
+  bool waitForRequest(std::uint64_t *observedGeneration,
+                      ActiveRequest *request) {
     std::unique_lock<std::mutex> lock(mutex);
     condition.wait(lock, [&]() {
       return stopping.load(std::memory_order_acquire) ||
@@ -144,7 +143,8 @@ struct Service::Impl {
                             *observedGeneration) ||
              (active && installRequested);
     });
-    if (stopping.load(std::memory_order_acquire)) return false;
+    if (stopping.load(std::memory_order_acquire))
+      return false;
     *observedGeneration = generation.load(std::memory_order_acquire);
     *request = *active;
     return true;
@@ -154,8 +154,7 @@ struct Service::Impl {
     std::unique_lock<std::mutex> lock(mutex);
     condition.wait(lock, [&]() {
       return stopping.load(std::memory_order_acquire) ||
-             generation.load(std::memory_order_acquire) !=
-                 expectedGeneration ||
+             generation.load(std::memory_order_acquire) != expectedGeneration ||
              installRequested;
     });
     return !stopping.load(std::memory_order_acquire) &&
@@ -166,16 +165,15 @@ struct Service::Impl {
     std::unique_lock<std::mutex> lock(mutex);
     condition.wait(lock, [&]() {
       return stopping.load(std::memory_order_acquire) ||
-             generation.load(std::memory_order_acquire) !=
-                 expectedGeneration ||
+             generation.load(std::memory_order_acquire) != expectedGeneration ||
              gpuAllowed.load(std::memory_order_acquire);
     });
     return !stopping.load(std::memory_order_acquire) &&
            generation.load(std::memory_order_acquire) == expectedGeneration;
   }
 
-  void publishTerminal(std::uint64_t expectedGeneration,
-                       AnalysisState state, std::string detail) {
+  void publishTerminal(std::uint64_t expectedGeneration, AnalysisState state,
+                       std::string detail) {
     Snapshot snapshot;
     snapshot.state = state;
     snapshot.detail = std::move(detail);
@@ -205,8 +203,10 @@ struct Service::Impl {
       std::lock_guard<std::mutex> lock(mutex);
       installInProgress = false;
     }
-    if (!current(expectedGeneration)) return false;
-    if (result.status == OperationStatus::Succeeded) return true;
+    if (!current(expectedGeneration))
+      return false;
+    if (result.status == OperationStatus::Succeeded)
+      return true;
     if (result.status == OperationStatus::Cancelled) {
       publishTerminal(expectedGeneration, AnalysisState::SetupRequired,
                       result.detail.empty() ? "Model installation cancelled."
@@ -220,8 +220,7 @@ struct Service::Impl {
   }
 
   void process(ActiveRequest request, std::uint64_t expectedGeneration) {
-    if (request.request.file.empty() ||
-        request.request.videoStreamIndex < 0 ||
+    if (request.request.file.empty() || request.request.videoStreamIndex < 0 ||
         request.request.durationUs <= 0) {
       publishTerminal(
           expectedGeneration, AnalysisState::Unsupported,
@@ -230,7 +229,8 @@ struct Service::Impl {
       return;
     }
     for (;;) {
-      if (!current(expectedGeneration)) return;
+      if (!current(expectedGeneration))
+        return;
       if (std::optional<AnalysisResult> cached =
               backend->cached(request.request)) {
         std::string validationError;
@@ -251,13 +251,13 @@ struct Service::Impl {
         waiting.state = AnalysisState::WaitingForPlayback;
         waiting.phase = "Waiting for stable playback";
         publish(expectedGeneration, std::move(waiting));
-        if (!waitForGpuOrReplacement(expectedGeneration)) return;
+        if (!waitForGpuOrReplacement(expectedGeneration))
+          return;
       }
       Snapshot checking = initialSnapshot(request.request);
       publish(expectedGeneration, std::move(checking));
-      const CapabilityResult capability =
-          backend->inspect(request.request,
-                           inspectionControl(expectedGeneration));
+      const CapabilityResult capability = backend->inspect(
+          request.request, inspectionControl(expectedGeneration));
       if (!current(expectedGeneration) ||
           capability.state == CapabilityState::Cancelled) {
         return;
@@ -272,19 +272,22 @@ struct Service::Impl {
         waiting.state = AnalysisState::WaitingForPlayback;
         waiting.phase = "Playback has GPU priority";
         publish(expectedGeneration, std::move(waiting));
-        if (!waitForGpuOrReplacement(expectedGeneration)) return;
+        if (!waitForGpuOrReplacement(expectedGeneration))
+          return;
         continue;
       }
       if (capability.state == CapabilityState::SetupRequired) {
         publishTerminal(expectedGeneration, AnalysisState::SetupRequired,
                         capability.detail);
-        if (!waitForInstallOrReplacement(expectedGeneration)) return;
+        if (!waitForInstallOrReplacement(expectedGeneration))
+          return;
         bool requested = false;
         {
           std::lock_guard<std::mutex> lock(mutex);
           requested = installRequested;
         }
-        if (!requested || !performInstallation(expectedGeneration)) return;
+        if (!requested || !performInstallation(expectedGeneration))
+          return;
         continue;
       }
 
@@ -293,12 +296,12 @@ struct Service::Impl {
         waiting.state = AnalysisState::WaitingForPlayback;
         waiting.phase = "Waiting for stable playback";
         publish(expectedGeneration, std::move(waiting));
-        if (!waitForGpuOrReplacement(expectedGeneration)) return;
+        if (!waitForGpuOrReplacement(expectedGeneration))
+          return;
       }
 
-      AnalysisResult result =
-          backend->analyze(request.request,
-                           analysisControl(expectedGeneration));
+      AnalysisResult result = backend->analyze(
+          request.request, analysisControl(expectedGeneration));
       if (!current(expectedGeneration) ||
           result.status == OperationStatus::Cancelled) {
         return;
@@ -308,7 +311,8 @@ struct Service::Impl {
         waiting.state = AnalysisState::WaitingForPlayback;
         waiting.phase = "Playback has GPU priority";
         publish(expectedGeneration, std::move(waiting));
-        if (!waitForGpuOrReplacement(expectedGeneration)) return;
+        if (!waitForGpuOrReplacement(expectedGeneration))
+          return;
         continue;
       }
       if (result.status == OperationStatus::Unsupported) {
@@ -333,6 +337,7 @@ struct Service::Impl {
       }
       Snapshot ready;
       ready.state = AnalysisState::Ready;
+      ready.warning = std::move(result.warning);
       ready.overview = std::move(result.overview);
       ready.chapters = std::move(result.chapters);
       publish(expectedGeneration, std::move(ready));
@@ -345,10 +350,11 @@ struct Service::Impl {
     std::uint64_t observedGeneration = 0;
     for (;;) {
       ActiveRequest request;
-      if (!waitForRequest(&observedGeneration, &request)) return;
+      if (!waitForRequest(&observedGeneration, &request))
+        return;
       try {
         process(std::move(request), observedGeneration);
-      } catch (const std::exception& error) {
+      } catch (const std::exception &error) {
         publishTerminal(observedGeneration, AnalysisState::Failed,
                         "Chapter analysis failed: " +
                             std::string(error.what()));
@@ -373,7 +379,8 @@ Service::RequestId Service::start(AnalysisRequest request) {
       impl_->installCancelled.store(true, std::memory_order_release);
     }
     id = impl_->nextRequestId++;
-    if (id == 0) id = impl_->nextRequestId++;
+    if (id == 0)
+      id = impl_->nextRequestId++;
     impl_->active = Impl::ActiveRequest{id, std::move(request)};
     impl_->published = initialSnapshot(impl_->active->request);
     impl_->published.revision = impl_->nextRevision++;
@@ -389,7 +396,8 @@ Service::RequestId Service::start(AnalysisRequest request) {
 void Service::cancel(RequestId requestId) {
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (!impl_->active || impl_->active->id != requestId) return;
+    if (!impl_->active || impl_->active->id != requestId)
+      return;
     if (impl_->installInProgress) {
       impl_->installCancelled.store(true, std::memory_order_release);
     }
@@ -457,7 +465,8 @@ bool Service::retry(RequestId requestId) {
 void Service::setBackgroundGpuAllowed(RequestId requestId, bool allowed) {
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (!impl_->active || impl_->active->id != requestId) return;
+    if (!impl_->active || impl_->active->id != requestId)
+      return;
     impl_->gpuAllowed.store(allowed, std::memory_order_release);
   }
   impl_->condition.notify_all();
@@ -469,4 +478,4 @@ NativeWaitHandle Service::changedWaitHandle() const {
 
 bool Service::consumeChanged() { return impl_->changed.consume(); }
 
-}  // namespace playback_video_chapters
+} // namespace playback_video_chapters

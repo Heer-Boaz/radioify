@@ -58,21 +58,26 @@ struct AnalysisResult {
   std::string detail;
   std::string overview;
   std::vector<Chapter> chapters;
+  // A completed document remains publishable when an ancillary operation,
+  // such as durable cache storage, fails. Warnings are surfaced separately
+  // from terminal failure detail so callers never have to infer partial
+  // success from an error string.
+  std::string warning;
 };
 
 class Backend {
- public:
+public:
   virtual ~Backend() = default;
 
-  virtual std::optional<AnalysisResult> cached(
-      const AnalysisRequest& request) = 0;
-  virtual CapabilityResult inspect(const AnalysisRequest& request,
-                                   const OperationControl& control) = 0;
-  virtual InstallResult install(const OperationControl& control) = 0;
-  virtual AnalysisResult analyze(const AnalysisRequest& request,
-                                 const OperationControl& control) = 0;
+  virtual std::optional<AnalysisResult>
+  cached(const AnalysisRequest &request) = 0;
+  virtual CapabilityResult inspect(const AnalysisRequest &request,
+                                   const OperationControl &control) = 0;
+  virtual InstallResult install(const OperationControl &control) = 0;
+  virtual AnalysisResult analyze(const AnalysisRequest &request,
+                                 const OperationControl &control) = 0;
 };
 
 std::unique_ptr<Backend> createDefaultBackend();
 
-}  // namespace playback_video_chapters
+} // namespace playback_video_chapters
