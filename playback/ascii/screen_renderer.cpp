@@ -444,27 +444,10 @@ void renderPlaybackScreen(const PlaybackScreenResources &resources,
       if (overlayState.chapterOverviewOpen) {
         const auto panel = playback_video_chapters::layoutOverviewPanel(
             overlayState.chapters, overlayLayout.width, overlayLayout.height,
-            overlayLayout.progressBarY,
+            overlayLayout.topY,
             overlayState.chapterOverviewScrollOffset);
-        if (panel.drawable()) {
-          playback_overlay::ChapterOverviewRegion region{
-              {static_cast<double>(panel.x), static_cast<double>(panel.y),
-               static_cast<double>(panel.x + panel.width),
-               static_cast<double>(panel.y + panel.height)},
-              panel.scrollOffset, panel.maximumScrollOffset, {}};
-          for (std::size_t line = 0; line < panel.lines.size(); ++line) {
-            const auto &row = panel.lines[line];
-            if (!row.chapterStartUs)
-              continue;
-            region.items.push_back(
-                {{static_cast<double>(panel.x + 1),
-                  static_cast<double>(panel.y + 1 + line),
-                  static_cast<double>(panel.x + panel.width - 1),
-                  static_cast<double>(panel.y + 2 + line)},
-                 *row.chapterStartUs});
-          }
-          overviewRegion = std::move(region);
-        }
+        overviewRegion =
+            playback_overlay::chapterOverviewRegionForLayout(panel);
       }
       frameOutput.overlayInteractions =
           playback_overlay::buildOverlayInteractionMap(

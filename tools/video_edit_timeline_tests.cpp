@@ -1021,6 +1021,7 @@ int main() {
                         [&](const auto &spec) { return spec.id == id; });
   };
   playback_overlay::PlaybackOverlayState chapterControlState;
+  chapterControlState.chapterControlVisible = true;
   chapterControlState.chapters.state =
       playback_video_chapters::AnalysisState::Analyzing;
   chapterControlState.chapters.progress = 0.37;
@@ -1028,32 +1029,29 @@ int main() {
       playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
   ok &= expect(
       controlFor(analyzingChapterControls,
-                 playback_overlay::OverlayControlId::Chapters) ==
+                 playback_overlay::OverlayControlId::Chapters) !=
           analyzingChapterControls.end(),
-      "automatic analysis must own no timeline-toolbar space until chapter "
-      "content exists");
+      "the chapter entry point must remain stable while analysis is running");
   chapterControlState.chapters.state =
       playback_video_chapters::AnalysisState::Unsupported;
   const auto unsupportedChapterControls =
       playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
   ok &= expect(controlFor(unsupportedChapterControls,
-                          playback_overlay::OverlayControlId::Chapters) ==
+                          playback_overlay::OverlayControlId::Chapters) !=
                    unsupportedChapterControls.end(),
-               "unsupported automatic analysis must not reserve a dead chapter "
-               "control");
+               "unsupported analysis must retain its stable details entry point");
   chapterControlState.chapters.state =
       playback_video_chapters::AnalysisState::Disabled;
   const auto disabledChapterControls =
       playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
   ok &= expect(
       controlFor(disabledChapterControls,
-                 playback_overlay::OverlayControlId::Chapters) ==
+                 playback_overlay::OverlayControlId::Chapters) !=
               disabledChapterControls.end() &&
           controlFor(disabledChapterControls,
                      playback_overlay::OverlayControlId::ChapterInstall) ==
               disabledChapterControls.end(),
-      "a launch-level automatic-chapter opt-out must remove the feature "
-      "instead of leaving a permanently pending control");
+      "an automatic-analysis opt-out must retain a manual chapter entry point");
   chapterControlState.chapters.state =
       playback_video_chapters::AnalysisState::SetupRequired;
   const auto chapterSetupControls =
@@ -1061,10 +1059,18 @@ int main() {
   const auto installChapterModel = controlFor(
       chapterSetupControls, playback_overlay::OverlayControlId::ChapterInstall);
   ok &= expect(installChapterModel != chapterSetupControls.end() &&
+                   controlFor(chapterSetupControls,
+                              playback_overlay::OverlayControlId::Chapters) !=
+                       chapterSetupControls.end() &&
                    overlayActionForControl(
                        playback_overlay::OverlayControlId::ChapterInstall) ==
                        playback_overlay::OverlayAction::InstallChapterModel,
                "model setup must remain an explicit chapter action");
+  ok &= expect(
+      overlayActionForControl(
+          playback_overlay::OverlayControlId::ChapterOverviewClose) ==
+          playback_overlay::OverlayAction::CloseChapterOverview,
+      "the drawer close affordance must map to an explicit close action");
   chapterControlState.chapters.state =
       playback_video_chapters::AnalysisState::Installing;
   const auto chapterInstallingControls =
@@ -1690,9 +1696,14 @@ int main() {
       {{95.0, 200.0, 115.0, 210.0}, playback_video_edit::EditBoundary::In});
   interactions.chapterOverview = playback_overlay::ChapterOverviewRegion{
       {300.0, 20.0, 500.0, 180.0},
+      playback_overlay::InteractionRect{460.0, 30.0, 490.0, 40.0},
       0,
       4,
       {{{310.0, 60.0, 490.0, 70.0}, 120'000'000}}};
+  const playback_overlay::InteractionMap chapterOverviewInteractions =
+      playback_overlay::buildOverlayInteractionMap(
+          promptLayout, nullptr, Prompt::None, false,
+          &*interactions.chapterOverview);
   auto progressHit =
       playback_overlay::progressBarHitAt(interactions, 149.5, 205.0);
   ok &= expect(progressHit && progressHit->ratio == 0.5 &&
@@ -1711,6 +1722,11 @@ int main() {
   ok &= expect(playback_overlay::overlayControlAt(interactions, 25.0, 35.0) ==
                    playback_overlay::OverlayControlId::EditStartExport,
                "rendered controls must retain their semantic identity");
+  ok &= expect(
+      playback_overlay::overlayControlAt(chapterOverviewInteractions, 470.0,
+                                         35.0) ==
+          playback_overlay::OverlayControlId::ChapterOverviewClose,
+      "the visible chapter-drawer close action must own its hit target");
   ok &= expect(playback_overlay::editBoundaryAt(interactions, 100.0, 205.0) ==
                    playback_video_edit::EditBoundary::In,
                "rendered edit handles must retain their boundary identity");
@@ -1736,6 +1752,13 @@ int main() {
                                                     3.0, 645.0, 202.0);
   ok &= expect(transformedChapterRowHit.chapterStartUs == 120'000'000,
                "chapter-row targets must survive framebuffer transforms");
+  ok &= expect(
+      playback_overlay::overlayControlAt(
+          playback_overlay::transformInteractionMap(
+              chapterOverviewInteractions, 5.0, 7.0, 2.0, 3.0),
+          945.0, 112.0) ==
+          playback_overlay::OverlayControlId::ChapterOverviewClose,
+      "the drawer close target must survive framebuffer transforms");
 
   playback_overlay::ContextMenuSnapshot contextMenu;
   contextMenu.visible = true;

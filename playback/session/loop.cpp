@@ -964,6 +964,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     state.mediaActionConfirmationPrompt =
         mediaActionConfirmation.snapshot().has_value();
     state.contextMenuVisible = contextMenuController.visible();
+    state.chapterOverviewOpen = chapterOverviewOpen;
     state.playbackControlsVisible = osd.controlsVisible();
     state.stopRequested = loopStopRequested;
     return state;
@@ -1037,7 +1038,17 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       return executeChapterAction(
           chapterSnapshot.ready()
               ? playback_video_chapters::Action::TogglePanel
-              : playback_video_chapters::Action::ShowStatus);
+              : (chapterSnapshot.state ==
+                         playback_video_chapters::AnalysisState::Disabled
+                     ? playback_video_chapters::Action::StartAnalysis
+                     : playback_video_chapters::Action::ShowStatus));
+    case Action::CloseChapterOverview:
+      if (!chapterOverviewOpen)
+        return false;
+      chapterOverviewOpen = false;
+      chapterOverviewScrollOffset = 0;
+      syncOverlayPresentation();
+      return true;
     case Action::InstallChapterModel:
       return executeChapterAction(
           playback_video_chapters::Action::InstallModels);
@@ -1601,6 +1612,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         mediaActionConfirmation.snapshot();
     projection.mediaTaskActivity = mediaTaskActivity;
     projection.chapters = chapterPresentationSnapshot(projection.videoEdit);
+    projection.chapterControlVisible = true;
     projection.chapterOverviewOpen = chapterOverviewOpen;
     projection.chapterOverviewScrollOffset = chapterOverviewScrollOffset;
     if (config.debugOverlay &&

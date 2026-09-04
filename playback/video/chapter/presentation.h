@@ -40,6 +40,8 @@ struct OverviewPanelLayout {
   int scrollOffset = 0;
   int maximumScrollOffset = 0;
   int pageLineCount = 0;
+  int closeButtonColumn = -1;
+  int closeButtonWidth = 0;
   // Wrapping preserves semantic runs. Renderers never have to reconstruct
   // title/heading styling from a flattened string or from a row index.
   std::vector<Line> lines;
@@ -51,7 +53,7 @@ struct OverviewPanelLayout {
 // analysis is drawable: a wide surface gets a right-hand drawer and a
 // genuinely narrow surface gets a full-width overlay.
 OverviewPanelLayout layoutOverviewPanel(const Snapshot &snapshot, int columns,
-                                        int rows, int progressBarY,
+                                        int rows, int chromeTopY,
                                         int requestedScrollOffset = 0);
 
 } // namespace playback_video_chapters

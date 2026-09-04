@@ -27,6 +27,7 @@ std::optional<ActionStripItem> actionForControl(
     case playback_overlay::OverlayControlId::AudioTrack:
     case playback_overlay::OverlayControlId::Subtitles:
     case playback_overlay::OverlayControlId::Chapters:
+    case playback_overlay::OverlayControlId::ChapterOverviewClose:
     case playback_overlay::OverlayControlId::ChapterInstall:
     case playback_overlay::OverlayControlId::ChapterCancel:
     case playback_overlay::OverlayControlId::ChapterRetry:

@@ -56,6 +56,7 @@ enum class OverlayAction : std::uint8_t {
   ConfirmMediaAction,
   DismissMediaAction,
   ToggleChapterOverview,
+  CloseChapterOverview,
   InstallChapterModel,
   CancelChapterOperation,
   RetryChapterAnalysis,
@@ -195,6 +196,7 @@ struct PlaybackOverlayInputs {
   std::optional<MediaActionConfirmationDialog> mediaActionConfirmationPrompt;
   std::optional<playback_media_processing::Activity> mediaTaskActivity;
   playback_video_chapters::Snapshot chapters;
+  bool chapterControlVisible = false;
   bool chapterOverviewOpen = false;
   int chapterOverviewScrollOffset = 0;
 };
@@ -241,6 +243,7 @@ struct PlaybackOverlayState {
   std::optional<MediaActionConfirmationDialog> mediaActionConfirmationPrompt;
   std::optional<playback_media_processing::Activity> mediaTaskActivity;
   playback_video_chapters::Snapshot chapters;
+  bool chapterControlVisible = false;
   bool chapterOverviewOpen = false;
   int chapterOverviewScrollOffset = 0;
 };

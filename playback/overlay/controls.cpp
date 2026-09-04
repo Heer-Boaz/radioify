@@ -119,6 +119,8 @@ OverlayControlIntent intentForOverlayControl(OverlayControlId id) {
     return OverlayAction::ToggleSubtitles;
   case OverlayControlId::Chapters:
     return OverlayAction::ToggleChapterOverview;
+  case OverlayControlId::ChapterOverviewClose:
+    return OverlayAction::CloseChapterOverview;
   case OverlayControlId::ChapterInstall:
     return OverlayAction::InstallChapterModel;
   case OverlayControlId::ChapterCancel:
@@ -377,13 +379,13 @@ buildOverlayControlSpecs(const PlaybackOverlayState &state,
     add(OverlayControlId::Subtitles, subtitleLabel, subtitlesActive);
   }
 
-  // Automatic background work owns no permanent toolbar space. A control
-  // appears only when it represents content or a user decision.
-  if (state.chapters.ready()) {
-    add(OverlayControlId::Chapters,
-        "Chapters " + std::to_string(state.chapters.chapters.size()),
-        state.chapterOverviewOpen);
-  } else if (state.chapters.state ==
+  // Chapters are a stable player capability. Keep their entry point in one
+  // place while its content moves through asynchronous lifecycle states; the
+  // panel itself remains content-only and is opened only when data is ready.
+  if (state.chapterControlVisible) {
+    add(OverlayControlId::Chapters, "Chapters", state.chapterOverviewOpen);
+  }
+  if (state.chapters.state ==
              playback_video_chapters::AnalysisState::SetupRequired) {
     add(OverlayControlId::ChapterInstall, "Install chapter models", false);
   } else if (state.chapters.state ==

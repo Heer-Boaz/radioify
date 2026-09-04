@@ -251,6 +251,8 @@ bool executeOverlayControl(SessionPort &session,
     return toggleSubtitles(session);
   case Action::ToggleChapterOverview:
     return session.dispatch(CommandAction::ToggleChapterOverview);
+  case Action::CloseChapterOverview:
+    return session.dispatch(CommandAction::CloseChapterOverview);
   case Action::InstallChapterModel:
     return session.dispatch(CommandAction::InstallChapterModel);
   case Action::CancelChapterOperation:
@@ -494,6 +496,18 @@ void handlePlaybackInputEvent(SessionPort &session,
     }
   }
   const SessionSnapshot initialState = session.snapshot();
+  if (initialState.chapterOverviewOpen &&
+      ((ev.type == InputEvent::Type::Action &&
+        ev.action == InputAction::Back) ||
+       (ev.type == InputEvent::Type::Key &&
+        (ev.key.vk == VK_ESCAPE || ev.key.vk == VK_BACK)))) {
+    if (ev.type != InputEvent::Type::Key || !isAutoRepeat(ev.key)) {
+      session.dispatch(CommandAction::CloseChapterOverview);
+      triggerOverlay(session);
+      session.dispatch(CommandAction::RequestRedraw);
+    }
+    return;
+  }
   const playback_video_edit::Prompt editPrompt = initialState.videoEditPrompt;
   uint32_t shortcutContexts = 0;
   if (initialState.mediaActionConfirmationPrompt) {

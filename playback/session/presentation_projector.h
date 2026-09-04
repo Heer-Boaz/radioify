@@ -40,6 +40,7 @@ struct OverlayProjection {
   std::optional<MediaActionConfirmationPrompt> mediaActionConfirmationPrompt;
   std::optional<playback_media_processing::Activity> mediaTaskActivity;
   playback_video_chapters::Snapshot chapters;
+  bool chapterControlVisible = false;
   bool chapterOverviewOpen = false;
   int chapterOverviewScrollOffset = 0;
 };

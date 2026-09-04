@@ -31,9 +31,9 @@ struct ActionItem {
   std::string label;
 };
 
-// Builds the active-video chapter portion of a context menu. Running and
-// terminal states remain discoverable here without reserving toolbar space or
-// opening an empty chapter panel.
+// Builds the active-video chapter portion of a context menu. It mirrors the
+// stable player control so lifecycle details and commands remain discoverable
+// without opening an empty chapter panel.
 std::vector<ActionItem> buildActionCatalog(const ActionContext &context);
 
 } // namespace playback_video_chapters

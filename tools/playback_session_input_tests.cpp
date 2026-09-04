@@ -103,6 +103,16 @@ int main() {
                "playback-feedback commands as one session workflow");
 
   session.clear();
+  session.state.chapterOverviewOpen = true;
+  playback_session_input::handlePlaybackInputEvent(
+      session, seekState, keyEvent(VK_ESCAPE));
+  ok &= expect(session.contains(Action::CloseChapterOverview) &&
+                   !session.containsType<
+                       playback_session_input::PlaybackExitRequest>(),
+               "Escape must close the chapter drawer before leaving playback");
+  session.state.chapterOverviewOpen = false;
+
+  session.clear();
   playback_session_input::handlePlaybackInputEvent(
       session, seekState, keyEvent('W', 'w', LEFT_CTRL_PRESSED));
   ok &= expect(session.contains(Action::ToggleWindowPresentation) &&

@@ -6,6 +6,10 @@
 
 #include "playback/video/edit/view.h"
 
+namespace playback_video_chapters {
+struct OverviewPanelLayout;
+}
+
 namespace playback_overlay {
 
 struct OverlayCellLayout;
@@ -20,6 +24,7 @@ enum class OverlayControlId {
   Subtitles,
   PictureInPicture,
   Chapters,
+  ChapterOverviewClose,
   ChapterInstall,
   ChapterCancel,
   ChapterRetry,
@@ -93,6 +98,7 @@ struct ChapterOverviewRegion {
   };
 
   InteractionRect bounds;
+  std::optional<InteractionRect> closeButton;
   int scrollOffset = 0;
   int maximumScrollOffset = 0;
   std::vector<Item> items;
@@ -155,5 +161,8 @@ InteractionMap buildOverlayInteractionMap(
         playback_video_edit::Prompt::None,
     bool mediaActionConfirmationPrompt = false,
     const ChapterOverviewRegion *chapterOverview = nullptr);
+
+std::optional<ChapterOverviewRegion> chapterOverviewRegionForLayout(
+    const playback_video_chapters::OverviewPanelLayout &layout);
 
 } // namespace playback_overlay

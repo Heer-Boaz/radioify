@@ -1,5 +1,6 @@
 #include "overlay.h"
 
+#include "playback/video/chapter/presentation.h"
 #include "playback/video/edit/overlay_model.h"
 
 #include <algorithm>
@@ -38,6 +39,12 @@ buildOverlayInteractionMap(const OverlayCellLayout &layout,
 
   if (!map.modal && chapterOverview && chapterOverview->bounds.valid()) {
     map.chapterOverview = *chapterOverview;
+    if (chapterOverview->closeButton &&
+        chapterOverview->closeButton->valid()) {
+      map.controls.push_back(
+          {*chapterOverview->closeButton,
+           OverlayControlId::ChapterOverviewClose});
+    }
   }
 
   if (layout.progressBarX < 0 || layout.progressBarY < 0 ||
@@ -241,6 +248,10 @@ InteractionMap transformInteractionMap(const InteractionMap &map,
       item.bounds = transformRect(item.bounds, offsetX, offsetY, scaleX,
                                   scaleY);
     }
+    if (out.chapterOverview->closeButton) {
+      out.chapterOverview->closeButton = transformRect(
+          *out.chapterOverview->closeButton, offsetX, offsetY, scaleX, scaleY);
+    }
   }
   if (map.progressBar) {
     out.progressBar = *map.progressBar;
@@ -266,6 +277,37 @@ InteractionMap transformInteractionMap(const InteractionMap &map,
          handle.boundary});
   }
   return out;
+}
+
+std::optional<ChapterOverviewRegion> chapterOverviewRegionForLayout(
+    const playback_video_chapters::OverviewPanelLayout &layout) {
+  if (!layout.drawable())
+    return std::nullopt;
+  ChapterOverviewRegion region{
+      {static_cast<double>(layout.x), static_cast<double>(layout.y),
+       static_cast<double>(layout.x + layout.width),
+       static_cast<double>(layout.y + layout.height)},
+      std::nullopt, layout.scrollOffset, layout.maximumScrollOffset, {}};
+  if (layout.closeButtonColumn >= 0 && layout.closeButtonWidth > 0) {
+    region.closeButton = InteractionRect{
+        static_cast<double>(layout.x + 2 + layout.closeButtonColumn),
+        static_cast<double>(layout.y + 1),
+        static_cast<double>(layout.x + 2 + layout.closeButtonColumn +
+                            layout.closeButtonWidth),
+        static_cast<double>(layout.y + 2)};
+  }
+  for (std::size_t line = 0; line < layout.lines.size(); ++line) {
+    const auto &row = layout.lines[line];
+    if (!row.chapterStartUs)
+      continue;
+    region.items.push_back(
+        {{static_cast<double>(layout.x + 1),
+          static_cast<double>(layout.y + 1 + line),
+          static_cast<double>(layout.x + layout.width - 1),
+          static_cast<double>(layout.y + 2 + line)},
+         *row.chapterStartUs});
+  }
+  return region;
 }
 
 } // namespace playback_overlay

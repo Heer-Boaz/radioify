@@ -23,6 +23,7 @@ enum class CommandAction : std::uint8_t {
   CycleAudioTrack,
   ToggleSubtitles,
   ToggleChapterOverview,
+  CloseChapterOverview,
   InstallChapterModel,
   CancelChapterOperation,
   RetryChapterAnalysis,
@@ -138,6 +139,7 @@ struct SessionSnapshot {
       playback_video_edit::Prompt::None;
   bool mediaActionConfirmationPrompt = false;
   bool contextMenuVisible = false;
+  bool chapterOverviewOpen = false;
   bool playbackControlsVisible = false;
   bool stopRequested = false;
 };

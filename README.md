@@ -336,19 +336,23 @@ to the browser.
   focus its `Cancel` and `Hide` buttons; hiding the panel leaves a footer
   indicator that can restore it. Task failures open a separate detailed dialog
   with `Retry` when that operation supports retrying.
-- `Chapters` opens a responsive chapter list. Once analysis is
-  ready, chapter boundaries appear on the shared timeline in both ASCII and
-  framebuffer presentation. Hovering anywhere on that timeline keeps the
-  existing preview frame and adds the chapter title and time range;
-  metadata wraps to the responsive panel width. Until usable chapter content
-  exists, the chapter list stays closed and the hover preview remains frame-only
-  instead of reserving an empty status panel.
+- `Chapters` is a stable player control. It starts manual analysis when the
+  automatic trigger is disabled, reports the current lifecycle state when
+  content is not ready, and toggles the responsive chapter drawer once results
+  exist. The drawer has a persistent `Close` action, and `Esc`/Back closes it
+  before leaving playback. It is confined to video-content space and never
+  covers the title, controls, status, or timeline. Chapter boundaries appear
+  on the shared timeline in both ASCII and framebuffer presentation. Hovering
+  anywhere on that timeline keeps the existing preview frame and adds the
+  chapter title and time range; metadata wraps to the responsive panel width.
+  Until usable chapter content exists, the chapter list stays closed and the
+  hover preview remains frame-only instead of reserving an empty status panel.
 - Right-click the active video to start chapter analysis manually, inspect a
   failure, approve model installation, or cancel/retry the current request.
   The same typed actions are exposed in terminal and framebuffer playback.
   While analysis runs, its context-menu action reports the current phase or
-  progress without taking permanent toolbar space. `--no-automatic-chapters`
-  disables only the automatic trigger; manual analysis remains available.
+  progress. `--no-automatic-chapters` disables only the automatic trigger;
+  the stable control and context-menu action can still start manual analysis.
 - Enter: open folder / play file
 - Backspace: up
 - Arrows: move selection

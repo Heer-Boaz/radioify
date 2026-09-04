@@ -92,14 +92,18 @@ std::vector<std::string> previewMetadata(const Snapshot &snapshot,
 }
 
 OverviewPanelLayout layoutOverviewPanel(const Snapshot &snapshot, int columns,
-                                        int rows, int progressBarY,
+                                        int rows, int chromeTopY,
                                         int requestedScrollOffset) {
   OverviewPanelLayout out;
   // The chapter list is a content surface, not an operation-status surface.
   if (!snapshot.ready())
     return out;
+  // A drawer owns video-content space only. It must never cover the title,
+  // transport controls, status suffix, or progress bar that includes its
+  // persistent opener.
   const int availableBottom = std::clamp(
-      progressBarY > 0 ? progressBarY - 1 : rows - 2, 3, std::max(3, rows - 1));
+      chromeTopY > 0 ? chromeTopY - 1 : rows - 2, 3,
+      std::max(3, rows - 1));
   if (columns < 24 || rows < 8 || availableBottom < 5)
     return out;
 
@@ -119,22 +123,31 @@ OverviewPanelLayout layoutOverviewPanel(const Snapshot &snapshot, int columns,
     return OverviewPanelLayout{};
 
   const int contentWidth = std::max(1, out.width - 4);
-  std::vector<OverviewLine> documentLines;
-  documentLines.push_back(lineWithRun("Chapters", OverviewTextRole::Accent));
+  std::vector<OverviewLine> chapterLines;
+  OverviewLine header = lineWithRun("Chapters", OverviewTextRole::Accent);
+  const std::string closeLabel = "[Close]";
+  const int closeWidth = utf8DisplayWidth(closeLabel);
+  out.closeButtonColumn = std::max(0, contentWidth - closeWidth);
+  out.closeButtonWidth = closeWidth;
+  header.runs.push_back({out.closeButtonColumn, closeLabel,
+                         OverviewTextRole::Body});
   for (const Chapter &chapter : snapshot.chapters)
-    appendChapterRow(&documentLines, chapter, contentWidth);
+    appendChapterRow(&chapterLines, chapter, contentWidth);
 
   out.pageLineCount = std::max(0, out.height - 2);
-  out.maximumScrollOffset =
-      std::max(0, static_cast<int>(documentLines.size()) - out.pageLineCount);
+  const int chapterPageLineCount = std::max(0, out.pageLineCount - 1);
+  out.maximumScrollOffset = std::max(
+      0, static_cast<int>(chapterLines.size()) - chapterPageLineCount);
   out.scrollOffset =
       std::clamp(requestedScrollOffset, 0, out.maximumScrollOffset);
   const std::size_t first = static_cast<std::size_t>(out.scrollOffset);
   const std::size_t after =
-      std::min(documentLines.size(),
-               first + static_cast<std::size_t>(out.pageLineCount));
-  out.lines.assign(documentLines.begin() + static_cast<std::ptrdiff_t>(first),
-                   documentLines.begin() + static_cast<std::ptrdiff_t>(after));
+      std::min(chapterLines.size(),
+               first + static_cast<std::size_t>(chapterPageLineCount));
+  out.lines.push_back(std::move(header));
+  out.lines.insert(out.lines.end(),
+                   chapterLines.begin() + static_cast<std::ptrdiff_t>(first),
+                   chapterLines.begin() + static_cast<std::ptrdiff_t>(after));
   return out;
 }
 

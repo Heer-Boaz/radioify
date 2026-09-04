@@ -421,8 +421,17 @@ bool runChapterDomainTests() {
   const OverviewPanelLayout wide = layoutOverviewPanel(snapshot, 120, 30, 25);
   const OverviewPanelLayout narrow = layoutOverviewPanel(snapshot, 60, 20, 15);
   ok &= expect(wide.drawable() && wide.drawer && narrow.drawable() &&
-                   !narrow.drawer && wide.width < 120 && narrow.width == 58,
+                   !narrow.drawer && wide.width < 120 && narrow.width == 58 &&
+                   wide.y + wide.height <= 25 &&
+                   narrow.y + narrow.height <= 15,
                "overview layout must respond to geometry, not renderer mode");
+  ok &= expect(
+      !wide.lines.empty() &&
+          panelLineText(wide.lines.front()).find("Chapters") == 0 &&
+          panelLineText(wide.lines.front()).find("[Close]") !=
+              std::string::npos &&
+          wide.closeButtonColumn >= 0 && wide.closeButtonWidth > 0,
+      "the chapter drawer must expose a persistent close action in its header");
   const auto wideChapterRows =
       std::count_if(wide.lines.begin(), wide.lines.end(),
                     [](const OverviewPanelLayout::Line &line) {
@@ -493,6 +502,9 @@ bool runChapterDomainTests() {
   ok &= expect(
       firstPage.drawable() && firstPage.maximumScrollOffset > 0 &&
           lastPage.scrollOffset == lastPage.maximumScrollOffset &&
+          !lastPage.lines.empty() &&
+          panelLineText(lastPage.lines.front()).find("[Close]") !=
+              std::string::npos &&
           std::any_of(lastPage.lines.begin(), lastPage.lines.end(),
                       [](const OverviewPanelLayout::Line &line) {
                          return panelLineText(line).find(

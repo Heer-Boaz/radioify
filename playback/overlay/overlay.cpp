@@ -130,6 +130,7 @@ buildPlaybackOverlayState(const PlaybackOverlayInputs &inputs) {
   state.mediaActionConfirmationPrompt = inputs.mediaActionConfirmationPrompt;
   state.mediaTaskActivity = inputs.mediaTaskActivity;
   state.chapters = inputs.chapters;
+  state.chapterControlVisible = inputs.chapterControlVisible;
   state.chapterOverviewOpen = inputs.chapterOverviewOpen;
   state.chapterOverviewScrollOffset = inputs.chapterOverviewScrollOffset;
   state.chromeVisible =
@@ -840,7 +841,7 @@ void renderChapterOverviewToTarget(
   const playback_video_chapters::OverviewPanelLayout panel =
       playback_video_chapters::layoutOverviewPanel(
           *chapters, target.width(), target.height(),
-          overlayLayout.progressBarY, chapterOverviewScrollOffset);
+          overlayLayout.topY, chapterOverviewScrollOffset);
   if (!panel.drawable())
     return;
 
