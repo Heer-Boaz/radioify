@@ -178,6 +178,16 @@ bool requestChapterNavigation(
   return true;
 }
 
+bool requestChapterSeek(SessionPort &session,
+                        PlaybackSeekGestureState &seekState,
+                        int64_t timelineStartUs) {
+  commitQueuedSeek(session, seekState);
+  if (!session.dispatch(SeekToChapter{timelineStartUs}))
+    return false;
+  markSeekSent(session, seekState);
+  return true;
+}
+
 bool toggleRequestedLayout(SessionPort &session) {
   return session.dispatch(CommandAction::ToggleWindowPresentation);
 }
@@ -675,8 +685,7 @@ void handlePlaybackMouseEvent(SessionPort &session,
     return;
   }
   if (leftPressed && mouse.kind == MouseEventKind::Press && chapterStartHit) {
-    sendSeekRequest(session, seekState,
-                    static_cast<double>(*chapterStartHit) / 1000000.0);
+    requestChapterSeek(session, seekState, *chapterStartHit);
     triggerOverlay(session);
     session.dispatch(CommandAction::RequestRedraw);
     return;

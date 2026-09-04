@@ -1,5 +1,5 @@
-#include "playback/video/subtitle/sidecar_discovery.h"
 #include "playback/video/sidecar_identity.h"
+#include "playback/video/subtitle/sidecar_discovery.h"
 
 #include <algorithm>
 #include <chrono>
@@ -12,41 +12,49 @@
 
 namespace {
 
-bool expect(bool condition, const char* message) {
-  if (condition) return true;
+bool expect(bool condition, const char *message) {
+  if (condition)
+    return true;
   std::cerr << "subtitle_sidecar_discovery_tests: " << message << '\n';
   return false;
 }
 
-void touch(const std::filesystem::path& path) {
+void touch(const std::filesystem::path &path) {
   std::ofstream file(path, std::ios::binary);
   file << "1\n00:00:00,000 --> 00:00:01,000\nTest\n";
 }
 
-int inspectRealPath(const std::filesystem::path& videoPath) {
+int inspectRealPath(const std::filesystem::path &videoPath) {
   const auto sidecars =
       playback_video_subtitle::discoverAutomaticSubtitleSidecars(videoPath);
   std::cout << "subtitle_sidecar_discovery: " << sidecars.size()
             << " automatic sidecar(s)\n";
-  for (const auto& sidecar : sidecars) {
+  for (const auto &sidecar : sidecars) {
     std::cout << sidecar.string() << '\n';
   }
   return EXIT_SUCCESS;
 }
 
-}  // namespace
+} // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
   namespace subtitle = playback_video_subtitle;
-  if (argc == 2) return inspectRealPath(std::filesystem::path(argv[1]));
+  if (argc == 2)
+    return inspectRealPath(std::filesystem::path(argv[1]));
 
   bool ok = true;
-  ok &= expect(subtitle::isAutomaticSubtitleSidecar(
-                   "episode.mp4", "episode.srt"),
-               "an exact stem must be accepted");
-  ok &= expect(subtitle::isAutomaticSubtitleSidecar(
-                   "episode.mp4", "episode.transcript.4.srt"),
+  ok &=
+      expect(subtitle::isAutomaticSubtitleSidecar("episode.mp4", "episode.srt"),
+             "an exact stem must be accepted");
+  ok &= expect(subtitle::isAutomaticSubtitleSidecar("episode.mp4",
+                                                    "episode.transcript.4.srt"),
                "a numbered Radioify transcript must be accepted");
+  ok &= expect(playback_video_sidecars::isIndexedTranscriptSidecar(
+                   "episode.mp4", "episode.transcript.en.srt") &&
+                   playback_video_sidecars::isIndexedTranscriptSidecar(
+                       "episode.mp4", "episode.transcript.ja.srt"),
+               "language-tagged Radioify transcripts must remain indexed "
+               "sidecars");
   ok &= expect(playback_video_sidecars::isIndexedTranscriptSidecar(
                    "episode.mp4", "episode.transcript.4.srt") &&
                    !playback_video_sidecars::isIndexedTranscriptSidecar(
@@ -55,26 +63,26 @@ int main(int argc, char** argv) {
                        "episode.mp4", "episode.transcript.4.ass"),
                "only SRT transcript sidecars are indexed, while converted "
                "subtitle formats remain discoverable");
-  ok &= expect(subtitle::isAutomaticSubtitleSidecar(
-                   "episode.mp4", "episode.en-US.forced.ass"),
+  ok &= expect(subtitle::isAutomaticSubtitleSidecar("episode.mp4",
+                                                    "episode.en-US.forced.ass"),
                "language and role qualifiers must be accepted");
-  ok &= expect(subtitle::isAutomaticSubtitleSidecar(
-                   "episode.mp4", "episode.english.srt") &&
-                   subtitle::isAutomaticSubtitleSidecar(
-                       "episode.mp4", "episode.dutch.srt") &&
-                   subtitle::isAutomaticSubtitleSidecar(
-                       "episode.mp4", "episode.japanese.srt"),
+  ok &= expect(subtitle::isAutomaticSubtitleSidecar("episode.mp4",
+                                                    "episode.english.srt") &&
+                   subtitle::isAutomaticSubtitleSidecar("episode.mp4",
+                                                        "episode.dutch.srt") &&
+                   subtitle::isAutomaticSubtitleSidecar("episode.mp4",
+                                                        "episode.japanese.srt"),
                "declared English, Dutch, and Japanese word qualifiers must "
                "be accepted");
-  ok &= expect(!subtitle::isAutomaticSubtitleSidecar(
-                   "episode.mp4", "episode2.srt") &&
-                   !subtitle::isAutomaticSubtitleSidecar(
-                       "episode.mp4", "episode Part 2.srt") &&
-                   !subtitle::isAutomaticSubtitleSidecar(
-                       "episode.mp4", "episode.Part2.srt") &&
-                   !subtitle::isAutomaticSubtitleSidecar(
-                       "episode.mp4", "other.transcript.srt"),
-               "similar or unrelated media stems must never match");
+  ok &= expect(
+      !subtitle::isAutomaticSubtitleSidecar("episode.mp4", "episode2.srt") &&
+          !subtitle::isAutomaticSubtitleSidecar("episode.mp4",
+                                                "episode Part 2.srt") &&
+          !subtitle::isAutomaticSubtitleSidecar("episode.mp4",
+                                                "episode.Part2.srt") &&
+          !subtitle::isAutomaticSubtitleSidecar("episode.mp4",
+                                                "other.transcript.srt"),
+      "similar or unrelated media stems must never match");
 
   const auto stamp =
       std::chrono::steady_clock::now().time_since_epoch().count();
@@ -105,8 +113,8 @@ int main(int argc, char** argv) {
                          directory / "episode.transcript.srt") !=
                        sidecars.end() &&
                    std::find(sidecars.begin(), sidecars.end(),
-                             directory / "subs" /
-                                 "episode.nl.forced.srt") != sidecars.end(),
+                             directory / "subs" / "episode.nl.forced.srt") !=
+                       sidecars.end(),
                "the exact main-directory and subtitle-directory files must be "
                "returned");
   ok &= expect(std::find(sidecars.begin(), sidecars.end(),

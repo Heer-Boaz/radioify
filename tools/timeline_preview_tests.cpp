@@ -263,9 +263,10 @@ bool runModelTests() {
   ok &= expect(afterCut.request.has_value() &&
                    afterCut.request->targetUs == 4'125'000 &&
                    editedModel.snapshot().targetUs == 2'000'000 &&
+                   editedModel.snapshot().sourceTargetUs == 4'000'000 &&
                    editedModel.snapshot().durationUs == 8'000'000,
-               "one hover coordinate must show exact program time while its "
-               "quantized preview request maps onto source time");
+               "one hover coordinate must retain exact program and source "
+               "time while its preview decode remains independently bucketed");
   return ok;
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -15,9 +16,20 @@ std::vector<std::string> previewMetadata(const Snapshot &snapshot,
                                          std::int64_t targetUs);
 
 struct OverviewPanelLayout {
-  struct ChapterRow {
-    std::size_t line = 0;
-    std::int64_t startUs = 0;
+  enum class TextRole : std::uint8_t {
+    Body,
+    Accent,
+  };
+
+  struct TextRun {
+    int column = 0;
+    std::string text;
+    TextRole role = TextRole::Body;
+  };
+
+  struct Line {
+    std::vector<TextRun> runs;
+    std::optional<std::int64_t> chapterStartUs;
   };
 
   int x = 0;
@@ -28,9 +40,9 @@ struct OverviewPanelLayout {
   int scrollOffset = 0;
   int maximumScrollOffset = 0;
   int pageLineCount = 0;
-  std::vector<std::string> lines;
-  std::vector<std::size_t> headingLines;
-  std::vector<ChapterRow> chapterRows;
+  // Wrapping preserves semantic runs. Renderers never have to reconstruct
+  // title/heading styling from a flattened string or from a row index.
+  std::vector<Line> lines;
 
   bool drawable() const { return width >= 12 && height >= 4; }
 };

@@ -1,9 +1,6 @@
 #include "playback/video/chapter/generated_document.h"
 
-#include <algorithm>
 #include <cctype>
-#include <iterator>
-#include <nlohmann/json.hpp>
 #include <optional>
 #include <sstream>
 #include <utility>
@@ -18,15 +15,10 @@ void setError(std::string *error, std::string value) {
     *error = std::move(value);
 }
 
-std::optional<std::string> normalizedText(const nlohmann::json &value,
+std::optional<std::string> normalizedText(std::string_view source,
                                           std::size_t maximumBytes,
                                           std::string_view field,
                                           std::string *error) {
-  if (!value.is_string()) {
-    setError(error, "The generated " + std::string(field) + " is not text.");
-    return std::nullopt;
-  }
-  const std::string source = value.get<std::string>();
   if (!isValidUtf8(source)) {
     setError(error,
              "The generated " + std::string(field) + " is not valid UTF-8.");
@@ -59,29 +51,6 @@ std::optional<std::string> normalizedText(const nlohmann::json &value,
   return normalized;
 }
 
-std::optional<nlohmann::json> parseObject(std::string_view source,
-                                          std::size_t expectedFields,
-                                          std::string *error) {
-  try {
-    nlohmann::json document =
-        nlohmann::json::parse(source.begin(), source.end());
-    if (!document.is_object() || document.size() != expectedFields) {
-      setError(error, "The chapter engine returned an invalid JSON object.");
-      return std::nullopt;
-    }
-    return document;
-  } catch (const nlohmann::json::exception &) {
-    setError(error, "The chapter engine did not return valid JSON.");
-    return std::nullopt;
-  }
-}
-
-std::string stringRules() {
-  return "string-char ::= [^\"\\\\\\x7F\\x00-\\x1F] | \"\\\\\" "
-         "([\"\\\\bfnrt] | \"u\" [0-9a-fA-F]{4})\n"
-         "ws ::= | \" \" | \"\\n\" [ \\t]{0,20}\n";
-}
-
 AnalysisResult invalid(std::string detail) {
   AnalysisResult result;
   result.detail = std::move(detail);
@@ -90,56 +59,25 @@ AnalysisResult invalid(std::string detail) {
 
 } // namespace
 
-std::string generatedFrameCaptionsGrammar(std::size_t captionCount) {
-  if (captionCount == 0 || captionCount > 6)
-    return {};
-  std::ostringstream grammar;
-  grammar << "root ::= \"{\" ws \"\\\"captions\\\"\" ws \":\" ws "
-             "\"[\" ws caption";
-  for (std::size_t index = 1; index < captionCount; ++index)
-    grammar << " ws \",\" ws caption";
-  grammar << " ws \"]\" ws \"}\" ws\n"
-             "caption ::= \"\\\"\" string-char+ \"\\\"\" ws\n"
-          << stringRules();
-  return grammar.str();
-}
-
-bool parseGeneratedFrameCaptions(std::string_view json,
-                                 std::size_t expectedCount,
-                                 std::vector<std::string> *captions,
-                                 std::string *error) {
+bool normalizeGeneratedFrameCaption(std::string_view text,
+                                    std::string *caption,
+                                    std::string *error) {
   if (error)
     error->clear();
-  if (!captions) {
+  if (!caption) {
     setError(error, "The frame-caption destination is missing.");
     return false;
   }
-  captions->clear();
-  const std::optional<nlohmann::json> document = parseObject(json, 1, error);
-  if (!document || !document->contains("captions") ||
-      !(*document)["captions"].is_array() ||
-      (*document)["captions"].size() != expectedCount || expectedCount == 0 ||
-      expectedCount > 6) {
-    if (document)
-      setError(error,
-               "The frame-caption array does not match the supplied frames.");
+  caption->clear();
+  const std::optional<std::string> parsed = normalizedText(
+      text, kMaximumAutomaticCaptionBytes, "frame caption", error);
+  if (!parsed)
     return false;
-  }
-  captions->reserve(expectedCount);
-  for (const nlohmann::json &value : (*document)["captions"]) {
-    const std::optional<std::string> parsed = normalizedText(
-        value, kMaximumAutomaticCaptionBytes, "frame caption", error);
-    if (!parsed) {
-      captions->clear();
-      return false;
-    }
-    captions->push_back(*parsed);
-  }
+  *caption = *parsed;
   return true;
 }
 
 bool parseChapterLlamaPlan(std::string_view output, std::int64_t durationUs,
-                           const std::vector<std::int64_t> &boundaryAnchorsUs,
                            std::vector<GeneratedChapterPlanEntry> *plan,
                            std::string *error) {
   if (error)
@@ -149,15 +87,8 @@ bool parseChapterLlamaPlan(std::string_view output, std::int64_t durationUs,
     return false;
   }
   plan->clear();
-  if (durationUs <= 0 ||
-      boundaryAnchorsUs.size() < kMinimumAutomaticEvidenceSampleCount ||
-      boundaryAnchorsUs.size() > kMaximumAutomaticEvidenceFrameCount ||
-      boundaryAnchorsUs.front() != 0 ||
-      !std::is_sorted(boundaryAnchorsUs.begin(), boundaryAnchorsUs.end()) ||
-      std::adjacent_find(boundaryAnchorsUs.begin(), boundaryAnchorsUs.end()) !=
-          boundaryAnchorsUs.end() ||
-      boundaryAnchorsUs.back() >= durationUs) {
-    setError(error, "The Chapter-Llama evidence timeline is invalid.");
+  if (durationUs <= 0) {
+    setError(error, "The Chapter-Llama video duration is invalid.");
     return false;
   }
 
@@ -172,7 +103,9 @@ bool parseChapterLlamaPlan(std::string_view output, std::int64_t durationUs,
     const std::size_t separator = line.find(" - ");
     if (separator == std::string::npos || separator != 8 || line[2] != ':' ||
         line[5] != ':') {
-      continue;
+      setError(error, "Chapter-Llama returned a line outside its chapter protocol.");
+      plan->clear();
+      return false;
     }
     for (const std::size_t index : {0u, 1u, 3u, 4u, 6u, 7u}) {
       if (!std::isdigit(static_cast<unsigned char>(line[index]))) {
@@ -197,20 +130,9 @@ bool parseChapterLlamaPlan(std::string_view output, std::int64_t durationUs,
       return false;
     }
 
-    auto after = std::lower_bound(boundaryAnchorsUs.begin(),
-                                  boundaryAnchorsUs.end(), proposedUs);
-    auto match = after;
-    if (after == boundaryAnchorsUs.end()) {
-      match = std::prev(boundaryAnchorsUs.end());
-    } else if (after != boundaryAnchorsUs.begin()) {
-      const auto before = std::prev(after);
-      if (proposedUs - *before <= *after - proposedUs)
-        match = before;
-    }
-    const std::int64_t startUs = *match;
+    const std::int64_t startUs = proposedUs;
     if (!plan->empty() && startUs <= plan->back().startUs) {
-      setError(error, "Two Chapter-Llama timestamps map to the same or an "
-                      "earlier sampler-owned frame.");
+      setError(error, "Chapter-Llama timestamps must strictly increase.");
       plan->clear();
       return false;
     }
@@ -221,18 +143,14 @@ bool parseChapterLlamaPlan(std::string_view output, std::int64_t durationUs,
       return false;
     }
     std::string title = line.substr(separator + 3);
-    const std::string ordinal = std::to_string(plan->size() + 1) + ". ";
-    if (title.compare(0, ordinal.size(), ordinal) == 0) {
-      title.erase(0, ordinal.size());
-    }
     const std::optional<std::string> normalized =
-        normalizedText(nlohmann::json(title), kMaximumAutomaticTitleBytes,
-                       "chapter title", error);
+        normalizedText(title, kMaximumAutomaticTitleBytes, "chapter title",
+                       error);
     if (!normalized) {
       plan->clear();
       return false;
     }
-    plan->push_back({startUs});
+    plan->push_back({startUs, *normalized});
   }
   if (plan->size() < kMinimumAutomaticChapterCount ||
       plan->front().startUs != 0) {
@@ -243,104 +161,20 @@ bool parseChapterLlamaPlan(std::string_view output, std::int64_t durationUs,
   return true;
 }
 
-std::string generatedChapterMetadataGrammar() {
-  return "root ::= \"{\" ws \"\\\"title\\\"\" ws \":\" ws title ws "
-         "\",\" ws \"\\\"summary\\\"\" ws \":\" ws summary \"}\" ws\n"
-         "title ::= \"\\\"\" string-char{1,120} \"\\\"\" ws\n"
-         "summary ::= \"\\\"\" string-char+ \"\\\"\" ws\n" +
-         stringRules();
-}
-
-bool parseGeneratedChapterMetadata(std::string_view json,
-                                   GeneratedChapterMetadata *metadata,
-                                   std::string *error) {
-  if (error)
-    error->clear();
-  if (!metadata) {
-    setError(error, "The generated-metadata destination is missing.");
-    return false;
-  }
-  const std::optional<nlohmann::json> document = parseObject(json, 2, error);
-  if (!document || !document->contains("title") ||
-      !document->contains("summary")) {
-    if (document)
-      setError(error, "The generated chapter metadata is invalid.");
-    return false;
-  }
-  const std::optional<std::string> parsedTitle =
-      normalizedText((*document)["title"], kMaximumAutomaticTitleBytes,
-                     "chapter title", error);
-  const std::optional<std::string> parsedSummary =
-      normalizedText((*document)["summary"], kMaximumAutomaticSummaryBytes,
-                     "chapter summary", error);
-  if (!parsedTitle || !parsedSummary)
-    return false;
-  metadata->title = *parsedTitle;
-  metadata->summary = *parsedSummary;
-  return true;
-}
-
-std::string generatedOverviewGrammar() {
-  return "root ::= \"{\" ws \"\\\"overview\\\"\" ws \":\" ws "
-         "overview \"}\" ws\n"
-         "overview ::= \"\\\"\" string-char+ \"\\\"\" ws\n" +
-         stringRules();
-}
-
-bool parseGeneratedOverview(std::string_view json, std::string *overview,
-                            std::string *error) {
-  if (error)
-    error->clear();
-  if (!overview) {
-    setError(error, "The generated-overview destination is missing.");
-    return false;
-  }
-  const std::optional<nlohmann::json> document = parseObject(json, 1, error);
-  if (!document || !document->contains("overview")) {
-    if (document)
-      setError(error, "The generated overview is invalid.");
-    return false;
-  }
-  const std::optional<std::string> parsed =
-      normalizedText((*document)["overview"], kMaximumAutomaticOverviewBytes,
-                     "overview", error);
-  if (!parsed)
-    return false;
-  *overview = *parsed;
-  return true;
-}
-
 AnalysisResult materializeGeneratedDocument(
-    const GeneratedDocument &document, std::int64_t durationUs,
-    const std::vector<std::int64_t> &boundaryAnchorsUs) {
+    const GeneratedDocument &document, std::int64_t durationUs) {
   if (durationUs <= 0 ||
-      boundaryAnchorsUs.size() < kMinimumAutomaticEvidenceSampleCount ||
-      boundaryAnchorsUs.size() > kMaximumAutomaticEvidenceFrameCount ||
       document.chapters.size() < kMinimumAutomaticChapterCount ||
-      document.chapters.size() > kMaximumAutomaticChapterCount ||
-      document.chapters.size() > boundaryAnchorsUs.size()) {
+      document.chapters.size() > kMaximumAutomaticChapterCount) {
     return invalid("The generated chapter artifact has invalid dimensions.");
-  }
-  if (boundaryAnchorsUs.front() != 0) {
-    return invalid("The chapter evidence has no video-start interval.");
-  }
-  for (std::size_t index = 0; index < boundaryAnchorsUs.size(); ++index) {
-    if (boundaryAnchorsUs[index] < 0 ||
-        boundaryAnchorsUs[index] >= durationUs ||
-        (index > 0 &&
-         boundaryAnchorsUs[index] <= boundaryAnchorsUs[index - 1])) {
-      return invalid("The chapter evidence intervals are not chronological.");
-    }
   }
 
   AnalysisResult result;
-  result.overview = document.overview;
   result.chapters.reserve(document.chapters.size());
   std::int64_t previousStartUs = -1;
   for (std::size_t index = 0; index < document.chapters.size(); ++index) {
     const GeneratedChapter &generated = document.chapters[index];
-    if (!std::binary_search(boundaryAnchorsUs.begin(), boundaryAnchorsUs.end(),
-                            generated.startUs) ||
+    if (generated.startUs < 0 || generated.startUs >= durationUs ||
         (index == 0 && generated.startUs != 0) ||
         (index > 0 && generated.startUs <= previousStartUs)) {
       return invalid(
@@ -351,7 +185,6 @@ AnalysisResult materializeGeneratedDocument(
     chapter.id = static_cast<std::uint64_t>(index + 1);
     chapter.startUs = generated.startUs;
     chapter.title = generated.title;
-    chapter.summary = generated.summary;
     result.chapters.push_back(std::move(chapter));
     previousStartUs = generated.startUs;
   }
@@ -362,7 +195,7 @@ AnalysisResult materializeGeneratedDocument(
   }
 
   std::string validationError;
-  if (!validateAutomaticAnalysis(durationUs, result.overview, result.chapters,
+  if (!validateAutomaticAnalysis(durationUs, result.chapters,
                                  &validationError)) {
     return invalid(std::move(validationError));
   }

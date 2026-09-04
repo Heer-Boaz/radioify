@@ -107,6 +107,7 @@ radioify_add_module_object_library(radioify_video_chapters
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/integrity.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/model.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/presentation.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/prompt_contract.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/service.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/storage.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/text_evidence.cpp

@@ -4,7 +4,6 @@
 #include <string>
 #include <vector>
 
-#include "playback/video/analysis/visual_timeline_scan.h"
 #include "playback/video/chapter/backend.h"
 #include "playback/video/chapter/evidence_plan.h"
 
@@ -30,11 +29,10 @@ struct SampledEvidenceResult {
   std::string detail;
 };
 
-// Owner-held checkpoint for the comparatively expensive two-pass evidence
-// preparation. A cooperative GPU yield after the dense scan retains both the
-// temporal plan and every completely extracted multi-frame window.
+// Owner-held checkpoint for independently sampled caption frames. A
+// cooperative GPU yield retains every completely extracted frame without
+// inventing a second visual-analysis or boundary-snapping pass.
 struct SampledEvidenceCheckpoint {
-  playback_video_analysis::VisualTimelineScanCheckpoint timelineScan;
   std::vector<ChapterEvidenceInterval> intervals;
   std::vector<SampledTemporalWindow> windows;
 };
@@ -45,6 +43,7 @@ OperationStatus probeHardwareVideoDecode(const AnalysisRequest &request,
 SampledEvidenceResult
 sampleVideoEvidence(const AnalysisRequest &request,
                     const OperationControl &control,
-                    SampledEvidenceCheckpoint *checkpoint);
+                    SampledEvidenceCheckpoint *checkpoint,
+                    const std::vector<ChapterEvidenceInterval> &plan);
 
 } // namespace playback_video_chapters

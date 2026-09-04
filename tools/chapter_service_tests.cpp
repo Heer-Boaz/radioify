@@ -22,13 +22,10 @@ bool expect(bool condition, const char *message) {
 AnalysisResult validResult(std::int64_t durationUs) {
   AnalysisResult result;
   result.status = OperationStatus::Succeeded;
-  result.overview = "The video has three sections.";
   result.chapters = {
-      {1, 0, durationUs / 3, "Opening", "The introduction begins."},
-      {2, durationUs / 3, 2 * durationUs / 3, "Middle",
-       "The subject develops."},
-      {3, 2 * durationUs / 3, durationUs, "Conclusion",
-       "The result concludes."},
+      {1, 0, durationUs / 3, "Opening"},
+      {2, durationUs / 3, 2 * durationUs / 3, "Middle"},
+      {3, 2 * durationUs / 3, durationUs, "Conclusion"},
   };
   return result;
 }
@@ -85,7 +82,7 @@ public:
                          const OperationControl &control) override {
     ++analyzeCalls;
     if (!control.backgroundGpuAllowed()) {
-      return {OperationStatus::Yielded, "foreground", {}, {}, {}};
+      return {OperationStatus::Yielded, "foreground", {}, {}};
     }
     return validResult(request.durationUs);
   }
@@ -115,10 +112,9 @@ public:
       }
       return {control.cancelled() ? OperationStatus::Cancelled
                                   : OperationStatus::Yielded,
-              {},
-              {},
-              {},
-              {}};
+               {},
+               {},
+               {}};
     }
     return validResult(request.durationUs);
   }
@@ -140,7 +136,7 @@ public:
   AnalysisResult analyze(const AnalysisRequest &request,
                          const OperationControl &) override {
     if (++attempts == 1) {
-      return {OperationStatus::Failed, "invalid structured output", {}, {}, {}};
+      return {OperationStatus::Failed, "invalid chapter output", {}, {}};
     }
     return validResult(request.durationUs);
   }

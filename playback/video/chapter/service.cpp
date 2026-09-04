@@ -26,7 +26,7 @@ Snapshot initialSnapshot(const AnalysisRequest &request) {
   Snapshot snapshot;
   snapshot.state = AnalysisState::CheckingSupport;
   snapshot.durationUs = request.durationUs;
-  snapshot.phase = "Checking GPU and model";
+  snapshot.phase = "Checking chapter prerequisites";
   return snapshot;
 }
 
@@ -236,11 +236,11 @@ struct Service::Impl {
         std::string validationError;
         if (cached->status == OperationStatus::Succeeded &&
             validateAutomaticAnalysis(request.request.durationUs,
-                                      cached->overview, cached->chapters,
+                                      cached->chapters,
                                       &validationError)) {
           Snapshot ready;
           ready.state = AnalysisState::Ready;
-          ready.overview = std::move(cached->overview);
+          ready.warning = std::move(cached->warning);
           ready.chapters = std::move(cached->chapters);
           publish(expectedGeneration, std::move(ready));
           return;
@@ -329,7 +329,7 @@ struct Service::Impl {
 
       std::string validationError;
       if (!validateAutomaticAnalysis(request.request.durationUs,
-                                     result.overview, result.chapters,
+                                     result.chapters,
                                      &validationError)) {
         publishTerminal(expectedGeneration, AnalysisState::Failed,
                         validationError);
@@ -338,7 +338,6 @@ struct Service::Impl {
       Snapshot ready;
       ready.state = AnalysisState::Ready;
       ready.warning = std::move(result.warning);
-      ready.overview = std::move(result.overview);
       ready.chapters = std::move(result.chapters);
       publish(expectedGeneration, std::move(ready));
       return;

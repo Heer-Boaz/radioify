@@ -295,13 +295,32 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     request.sourceHeight = core.player().sourceHeight();
     request.englishText = playback_video_chapters::selectEnglishTextEvidence(
         subtitleManager, file);
+    if (!request.englishText || request.englishText->cues.empty()) {
+      chapterRequestId.reset();
+      chapterGpuAdmission.reset();
+      lastChapterGpuHeartbeat = std::chrono::steady_clock::time_point::min();
+      chapterSnapshot = {};
+      chapterSnapshot.durationUs = request.durationUs;
+      chapterSnapshot.state =
+          trigger == ChapterAnalysisTrigger::Manual
+              ? playback_video_chapters::AnalysisState::Unsupported
+              : playback_video_chapters::AnalysisState::Disabled;
+      chapterSnapshot.detail =
+          "Automatic chapters require an English timecoded transcript or "
+          "subtitle track.";
+      if (trigger == ChapterAnalysisTrigger::Manual)
+        showEditMessage(chapterSnapshot.detail);
+      return;
+    }
     chapterRequestId = chapterAnalysis.start(std::move(request));
     chapterSnapshot = chapterAnalysis.snapshot(*chapterRequestId);
     chapterGpuAdmission.reset();
     lastChapterGpuHeartbeat = std::chrono::steady_clock::time_point::min();
-    osd.showMessage("Chapter analysis started in background",
-                    playback_session::PlaybackOsdTimeline::Clock::now(),
-                    kEditMessageDuration);
+    if (trigger == ChapterAnalysisTrigger::Manual) {
+      osd.showMessage("Chapter analysis started in background",
+                      playback_session::PlaybackOsdTimeline::Clock::now(),
+                      kEditMessageDuration);
+    }
     redraw = true;
   }
 
@@ -801,7 +820,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       syncOverlayPresentation();
       showEditMessage("Retrying chapter analysis");
       return true;
-    case Action::ToggleOverview:
+    case Action::TogglePanel:
       if (!chapterSnapshot.ready())
         return false;
       chapterOverviewOpen = !chapterOverviewOpen;
@@ -1034,7 +1053,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     case Action::ToggleChapterOverview:
       return executeChapterAction(
           chapterSnapshot.ready()
-              ? playback_video_chapters::Action::ToggleOverview
+              ? playback_video_chapters::Action::TogglePanel
               : playback_video_chapters::Action::ShowStatus);
     case Action::InstallChapterModel:
       return executeChapterAction(
@@ -1114,11 +1133,37 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   bool executeInputCommand(
       playback_session_input::ChapterNavigationRequest request) {
     const playback_session_input::TransportSnapshot transport = core.snapshot();
+    const playback_video_chapters::Snapshot chapters =
+        chapterPresentationSnapshot(videoEditWorkspace.edit());
+    const playback_video_chapters::Chapter *current =
+        playback_video_chapters::chapterAt(chapters, transport.positionUs);
+    if (!current)
+      return false;
+    auto chapter = std::find_if(
+        chapters.chapters.begin(), chapters.chapters.end(),
+        [&](const playback_video_chapters::Chapter &candidate) {
+          return candidate.id == current->id;
+        });
+    if (chapter == chapters.chapters.end())
+      return false;
     const std::optional<std::int64_t> target =
         playback_video_chapters::navigationTarget(
-            chapterSnapshot, transport.positionUs, request.direction);
+            chapters, transport.positionUs, request.direction);
     return target &&
            executeInputCommand(playback_session_input::SeekTo{*target});
+  }
+
+  bool executeInputCommand(playback_session_input::SeekToChapter request) {
+    const playback_video_chapters::Snapshot chapters =
+        chapterPresentationSnapshot(videoEditWorkspace.edit());
+    const auto chapter = std::find_if(
+        chapters.chapters.begin(), chapters.chapters.end(),
+        [&](const playback_video_chapters::Chapter &candidate) {
+          return candidate.startUs == request.timelineStartUs;
+        });
+    if (chapter == chapters.chapters.end())
+      return false;
+    return executeInputCommand(playback_session_input::SeekTo{chapter->startUs});
   }
 
   bool executeInputCommand(
@@ -1499,13 +1544,35 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     }
   }
 
+  playback_video_chapters::Snapshot chapterPresentationSnapshot(
+      const playback_video_edit::EditSnapshot &edit) const {
+    if (!chapterSnapshot.ready() || !edit.hasEdits)
+      return chapterSnapshot;
+    if (edit.sourceDurationUs != chapterSnapshot.durationUs ||
+        edit.timelineDurationUs <= 0 || edit.clips.empty()) {
+      return {};
+    }
+    std::vector<playback_video_chapters::MarkerTimelineSegment> segments;
+    segments.reserve(edit.clips.size());
+    for (const playback_video_edit::EditClipSnapshot &clip : edit.clips) {
+      segments.push_back(
+          {clip.source.startUs, clip.source.endUs, clip.timelineStartUs});
+    }
+    const std::optional<playback_video_chapters::Snapshot> projected =
+        playback_video_chapters::projectToPresentationTimeline(
+            chapterSnapshot, edit.timelineDurationUs, segments);
+    return projected.value_or(playback_video_chapters::Snapshot{});
+  }
+
   playback_video_timeline_preview::Snapshot timelinePreviewSnapshot(
       playback_video_timeline_preview::PresentationSurface surface) const {
     playback_video_timeline_preview::Snapshot snapshot =
         timelinePreviewModel.snapshotFor(surface);
     if (snapshot.hoverActive) {
+      const playback_video_chapters::Snapshot chapters =
+          chapterPresentationSnapshot(videoEditWorkspace.edit());
       snapshot.metadataLines = playback_video_chapters::previewMetadata(
-          chapterSnapshot, snapshot.targetUs);
+          chapters, snapshot.targetUs);
     }
     return snapshot;
   }
@@ -1549,7 +1616,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     projection.mediaActionConfirmationPrompt =
         mediaActionConfirmation.snapshot();
     projection.mediaTaskActivity = mediaTaskActivity;
-    projection.chapters = chapterSnapshot;
+    projection.chapters = chapterPresentationSnapshot(projection.videoEdit);
     projection.chapterOverviewOpen = chapterOverviewOpen;
     projection.chapterOverviewScrollOffset = chapterOverviewScrollOffset;
     if (config.debugOverlay &&

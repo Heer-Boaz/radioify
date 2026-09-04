@@ -41,7 +41,11 @@ int verifyChapterModels() {
             << '\n'
             << "executable_root=" << toUtf8String(radioifyExecutableDir())
             << '\n'
-            << "planner_adapter=" << toUtf8String(paths.plannerAdapter)
+            << "speech_plan_adapter="
+            << toUtf8String(paths.speechPlanAdapter)
+            << '\n'
+            << "chapter_plan_adapter="
+            << toUtf8String(paths.chapterPlanAdapter)
             << '\n';
   if (!result.detail.empty())
     std::cout << "detail=" << result.detail << '\n';
@@ -51,13 +55,19 @@ int verifyChapterModels() {
 int verifyChapterRuntime() {
   using namespace playback_video_chapters;
   const CapabilityResult result = inspectPackagedChapterRuntime();
-  const std::filesystem::path adapter =
+  const std::filesystem::path speechPlanAdapter =
+      radioifyExecutableDir() / "models" / "chapter_analysis" /
+      "chapter-llama-asr-10k-f16.gguf";
+  const std::filesystem::path chapterPlanAdapter =
       radioifyExecutableDir() / "models" / "chapter_analysis" /
       "chapter-llama-captions-asr-10k-f16.gguf";
   std::cout << "state=" << capabilityName(result.state) << '\n'
             << "executable_root=" << toUtf8String(radioifyExecutableDir())
             << '\n'
-            << "planner_adapter=" << toUtf8String(adapter) << '\n';
+            << "speech_plan_adapter=" << toUtf8String(speechPlanAdapter)
+            << '\n'
+            << "chapter_plan_adapter=" << toUtf8String(chapterPlanAdapter)
+            << '\n';
   if (!result.detail.empty())
     std::cout << "detail=" << result.detail << '\n';
   return result.state == CapabilityState::Ready ? 0 : 1;

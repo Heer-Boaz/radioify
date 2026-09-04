@@ -6,7 +6,6 @@
 #include <new>
 #include <utility>
 
-#include "playback/video/analysis/visual_timeline_scan.h"
 #include "playback/video/decoder.h"
 #include "playback/video/frame_conversion.h"
 #include "playback/video/image.h"
@@ -183,36 +182,25 @@ bool copySample(const playback_video_image::RgbaImage &image,
   return true;
 }
 
-OperationStatus
-scanStatus(playback_video_analysis::VisualTimelineScanStatus status) {
-  using ScanStatus = playback_video_analysis::VisualTimelineScanStatus;
-  switch (status) {
-  case ScanStatus::Succeeded:
-    return OperationStatus::Succeeded;
-  case ScanStatus::Cancelled:
-    return OperationStatus::Cancelled;
-  case ScanStatus::Yielded:
-    return OperationStatus::Yielded;
-  case ScanStatus::Unsupported:
-    return OperationStatus::Unsupported;
-  case ScanStatus::Failed:
-    return OperationStatus::Failed;
-  }
-  return OperationStatus::Failed;
-}
-
 bool validCheckpoint(const AnalysisRequest &request,
-                     const SampledEvidenceCheckpoint &checkpoint) {
-  const playback_video_analysis::VisualTimelineScanRequest scanRequest{
-      request.file, request.videoStreamIndex, request.durationUs, true};
+                     const SampledEvidenceCheckpoint &checkpoint,
+                     const std::vector<ChapterEvidenceInterval> &plan) {
   if (checkpoint.intervals.empty()) {
-    return checkpoint.windows.empty() &&
-           playback_video_analysis::validVisualTimelineScanCheckpoint(
-               scanRequest, checkpoint.timelineScan);
+    return checkpoint.windows.empty();
   }
-  if (checkpoint.timelineScan.initialized ||
-      !checkpoint.timelineScan.samples.empty() ||
-      checkpoint.intervals.size() < kMinimumAutomaticEvidenceSampleCount ||
+  if (!plan.empty()) {
+    if (plan.size() != checkpoint.intervals.size())
+      return false;
+    for (std::size_t index = 0; index < plan.size(); ++index) {
+      if (plan[index].startUs != checkpoint.intervals[index].startUs ||
+          plan[index].endUs != checkpoint.intervals[index].endUs ||
+          plan[index].sampleTimesUs !=
+              checkpoint.intervals[index].sampleTimesUs) {
+        return false;
+      }
+    }
+  }
+  if (checkpoint.intervals.size() < kMinimumAutomaticEvidenceSampleCount ||
       checkpoint.intervals.size() > kMaximumAutomaticEvidenceSampleCount ||
       checkpoint.windows.size() > checkpoint.intervals.size() ||
       checkpoint.intervals.front().startUs != 0 ||
@@ -221,9 +209,8 @@ bool validCheckpoint(const AnalysisRequest &request,
   }
   for (std::size_t index = 0; index < checkpoint.intervals.size(); ++index) {
     const ChapterEvidenceInterval &interval = checkpoint.intervals[index];
-    if (interval.endUs - interval.startUs <
-            kMinimumAutomaticChapterDurationUs ||
-        interval.sampleTimesUs.empty() || interval.sampleTimesUs.size() > 6 ||
+    if (interval.endUs <= interval.startUs ||
+        interval.sampleTimesUs.size() != 1 ||
         (index > 0 &&
          interval.startUs != checkpoint.intervals[index - 1].endUs)) {
       return false;
@@ -241,7 +228,7 @@ bool validCheckpoint(const AnalysisRequest &request,
     const SampledTemporalWindow &window = checkpoint.windows[index];
     const ChapterEvidenceInterval &interval = checkpoint.intervals[index];
     if (window.startUs != interval.startUs || window.endUs != interval.endUs ||
-        window.frames.size() != interval.sampleTimesUs.size()) {
+        window.frames.size() != 1 || interval.sampleTimesUs.size() != 1) {
       return false;
     }
     for (std::size_t frameIndex = 0; frameIndex < window.frames.size();
@@ -309,14 +296,15 @@ OperationStatus probeHardwareVideoDecode(const AnalysisRequest &request,
 SampledEvidenceResult
 sampleVideoEvidence(const AnalysisRequest &request,
                     const OperationControl &control,
-                    SampledEvidenceCheckpoint *checkpoint) {
+                    SampledEvidenceCheckpoint *checkpoint,
+                    const std::vector<ChapterEvidenceInterval> &plan) {
   SampledEvidenceResult result;
   if (request.file.empty() || request.videoStreamIndex < 0 ||
-      request.durationUs <= 0 || !checkpoint) {
+      request.durationUs <= 0 || !checkpoint || plan.empty()) {
     result.detail = "The video cannot be sampled for chapter analysis.";
     return result;
   }
-  if (!validCheckpoint(request, *checkpoint)) {
+  if (!validCheckpoint(request, *checkpoint, plan)) {
     *checkpoint = {};
     result.detail = "The retained chapter evidence is invalid.";
     return result;
@@ -328,32 +316,11 @@ sampleVideoEvidence(const AnalysisRequest &request,
   }
 
   if (checkpoint->intervals.empty()) {
-    playback_video_analysis::VisualTimelineScanControl scanControl;
-    scanControl.cancelled = control.cancelled;
-    scanControl.backgroundGpuAllowed = control.backgroundGpuAllowed;
-    scanControl.progress = [&](double fraction) {
-      if (control.progress) {
-        control.progress(0.02 + fraction * 0.33,
-                         "Scanning the complete video timeline");
-      }
-    };
-    playback_video_analysis::VisualTimelineScanResult scan =
-        playback_video_analysis::scanVisualTimeline(
-            {request.file, request.videoStreamIndex, request.durationUs, true},
-            scanControl, &checkpoint->timelineScan);
-    result.status = scanStatus(scan.status);
-    if (scan.status !=
-        playback_video_analysis::VisualTimelineScanStatus::Succeeded) {
-      result.detail = std::move(scan.detail);
-      return result;
-    }
-    checkpoint->intervals =
-        buildChapterEvidencePlan(request.durationUs, scan.samples);
+    checkpoint->intervals = plan;
     if (checkpoint->intervals.size() < kMinimumAutomaticEvidenceSampleCount) {
       *checkpoint = {};
       result.status = OperationStatus::Failed;
-      result.detail =
-          "The complete timeline scan produced no usable semantic ranges.";
+      result.detail = "The video has no usable chapter-caption samples.";
       return result;
     }
   }
@@ -429,9 +396,9 @@ sampleVideoEvidence(const AnalysisRequest &request,
       window.frames.push_back(std::move(sample));
       ++completedFrames;
       if (control.progress) {
-        control.progress(0.36 + 0.19 * static_cast<double>(completedFrames) /
-                                    std::max<std::size_t>(1, totalFrames),
-                         "Extracting temporal video evidence on D3D11");
+        control.progress(static_cast<double>(completedFrames) /
+                             std::max<std::size_t>(1, totalFrames),
+                         "Extracting chapter caption frames on D3D11");
       }
     }
     checkpoint->windows.push_back(std::move(window));

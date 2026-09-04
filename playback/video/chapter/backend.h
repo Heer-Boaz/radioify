@@ -56,7 +56,6 @@ struct InstallResult {
 struct AnalysisResult {
   OperationStatus status = OperationStatus::Failed;
   std::string detail;
-  std::string overview;
   std::vector<Chapter> chapters;
   // A completed document remains publishable when an ancillary operation,
   // such as durable cache storage, fails. Warnings are surfaced separately

@@ -212,10 +212,15 @@ set(RADIOIFY_AUDIO_SEPARATION_MODEL_PATH
     CACHE FILEPATH "Path to Radioify's BandIt v2 mask model")
 set(RADIOIFY_AUDIO_SEPARATION_MODEL_SHA256
     "4694632688ae0b9a3e4c46918c0f9bb4f2af18c393d8e7d55f3e1e276d6fa6c7")
-set(RADIOIFY_CHAPTER_PLANNER_ADAPTER_PATH
+set(RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_PATH
+    "${CMAKE_SOURCE_DIR}/models/chapter_analysis/chapter-llama-asr-10k-f16.gguf")
+set(RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_SIZE 13640320)
+set(RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_SHA256
+    "7d160d379d3d654386967bf402f80c09ff24380dd71d54c1317818353a575b05")
+set(RADIOIFY_CHAPTER_PLAN_ADAPTER_PATH
     "${CMAKE_SOURCE_DIR}/models/chapter_analysis/chapter-llama-captions-asr-10k-f16.gguf")
-set(RADIOIFY_CHAPTER_PLANNER_ADAPTER_SIZE 13640320)
-set(RADIOIFY_CHAPTER_PLANNER_ADAPTER_SHA256
+set(RADIOIFY_CHAPTER_PLAN_ADAPTER_SIZE 13640320)
+set(RADIOIFY_CHAPTER_PLAN_ADAPTER_SHA256
     "4e07a53dfa65e356e691716645d795697427c30dc983b198faf9e84d7eeec6da")
 file(MAKE_DIRECTORY
   "${CMAKE_BINARY_DIR}/generated/playback/video/chapter")
@@ -398,28 +403,51 @@ find_file(RADIOIFY_LLAMA_CPP_LICENSE
 if (NOT RADIOIFY_LLAMA_CPP_LICENSE)
   message(FATAL_ERROR "The llama.cpp third-party license file was not found.")
 endif()
-if (NOT EXISTS "${RADIOIFY_CHAPTER_PLANNER_ADAPTER_PATH}")
+if (NOT EXISTS "${RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_PATH}")
   message(FATAL_ERROR
-    "Chapter-Llama planner adapter not found at "
-    "${RADIOIFY_CHAPTER_PLANNER_ADAPTER_PATH}. Ensure Git LFS objects were fetched.")
+    "Chapter-Llama ASR plan adapter not found at "
+    "${RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_PATH}. Ensure Git LFS objects were fetched.")
 endif()
-file(SIZE "${RADIOIFY_CHAPTER_PLANNER_ADAPTER_PATH}"
-     _radioify_chapter_planner_adapter_size)
-if (NOT _radioify_chapter_planner_adapter_size EQUAL
-    RADIOIFY_CHAPTER_PLANNER_ADAPTER_SIZE)
+file(SIZE "${RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_PATH}"
+     _radioify_chapter_speech_plan_adapter_size)
+if (NOT _radioify_chapter_speech_plan_adapter_size EQUAL
+    RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_SIZE)
   message(FATAL_ERROR
-    "Chapter-Llama planner adapter size mismatch. Expected "
-    "${RADIOIFY_CHAPTER_PLANNER_ADAPTER_SIZE}, got "
-    "${_radioify_chapter_planner_adapter_size}.")
+    "Chapter-Llama ASR plan adapter size mismatch. Expected "
+    "${RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_SIZE}, got "
+    "${_radioify_chapter_speech_plan_adapter_size}.")
 endif()
-file(SHA256 "${RADIOIFY_CHAPTER_PLANNER_ADAPTER_PATH}"
-     _radioify_chapter_planner_adapter_hash)
-if (NOT _radioify_chapter_planner_adapter_hash STREQUAL
-    RADIOIFY_CHAPTER_PLANNER_ADAPTER_SHA256)
+file(SHA256 "${RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_PATH}"
+     _radioify_chapter_speech_plan_adapter_hash)
+if (NOT _radioify_chapter_speech_plan_adapter_hash STREQUAL
+    RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_SHA256)
   message(FATAL_ERROR
-    "Chapter-Llama planner adapter hash mismatch. Expected "
-    "${RADIOIFY_CHAPTER_PLANNER_ADAPTER_SHA256}, got "
-    "${_radioify_chapter_planner_adapter_hash}.")
+    "Chapter-Llama ASR plan adapter hash mismatch. Expected "
+    "${RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_SHA256}, got "
+    "${_radioify_chapter_speech_plan_adapter_hash}.")
+endif()
+if (NOT EXISTS "${RADIOIFY_CHAPTER_PLAN_ADAPTER_PATH}")
+  message(FATAL_ERROR
+    "Chapter-Llama captions-plus-ASR adapter not found at "
+    "${RADIOIFY_CHAPTER_PLAN_ADAPTER_PATH}. Ensure Git LFS objects were fetched.")
+endif()
+file(SIZE "${RADIOIFY_CHAPTER_PLAN_ADAPTER_PATH}"
+     _radioify_chapter_plan_adapter_size)
+if (NOT _radioify_chapter_plan_adapter_size EQUAL
+    RADIOIFY_CHAPTER_PLAN_ADAPTER_SIZE)
+  message(FATAL_ERROR
+    "Chapter-Llama captions-plus-ASR adapter size mismatch. Expected "
+    "${RADIOIFY_CHAPTER_PLAN_ADAPTER_SIZE}, got "
+    "${_radioify_chapter_plan_adapter_size}.")
+endif()
+file(SHA256 "${RADIOIFY_CHAPTER_PLAN_ADAPTER_PATH}"
+     _radioify_chapter_plan_adapter_hash)
+if (NOT _radioify_chapter_plan_adapter_hash STREQUAL
+    RADIOIFY_CHAPTER_PLAN_ADAPTER_SHA256)
+  message(FATAL_ERROR
+    "Chapter-Llama captions-plus-ASR adapter hash mismatch. Expected "
+    "${RADIOIFY_CHAPTER_PLAN_ADAPTER_SHA256}, got "
+    "${_radioify_chapter_plan_adapter_hash}.")
 endif()
 if (NOT EXISTS "${RADIOIFY_CHAPTER_PLANNER_NOTICE_PATH}")
   message(FATAL_ERROR "The Chapter-Llama attribution notice was not found.")
@@ -435,7 +463,10 @@ function(radioify_deploy_chapter_planner target_name)
     COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_FILE_DIR:${target_name}>/models/chapter_analysis"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${RADIOIFY_CHAPTER_PLANNER_ADAPTER_PATH}"
+            "${RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_PATH}"
+            "$<TARGET_FILE_DIR:${target_name}>/models/chapter_analysis/chapter-llama-asr-10k-f16.gguf"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${RADIOIFY_CHAPTER_PLAN_ADAPTER_PATH}"
             "$<TARGET_FILE_DIR:${target_name}>/models/chapter_analysis/chapter-llama-captions-asr-10k-f16.gguf"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${RADIOIFY_CHAPTER_PLANNER_NOTICE_PATH}"
@@ -446,7 +477,7 @@ function(radioify_deploy_chapter_planner target_name)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${RADIOIFY_LLAMA_31_NOTICE_PATH}"
             "$<TARGET_FILE_DIR:${target_name}>/models/chapter_analysis/NOTICE"
-    COMMENT "Publishing the pinned Chapter-Llama planner adapter for ${target_name}"
+    COMMENT "Publishing the pinned Chapter-Llama adapters for ${target_name}"
     VERBATIM)
 endfunction()
 
@@ -454,6 +485,7 @@ add_executable(radioify_chapter_worker
   ${CMAKE_SOURCE_DIR}/tools/chapter_inference_worker.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_protocol.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/prompt_contract.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/generated_document.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
@@ -946,6 +978,7 @@ target_sources(chapter_analysis_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/analysis/scene_analysis.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/transcript/cue_semantics.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/presentation.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/prompt_contract.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/text_evidence.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/timeline_preview_policy.cpp
   ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
@@ -967,6 +1000,7 @@ target_sources(chapter_inference_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/generated_document.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/prompt_contract.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_client.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_protocol.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/storage.cpp
@@ -986,10 +1020,12 @@ add_executable(chapter_inference_probe)
 target_sources(chapter_inference_probe PRIVATE
   $<TARGET_OBJECTS:radioify_tool_chapter_inference_probe>
   $<TARGET_OBJECTS:radioify_image_codec>
+  $<TARGET_OBJECTS:radioify_transcript_document>
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/evidence_plan.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/generated_document.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/prompt_contract.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_client.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_protocol.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/storage.cpp
@@ -1003,6 +1039,7 @@ target_sources(chapter_inference_probe PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/sequence.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/timing/timeline.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/core/file_output.cpp
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )

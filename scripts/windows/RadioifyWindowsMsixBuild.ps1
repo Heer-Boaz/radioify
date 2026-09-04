@@ -272,6 +272,7 @@ function Initialize-RadioifyMsixPackageLayout {
     $chapterPlannerLayoutDir = Join-Path $modelLayoutDir "chapter_analysis"
     New-Item -ItemType Directory -Force -Path $chapterPlannerLayoutDir | Out-Null
     foreach ($chapterPlannerFile in @(
+        "chapter-llama-asr-10k-f16.gguf",
         "chapter-llama-captions-asr-10k-f16.gguf",
         "CHAPTER-LLAMA-NOTICE.md",
         "LLAMA-3.1-LICENSE",

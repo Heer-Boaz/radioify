@@ -1,6 +1,8 @@
 #include "playback/video/chapter/inference.h"
 #include "playback/video/chapter/inference_worker.h"
+#include "playback/video/chapter/inference_worker_protocol.h"
 #include "playback/video/chapter/storage.h"
+#include "playback/video/analysis/scene_analysis.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -12,8 +14,10 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -117,21 +121,39 @@ int main(int argc, char **argv) {
 
   InferenceRequest boundedPrompt;
   boundedPrompt.durationUs = kMaximumAutomaticChapterVideoDurationUs;
-  boundedPrompt.windows.resize(60);
+  boundedPrompt.englishDialogue.push_back(
+      {0, "Opening narration establishes the video topic."});
+  boundedPrompt.windows.resize(kMaximumAutomaticEvidenceSampleCount);
+  std::vector<std::int64_t> expectedSampleTimesUs;
+  expectedSampleTimesUs.reserve(boundedPrompt.windows.size());
+  for (std::size_t index = 0; index < boundedPrompt.windows.size(); ++index) {
+    const std::int64_t startUs =
+        boundedPrompt.durationUs * static_cast<std::int64_t>(index) /
+        static_cast<std::int64_t>(boundedPrompt.windows.size());
+    boundedPrompt.chapterPlan.push_back(
+        {startUs, "Chapter " + std::to_string(index + 1)});
+    expectedSampleTimesUs.push_back(startUs);
+  }
+  expectedSampleTimesUs.front() = 1'000'000;
   for (std::size_t windowIndex = 0; windowIndex < boundedPrompt.windows.size();
        ++windowIndex) {
     InferenceTemporalWindow &window = boundedPrompt.windows[windowIndex];
     window.intervalStartUs =
-        static_cast<std::int64_t>(windowIndex) * 60'000'000;
+        windowIndex == 0
+            ? 0
+            : expectedSampleTimesUs[windowIndex - 1] +
+                  (expectedSampleTimesUs[windowIndex] -
+                   expectedSampleTimesUs[windowIndex - 1]) /
+                      2;
     window.intervalEndUs =
-        static_cast<std::int64_t>(windowIndex + 1) * 60'000'000;
-    window.frames.resize(6);
-    for (std::size_t frameIndex = 0; frameIndex < window.frames.size();
-         ++frameIndex) {
-      window.frames[frameIndex].timeUs =
-          window.intervalStartUs +
-          static_cast<std::int64_t>(frameIndex) * 10'000'000 + 5'000'000;
-    }
+        windowIndex + 1 == boundedPrompt.windows.size()
+            ? boundedPrompt.durationUs
+            : expectedSampleTimesUs[windowIndex] +
+                  (expectedSampleTimesUs[windowIndex + 1] -
+                   expectedSampleTimesUs[windowIndex]) /
+                      2;
+    window.frames.resize(1);
+    window.frames.front().timeUs = expectedSampleTimesUs[windowIndex];
   }
   std::string budgetError;
   bool ok = expect(validateInferenceInputBudget(boundedPrompt, &budgetError),
@@ -139,7 +161,7 @@ int main(int argc, char **argv) {
                    "fit the planner context by construction");
   for (std::int64_t index = 0; index < 100; ++index) {
     boundedPrompt.englishDialogue.push_back(
-        {index * 30'000'000, std::string(600, 'x')});
+        {index * 1'000, std::string(600, 'x')});
   }
   ok &= expect(!validateInferenceInputBudget(boundedPrompt, &budgetError) &&
                    !budgetError.empty(),
@@ -151,12 +173,53 @@ int main(int argc, char **argv) {
   ok &= expect(analysisCacheRoot() == cacheRoot.lexically_normal(),
                "chapter inference must honor its isolated cache root");
 
+  const std::filesystem::path protocolWorkspace = cacheRoot / "protocol";
+  std::error_code protocolError;
+  std::filesystem::create_directories(protocolWorkspace, protocolError);
+  SpeechChapterPlanRequest selectionProtocol;
+  selectionProtocol.plannerModel = "planner.gguf";
+  selectionProtocol.planAdapter = "plan.gguf";
+  selectionProtocol.durationUs = 60'000'000;
+  selectionProtocol.englishDialogue.push_back(
+      {0, "The introduction establishes the topic."});
+  std::string protocolDetail;
+  bool planProtocolValid =
+      !protocolError &&
+      inference_worker_protocol::storeSpeechChapterPlanRequest(
+          protocolWorkspace, selectionProtocol, &protocolDetail);
+  if (planProtocolValid) {
+    try {
+      std::ifstream input(protocolWorkspace / "request.json",
+                          std::ios::binary);
+      nlohmann::json document;
+      input >> document;
+      planProtocolValid =
+          input && document.is_object() &&
+          document.value("schema", 0) == inference_worker_protocol::kSchema &&
+          document.value("operation", std::string{}) ==
+              "plan_chapters_from_speech" &&
+          document.value("duration_us", std::int64_t{0}) == 60'000'000 &&
+          document["english_dialogue"].size() == 1;
+    } catch (const nlohmann::json::exception &) {
+      planProtocolValid = false;
+    }
+  }
+  ok &= expect(planProtocolValid,
+               "the worker protocol must preserve the typed ASR planner "
+               "operation independently of frame-analysis requests");
+
   InferenceEngine engine;
   OperationControl cancelled;
   cancelled.cancelled = [] { return true; };
   cancelled.backgroundGpuAllowed = [] { return true; };
   ok &= expect(engine.inspect(cancelled).state == CapabilityState::Cancelled,
                "cancellation must win before backend initialization");
+  SpeechChapterPlanRequest cancelledPlan;
+  const SpeechChapterPlanResult cancelledPlanResult =
+      engine.planChaptersFromSpeech(cancelledPlan, cancelled);
+  ok &= expect(cancelledPlanResult.status == OperationStatus::Cancelled,
+               "speech-guided planning must honor cancellation before "
+               "model validation or loading");
 
   OperationControl yielded;
   yielded.cancelled = [] { return false; };
@@ -189,8 +252,6 @@ int main(int argc, char **argv) {
                  "unsupported hardware must remain an explicit result");
   }
   std::error_code cleanupError;
-  std::filesystem::remove(cacheRoot / "work", cleanupError);
-  cleanupError.clear();
-  std::filesystem::remove(cacheRoot, cleanupError);
+  std::filesystem::remove_all(cacheRoot, cleanupError);
   return ok ? 0 : 1;
 }

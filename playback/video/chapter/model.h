@@ -15,7 +15,8 @@ struct ModelPaths {
   std::filesystem::path projector;
   std::filesystem::path plannerDirectory;
   std::filesystem::path plannerModel;
-  std::filesystem::path plannerAdapter;
+  std::filesystem::path speechPlanAdapter;
+  std::filesystem::path chapterPlanAdapter;
 };
 
 ModelPaths resolveModelPaths();
@@ -28,15 +29,15 @@ CapabilityResult inspectPackagedChapterRuntime();
 InstallResult installModelArtifacts(const ModelPaths &paths,
                                     const OperationControl &control);
 
-inline constexpr std::uintmax_t kModelBytes = 4683072032ull;
-inline constexpr std::uintmax_t kProjectorBytes = 853119712ull;
+inline constexpr std::uintmax_t kModelBytes = 1961506240ull;
+inline constexpr std::uintmax_t kProjectorBytes = 866071872ull;
 inline constexpr std::uintmax_t kPlannerModelBytes = 4920739232ull;
 inline constexpr std::uintmax_t kModelDownloadBytes =
     kModelBytes + kProjectorBytes + kPlannerModelBytes;
 inline constexpr const char *kModelSha256 =
-    "9258bf05b12686d097ff3b6b18d968ab393649780aa2b3cd67fec43d50554392";
+    "0c4fc8a2a912ec24f1ec8210c603d245430ea824cf6bee491820b34faa3be89f";
 inline constexpr const char *kProjectorSha256 =
-    "2ddb555391bae966e412deab9e07b58afa18bcc06930ba0f1c78a3695ab9e506";
+    "79611c59b5ad5b0547256602e3fb546a3041bcf6db5058091b6bcaa31f3a1c95";
 inline constexpr const char *kPlannerModelSha256 =
     "7b064f5842bf9532c91456deda288a1b672397a54fa729aa665952863033557c";
 } // namespace playback_video_chapters

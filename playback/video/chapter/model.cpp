@@ -24,20 +24,21 @@ namespace playback_video_chapters {
 namespace {
 
 constexpr const wchar_t *kVisionRevision =
-    L"508edd0afaa66bb9e9f40587acc2184f02daf1f6";
+    L"3a38804c39d96c935a6b542581f51171aefa06a5";
 constexpr const wchar_t *kHost = L"huggingface.co";
 constexpr const wchar_t *kVisionRepository =
-    L"/ggml-org/Qwen2.5-VL-7B-Instruct-GGUF/resolve/";
-constexpr const wchar_t *kModelFile = L"Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf";
-constexpr const wchar_t *kProjectorFile =
-    L"mmproj-Qwen2.5-VL-7B-Instruct-Q8_0.gguf";
+    L"/openbmb/MiniCPM-V-2-gguf/resolve/";
+constexpr const wchar_t *kModelFile = L"ggml-model-Q4_K_M.gguf";
+constexpr const wchar_t *kProjectorFile = L"mmproj-model-f16.gguf";
 constexpr const wchar_t *kPlannerRevision =
     L"bf5b95e96dac0462e2a09145ec66cae9a3f12067";
 constexpr const wchar_t *kPlannerRepository =
     L"/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/";
 constexpr const wchar_t *kPlannerModelFile =
     L"Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf";
-constexpr const wchar_t *kPlannerAdapterFile =
+constexpr const wchar_t *kSpeechPlanAdapterFile =
+    L"chapter-llama-asr-10k-f16.gguf";
+constexpr const wchar_t *kChapterPlanAdapterFile =
     L"chapter-llama-captions-asr-10k-f16.gguf";
 
 struct InternetHandle {
@@ -203,8 +204,8 @@ bool exactFile(const std::filesystem::path &path, std::uintmax_t expected,
   const bool regular = std::filesystem::is_regular_file(path, fileError);
   if (fileError) {
     if (error)
-      *error = "the resource could not be inspected (" +
-               fileError.message() + ")";
+      *error =
+          "the resource could not be inspected (" + fileError.message() + ")";
     return false;
   }
   if (!regular) {
@@ -216,8 +217,8 @@ bool exactFile(const std::filesystem::path &path, std::uintmax_t expected,
       std::filesystem::file_size(path, fileError);
   if (fileError) {
     if (error)
-      *error = "the resource size could not be read (" +
-               fileError.message() + ")";
+      *error =
+          "the resource size could not be read (" + fileError.message() + ")";
     return false;
   }
   if (actualFileSize != expected) {
@@ -488,7 +489,7 @@ downloadOne(const std::filesystem::path &destination, const wchar_t *repository,
 ModelPaths resolveModelPaths() {
   ModelPaths paths;
   paths.directory =
-      radioifyWritableDataDir() / "models" / "qwen2.5-vl-7b-instruct-q4-k-m";
+      radioifyWritableDataDir() / "models" / "minicpm-v-2-q4-k-m";
   paths.model = paths.directory / kModelFile;
   paths.projector = paths.directory / kProjectorFile;
   paths.plannerDirectory =
@@ -496,19 +497,30 @@ ModelPaths resolveModelPaths() {
   paths.plannerModel = paths.plannerDirectory / kPlannerModelFile;
   const std::vector<std::filesystem::path> resourceRoots =
       radioifyResourceSearchRoots();
-  const std::filesystem::path relativeAdapter =
+  const std::filesystem::path relativeSpeechPlanAdapter =
       std::filesystem::path("models") / "chapter_analysis" /
-      kPlannerAdapterFile;
+      kSpeechPlanAdapterFile;
+  const std::filesystem::path relativeChapterPlanAdapter =
+      std::filesystem::path("models") / "chapter_analysis" /
+      kChapterPlanAdapterFile;
   if (!resourceRoots.empty())
-    paths.plannerAdapter = resourceRoots.front() / relativeAdapter;
+    paths.speechPlanAdapter =
+        resourceRoots.front() / relativeSpeechPlanAdapter;
+  if (!resourceRoots.empty())
+    paths.chapterPlanAdapter =
+        resourceRoots.front() / relativeChapterPlanAdapter;
   for (const std::filesystem::path &root : resourceRoots) {
-    const std::filesystem::path candidate =
-        root / relativeAdapter;
+    const std::filesystem::path candidate = root / relativeSpeechPlanAdapter;
     std::error_code fileError;
     if (std::filesystem::is_regular_file(candidate, fileError) && !fileError) {
-      paths.plannerAdapter = candidate;
-      break;
+      paths.speechPlanAdapter = candidate;
     }
+    const std::filesystem::path chapterCandidate =
+        root / relativeChapterPlanAdapter;
+    fileError.clear();
+    if (std::filesystem::is_regular_file(chapterCandidate, fileError) &&
+        !fileError)
+      paths.chapterPlanAdapter = chapterCandidate;
   }
   return paths;
 }
@@ -522,12 +534,24 @@ CapabilityResult inspectPackagedChapterRuntime() {
 
   const std::filesystem::path chapterRoot =
       executableRoot / "models" / "chapter_analysis";
-  const std::filesystem::path adapter = chapterRoot / kPlannerAdapterFile;
+  const std::filesystem::path speechPlanAdapter =
+      chapterRoot / kSpeechPlanAdapterFile;
+  const std::filesystem::path chapterPlanAdapter =
+      chapterRoot / kChapterPlanAdapterFile;
   std::string verificationError;
-  if (!exactFile(adapter, kPlannerAdapterBytes, kPlannerAdapterSha256, {},
-                 &verificationError)) {
+  if (!exactFile(speechPlanAdapter, kSpeechPlanAdapterBytes,
+                 kSpeechPlanAdapterSha256, {}, &verificationError)) {
     std::string detail =
-        "The staged Chapter-Llama planner adapter could not be verified";
+        "The staged Chapter-Llama ASR plan adapter could not be verified";
+    if (!verificationError.empty())
+      detail += ": " + verificationError;
+    detail += ".";
+    return {CapabilityState::Unsupported, std::move(detail)};
+  }
+  if (!exactFile(chapterPlanAdapter, kChapterPlanAdapterBytes,
+                 kChapterPlanAdapterSha256, {}, &verificationError)) {
+    std::string detail =
+        "The staged Chapter-Llama captions-plus-ASR adapter could not be verified";
     if (!verificationError.empty())
       detail += ": " + verificationError;
     detail += ".";
@@ -554,7 +578,7 @@ CapabilityResult inspectPackagedChapterRuntime() {
 CapabilityResult inspectModelArtifacts(const ModelPaths &paths,
                                        const OperationControl &control) {
   if (control.progress) {
-    control.progress(std::nullopt, "Verifying Qwen2.5-VL model");
+    control.progress(std::nullopt, "Verifying MiniCPM-V 2.0 model");
   }
   std::string error;
   const bool modelReady =
@@ -578,22 +602,35 @@ CapabilityResult inspectModelArtifacts(const ModelPaths &paths,
   }
   if (gpuRevoked(control))
     return {CapabilityState::Yielded, {}};
-  const bool adapterReady =
-      exactFile(paths.plannerAdapter, kPlannerAdapterBytes,
-                kPlannerAdapterSha256, control, &error);
-  if (cancelled(control)) {
+  const bool speechPlanAdapterReady =
+      exactFile(paths.speechPlanAdapter, kSpeechPlanAdapterBytes,
+                kSpeechPlanAdapterSha256, control, &error);
+  if (cancelled(control))
     return {CapabilityState::Cancelled, {}};
-  }
   if (gpuRevoked(control))
     return {CapabilityState::Yielded, {}};
-  if (!adapterReady) {
-    std::string detail =
-        "The packaged Chapter-Llama planner adapter could not be verified";
+  const bool chapterPlanAdapterReady =
+      exactFile(paths.chapterPlanAdapter, kChapterPlanAdapterBytes,
+                kChapterPlanAdapterSha256, control, &error);
+  if (cancelled(control))
+    return {CapabilityState::Cancelled, {}};
+  if (gpuRevoked(control))
+    return {CapabilityState::Yielded, {}};
+  if (!speechPlanAdapterReady) {
+    std::string detail = "The packaged Chapter-Llama ASR plan adapter could "
+                         "not be verified";
     if (!error.empty())
       detail += ": " + error;
     detail += ".";
-    return {CapabilityState::Unsupported,
-            std::move(detail)};
+    return {CapabilityState::Unsupported, std::move(detail)};
+  }
+  if (!chapterPlanAdapterReady) {
+    std::string detail = "The packaged Chapter-Llama captions-plus-ASR adapter could "
+                         "not be verified";
+    if (!error.empty())
+      detail += ": " + error;
+    detail += ".";
+    return {CapabilityState::Unsupported, std::move(detail)};
   }
   if (!modelReady || !projectorReady || !plannerReady) {
     return {CapabilityState::SetupRequired,
@@ -606,23 +643,33 @@ CapabilityResult inspectModelArtifacts(const ModelPaths &paths,
 InstallResult installModelArtifacts(const ModelPaths &paths,
                                     const OperationControl &control) {
   std::string verificationError;
-  const bool adapterReady =
-      exactFile(paths.plannerAdapter, kPlannerAdapterBytes,
-                kPlannerAdapterSha256, control, &verificationError);
-  if (cancelled(control)) {
+  const bool speechPlanAdapterReady =
+      exactFile(paths.speechPlanAdapter, kSpeechPlanAdapterBytes,
+                kSpeechPlanAdapterSha256, control, &verificationError);
+  if (cancelled(control))
     return {OperationStatus::Cancelled, "Model installation cancelled."};
-  }
-  if (gpuRevoked(control)) {
+  if (gpuRevoked(control))
     return {OperationStatus::Yielded, "Model installation yielded."};
-  }
-  if (!adapterReady) {
-    std::string detail =
-        "The packaged Chapter-Llama planner adapter could not be verified";
+  if (!speechPlanAdapterReady) {
+    std::string detail = "The packaged Chapter-Llama ASR plan adapter could "
+                         "not be verified";
     if (!verificationError.empty())
       detail += ": " + verificationError;
     detail += ".";
-    return {OperationStatus::Unsupported,
-            std::move(detail)};
+    return {OperationStatus::Unsupported, std::move(detail)};
+  }
+  const bool chapterPlanAdapterReady =
+      exactFile(paths.chapterPlanAdapter, kChapterPlanAdapterBytes,
+                kChapterPlanAdapterSha256, control, &verificationError);
+  if (cancelled(control))
+    return {OperationStatus::Cancelled, "Model installation cancelled."};
+  if (!chapterPlanAdapterReady) {
+    std::string detail =
+        "The packaged Chapter-Llama captions-plus-ASR adapter could not be verified";
+    if (!verificationError.empty())
+      detail += ": " + verificationError;
+    detail += ".";
+    return {OperationStatus::Unsupported, std::move(detail)};
   }
   bool modelReady = exactFile(paths.model, kModelBytes, kModelSha256, control,
                               &verificationError);
@@ -632,7 +679,7 @@ InstallResult installModelArtifacts(const ModelPaths &paths,
   if (!modelReady) {
     InstallResult model =
         downloadOne(paths.model, kVisionRepository, kVisionRevision, kModelFile,
-                    "Downloading Qwen2.5-VL visual model", kModelBytes,
+                    "Downloading MiniCPM-V 2.0 visual model", kModelBytes,
                     kModelSha256, 0, control);
     if (model.status != OperationStatus::Succeeded)
       return model;
@@ -651,7 +698,7 @@ InstallResult installModelArtifacts(const ModelPaths &paths,
   if (!projectorReady) {
     InstallResult projector =
         downloadOne(paths.projector, kVisionRepository, kVisionRevision,
-                    kProjectorFile, "Downloading Qwen2.5-VL projector",
+                    kProjectorFile, "Downloading MiniCPM-V 2.0 projector",
                     kProjectorBytes, kProjectorSha256, kModelBytes, control);
     if (projector.status != OperationStatus::Succeeded)
       return projector;

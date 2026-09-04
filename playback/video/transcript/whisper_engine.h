@@ -32,7 +32,7 @@ struct RecognizedSegment {
 };
 
 class WhisperEngine {
- public:
+public:
   static constexpr uint32_t kSampleRate = 16000;
 
   using ProgressCallback = std::function<void(int)>;
@@ -41,22 +41,24 @@ class WhisperEngine {
   WhisperEngine();
   ~WhisperEngine();
 
-  WhisperEngine(const WhisperEngine&) = delete;
-  WhisperEngine& operator=(const WhisperEngine&) = delete;
+  WhisperEngine(const WhisperEngine &) = delete;
+  WhisperEngine &operator=(const WhisperEngine &) = delete;
 
-  bool initialize(const std::filesystem::path& modelPath,
+  bool initialize(const std::filesystem::path &modelPath,
                   WhisperAlignmentPreset alignmentPreset,
-                  std::string sourceLanguage,
-                  std::string* deviceDescription, std::string* error);
-  bool transcribe(const float* samples, size_t sampleCount,
-                  const ProgressCallback& onProgress,
-                  const AbortCheck& shouldAbort,
-                  std::vector<RecognizedSegment>* segments,
-                  std::string* error);
+                  std::string sourceLanguage, std::string *deviceDescription,
+                  std::string *error);
+  bool transcribe(const float *samples, size_t sampleCount,
+                  const ProgressCallback &onProgress,
+                  const AbortCheck &shouldAbort,
+                  std::vector<RecognizedSegment> *segments, std::string *error);
+  // Returns the explicit or first successfully detected ISO 639-1 language.
+  // The value becomes stable after the first chunk containing speech.
+  std::string sourceLanguage() const;
 
- private:
+private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace playback_video_transcript
+} // namespace playback_video_transcript

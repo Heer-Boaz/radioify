@@ -14,19 +14,18 @@ struct Progress {
   std::string phase;
 };
 
-using ProgressCallback = std::function<void(const Progress&)>;
+using ProgressCallback = std::function<void(const Progress &)>;
 using TranscriptCommitStarted = std::function<bool()>;
 
 // Decodes the video's primary audio stream to Whisper's native mono 16 kHz
 // format and writes a timestamp-indexed SRT sidecar. The destination is not
 // changed unless the complete transcript succeeds.
-bool createIndexedTranscript(const std::filesystem::path& videoPath,
-                             const std::filesystem::path& outputPath,
-                             TranscriptPublishMode publishMode,
-                             const ProgressCallback& onProgress,
-                             const std::atomic<bool>* cancelRequested,
-                             std::string* error,
-                             const TranscriptCommitStarted&
-                                 outputCommitStarted = {});
+bool createIndexedTranscript(
+    const std::filesystem::path &videoPath,
+    const std::filesystem::path &outputPath, TranscriptPublishMode publishMode,
+    const ProgressCallback &onProgress,
+    const std::atomic<bool> *cancelRequested, std::string *error,
+    const TranscriptCommitStarted &outputCommitStarted = {},
+    std::filesystem::path *publishedPath = nullptr);
 
-}  // namespace playback_video_transcript
+} // namespace playback_video_transcript

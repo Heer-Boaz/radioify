@@ -1,4 +1,5 @@
 #include "playback/video/framebuffer/window/gpu_text_grid_composition.h"
+#include "playback/video/framebuffer/gpu_text_grid_glyph_catalog.h"
 
 #include <d3d11.h>
 #include <iostream>
@@ -74,5 +75,16 @@ int main() {
                "an overlay pass must reject a missing blend state");
   ok &= expect(!currentBlendState(context.Get()),
                "a rejected composition must not mutate inherited state");
+  for (const std::uint32_t codepoint :
+       {0x2504u, 0x250Au, 0x256Bu, 0x2550u, 0x2591u, 0x2191u, 0x2193u,
+        0x00B7u, 0x2026u}) {
+    const std::uint32_t atlasIndex =
+        playback_gpu_text_grid::glyphIndex(codepoint);
+    ok &= expect(
+        atlasIndex != playback_gpu_text_grid::kMissingGlyphAtlasIndex &&
+            playback_gpu_text_grid::codepoint(atlasIndex) == codepoint,
+        "every emitted timeline/panel UI glyph must have one catalogued "
+        "framebuffer atlas identity");
+  }
   return ok ? 0 : 1;
 }

@@ -110,6 +110,7 @@ third_party/nvidia/
 models/*.onnx
 models/*.bin
 models/*.download
+models/**/*.verified
 
 # Useless files
 **.md

@@ -22,16 +22,16 @@ Notes:
 - Automatic video chapters require compatible D3D11VA and Vulkan hardware.
   Built with Llama.
   Runtime analysis currently supports videos from 30 seconds through 60
-  minutes; longer sources are rejected instead of silently reducing evidence
-  density below the validated cadence.
+  minutes as a Radioify single-pass admission contract. Longer sources are
+  rejected instead of being routed through a different sampling strategy.
   Vulkan inference runs in an isolated helper process so foreground playback
   can reclaim GPU resources without waiting for a model dispatch to cooperate.
-  Open Chapters during playback to explicitly install the pinned Qwen2.5-VL
+  Open Chapters during playback to explicitly install the pinned MiniCPM-V 2.0
   observer and Chapter-Llama planner base; the bundle does not contain or
   silently download either model. Radioify ships only the verified
-  Chapter-Llama planner adapter and its provenance notice.
+  Chapter-Llama ASR and captions-plus-ASR adapters and their provenance notice.
   Model sources and licenses:
-  https://huggingface.co/ggml-org/Qwen2.5-VL-7B-Instruct-GGUF
+  https://huggingface.co/openbmb/MiniCPM-V-2-gguf
   https://huggingface.co/lucas-ventura/chapter-llama
   Llama 3.1 license: models\chapter_analysis\LLAMA-3.1-LICENSE
   Acceptable Use Policy: https://llama.meta.com/llama3_1/use-policy

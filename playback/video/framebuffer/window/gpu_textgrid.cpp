@@ -13,10 +13,10 @@
 #include "present.h"
 
 namespace {
-constexpr int kGlyphAtlasCols = 16;
-constexpr int kGlyphAtlasRows = 24;
-constexpr int kBlockGlyphAtlasStart = 111;
-constexpr int kBrailleGlyphAtlasStart = 119;
+constexpr int kGlyphAtlasCols =
+    static_cast<int>(playback_gpu_text_grid::kAtlasColumns);
+constexpr int kGlyphAtlasRows =
+    static_cast<int>(playback_gpu_text_grid::kAtlasRows);
 
 struct GpuTextGridConstants {
     uint32_t glyphCellWidth = 1;
@@ -69,55 +69,10 @@ RadioifyTerminalFontMetrics measureTerminalFontMetrics(UINT dpi) {
 }
 
 wchar_t glyphForAtlasIndex(int index) {
-    if (index >= 0 && index <= 94) {
-        return static_cast<wchar_t>(32 + index);
-    }
-    switch (index) {
-        case 95:
-            return L'\u25B6';
-        case 96:
-            return L'\u23F8';
-        case 97:
-            return L'\u25A0';
-        case 98:
-            return L'\u2022';
-        case 99:
-            return L'\u2500';
-        case 100:
-            return L'\u2502';
-        case 101:
-            return L'\u250C';
-        case 102:
-            return L'\u2510';
-        case 103:
-            return L'\u2514';
-        case 104:
-            return L'\u2518';
-        case 105:
-            return L'\u251C';
-        case 106:
-            return L'\u2524';
-        case 107:
-            return L'\u252C';
-        case 108:
-            return L'\u2534';
-        case 109:
-            return L'\u253C';
-        case 110:
-            return L'\u25CB';
-        default:
-            if (index >= kBlockGlyphAtlasStart &&
-                index < kBlockGlyphAtlasStart + 8) {
-                return static_cast<wchar_t>(
-                    L'\u2588' + (index - kBlockGlyphAtlasStart));
-            }
-            if (index >= kBrailleGlyphAtlasStart &&
-                index < kBrailleGlyphAtlasStart + 256) {
-                return static_cast<wchar_t>(
-                    L'\u2800' + (index - kBrailleGlyphAtlasStart));
-            }
-            return L'?';
-    }
+    if (index < 0 || index >= kGlyphAtlasCols * kGlyphAtlasRows)
+        return L'?';
+    return static_cast<wchar_t>(playback_gpu_text_grid::codepoint(
+        static_cast<std::uint32_t>(index)));
 }
 
 bool renderGlyphAtlas(std::vector<uint8_t>& outAlpha, int cellWidth,

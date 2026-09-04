@@ -16,14 +16,14 @@ enum class Action : std::uint8_t {
   InstallModels,
   CancelInstallation,
   RetryAnalysis,
-  ToggleOverview,
+  TogglePanel,
   ShowStatus,
 };
 
 struct ActionContext {
   const Snapshot &snapshot;
   bool requestActive = false;
-  bool overviewOpen = false;
+  bool panelOpen = false;
 };
 
 struct ActionItem {
@@ -33,7 +33,7 @@ struct ActionItem {
 
 // Builds the active-video chapter portion of a context menu. Running and
 // terminal states remain discoverable here without reserving toolbar space or
-// opening an empty overview panel.
+// opening an empty chapter panel.
 std::vector<ActionItem> buildActionCatalog(const ActionContext &context);
 
 } // namespace playback_video_chapters

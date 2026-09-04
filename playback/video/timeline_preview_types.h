@@ -67,7 +67,11 @@ struct Snapshot {
   bool hoverActive = false;
   PresentationSurface presentationSurface = PresentationSurface::Terminal;
   double anchorRatio = 0.0;
+  // Exact edited/program position shown to the user.
   int64_t targetUs = 0;
+  // Exact source position used for source-coordinate semantic metadata. This
+  // is deliberately independent of the bucketed frame decode request.
+  int64_t sourceTargetUs = 0;
   int64_t durationUs = 0;
   int sourceWidth = 0;
   int sourceHeight = 0;

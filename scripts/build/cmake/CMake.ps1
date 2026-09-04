@@ -408,6 +408,7 @@ function Publish-BuildArtifacts {
     New-Item -ItemType Directory -Force -Path $chapterPlannerDistDir | Out-Null
   }
   foreach ($chapterPlannerAsset in @(
+      "chapter-llama-asr-10k-f16.gguf",
       "chapter-llama-captions-asr-10k-f16.gguf",
       "CHAPTER-LLAMA-NOTICE.md",
       "LLAMA-3.1-LICENSE",

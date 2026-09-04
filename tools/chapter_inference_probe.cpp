@@ -19,6 +19,7 @@
 #include "playback/video/chapter/inference.h"
 #include "playback/video/chapter/inference_worker.h"
 #include "playback/video/chapter/sampled_evidence.h"
+#include "playback/video/transcript/document.h"
 #include "playback/video/image_wic.h"
 
 namespace {
@@ -117,12 +118,19 @@ bool loadEvidenceCache(const std::filesystem::path &path,
             intervalStarts &&
         document.value("interval_ends_us", std::vector<std::int64_t>{}) ==
             intervalEnds;
-    const bool current = document.value("schema", 0) == 5 &&
-                         document.size() == 10 && visualIdentityMatches &&
+    nlohmann::json chapterPlan = nlohmann::json::array();
+    for (const auto &chapter : request.chapterPlan) {
+      chapterPlan.push_back(
+          {{"start_us", chapter.startUs}, {"title", chapter.title}});
+    }
+    const bool current = document.value("schema", 0) == 13 &&
+                         document.size() == 11 && visualIdentityMatches &&
                          document.value("planner_model", std::string{}) ==
                              request.plannerModel.generic_u8string() &&
-                         document.value("planner_adapter", std::string{}) ==
-                             request.plannerAdapter.generic_u8string();
+                         document.value("chapter_plan_adapter", std::string{}) ==
+                             request.chapterPlanAdapter.generic_u8string() &&
+                         document.value("chapter_plan", nlohmann::json{}) ==
+                             chapterPlan;
     if (!current) {
       throw std::runtime_error("evidence cache does not match this request");
     }
@@ -130,8 +138,9 @@ bool loadEvidenceCache(const std::filesystem::path &path,
     checkpoint->model = request.model;
     checkpoint->projector = request.projector;
     checkpoint->plannerModel = request.plannerModel;
-    checkpoint->plannerAdapter = request.plannerAdapter;
+    checkpoint->chapterPlanAdapter = request.chapterPlanAdapter;
     checkpoint->durationUs = request.durationUs;
+    checkpoint->chapterPlan = request.chapterPlan;
     checkpoint->observations =
         document["observations"].get<std::vector<std::string>>();
     checkpoint->sampleTimesUs = std::move(sampleTimes);
@@ -152,12 +161,19 @@ bool storeEvidenceCache(
   if (path.empty())
     return true;
   try {
+    nlohmann::json chapterPlan = nlohmann::json::array();
+    for (const auto &chapter : checkpoint.chapterPlan) {
+      chapterPlan.push_back(
+          {{"start_us", chapter.startUs}, {"title", chapter.title}});
+    }
     nlohmann::json document = {
-        {"schema", 5},
+        {"schema", 13},
         {"model", checkpoint.model.generic_u8string()},
         {"projector", checkpoint.projector.generic_u8string()},
         {"planner_model", checkpoint.plannerModel.generic_u8string()},
-        {"planner_adapter", checkpoint.plannerAdapter.generic_u8string()},
+        {"chapter_plan_adapter",
+         checkpoint.chapterPlanAdapter.generic_u8string()},
+        {"chapter_plan", std::move(chapterPlan)},
         {"duration_us", checkpoint.durationUs},
         {"sample_times_us", checkpoint.sampleTimesUs},
         {"interval_starts_us", checkpoint.intervalStartsUs},
@@ -183,13 +199,14 @@ bool storeEvidenceCache(
 int main(int argc, char **argv) {
   using namespace playback_video_chapters;
   const bool exerciseYield =
-      argc == 8 && std::string_view(argv[7]) == "--exercise-yield";
+      argc == 10 && std::string_view(argv[9]) == "--exercise-yield";
   const bool useEvidenceCache =
-      argc == 9 && std::string_view(argv[7]) == "--evidence-cache";
-  if (argc != 7 && !exerciseYield && !useEvidenceCache) {
+      argc == 11 && std::string_view(argv[9]) == "--evidence-cache";
+  if (argc != 9 && !exerciseYield && !useEvidenceCache) {
     std::cerr << "usage: chapter_inference_probe <model.gguf> "
-                 "<projector.gguf> <planner-model.gguf> "
-                 "<planner-adapter.gguf> <png-directory-or-video> "
+                  "<projector.gguf> <planner-model.gguf> "
+                  "<speech-plan-adapter.gguf> <chapter-plan-adapter.gguf> "
+                  "<png-directory> <english.srt> "
                  "<duration-us> "
                  "[--exercise-yield | --evidence-cache <cache.json>]\n";
     return 2;
@@ -197,12 +214,12 @@ int main(int argc, char **argv) {
 
   std::int64_t durationUs = 0;
   try {
-    durationUs = std::stoll(argv[6]);
+    durationUs = std::stoll(argv[8]);
   } catch (const std::exception &) {
     std::cerr << "invalid duration\n";
     return 2;
   }
-  const std::filesystem::path input = argv[5];
+  const std::filesystem::path input = argv[6];
   std::vector<OwnedWindow> windows;
   std::error_code error;
   if (std::filesystem::is_directory(input, error) && !error) {
@@ -249,54 +266,9 @@ int main(int argc, char **argv) {
           windows[index].startUs +
           (windows[index].endUs - windows[index].startUs) / 2;
     }
-  } else if (std::filesystem::is_regular_file(input, error) && !error) {
-    AnalysisRequest analysisRequest;
-    analysisRequest.file = input;
-    analysisRequest.videoStreamIndex = 0;
-    analysisRequest.durationUs = durationUs;
-    OperationControl samplingControl;
-    samplingControl.cancelled = [] { return false; };
-    samplingControl.backgroundGpuAllowed = [] { return true; };
-    std::string lastSamplingPhase;
-    int lastSamplingPercentage = -2;
-    samplingControl.progress = [&](std::optional<double> progress,
-                                   std::string phase) {
-      const int percentage =
-          progress ? static_cast<int>(*progress * 100.0) : -1;
-      if (phase == lastSamplingPhase && percentage == lastSamplingPercentage) {
-        return;
-      }
-      lastSamplingPhase = phase;
-      lastSamplingPercentage = percentage;
-      std::cerr << percentage << "% " << phase << '\n';
-    };
-    SampledEvidenceCheckpoint evidenceCheckpoint;
-    SampledEvidenceResult sampled = sampleVideoEvidence(
-        analysisRequest, samplingControl, &evidenceCheckpoint);
-    if (sampled.status != OperationStatus::Succeeded ||
-        evidenceCheckpoint.windows.size() <
-            kMinimumAutomaticEvidenceSampleCount) {
-      std::cerr << "D3D11 sampling failed: " << sampled.detail << '\n';
-      return 2;
-    }
-    windows.reserve(evidenceCheckpoint.windows.size());
-    for (SampledTemporalWindow &sampled : evidenceCheckpoint.windows) {
-      OwnedWindow window;
-      window.startUs = sampled.startUs;
-      window.endUs = sampled.endUs;
-      window.frames.reserve(sampled.frames.size());
-      for (SampledFrame &frame : sampled.frames) {
-        OwnedFrame owned;
-        owned.width = frame.width;
-        owned.height = frame.height;
-        owned.rgb = std::move(frame.rgb);
-        owned.timeUs = frame.timeUs;
-        window.frames.push_back(std::move(owned));
-      }
-      windows.push_back(std::move(window));
-    }
   } else {
-    std::cerr << "input is neither a PNG directory nor a video file\n";
+    std::cerr << "input is not a chronological PNG directory; direct video "
+                 "sampling requires the production ASR planner\n";
     return 2;
   }
 
@@ -304,20 +276,25 @@ int main(int argc, char **argv) {
   request.model = argv[1];
   request.projector = argv[2];
   request.plannerModel = argv[3];
-  request.plannerAdapter = argv[4];
+  request.chapterPlanAdapter = argv[5];
   request.durationUs = durationUs;
-  request.windows.reserve(windows.size());
-  for (OwnedWindow &owned : windows) {
-    InferenceTemporalWindow window;
-    window.intervalStartUs = owned.startUs;
-    window.intervalEndUs = owned.endUs;
-    for (OwnedFrame &frame : owned.frames) {
-      window.frames.push_back(
-          {frame.width, frame.height, &frame.rgb, frame.timeUs});
-    }
-    request.windows.push_back(std::move(window));
+  std::vector<playback_video_transcript::Segment> transcript;
+  std::string transcriptError;
+  if (!playback_video_transcript::readIndexedTranscript(
+          std::filesystem::path(argv[7]), &transcript, &transcriptError)) {
+    std::cerr << "could not read English transcript: " << transcriptError
+              << '\n';
+    return 2;
   }
-
+  request.englishDialogue.reserve(transcript.size());
+  for (const playback_video_transcript::Segment &cue : transcript) {
+    if (cue.startUs >= 0 && cue.startUs < durationUs && !cue.text.empty())
+      request.englishDialogue.push_back({cue.startUs, cue.text});
+  }
+  if (request.englishDialogue.empty()) {
+    std::cerr << "English transcript has no cues inside the video timeline\n";
+    return 2;
+  }
   std::string lastPhase;
   int lastPercentage = -2;
   std::atomic<bool> gpuAllowed{true};
@@ -340,9 +317,60 @@ int main(int argc, char **argv) {
     }
   };
 
+  SpeechChapterPlanRequest planRequest;
+  planRequest.plannerModel = request.plannerModel;
+  planRequest.planAdapter = argv[4];
+  planRequest.durationUs = durationUs;
+  planRequest.englishDialogue = request.englishDialogue;
+  InferenceEngine planEngine;
+  SpeechChapterPlanResult plan =
+      planEngine.planChaptersFromSpeech(planRequest, control);
+  if (plan.status != OperationStatus::Succeeded) {
+    std::cerr << "speech plan failed (" << static_cast<int>(plan.status)
+              << "): " << plan.detail << '\n';
+    return 1;
+  }
+  if (plan.chapterPlan.size() != windows.size()) {
+    std::cerr << "expected one chronological PNG for each of the "
+              << plan.chapterPlan.size() << " ASR-planned chapters, found "
+              << windows.size() << '\n';
+    return 2;
+  }
+  request.chapterPlan = std::move(plan.chapterPlan);
+  std::vector<std::int64_t> sampleTimesUs;
+  sampleTimesUs.reserve(request.chapterPlan.size());
+  for (const auto &chapter : request.chapterPlan)
+    sampleTimesUs.push_back(chapter.startUs);
+  sampleTimesUs.front() =
+      std::min<std::int64_t>(1'000'000, durationUs - 1);
+  for (std::size_t index = 0; index < windows.size(); ++index) {
+    const std::int64_t sampleUs = sampleTimesUs[index];
+    windows[index].startUs =
+        index == 0
+            ? 0
+            : sampleTimesUs[index - 1] +
+                  (sampleUs - sampleTimesUs[index - 1]) / 2;
+    windows[index].endUs =
+        index + 1 == windows.size()
+            ? durationUs
+            : sampleUs + (sampleTimesUs[index + 1] - sampleUs) / 2;
+    windows[index].frames.front().timeUs = sampleUs;
+  }
+  request.windows.reserve(windows.size());
+  for (OwnedWindow &owned : windows) {
+    InferenceTemporalWindow window;
+    window.intervalStartUs = owned.startUs;
+    window.intervalEndUs = owned.endUs;
+    for (OwnedFrame &frame : owned.frames) {
+      window.frames.push_back(
+          {frame.width, frame.height, &frame.rgb, frame.timeUs});
+    }
+    request.windows.push_back(std::move(window));
+  }
+
   InferenceCheckpoint checkpoint;
   const std::filesystem::path evidenceCache =
-      useEvidenceCache ? std::filesystem::path(argv[8])
+      useEvidenceCache ? std::filesystem::path(argv[10])
                        : std::filesystem::path{};
   std::string cacheDetail;
   if (!exerciseYield &&
@@ -414,18 +442,7 @@ int main(int argc, char **argv) {
     }
   };
   AnalysisResult result =
-      materializeGeneratedDocument(inference.document, durationUs, [&] {
-        std::vector<std::int64_t> starts;
-        starts.reserve(windows.size() * 6u + 1u);
-        starts.push_back(0);
-        for (const OwnedWindow &window : windows) {
-          for (const OwnedFrame &frame : window.frames) {
-            if (frame.timeUs > 0 && frame.timeUs != starts.back())
-              starts.push_back(frame.timeUs);
-          }
-        }
-        return starts;
-      }());
+      materializeGeneratedDocument(inference.document, durationUs);
   if (result.status != OperationStatus::Succeeded) {
     emitEvidence(std::cerr);
     std::cerr << "BOUNDARIES";
@@ -435,9 +452,8 @@ int main(int argc, char **argv) {
     std::cerr << '\n';
     for (const GeneratedChapter &chapter : inference.document.chapters) {
       std::cerr << "GENERATED_CHAPTER\t" << chapter.startUs << '\t'
-                << chapter.title << '\t' << chapter.summary << '\n';
+                << chapter.title << '\n';
     }
-    std::cerr << "GENERATED_OVERVIEW\t" << inference.document.overview << '\n';
     std::cerr << "artifact rejected: " << result.detail << '\n';
     return 1;
   }
@@ -448,10 +464,9 @@ int main(int argc, char **argv) {
     std::cout << '\t' << chapter.startUs;
   }
   std::cout << '\n';
-  std::cout << "OVERVIEW\t" << result.overview << '\n';
   for (const Chapter &chapter : result.chapters) {
     std::cout << "CHAPTER\t" << chapter.startUs << '\t' << chapter.endUs << '\t'
-              << chapter.title << '\t' << chapter.summary << '\n';
+              << chapter.title << '\n';
   }
   return 0;
 }

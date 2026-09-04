@@ -17,10 +17,7 @@ cbuffer GpuTextGridConstants : register(b0) {
     float asciiGlyphPeakNits;
 };
 
-static const uint CELL_FLAG_BRAILLE = 1u;
 static const uint CELL_FLAG_TRANSPARENT_BG = 2u;
-static const uint BLOCK_GLYPH_ATLAS_START = 111u;
-static const uint BRAILLE_GLYPH_ATLAS_START = 119u;
 
 #include "hdr_generate.hlsli"
 
@@ -29,30 +26,6 @@ float3 packedRgb(uint rgb) {
         float(rgb & 0xFFu),
         float((rgb >> 8) & 0xFFu),
         float((rgb >> 16) & 0xFFu)) / 255.0;
-}
-
-uint atlasGlyphIndex(uint ch) {
-    if (ch >= 32u && ch <= 126u) return ch - 32u;
-    if (ch == 0x25B6u) return 95u;
-    if (ch == 0x23F8u) return 96u;
-    if (ch == 0x25A0u) return 97u;
-    if (ch == 0x2022u) return 98u;
-    if (ch == 0x2500u || ch == 0x2501u) return 99u;
-    if (ch == 0x2502u || ch == 0x2503u) return 100u;
-    if (ch == 0x250Cu) return 101u;
-    if (ch == 0x2510u) return 102u;
-    if (ch == 0x2514u) return 103u;
-    if (ch == 0x2518u) return 104u;
-    if (ch == 0x251Cu) return 105u;
-    if (ch == 0x2524u) return 106u;
-    if (ch == 0x252Cu) return 107u;
-    if (ch == 0x2534u) return 108u;
-    if (ch == 0x253Cu) return 109u;
-    if (ch == 0x25CBu) return 110u;
-    if (ch >= 0x2588u && ch <= 0x258Fu) {
-        return BLOCK_GLYPH_ATLAS_START + (ch - 0x2588u);
-    }
-    return 31u;
 }
 
 float4 PS_GPU_TEXT_GRID(PS_INPUT input) : SV_Target {
@@ -65,10 +38,7 @@ float4 PS_GPU_TEXT_GRID(PS_INPUT input) : SV_Target {
     uint4 cell = gridTex.Load(int3(cellPos, 0));
 
     float2 local = frac(gridPos);
-    uint glyphIndex = atlasGlyphIndex(cell.r);
-    if ((cell.a & CELL_FLAG_BRAILLE) != 0u) {
-        glyphIndex = BRAILLE_GLYPH_ATLAS_START + (cell.r & 0xFFu);
-    }
+    uint glyphIndex = cell.r;
 
     uint atlasCols = max(1u, glyphAtlasCols);
     uint2 cellSize = uint2(max(1u, glyphCellWidth),

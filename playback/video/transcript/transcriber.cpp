@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "ffmpegaudio.h"
+#include "playback/video/transcript/artifact.h"
 #include "playback/video/transcript/document.h"
 #include "playback/video/transcript/subtitle_cues.h"
 #include "playback/video/transcript/whisper_engine.h"
@@ -26,7 +27,7 @@ constexpr uint64_t kChunkFrames = 60ull * kSampleRate;
 // chunk, especially when speech follows silence; a short overlap allowed that
 // boundary artifact to leak into otherwise valid SRT timing.
 constexpr uint64_t kOverlapFrames = 16ull * kSampleRate;
-constexpr const char* kDefaultModelName = "ggml-base-q5_1.bin";
+constexpr const char *kDefaultModelName = "ggml-base-q5_1.bin";
 
 struct WhisperModelSelection {
   std::filesystem::path path;
@@ -34,18 +35,19 @@ struct WhisperModelSelection {
   std::string sourceLanguage;
 };
 
-void setError(std::string* error, std::string message) {
-  if (error) *error = std::move(message);
+void setError(std::string *error, std::string message) {
+  if (error)
+    *error = std::move(message);
 }
 
-bool cancelled(const std::atomic<bool>* cancelRequested) {
-  return cancelRequested &&
-         cancelRequested->load(std::memory_order_relaxed);
+bool cancelled(const std::atomic<bool> *cancelRequested) {
+  return cancelRequested && cancelRequested->load(std::memory_order_relaxed);
 }
 
-void report(const ProgressCallback& callback, float fraction,
-            const std::string& phase) {
-  if (!callback) return;
+void report(const ProgressCallback &callback, float fraction,
+            const std::string &phase) {
+  if (!callback)
+    return;
   Progress progress;
   progress.fraction = std::clamp(fraction, 0.0f, 1.0f);
   progress.phase = phase;
@@ -54,8 +56,7 @@ void report(const ProgressCallback& callback, float fraction,
 
 float estimatedTranscriptionFraction(uint64_t processedFrames,
                                      uint64_t currentChunkFrames,
-                                     int chunkProgress,
-                                     uint64_t totalFrames) {
+                                     int chunkProgress, uint64_t totalFrames) {
   const double within =
       std::clamp(static_cast<double>(chunkProgress) / 100.0, 0.0, 1.0);
   double audioFraction = 0.0;
@@ -77,14 +78,12 @@ int64_t framesToUs(uint64_t frames) {
   const uint64_t remainingFrames = frames % kSampleRate;
   constexpr uint64_t kUsPerSecond = 1000000;
   const uint64_t maxWholeSeconds =
-      static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
-      kUsPerSecond;
+      static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) / kUsPerSecond;
   if (wholeSeconds > maxWholeSeconds) {
     return std::numeric_limits<int64_t>::max();
   }
-  const uint64_t timestampUs =
-      wholeSeconds * kUsPerSecond +
-      (remainingFrames * kUsPerSecond) / kSampleRate;
+  const uint64_t timestampUs = wholeSeconds * kUsPerSecond +
+                               (remainingFrames * kUsPerSecond) / kSampleRate;
   if (timestampUs >
       static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
     return std::numeric_limits<int64_t>::max();
@@ -92,8 +91,7 @@ int64_t framesToUs(uint64_t frames) {
   return static_cast<int64_t>(timestampUs);
 }
 
-bool resolveWhisperModel(WhisperModelSelection* selection,
-                         std::string* error) {
+bool resolveWhisperModel(WhisperModelSelection *selection, std::string *error) {
   if (!selection) {
     setError(error, "No destination was provided for Whisper model selection.");
     return false;
@@ -108,12 +106,12 @@ bool resolveWhisperModel(WhisperModelSelection* selection,
       return false;
     }
   } else {
-    for (const std::filesystem::path& root : radioifyResourceSearchRoots()) {
+    for (const std::filesystem::path &root : radioifyResourceSearchRoots()) {
       const std::array<std::filesystem::path, 2> candidates = {
           root / "models" / kDefaultModelName,
           root / kDefaultModelName,
       };
-      for (const std::filesystem::path& candidate : candidates) {
+      for (const std::filesystem::path &candidate : candidates) {
         std::error_code ec;
         if (std::filesystem::is_regular_file(candidate, ec) && !ec) {
           selection->path = candidate;
@@ -121,13 +119,13 @@ bool resolveWhisperModel(WhisperModelSelection* selection,
           break;
         }
       }
-      if (!selection->path.empty()) break;
+      if (!selection->path.empty())
+        break;
     }
     if (selection->path.empty()) {
-      setError(error,
-               "Whisper model not found. Rebuild Radioify so "
-               "models/ggml-base-q5_1.bin is installed, or set "
-               "RADIOIFY_WHISPER_MODEL.");
+      setError(error, "Whisper model not found. Rebuild Radioify so "
+                      "models/ggml-base-q5_1.bin is installed, or set "
+                      "RADIOIFY_WHISPER_MODEL.");
       return false;
     }
   }
@@ -146,8 +144,7 @@ bool resolveWhisperModel(WhisperModelSelection* selection,
   }
   if (const auto configuredLanguage =
           getEnvString("RADIOIFY_WHISPER_LANGUAGE")) {
-    const auto language =
-        normalizeWhisperLanguageOverride(*configuredLanguage);
+    const auto language = normalizeWhisperLanguageOverride(*configuredLanguage);
     if (!language) {
       setError(error,
                "RADIOIFY_WHISPER_LANGUAGE is invalid. Use auto or a "
@@ -159,17 +156,18 @@ bool resolveWhisperModel(WhisperModelSelection* selection,
   return true;
 }
 
-}  // namespace
+} // namespace
 
-bool createIndexedTranscript(const std::filesystem::path& videoPath,
-                             const std::filesystem::path& outputPath,
+bool createIndexedTranscript(const std::filesystem::path &videoPath,
+                             const std::filesystem::path &outputPath,
                              TranscriptPublishMode publishMode,
-                             const ProgressCallback& onProgress,
-                             const std::atomic<bool>* cancelRequested,
-                             std::string* error,
-                             const TranscriptCommitStarted&
-                                 outputCommitStarted) {
-  if (error) error->clear();
+                             const ProgressCallback &onProgress,
+                             const std::atomic<bool> *cancelRequested,
+                             std::string *error,
+                             const TranscriptCommitStarted &outputCommitStarted,
+                             std::filesystem::path *publishedPathResult) {
+  if (error)
+    error->clear();
   if (videoPath.empty() || outputPath.empty()) {
     setError(error, "Video or transcript path is empty.");
     return false;
@@ -180,7 +178,8 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
   }
 
   WhisperModelSelection model;
-  if (!resolveWhisperModel(&model, error)) return false;
+  if (!resolveWhisperModel(&model, error))
+    return false;
 
   report(onProgress, 0.01f, "Loading Vulkan speech model");
   WhisperEngine whisper;
@@ -228,8 +227,7 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
     const uint64_t chunkStartFrame =
         decodedFrames - static_cast<uint64_t>(overlap.size());
     chunk.assign(overlap.begin(), overlap.end());
-    const uint64_t leadingOverlapFrames =
-        static_cast<uint64_t>(overlap.size());
+    const uint64_t leadingOverlapFrames = static_cast<uint64_t>(overlap.size());
     uint64_t newFramesRead = 0;
     report(onProgress,
            estimatedTranscriptionFraction(decodedFrames, 0, 0, totalFrames),
@@ -258,33 +256,31 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
                    decodeBlock.begin() + static_cast<ptrdiff_t>(framesRead));
     }
 
-    if (newFramesRead == 0) break;
+    if (newFramesRead == 0)
+      break;
 
     int64_t seamUs = std::numeric_limits<int64_t>::min();
     if (!firstChunk) {
-      const uint64_t seamFrame =
-          chunkStartFrame + leadingOverlapFrames / 2;
+      const uint64_t seamFrame = chunkStartFrame + leadingOverlapFrames / 2;
       seamUs = std::max<int64_t>(0, audioStartUs + framesToUs(seamFrame));
-      segments.erase(
-          std::remove_if(segments.begin(), segments.end(),
-                         [seamUs](const Segment& segment) {
-                           const int64_t midpoint =
-                               segment.startUs +
-                               (segment.endUs - segment.startUs) / 2;
-                           return midpoint >= seamUs;
-                         }),
-          segments.end());
+      segments.erase(std::remove_if(segments.begin(), segments.end(),
+                                    [seamUs](const Segment &segment) {
+                                      const int64_t midpoint =
+                                          segment.startUs +
+                                          (segment.endUs - segment.startUs) / 2;
+                                      return midpoint >= seamUs;
+                                    }),
+                     segments.end());
     }
 
-    const uint64_t processedFrames =
-        chunkStartFrame + leadingOverlapFrames;
+    const uint64_t processedFrames = chunkStartFrame + leadingOverlapFrames;
     const uint64_t currentChunkFrames =
         static_cast<uint64_t>(chunk.size()) - leadingOverlapFrames;
 
     const int64_t chunkStartUs = framesToUs(chunkStartFrame);
     report(onProgress,
-           estimatedTranscriptionFraction(
-               processedFrames, currentChunkFrames, 0, totalFrames),
+           estimatedTranscriptionFraction(processedFrames, currentChunkFrames,
+                                          0, totalFrames),
            "Transcribing audio");
     std::vector<RecognizedSegment> recognizedSegments;
     std::string inferenceError;
@@ -292,9 +288,9 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
             chunk.data(), chunk.size(),
             [&](int progress) {
               report(onProgress,
-                     estimatedTranscriptionFraction(
-                         processedFrames, currentChunkFrames, progress,
-                         totalFrames),
+                     estimatedTranscriptionFraction(processedFrames,
+                                                    currentChunkFrames,
+                                                    progress, totalFrames),
                      "Transcribing audio");
             },
             [cancelRequested]() { return cancelled(cancelRequested); },
@@ -307,24 +303,23 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
 
     const std::vector<Segment> recognizedCues =
         buildSubtitleCues(recognizedSegments);
-    for (const Segment& recognized : recognizedCues) {
+    for (const Segment &recognized : recognizedCues) {
       Segment segment;
-      segment.startUs =
-          std::max<int64_t>(0,
-                            audioStartUs + chunkStartUs + recognized.startUs);
-      segment.endUs =
-          std::max(segment.startUs + 1000,
-                   audioStartUs + chunkStartUs + recognized.endUs);
+      segment.startUs = std::max<int64_t>(0, audioStartUs + chunkStartUs +
+                                                 recognized.startUs);
+      segment.endUs = std::max(segment.startUs + 1000,
+                               audioStartUs + chunkStartUs + recognized.endUs);
       const int64_t midpoint =
           segment.startUs + (segment.endUs - segment.startUs) / 2;
-      if (!firstChunk && midpoint < seamUs) continue;
+      if (!firstChunk && midpoint < seamUs)
+        continue;
       segment.text = recognized.text;
       segments.push_back(std::move(segment));
     }
 
     if (!reachedEnd) {
-      const size_t overlapCount = static_cast<size_t>(
-          std::min<uint64_t>(kOverlapFrames, chunk.size()));
+      const size_t overlapCount =
+          static_cast<size_t>(std::min<uint64_t>(kOverlapFrames, chunk.size()));
       overlap.assign(chunk.end() - static_cast<ptrdiff_t>(overlapCount),
                      chunk.end());
     }
@@ -342,12 +337,23 @@ bool createIndexedTranscript(const std::filesystem::path& videoPath,
 
   finalizeSubtitleCueTimeline(&segments);
   report(onProgress, 0.98f, "Saving transcript");
-  if (!writeIndexedTranscript(outputPath, segments, publishMode, error,
+  std::filesystem::path publishedPath = outputPath;
+  if (outputPath.lexically_normal() ==
+      transcriptPathForVideo(videoPath).lexically_normal()) {
+    const std::filesystem::path languagePath =
+        languageTaggedTranscriptPathForVideo(videoPath,
+                                             whisper.sourceLanguage());
+    if (!languagePath.empty())
+      publishedPath = languagePath;
+  }
+  if (!writeIndexedTranscript(publishedPath, segments, publishMode, error,
                               outputCommitStarted)) {
     return false;
   }
+  if (publishedPathResult)
+    *publishedPathResult = publishedPath;
   report(onProgress, 1.0f, "Transcript complete");
   return true;
 }
 
-}  // namespace playback_video_transcript
+} // namespace playback_video_transcript

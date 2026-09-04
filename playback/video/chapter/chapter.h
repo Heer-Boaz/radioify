@@ -10,30 +10,28 @@
 namespace playback_video_chapters {
 
 inline constexpr std::size_t kMinimumAutomaticChapterCount = 1;
-// Keep a defensive storage bound without imposing an editorial "handful of
-// chapters" policy. Professional chapter formats are duration-driven; the
-// ten-second minimum and sampler-owned anchors provide the real density limit.
-inline constexpr std::size_t kMaximumAutomaticChapterCount = 64;
-// The complete-timeline scan is reduced to at most one hundred timestamped
-// temporal windows. Each window may contain several chronological frames;
-// evidence density remains independent of the published chapter count.
+// This is a storage/admission limit, not an editorial chapter-count policy.
+// It matches Chapter-Llama's published maximum caption-selection cardinality.
+inline constexpr std::size_t kMaximumAutomaticChapterCount = 100;
+// One frame is selected at each ASR-predicted chapter boundary. This defensive
+// bound matches the planner's public chapter cap; Radioify has no periodic
+// visual-only sampling path.
 inline constexpr std::size_t kMaximumAutomaticEvidenceSampleCount = 100;
-inline constexpr std::size_t kMinimumAutomaticEvidenceSampleCount = 3;
+inline constexpr std::size_t kMinimumAutomaticEvidenceSampleCount = 1;
 inline constexpr std::size_t kMaximumAutomaticEvidenceFrameCount =
-    kMaximumAutomaticEvidenceSampleCount * 6 + 1;
-inline constexpr std::int64_t kMinimumAutomaticChapterDurationUs = 10'000'000;
+    kMaximumAutomaticEvidenceSampleCount;
 inline constexpr std::int64_t kMinimumAutomaticChapterVideoDurationUs =
-    static_cast<std::int64_t>(kMinimumAutomaticEvidenceSampleCount) *
-    kMinimumAutomaticChapterDurationUs;
-// Chapter-Llama is evaluated on 30-60 minute sources. Keep the automatic
-// runtime feature inside that published envelope until a separately validated
-// hierarchical boundary planner owns longer media.
+    30'000'000;
+// Radioify's first runtime contract admits 30-second through 60-minute videos.
+// The upper bound avoids inventing a local replacement for Chapter-Llama's
+// separately published iterative long-context procedure.
 inline constexpr std::int64_t kMaximumAutomaticChapterVideoDurationUs =
     60LL * 60LL * 1'000'000LL;
-inline constexpr std::size_t kMaximumAutomaticCaptionBytes = 768;
+// The reference caption extractor permits 1024 generated tokens. Keep the
+// per-frame storage bound large enough for that native response while the
+// aggregate planner-context budget remains the authoritative admission limit.
+inline constexpr std::size_t kMaximumAutomaticCaptionBytes = 4096;
 inline constexpr std::size_t kMaximumAutomaticTitleBytes = 160;
-inline constexpr std::size_t kMaximumAutomaticSummaryBytes = 600;
-inline constexpr std::size_t kMaximumAutomaticOverviewBytes = 1200;
 
 enum class AnalysisState : std::uint8_t {
   Disabled,
@@ -52,7 +50,6 @@ struct Chapter {
   std::int64_t startUs = 0;
   std::int64_t endUs = 0;
   std::string title;
-  std::string summary;
 };
 
 // Immutable session-facing projection of automatic chapter analysis. The
@@ -65,7 +62,6 @@ struct Snapshot {
   std::string phase;
   std::string detail;
   std::string warning;
-  std::string overview;
   std::vector<Chapter> chapters;
   std::uint64_t revision = 0;
 
@@ -88,18 +84,14 @@ bool validatePartition(std::int64_t durationUs,
 
 // Product policy for generated timeline ranges. Homogeneous videos may have a
 // single chapter; multiple markers are only published when semantic evidence
-// supports change points. Every range remains at least ten seconds.
+// supports change points. Radioify does not impose an invented minimum chapter
+// length on the model output.
 bool validateAutomaticPartition(std::int64_t durationUs,
                                 const std::vector<Chapter> &chapters,
                                 std::string *error = nullptr);
 
-// Validates the complete publishable automatic-analysis artifact. Unlike the
-// timeline-only partition contract, this also rejects missing or visibly
-// truncated prose and a fully collapsed response that repeats the same title
-// and summary for every section. Individual titles or summaries may repeat;
-// real chapter formats do not require artificial uniqueness.
+// Validates the complete publishable automatic chapter artifact.
 bool validateAutomaticAnalysis(std::int64_t durationUs,
-                               std::string_view overview,
                                const std::vector<Chapter> &chapters,
                                std::string *error = nullptr);
 
@@ -127,6 +119,23 @@ struct MarkerProjection {
 };
 
 MarkerProjection projectMarkers(const Snapshot &snapshot, int units);
+
+// Presentation-time projection for a source-coordinate chapter partition.
+// Segments must form one contiguous presentation timeline but may skip source
+// ranges. A cut crossing chapter identity produces one boundary at the join.
+struct MarkerTimelineSegment {
+  std::int64_t sourceStartUs = 0;
+  std::int64_t sourceEndUs = 0;
+  std::int64_t presentationStartUs = 0;
+};
+
+// Materializes the single chapter view consumed by markers, hover metadata,
+// the overview and navigation after an edit decision list is applied. Source
+// chapters which are fully removed disappear; adjacent retained fragments of
+// the same chapter remain one semantic chapter.
+std::optional<Snapshot> projectToPresentationTimeline(
+    const Snapshot &snapshot, std::int64_t presentationDurationUs,
+    const std::vector<MarkerTimelineSegment> &segments);
 
 const char *analysisStateLabel(AnalysisState state);
 

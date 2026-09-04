@@ -1,8 +1,22 @@
-# Chapter-Llama planner adapter
+# Chapter-Llama planner adapters
 
-`chapter-llama-captions-asr-10k-f16.gguf` is the deterministic llama.cpp
-GGUF conversion of the `captions_asr-10k` PEFT adapter published by the
-Chapter-Llama authors under the MIT license.
+`chapter-llama-asr-10k-f16.gguf` is a deterministic llama.cpp GGUF conversion
+of the Chapter-Llama authors' `asr-10k` PEFT adapter, published under the MIT
+license. Radioify uses it to select the candidate timestamps whose frames are
+captioned by MiniCPM-V 2.0.
+
+- Source repository: `lucas-ventura/chapter-llama`
+- Source revision: `a3837e908f05eb3697873acba2870b2370b1e92d`
+- Source file: `outputs/chapterize/Meta-Llama-3.1-8B-Instruct/asr/default/s10k-2_train/default/model_checkpoints/adapter_model.safetensors`
+- Converter: llama.cpp `convert_lora_to_gguf.py`
+- Converter revision: `b8372eecd94890fd39a59a3a79ab86da1c0db480` (tag `b7146`)
+- Output type: `f16`
+- SHA-256: `7d160d379d3d654386967bf402f80c09ff24380dd71d54c1317818353a575b05`
+
+`chapter-llama-captions-asr-10k-f16.gguf` is the matching deterministic
+conversion of the authors' `captions_asr-10k` PEFT adapter. It consumes the
+chronologically interleaved MiniCPM captions and ASR transcript and owns the
+final published chapter boundaries and navigation titles.
 
 - Source repository: `lucas-ventura/chapter-llama`
 - Source revision: `a3837e908f05eb3697873acba2870b2370b1e92d`
@@ -10,9 +24,9 @@ Chapter-Llama authors under the MIT license.
 - Converter: llama.cpp `convert_lora_to_gguf.py`
 - Converter revision: `b8372eecd94890fd39a59a3a79ab86da1c0db480` (tag `b7146`)
 - Output type: `f16`
-- SHA-256: `4e07a53dfa65e356e691716645d795697427c30dc983b198faf9e84d7eec6da`
+- SHA-256: `4e07a53dfa65e356e691716645d795697427c30dc983b198faf9e84d7eeec6da`
 
-The adapter must be used with Meta Llama 3.1 8B Instruct. The base model is
+The adapters must be used with Meta Llama 3.1 8B Instruct. The base model is
 not redistributed by Radioify; the application downloads its pinned GGUF
 artifact after the user confirms model setup, subject to the Llama 3.1
 Community License.

@@ -42,7 +42,12 @@ const std::filesystem::path kProgressName = L"progress.json";
 const std::filesystem::path kResultName = L"result.json";
 
 struct OwnedRequest {
+  enum class Operation {
+    Analyze,
+    PlanChaptersFromSpeech
+  } operation = Operation::Analyze;
   InferenceRequest request;
+  SpeechChapterPlanRequest planRequest;
   std::vector<std::vector<std::uint8_t>> pixels;
 };
 
@@ -167,7 +172,10 @@ bool writeRequestFiles(const std::filesystem::path &workspace,
                        {"frames", std::move(frames)}});
   }
   if (totalBytes == 0 || totalBytes > kMaximumFrameBytes ||
-      request.englishDialogue.size() > kMaximumDialogueCues) {
+      request.englishDialogue.size() > kMaximumDialogueCues ||
+      request.chapterPlan.size() != request.windows.size() ||
+      request.chapterPlan.size() < kMinimumAutomaticChapterCount ||
+      request.chapterPlan.size() > kMaximumAutomaticChapterCount) {
     setError(error, "The chapter worker request exceeds its storage bounds.");
     return false;
   }
@@ -201,17 +209,50 @@ bool writeRequestFiles(const std::filesystem::path &workspace,
   for (const InferenceDialogueCue &cue : request.englishDialogue) {
     dialogue.push_back({{"time_us", cue.timeUs}, {"text", cue.text}});
   }
+  nlohmann::json chapterPlan = nlohmann::json::array();
+  for (const GeneratedChapterPlanEntry &chapter : request.chapterPlan) {
+    chapterPlan.push_back(
+        {{"start_us", chapter.startUs}, {"title", chapter.title}});
+  }
   const nlohmann::json manifest = {
       {"schema", inference_worker_protocol::kSchema},
+      {"operation", "analyze"},
       {"duration_us", request.durationUs},
       {"model", pathUtf8(request.model)},
       {"projector", pathUtf8(request.projector)},
       {"planner_model", pathUtf8(request.plannerModel)},
-      {"planner_adapter", pathUtf8(request.plannerAdapter)},
+      {"chapter_plan_adapter", pathUtf8(request.chapterPlanAdapter)},
       {"frame_bytes", totalBytes},
       {"windows", std::move(windows)},
-      {"english_dialogue", std::move(dialogue)}};
+      {"english_dialogue", std::move(dialogue)},
+      {"chapter_plan", std::move(chapterPlan)}};
   return writeJson(workspace / kRequestName, manifest, error);
+}
+
+bool writeSpeechChapterPlanRequestFiles(
+    const std::filesystem::path &workspace,
+    const SpeechChapterPlanRequest &request, std::string *error) {
+  if (request.plannerModel.empty() || request.planAdapter.empty() ||
+      request.durationUs <= 0 || request.englishDialogue.empty() ||
+      request.englishDialogue.size() > kMaximumDialogueCues) {
+    setError(error,
+             "The chapter worker received an invalid speech-plan request.");
+    return false;
+  }
+  nlohmann::json dialogue = nlohmann::json::array();
+  for (const InferenceDialogueCue &cue : request.englishDialogue) {
+    dialogue.push_back({{"time_us", cue.timeUs}, {"text", cue.text}});
+  }
+  std::error_code ignored;
+  std::filesystem::remove(workspace / kFramesName, ignored);
+  return writeJson(workspace / kRequestName,
+                   {{"schema", inference_worker_protocol::kSchema},
+                    {"operation", "plan_chapters_from_speech"},
+                    {"duration_us", request.durationUs},
+                    {"planner_model", pathUtf8(request.plannerModel)},
+                    {"plan_adapter", pathUtf8(request.planAdapter)},
+                    {"english_dialogue", std::move(dialogue)}},
+                   error);
 }
 
 bool loadRequest(const std::filesystem::path &workspace, OwnedRequest *owned,
@@ -224,13 +265,49 @@ bool loadRequest(const std::filesystem::path &workspace, OwnedRequest *owned,
       readJson(workspace / kRequestName, kMaximumManifestBytes, error);
   if (!manifest || !manifest->is_object() ||
       manifest->value("schema", 0) != inference_worker_protocol::kSchema ||
-      !manifest->contains("windows") || !(*manifest)["windows"].is_array() ||
       !manifest->contains("english_dialogue") ||
       !(*manifest)["english_dialogue"].is_array()) {
     setError(error, "The chapter worker request manifest is invalid.");
     return false;
   }
   OwnedRequest decoded;
+  const std::string operation = manifest->value("operation", std::string{});
+  if (operation == "plan_chapters_from_speech") {
+    decoded.operation = OwnedRequest::Operation::PlanChaptersFromSpeech;
+    try {
+      decoded.planRequest.durationUs =
+          manifest->at("duration_us").get<std::int64_t>();
+      decoded.planRequest.plannerModel =
+          pathFromUtf8(manifest->at("planner_model").get<std::string>());
+      decoded.planRequest.planAdapter =
+          pathFromUtf8(manifest->at("plan_adapter").get<std::string>());
+      for (const auto &cue : (*manifest)["english_dialogue"]) {
+        if (decoded.planRequest.englishDialogue.size() >=
+            kMaximumDialogueCues) {
+          throw std::bad_alloc();
+        }
+        decoded.planRequest.englishDialogue.push_back(
+            {cue.at("time_us").get<std::int64_t>(),
+             cue.at("text").get<std::string>()});
+      }
+    } catch (const nlohmann::json::exception &) {
+      setError(error, "The chapter worker speech-plan manifest is invalid.");
+      return false;
+    } catch (const std::bad_alloc &) {
+      setError(error,
+               "The chapter worker speech plan exceeds its memory bounds.");
+      return false;
+    }
+    *owned = std::move(decoded);
+    return true;
+  }
+  if (operation != "analyze" || !manifest->contains("windows") ||
+      !(*manifest)["windows"].is_array() ||
+      !manifest->contains("chapter_plan") ||
+      !(*manifest)["chapter_plan"].is_array()) {
+    setError(error, "The chapter worker operation is invalid.");
+    return false;
+  }
   try {
     decoded.request.durationUs =
         manifest->at("duration_us").get<std::int64_t>();
@@ -240,8 +317,8 @@ bool loadRequest(const std::filesystem::path &workspace, OwnedRequest *owned,
         pathFromUtf8(manifest->at("projector").get<std::string>());
     decoded.request.plannerModel =
         pathFromUtf8(manifest->at("planner_model").get<std::string>());
-    decoded.request.plannerAdapter =
-        pathFromUtf8(manifest->at("planner_adapter").get<std::string>());
+    decoded.request.chapterPlanAdapter = pathFromUtf8(
+        manifest->at("chapter_plan_adapter").get<std::string>());
   } catch (const nlohmann::json::exception &) {
     setError(error, "The chapter worker request header is invalid.");
     return false;
@@ -249,15 +326,15 @@ bool loadRequest(const std::filesystem::path &workspace, OwnedRequest *owned,
 
   const auto &jsonWindows = (*manifest)["windows"];
   if (jsonWindows.size() < kMinimumAutomaticEvidenceSampleCount ||
-      jsonWindows.size() > kMaximumAutomaticEvidenceSampleCount) {
+      jsonWindows.size() > kMaximumAutomaticEvidenceSampleCount ||
+      (*manifest)["chapter_plan"].size() != jsonWindows.size()) {
     setError(error, "The chapter worker request has an invalid timeline.");
     return false;
   }
   std::size_t totalFrames = 0;
   for (const auto &window : jsonWindows) {
     if (!window.is_object() || !window.contains("frames") ||
-        !window["frames"].is_array() || window["frames"].empty() ||
-        window["frames"].size() > 6) {
+        !window["frames"].is_array() || window["frames"].size() != 1) {
       setError(error, "The chapter worker request has invalid frame groups.");
       return false;
     }
@@ -332,6 +409,11 @@ bool loadRequest(const std::filesystem::path &workspace, OwnedRequest *owned,
           {cue.at("time_us").get<std::int64_t>(),
            cue.at("text").get<std::string>()});
     }
+    for (const auto &chapter : (*manifest)["chapter_plan"]) {
+      decoded.request.chapterPlan.push_back(
+          {chapter.at("start_us").get<std::int64_t>(),
+           chapter.at("title").get<std::string>()});
+    }
   } catch (const nlohmann::json::exception &) {
     setError(error, "The chapter worker timeline manifest is invalid.");
     return false;
@@ -345,13 +427,8 @@ bool loadRequest(const std::filesystem::path &workspace, OwnedRequest *owned,
 
 nlohmann::json checkpointJson(const InferenceCheckpoint &checkpoint) {
   nlohmann::json plan = nlohmann::json::array();
-  for (const GeneratedChapterPlanEntry &entry : checkpoint.chapterPlan)
-    plan.push_back({{"start_us", entry.startUs}});
-  nlohmann::json chapters = nlohmann::json::array();
-  for (const GeneratedChapter &chapter : checkpoint.completedChapters) {
-    chapters.push_back({{"start_us", chapter.startUs},
-                        {"title", chapter.title},
-                        {"summary", chapter.summary}});
+  for (const GeneratedChapterPlanEntry &entry : checkpoint.chapterPlan) {
+    plan.push_back({{"start_us", entry.startUs}, {"title", entry.title}});
   }
   return {{"schema", inference_worker_protocol::kSchema},
           {"duration_us", checkpoint.durationUs},
@@ -359,10 +436,7 @@ nlohmann::json checkpointJson(const InferenceCheckpoint &checkpoint) {
           {"interval_starts_us", checkpoint.intervalStartsUs},
           {"interval_ends_us", checkpoint.intervalEndsUs},
           {"observations", checkpoint.observations},
-          {"chapter_plan", std::move(plan)},
-          {"completed_chapters", std::move(chapters)},
-          {"overview_sections", checkpoint.overviewSections},
-          {"overview", checkpoint.overview}};
+          {"chapter_plan", std::move(plan)}};
 }
 
 bool storeCheckpoint(const std::filesystem::path &workspace,
@@ -389,7 +463,7 @@ bool loadCheckpoint(const std::filesystem::path &workspace,
   decoded.model = request.model;
   decoded.projector = request.projector;
   decoded.plannerModel = request.plannerModel;
-  decoded.plannerAdapter = request.plannerAdapter;
+  decoded.chapterPlanAdapter = request.chapterPlanAdapter;
   try {
     decoded.durationUs = document->at("duration_us").get<std::int64_t>();
     decoded.sampleTimesUs = document->at("sample_times_us")
@@ -401,17 +475,9 @@ bool loadCheckpoint(const std::filesystem::path &workspace,
     decoded.observations =
         document->at("observations").get<std::vector<std::string>>();
     for (const auto &entry : document->at("chapter_plan")) {
-      decoded.chapterPlan.push_back({entry.at("start_us").get<std::int64_t>()});
+      decoded.chapterPlan.push_back({entry.at("start_us").get<std::int64_t>(),
+                                     entry.at("title").get<std::string>()});
     }
-    for (const auto &chapter : document->at("completed_chapters")) {
-      decoded.completedChapters.push_back(
-          {chapter.at("start_us").get<std::int64_t>(),
-           chapter.at("title").get<std::string>(),
-           chapter.at("summary").get<std::string>()});
-    }
-    decoded.overviewSections =
-        document->at("overview_sections").get<std::vector<std::string>>();
-    decoded.overview = document->at("overview").get<std::string>();
   } catch (const nlohmann::json::exception &) {
     return false;
   } catch (const std::bad_alloc &) {
@@ -426,16 +492,32 @@ bool storeResult(const std::filesystem::path &workspace,
   nlohmann::json chapters = nlohmann::json::array();
   for (const GeneratedChapter &chapter : result.document.chapters) {
     chapters.push_back({{"start_us", chapter.startUs},
-                        {"title", chapter.title},
-                        {"summary", chapter.summary}});
+                        {"title", chapter.title}});
   }
   return writeJson(workspace / kResultName,
                    {{"schema", inference_worker_protocol::kSchema},
+                    {"operation", "analyze"},
                     {"status", static_cast<int>(result.status)},
                     {"detail", result.detail},
-                    {"overview", result.document.overview},
                     {"chapters", std::move(chapters)}},
                    error);
+}
+
+bool storeSpeechChapterPlanResult(const std::filesystem::path &workspace,
+                                  const SpeechChapterPlanResult &result,
+                                  std::string *error) {
+  nlohmann::json plan = nlohmann::json::array();
+  for (const GeneratedChapterPlanEntry &chapter : result.chapterPlan) {
+    plan.push_back({{"start_us", chapter.startUs}, {"title", chapter.title}});
+  }
+  return writeJson(
+      workspace / kResultName,
+      {{"schema", inference_worker_protocol::kSchema},
+       {"operation", "plan_chapters_from_speech"},
+       {"status", static_cast<int>(result.status)},
+       {"detail", result.detail},
+       {"chapter_plan", std::move(plan)}},
+      error);
 }
 
 class ProgressPublisher final {
@@ -480,6 +562,12 @@ bool inference_worker_protocol::storeRequest(
   return writeRequestFiles(workspace, request, error);
 }
 
+bool inference_worker_protocol::storeSpeechChapterPlanRequest(
+    const std::filesystem::path &workspace,
+    const SpeechChapterPlanRequest &request, std::string *error) {
+  return writeSpeechChapterPlanRequestFiles(workspace, request, error);
+}
+
 int inferenceWorkerMain(const std::filesystem::path &workspace) {
   std::string error;
   OwnedRequest owned;
@@ -498,6 +586,13 @@ int inferenceWorkerMain(const std::filesystem::path &workspace) {
     progress.publish(fraction, phase);
   };
   InferenceEngine engine;
+  if (owned.operation == OwnedRequest::Operation::PlanChaptersFromSpeech) {
+    const SpeechChapterPlanResult result =
+        engine.planChaptersFromSpeech(owned.planRequest, control);
+    if (!storeSpeechChapterPlanResult(workspace, result, &error))
+      return 3;
+    return result.status == OperationStatus::Succeeded ? 0 : 4;
+  }
   const InferenceResult result = engine.run(
       owned.request, control, &checkpoint,
       [&](const InferenceCheckpoint &value, std::string *checkpointError) {

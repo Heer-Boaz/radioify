@@ -15,15 +15,18 @@ std::string rangeLabel(const Chapter &chapter) {
          playback_video_timeline_preview::formatTimestamp(chapter.endUs);
 }
 
-void appendWrapped(std::vector<std::string> *lines, const std::string &text,
-                   int width) {
-  if (!lines)
-    return;
-  std::vector<std::string> wrapped = utf8WrapDisplayWidth(text, width);
-  lines->insert(lines->end(), wrapped.begin(), wrapped.end());
+using OverviewLine = OverviewPanelLayout::Line;
+using OverviewTextRole = OverviewPanelLayout::TextRole;
+
+OverviewLine lineWithRun(std::string text, OverviewTextRole role,
+                         int column = 0) {
+  OverviewLine line;
+  if (!text.empty())
+    line.runs.push_back({column, std::move(text), role});
+  return line;
 }
 
-void appendChapterRow(std::vector<std::string> *lines, const Chapter &chapter,
+void appendChapterRow(std::vector<OverviewLine> *lines, const Chapter &chapter,
                       int width) {
   if (!lines || width <= 0)
     return;
@@ -32,19 +35,31 @@ void appendChapterRow(std::vector<std::string> *lines, const Chapter &chapter,
   const std::string prefix = timestamp + "  ";
   const int prefixWidth = utf8DisplayWidth(prefix);
   if (prefixWidth >= width) {
-    lines->push_back(utf8TakeDisplayWidth(prefix, width));
+    OverviewLine line = lineWithRun(utf8TakeDisplayWidth(prefix, width),
+                                    OverviewTextRole::Body);
+    line.chapterStartUs = chapter.startUs;
+    lines->push_back(std::move(line));
     return;
   }
   std::vector<std::string> titleLines =
       utf8WrapDisplayWidth(chapter.title, width - prefixWidth);
   if (titleLines.empty()) {
-    lines->push_back(timestamp);
+    OverviewLine line = lineWithRun(timestamp, OverviewTextRole::Body);
+    line.chapterStartUs = chapter.startUs;
+    lines->push_back(std::move(line));
     return;
   }
-  lines->push_back(prefix + titleLines.front());
-  const std::string indent(static_cast<std::size_t>(prefixWidth), ' ');
+  OverviewLine first;
+  first.chapterStartUs = chapter.startUs;
+  first.runs.push_back({0, prefix, OverviewTextRole::Body});
+  first.runs.push_back(
+      {prefixWidth, std::move(titleLines.front()), OverviewTextRole::Accent});
+  lines->push_back(std::move(first));
   for (std::size_t index = 1; index < titleLines.size(); ++index) {
-    lines->push_back(indent + titleLines[index]);
+    OverviewLine continuation = lineWithRun(
+        std::move(titleLines[index]), OverviewTextRole::Accent, prefixWidth);
+    continuation.chapterStartUs = chapter.startUs;
+    lines->push_back(std::move(continuation));
   }
 }
 
@@ -73,8 +88,6 @@ std::vector<std::string> previewMetadata(const Snapshot &snapshot,
                   std::to_string(snapshot.chapters.size()) + " · " +
                   chapter->title);
   lines.push_back(rangeLabel(*chapter));
-  if (!chapter->summary.empty())
-    lines.push_back(chapter->summary);
   return lines;
 }
 
@@ -82,7 +95,7 @@ OverviewPanelLayout layoutOverviewPanel(const Snapshot &snapshot, int columns,
                                         int rows, int progressBarY,
                                         int requestedScrollOffset) {
   OverviewPanelLayout out;
-  // The overview is a content surface, not an operation-status surface.
+  // The chapter list is a content surface, not an operation-status surface.
   if (!snapshot.ready())
     return out;
   const int availableBottom = std::clamp(
@@ -106,26 +119,10 @@ OverviewPanelLayout layoutOverviewPanel(const Snapshot &snapshot, int columns,
     return OverviewPanelLayout{};
 
   const int contentWidth = std::max(1, out.width - 4);
-  std::vector<std::string> documentLines;
-  std::vector<std::size_t> documentHeadings;
-  std::vector<OverviewPanelLayout::ChapterRow> documentChapterRows;
-  documentLines.push_back("Video overview");
-  documentHeadings.push_back(0);
-  if (!snapshot.overview.empty()) {
-    documentLines.push_back({});
-    appendWrapped(&documentLines, snapshot.overview, contentWidth);
-  }
-  documentLines.push_back({});
-  documentHeadings.push_back(documentLines.size());
-  documentLines.push_back("Chapters");
-  for (const Chapter &chapter : snapshot.chapters) {
-    const std::size_t firstChapterLine = documentLines.size();
+  std::vector<OverviewLine> documentLines;
+  documentLines.push_back(lineWithRun("Chapters", OverviewTextRole::Accent));
+  for (const Chapter &chapter : snapshot.chapters)
     appendChapterRow(&documentLines, chapter, contentWidth);
-    for (std::size_t line = firstChapterLine; line < documentLines.size();
-         ++line) {
-      documentChapterRows.push_back({line, chapter.startUs});
-    }
-  }
 
   out.pageLineCount = std::max(0, out.height - 2);
   out.maximumScrollOffset =
@@ -138,15 +135,6 @@ OverviewPanelLayout layoutOverviewPanel(const Snapshot &snapshot, int columns,
                first + static_cast<std::size_t>(out.pageLineCount));
   out.lines.assign(documentLines.begin() + static_cast<std::ptrdiff_t>(first),
                    documentLines.begin() + static_cast<std::ptrdiff_t>(after));
-  for (const std::size_t heading : documentHeadings) {
-    if (heading >= first && heading < after) {
-      out.headingLines.push_back(heading - first);
-    }
-  }
-  for (const OverviewPanelLayout::ChapterRow &row : documentChapterRows) {
-    if (row.line >= first && row.line < after)
-      out.chapterRows.push_back({row.line - first, row.startUs});
-  }
   return out;
 }
 

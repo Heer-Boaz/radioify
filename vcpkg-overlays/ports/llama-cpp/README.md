@@ -13,6 +13,10 @@ integration contracts that the upstream package does not currently expose:
 - `libmtmd` exposes the selected vision-projector backend so Radioify can
   enforce its GPU-only product contract instead of mistaking `use_gpu=true`
   for proof that upstream did not select its CPU fallback.
+- `libmtmd` accepts the MiniCPM-V 2.0 projector revision used by the published
+  Chapter-Llama caption corpus, including its fixed 32x32 ViT positions,
+  learned query positions, legacy 64-query resampler metadata, and image/slice
+  placeholder layout.
 
 When updating llama.cpp, rebase the package integration patch against the new
 pinned source and remove it once upstream exports `mtmd` and consumes miniaudio

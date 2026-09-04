@@ -85,6 +85,8 @@ HoverModel::Update HoverModel::hover(PresentationSurface surface, double ratio,
 
   ratio = std::clamp(ratio, 0.0, 1.0);
   const int64_t targetUs = targetForRatio(ratio, snapshot_.durationUs);
+  const int64_t sourceTargetUs = std::clamp(
+      timeline_->pointAt(targetUs).sourceUs, int64_t{0}, sourceDurationUs_ - 1);
   const int64_t bucketUs =
       bucketDurationUs(snapshot_.durationUs, progressUnits);
   const int64_t timelineDecodeTargetUs =
@@ -103,6 +105,7 @@ HoverModel::Update HoverModel::hover(PresentationSurface surface, double ratio,
   snapshot_.presentationSurface = surface;
   snapshot_.anchorRatio = ratio;
   snapshot_.targetUs = targetUs;
+  snapshot_.sourceTargetUs = sourceTargetUs;
   ++snapshot_.revision;
   update.changed = true;
   if (sameTarget) return update;

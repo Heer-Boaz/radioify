@@ -36,7 +36,7 @@ class RecordingSession final : public playback_session_input::SessionPort {
 
   playback_overlay::InteractionHit hitTest(
       const playback_session_input::InteractionRequest&) const override {
-    return {};
+    return hit;
   }
 
   bool contains(playback_session_input::CommandAction action) const {
@@ -61,6 +61,7 @@ class RecordingSession final : public playback_session_input::SessionPort {
   void clear() { commands.clear(); }
 
   playback_session_input::SessionSnapshot state;
+  playback_overlay::InteractionHit hit;
   std::vector<playback_session_input::Command> commands;
 };
 
@@ -118,6 +119,27 @@ int main() {
           !session.containsType<playback_session_input::TransportRequest>(),
       "Ctrl+Right must request chapter navigation without falling back to "
       "playlist transport");
+
+  session.clear();
+  session.hit.chapterStartUs = 120'000'000;
+  MouseEvent chapterClick{};
+  chapterClick.button = MouseButton::Left;
+  chapterClick.buttons = MouseButtons::Left;
+  chapterClick.kind = MouseEventKind::Press;
+  playback_session_input::handlePlaybackMouseEvent(session, seekState,
+                                                    chapterClick);
+  const bool sourceChapterTarget = std::any_of(
+      session.commands.begin(), session.commands.end(),
+      [](const playback_session_input::Command& command) {
+        const auto* seek =
+            std::get_if<playback_session_input::SeekToChapter>(&command);
+        return seek && seek->timelineStartUs == 120'000'000;
+      });
+  ok &= expect(sourceChapterTarget &&
+                   !session.containsType<playback_session_input::SeekTo>(),
+               "chapter-row clicks must preserve source coordinates until "
+               "the session owner maps them through the current edit list");
+  session.hit = {};
 
   session.clear();
   session.state.pictureInPicture = true;

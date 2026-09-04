@@ -48,7 +48,7 @@ PC.
 
 For each active video, Radioify starts asynchronous chapter analysis after
 subtitle discovery completes. This feature is deliberately GPU-only: source
-frames must decode through D3D11VA, the pinned Qwen2.5-VL 7B visual model and
+frames must decode through D3D11VA, the pinned MiniCPM-V 2.0 visual model and
 projector must run through Vulkan, and the Meta Llama 3.1 8B planning model must
 fit completely on a Vulkan device. The llama.cpp adapter verifies the
 projector backend after initialization, so a library-level CPU fallback is
@@ -64,42 +64,42 @@ the planner is also subject to the incorporated
 [Llama 3.1 Acceptable Use Policy](https://llama.meta.com/llama3_1/use-policy).
 
 Open `Chapters` in the playback controls to install the fixed,
-SHA-256-verified model artifacts once. Radioify downloads the Qwen model and
-projector plus the Chapter-Llama base model (about 10.46 GB total) into the
-per-user data directory. Releases include only the small, pinned Chapter-Llama
-planner adapter and its attribution notice; the base models are not bundled.
-English text subtitle tracks are optional dialogue evidence independently of
-the subtitle selected for presentation, and visual analysis still works
-without them.
+SHA-256-verified model artifacts once. Radioify downloads the MiniCPM-V model
+and projector plus the Chapter-Llama base model (about 7.75 GB total) into the
+per-user data directory. Releases include the two small, pinned Chapter-Llama
+adapters and their attribution notice; the base models are not bundled.
+Chapter analysis requires English timecoded text, independently of the
+subtitle track selected for presentation. Radioify uses that complete
+transcript with Chapter-Llama's published ASR adapter to predict candidate
+boundaries, then samples exactly one frame at each candidate. MiniCPM-V captions
+those frames and the published captions-plus-ASR adapter jointly produces the
+final chapter boundaries and navigation titles. A source without English
+subtitles or a generated English transcript is not admitted; there is no
+periodic visual-only fallback.
 
 Automatic runtime analysis currently accepts videos from 30 seconds through
-60 minutes, matching Chapter-Llama's evaluated source-duration envelope. A
-bounded preflight rejects evidence that cannot fit the planner context before
-either inference model is loaded; longer media will require a separately
-validated hierarchical boundary planner rather than silently thinning the
-timeline.
+60 minutes. This is a Radioify admission contract for the single-pass runtime
+implementation, not a claimed limit of the research model. A bounded preflight
+rejects evidence that cannot fit the planner context before either inference
+model is loaded; longer media will require Chapter-Llama's separately published
+iterative procedure rather than silently thinning the timeline.
 
 The inference backend links the vcpkg-baseline-pinned `llama` and `libmtmd`
 libraries directly. Their native objects live behind one RAII-owned Radioify
 adapter; libmtmd's published helper API owns multimodal batching, M-RoPE
 positions, and `llama_decode` orchestration instead of duplicating that vendor
-logic in Radioify. Radioify first scans the complete source at two frames per
-second. It groups that dense timeline into roughly one-minute temporal windows
-and retains up to six chronological frames per window at Chapter-Llama's
-published ten-second caption cadence. Qwen observes each window as a sequence
-instead of captioning isolated thumbnails.
+logic in Radioify. Radioify packages both official Chapter-Llama adapters.
+MiniCPM-V 2.0 receives the reference single-image question at each
+ASR-predicted candidate and returns ordinary caption text. Radioify then
+chronologically interleaves `Caption HH:MM:SS` and `ASR HH:MM:SS` records and
+passes that evidence to the captions-plus-ASR adapter with the published task
+prompt. No Radioify-authored semantic prompt or title-repair stage participates
+in chapter planning.
 
-Qwen returns one caption per selected frame. Those captions and optional
-English subtitle cues are interleaved at their original timestamps before they
-are fed to the pinned Chapter-Llama adapter using its native caption/ASR
-training contract. The adapter's approximate boundary times are accepted only
-inside the source duration and deterministically snapped to the nearest
-sampler-owned interval; unsorted, duplicate, or over-budget output is rejected.
-Chapter boundaries come only from that specialized complete-timeline planner.
-Radioify labels and summarizes each immutable bounded interval independently,
-then reduces small ordered groups into the final overview. Temporal
-observations, chapter metadata, and overviews use constrained JSON grammars;
-invalid metadata and incomplete partitions are rejected, and only the complete
+The final adapter's second-resolution boundary times and titles are accepted
+only when they begin at zero, strictly increase, remain inside the source, and
+form a complete partition. Invalid or over-budget output is rejected rather
+than sorted, snapped, deduplicated, summarized, or repaired. Only that complete
 validated chapter domain object is published. The private helper
 uses a bounded, schema-versioned file protocol and atomically published
 checkpoints; no shell command, temporary PNG, or diagnostic-log parsing
@@ -107,32 +107,29 @@ participates in inference.
 
 Because llama.cpp marks `libmtmd` experimental, its version is pinned at the
 build boundary rather than allowed to drift at runtime. The visual model and
-projector come directly from the Apache-2.0-licensed
-[ggml-org Qwen2.5-VL repository](https://huggingface.co/ggml-org/Qwen2.5-VL-7B-Instruct-GGUF)
+projector come from OpenBMB's published
+[MiniCPM-V 2.0 GGUF repository](https://huggingface.co/openbmb/MiniCPM-V-2-gguf)
 at a fixed revision and are accepted only at their compiled-in sizes and
-SHA-256 hashes. The planning adapter is the MIT-licensed
-[Chapter-Llama captions+ASR adapter](https://huggingface.co/lucas-ventura/chapter-llama)
+SHA-256 hashes. Both planner adapters are MIT-licensed
+[Chapter-Llama artifacts](https://huggingface.co/lucas-ventura/chapter-llama)
 at a fixed revision, converted reproducibly for llama.cpp and paired with a
 pinned Meta Llama 3.1 8B Instruct GGUF subject to its community license.
 
-The architecture follows the timestamped visual-caption and ASR representation
-and specialized planner published by
-[Chapter-Llama](https://github.com/lucas-ventura/chapter-llama), applies the
-strict-output and lifecycle boundaries demonstrated by
-[Mux AI](https://github.com/muxinc/ai/blob/main/src/workflows/chapters.ts), and
-adopts the bounded recursive summarization pattern demonstrated by
-[Video ReCap](https://openaccess.thecvf.com/content/CVPR2024/html/Islam_Video_ReCap_Recursive_Captioning_of_Hour-Long_Videos_CVPR_2024_paper.html).
+The architecture follows the complete published
+[Chapter-Llama inference pipeline](https://github.com/lucas-ventura/chapter-llama).
+Its persistent chapter artifact follows the same start-time-and-title product
+shape used by [Mux AI](https://github.com/muxinc/ai/blob/main/src/workflows/chapters.ts).
 
 A completed result is atomically cached under
 `%LOCALAPPDATA%\Radioify\cache\video-chapters`. Its identity includes the
-source file, selected stream, every model/adapter hash, and English text evidence,
-so reopening unchanged media publishes the result immediately while changed
+source file, selected stream, every model/adapter hash, and English text
+evidence, so reopening unchanged media publishes the result immediately while changed
 inputs are analyzed again. Private in-progress inference checkpoints use the
 same identity, so a foreground GPU yield resumes at a completed model-stage
 boundary instead of relabeling partial output. A transient cache-write failure keeps the completed
 in-memory result available for the active session and reports a non-fatal OSD
 warning. In-progress or unsupported analysis never opens an
-empty overview or timeline-metadata panel; failures remain visible through the
+empty chapter or timeline-metadata panel; failures remain visible through the
 normal playback status/retry surface.
 
 For a presentation-free production-path diagnostic, run:
@@ -325,12 +322,12 @@ to the browser.
   focus its `Cancel` and `Hide` buttons; hiding the panel leaves a footer
   indicator that can restore it. Task failures open a separate detailed dialog
   with `Retry` when that operation supports retrying.
-- `Chapters` opens a responsive high-level video overview. Once analysis is
+- `Chapters` opens a responsive chapter list. Once analysis is
   ready, chapter boundaries appear on the shared timeline in both ASCII and
   framebuffer presentation. Hovering anywhere on that timeline keeps the
-  existing preview frame and adds the chapter title, time range, and summary;
+  existing preview frame and adds the chapter title and time range;
   metadata wraps to the responsive panel width. Until usable chapter content
-  exists, the overview stays closed and the hover preview remains frame-only
+  exists, the chapter list stays closed and the hover preview remains frame-only
   instead of reserving an empty status panel.
 - Right-click the active video to start chapter analysis manually, inspect a
   failure, approve model installation, or cancel/retry the current request.

@@ -73,6 +73,7 @@ try {
 
     $chapterRelativeDirectory = "models\chapter_analysis"
     foreach ($fileName in @(
+        "chapter-llama-asr-10k-f16.gguf",
         "chapter-llama-captions-asr-10k-f16.gguf",
         "CHAPTER-LLAMA-NOTICE.md",
         "LLAMA-3.1-LICENSE",
@@ -82,7 +83,6 @@ try {
             -Source (Join-Path $sourceDirectory "$chapterRelativeDirectory\$fileName") `
             -Destination (Join-Path $resolvedStage "$chapterRelativeDirectory\$fileName")
     }
-
     $runtimeContract = Get-RadioifyWindowsMlRuntimeContract
     if ($WindowsMlRuntime -eq "ON") {
         foreach ($fileName in $runtimeContract.ProductionRuntimeFiles) {
@@ -119,7 +119,9 @@ try {
     }
 
     $expectedRoot = [System.IO.Path]::GetFullPath($resolvedStage)
-    $expectedAdapter = [System.IO.Path]::GetFullPath((Join-Path $resolvedStage `
+    $expectedSpeechPlanAdapter = [System.IO.Path]::GetFullPath((Join-Path $resolvedStage `
+        "$chapterRelativeDirectory\chapter-llama-asr-10k-f16.gguf"))
+    $expectedChapterPlanAdapter = [System.IO.Path]::GetFullPath((Join-Path $resolvedStage `
         "$chapterRelativeDirectory\chapter-llama-captions-asr-10k-f16.gguf"))
     if (-not $reported.ContainsKey("executable_root") -or
         -not $expectedRoot.Equals(
@@ -127,11 +129,17 @@ try {
             [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "The verifier did not resolve the isolated staged executable root:`n$stdout"
     }
-    if (-not $reported.ContainsKey("planner_adapter") -or
-        -not $expectedAdapter.Equals(
-            [System.IO.Path]::GetFullPath($reported["planner_adapter"]),
+    if (-not $reported.ContainsKey("speech_plan_adapter") -or
+        -not $expectedSpeechPlanAdapter.Equals(
+            [System.IO.Path]::GetFullPath($reported["speech_plan_adapter"]),
             [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "The verifier escaped the isolated stage while resolving its adapter:`n$stdout"
+        throw "The verifier escaped the isolated stage while resolving its ASR plan adapter:`n$stdout"
+    }
+    if (-not $reported.ContainsKey("chapter_plan_adapter") -or
+        -not $expectedChapterPlanAdapter.Equals(
+            [System.IO.Path]::GetFullPath($reported["chapter_plan_adapter"]),
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "The verifier escaped the isolated stage while resolving its captions-plus-ASR adapter:`n$stdout"
     }
 
 # Exercise command routing and the machine-readable result contract from the

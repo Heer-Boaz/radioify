@@ -155,6 +155,7 @@ loadResult(const std::filesystem::path &workspace) {
     input >> document;
     if (!input || !document.is_object() ||
         document.value("schema", 0) != inference_worker_protocol::kSchema ||
+        document.value("operation", std::string{}) != "analyze" ||
         !document.contains("chapters") || !document["chapters"].is_array())
       return std::nullopt;
     const int rawStatus = document.value("status", -1);
@@ -164,12 +165,48 @@ loadResult(const std::filesystem::path &workspace) {
     InferenceResult result;
     result.status = static_cast<OperationStatus>(rawStatus);
     result.detail = document.value("detail", std::string{});
-    result.document.overview = document.value("overview", std::string{});
     for (const auto &chapter : document["chapters"]) {
       result.document.chapters.push_back(
           {chapter.at("start_us").get<std::int64_t>(),
-           chapter.at("title").get<std::string>(),
-           chapter.at("summary").get<std::string>()});
+           chapter.at("title").get<std::string>()});
+    }
+    return result;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::optional<SpeechChapterPlanResult>
+loadSpeechChapterPlanResult(const std::filesystem::path &workspace) {
+  try {
+    const std::filesystem::path path = workspace / kResultName;
+    std::error_code sizeError;
+    const std::uintmax_t size = std::filesystem::file_size(path, sizeError);
+    if (sizeError || size == 0 || size > kMaximumResultBytes)
+      return std::nullopt;
+    std::ifstream input(path, std::ios::binary);
+    nlohmann::json document;
+    input >> document;
+    if (!input || !document.is_object() ||
+        document.value("schema", 0) != inference_worker_protocol::kSchema ||
+        document.value("operation", std::string{}) !=
+            "plan_chapters_from_speech" ||
+        !document.contains("chapter_plan") ||
+        !document["chapter_plan"].is_array()) {
+      return std::nullopt;
+    }
+    const int rawStatus = document.value("status", -1);
+    if (rawStatus < static_cast<int>(OperationStatus::Succeeded) ||
+        rawStatus > static_cast<int>(OperationStatus::Failed)) {
+      return std::nullopt;
+    }
+    SpeechChapterPlanResult result;
+    result.status = static_cast<OperationStatus>(rawStatus);
+    result.detail = document.value("detail", std::string{});
+    for (const auto &chapter : document["chapter_plan"]) {
+      result.chapterPlan.push_back(
+          {chapter.at("start_us").get<std::int64_t>(),
+           chapter.at("title").get<std::string>()});
     }
     return result;
   } catch (...) {
@@ -293,27 +330,33 @@ acquireInferenceWorkspaceLease(const std::string &sourceKey,
   }
 }
 
-InferenceResult runInferenceWorker(const InferenceRequest &request,
-                                   const OperationControl &control,
-                                   const InferenceWorkspaceLease &lease) {
+namespace {
+
+struct WorkerProcessOutcome {
+  OperationStatus status = OperationStatus::Failed;
+  std::string detail;
+  DWORD exitCode = 0;
+};
+
+template <typename StoreRequest>
+WorkerProcessOutcome runWorkerProcess(const OperationControl &control,
+                                      const InferenceWorkspaceLease &lease,
+                                      StoreRequest storeRequest) {
   if (!lease) {
     return {OperationStatus::Failed,
-            "Chapter inference requires exclusive workspace ownership.",
-            {}};
+            "Chapter inference requires exclusive workspace ownership."};
   }
   const std::string &sourceKey = lease.sourceKey();
   const std::filesystem::path workspace = workspacePath(sourceKey);
   if (workspace.empty()) {
     return {OperationStatus::Failed,
-            "Could not establish a private chapter worker identity.",
-            {}};
+            "Could not establish a private chapter worker identity."};
   }
   std::error_code directoryError;
   std::filesystem::create_directories(workspace, directoryError);
   if (directoryError) {
     return {OperationStatus::Failed,
-            "Could not create the private chapter worker directory.",
-            {}};
+            "Could not create the private chapter worker directory."};
   }
   removeStaleStagingFiles(workspace);
   std::error_code ignored;
@@ -321,33 +364,31 @@ InferenceResult runInferenceWorker(const InferenceRequest &request,
   ignored.clear();
   std::filesystem::remove(workspace / kResultName, ignored);
   std::string storeError;
-  if (!inference_worker_protocol::storeRequest(workspace, request,
-                                               &storeError)) {
-    return {OperationStatus::Failed, std::move(storeError), {}};
+  if (!storeRequest(workspace, &storeError)) {
+    return {OperationStatus::Failed, std::move(storeError)};
   }
-  if (interrupted(control))
-    return interruptionResult(control);
+  if (interrupted(control)) {
+    const InferenceResult result = interruptionResult(control);
+    return {result.status, result.detail};
+  }
 
   const std::filesystem::path worker =
       radioifyExecutableDir() / "radioify_chapter_worker.exe";
   if (!std::filesystem::is_regular_file(worker, ignored) || ignored) {
     return {OperationStatus::Failed,
-            "The private chapter inference worker is missing.",
-            {}};
+            "The private chapter inference worker is missing."};
   }
   Handle job(CreateJobObjectW(nullptr, nullptr));
   if (!job.value) {
     return {OperationStatus::Failed,
-            "Could not create the chapter inference job object.",
-            {}};
+            "Could not create the chapter inference job object."};
   }
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
   limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
   if (!SetInformationJobObject(job.value, JobObjectExtendedLimitInformation,
                                &limits, sizeof(limits))) {
     return {OperationStatus::Failed,
-            "Could not configure the chapter inference job object.",
-            {}};
+            "Could not configure the chapter inference job object."};
   }
 
   std::wstring command = quoteArgument(worker.wstring()) + L" " +
@@ -361,8 +402,7 @@ InferenceResult runInferenceWorker(const InferenceRequest &request,
                       FALSE, CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr,
                       worker.parent_path().c_str(), &startup, &process)) {
     return {OperationStatus::Failed,
-            "Could not start the private chapter inference worker.",
-            {}};
+            "Could not start the private chapter inference worker."};
   }
   Handle processHandle(process.hProcess);
   Handle threadHandle(process.hThread);
@@ -371,8 +411,7 @@ InferenceResult runInferenceWorker(const InferenceRequest &request,
     TerminateProcess(processHandle.value, kTerminatedExitCode);
     WaitForSingleObject(processHandle.value, 5000);
     return {OperationStatus::Failed,
-            "Could not attach the chapter inference worker to its job.",
-            {}};
+            "Could not attach the chapter inference worker to its job."};
   }
 
   std::uint64_t progressSequence = 0;
@@ -386,28 +425,66 @@ InferenceResult runInferenceWorker(const InferenceRequest &request,
       TerminateJobObject(job.value, kTerminatedExitCode);
       WaitForSingleObject(processHandle.value, 5000);
       return {OperationStatus::Failed,
-              "Could not monitor the chapter inference worker.",
-              {}};
+              "Could not monitor the chapter inference worker."};
     }
     if (interrupted(control)) {
       TerminateJobObject(job.value, kTerminatedExitCode);
       WaitForSingleObject(processHandle.value, 5000);
-      return interruptionResult(control);
+      const InferenceResult result = interruptionResult(control);
+      return {result.status, result.detail};
     }
   }
   publishLatestProgress(workspace, control, &progressSequence);
   DWORD exitCode = 0;
   if (!GetExitCodeProcess(processHandle.value, &exitCode)) {
     return {OperationStatus::Failed,
-            "Could not read the chapter inference worker result.",
-            {}};
+            "Could not read the chapter inference worker result."};
   }
+  return {OperationStatus::Succeeded, {}, exitCode};
+}
+
+} // namespace
+
+InferenceResult runInferenceWorker(const InferenceRequest &request,
+                                   const OperationControl &control,
+                                   const InferenceWorkspaceLease &lease) {
+  const WorkerProcessOutcome outcome = runWorkerProcess(
+      control, lease, [&](const std::filesystem::path &workspace,
+                          std::string *error) {
+        return inference_worker_protocol::storeRequest(workspace, request,
+                                                       error);
+      });
+  if (outcome.status != OperationStatus::Succeeded)
+    return {outcome.status, outcome.detail, {}};
+  const std::filesystem::path workspace = workspacePath(lease.sourceKey());
   if (const auto result = loadResult(workspace))
     return *result;
   return {OperationStatus::Failed,
           "The chapter inference worker exited without a valid result "
           "(code " +
-              std::to_string(exitCode) + ").",
+              std::to_string(outcome.exitCode) + ").",
+          {}};
+}
+
+SpeechChapterPlanResult runSpeechChapterPlanWorker(
+    const SpeechChapterPlanRequest &request,
+    const OperationControl &control,
+    const InferenceWorkspaceLease &lease) {
+  const WorkerProcessOutcome outcome = runWorkerProcess(
+      control, lease, [&](const std::filesystem::path &workspace,
+                          std::string *error) {
+        return inference_worker_protocol::storeSpeechChapterPlanRequest(
+            workspace, request, error);
+      });
+  if (outcome.status != OperationStatus::Succeeded)
+    return {outcome.status, outcome.detail, {}};
+  const std::filesystem::path workspace = workspacePath(lease.sourceKey());
+  if (const auto result = loadSpeechChapterPlanResult(workspace))
+    return *result;
+  return {OperationStatus::Failed,
+          "The chapter speech-plan worker exited without a valid result "
+          "(code " +
+              std::to_string(outcome.exitCode) + ").",
           {}};
 }
 

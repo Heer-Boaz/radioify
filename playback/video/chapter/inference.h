@@ -32,14 +32,31 @@ struct InferenceDialogueCue {
   std::string text;
 };
 
+struct SpeechChapterPlanRequest {
+  std::filesystem::path plannerModel;
+  std::filesystem::path planAdapter;
+  std::int64_t durationUs = 0;
+  std::vector<InferenceDialogueCue> englishDialogue;
+};
+
+struct SpeechChapterPlanResult {
+  OperationStatus status = OperationStatus::Failed;
+  std::string detail;
+  std::vector<GeneratedChapterPlanEntry> chapterPlan;
+};
+
 struct InferenceRequest {
   std::filesystem::path model;
   std::filesystem::path projector;
   std::filesystem::path plannerModel;
-  std::filesystem::path plannerAdapter;
+  std::filesystem::path chapterPlanAdapter;
   std::int64_t durationUs = 0;
   std::vector<InferenceTemporalWindow> windows;
   std::vector<InferenceDialogueCue> englishDialogue;
+  // The ASR adapter supplies candidate boundaries used only to select one
+  // visual sample per candidate. The captions-plus-ASR adapter owns the final
+  // published boundaries and titles.
+  std::vector<GeneratedChapterPlanEntry> chapterPlan;
 };
 
 struct InferenceResult {
@@ -48,36 +65,32 @@ struct InferenceResult {
   GeneratedDocument document;
 };
 
-// Checks the worst-case serialized planner prompt before any expensive model
-// is loaded. Captions are still generated later, so their published per-frame
-// bound is used while optional dialogue is measured exactly.
+// Checks the worst-case serialized Chapter-Llama prompt before any expensive
+// model is loaded. Temporal observations are generated later, so their published
+// aggregate bound is reserved while dialogue is measured exactly.
 bool validateInferenceInputBudget(const InferenceRequest &request,
                                   std::string *error = nullptr);
 
 // Caller-owned, model-independent checkpoint for one exact inference request.
-// Completed timestamped temporal observations survive cooperative GPU
+// Completed timestamped frame captions survive cooperative GPU
 // preemption and form the ownership boundary between the vision model and the
-// specialized planner;
+// bounded Chapter-Llama planner;
 // native llama/mtmd objects never cross a run() boundary and therefore release
 // all GPU allocations immediately when foreground playback reclaims the
-// device. The complete caption-stream plan, independently bounded chapter
-// metadata, and hierarchical overview each retain only validated typed state.
+// device. Only complete, normalized frame captions cross that boundary.
 struct InferenceCheckpoint {
   std::filesystem::path model;
   std::filesystem::path projector;
   std::filesystem::path plannerModel;
-  std::filesystem::path plannerAdapter;
+  std::filesystem::path chapterPlanAdapter;
   std::int64_t durationUs = 0;
   std::vector<std::vector<std::int64_t>> sampleTimesUs;
   std::vector<std::int64_t> intervalStartsUs;
   std::vector<std::int64_t> intervalEndsUs;
-  // One caption for every sampled frame, in the exact flattened sample order.
-  // Checkpoints are committed only at complete temporal-window boundaries.
+  // One independent frame caption for every evidence item, in chronological
+  // order. Checkpoints are committed only after a complete caption.
   std::vector<std::string> observations;
   std::vector<GeneratedChapterPlanEntry> chapterPlan;
-  std::vector<GeneratedChapter> completedChapters;
-  std::vector<std::string> overviewSections;
-  std::string overview;
 };
 
 // Publishes one complete typed stage boundary. Implementations are expected to
@@ -98,6 +111,9 @@ public:
   InferenceEngine &operator=(const InferenceEngine &) = delete;
 
   CapabilityResult inspect(const OperationControl &control);
+  SpeechChapterPlanResult planChaptersFromSpeech(
+      const SpeechChapterPlanRequest &request,
+      const OperationControl &control);
   InferenceResult run(const InferenceRequest &request,
                       const OperationControl &control,
                       InferenceCheckpoint *checkpoint = nullptr,

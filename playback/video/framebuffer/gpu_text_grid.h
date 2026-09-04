@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "playback/video/framebuffer/gpu_text_grid_glyph_catalog.h"
+
 constexpr uint32_t gpuTextGridRgb(uint8_t r, uint8_t g, uint8_t b) {
     return static_cast<uint32_t>(r) | (static_cast<uint32_t>(g) << 8) |
            (static_cast<uint32_t>(b) << 16);
@@ -26,11 +28,10 @@ constexpr uint32_t gpuTextGridColorRgb(GpuTextGridColor color) {
 
 constexpr int kGpuTextGridFallbackCellPixelWidth = 9;
 constexpr int kGpuTextGridFallbackCellPixelHeight = 21;
-constexpr uint32_t kGpuTextGridCellFlagBraille = 1u;
 constexpr uint32_t kGpuTextGridCellFlagTransparentBg = 2u;
 
 struct GpuTextGridCell {
-    uint32_t ch = ' ';
+    uint32_t glyphIndex = playback_gpu_text_grid::glyphIndex(' ');
     uint32_t fg = gpuTextGridColorRgb(GpuTextGridColor::Text);
     uint32_t bg = gpuTextGridColorRgb(GpuTextGridColor::Background);
     uint32_t flags = 0;

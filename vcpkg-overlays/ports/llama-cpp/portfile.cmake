@@ -6,6 +6,7 @@ vcpkg_from_github(
     HEAD_REF master
     PATCHES
         cmake-package.diff
+        minicpmv-2-support.diff
         mtmd-vision-backend-query.diff
         pkgconfig.diff
 )

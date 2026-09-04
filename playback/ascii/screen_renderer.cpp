@@ -452,13 +452,16 @@ void renderPlaybackScreen(const PlaybackScreenResources &resources,
                static_cast<double>(panel.x + panel.width),
                static_cast<double>(panel.y + panel.height)},
               panel.scrollOffset, panel.maximumScrollOffset, {}};
-          for (const auto &row : panel.chapterRows) {
+          for (std::size_t line = 0; line < panel.lines.size(); ++line) {
+            const auto &row = panel.lines[line];
+            if (!row.chapterStartUs)
+              continue;
             region.items.push_back(
                 {{static_cast<double>(panel.x + 1),
-                  static_cast<double>(panel.y + 1 + row.line),
+                  static_cast<double>(panel.y + 1 + line),
                   static_cast<double>(panel.x + panel.width - 1),
-                  static_cast<double>(panel.y + 2 + row.line)},
-                 row.startUs});
+                  static_cast<double>(panel.y + 2 + line)},
+                 *row.chapterStartUs});
           }
           overviewRegion = std::move(region);
         }

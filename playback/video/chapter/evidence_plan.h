@@ -3,8 +3,6 @@
 #include <cstdint>
 #include <vector>
 
-#include "playback/video/analysis/scene_analysis.h"
-
 namespace playback_video_chapters {
 
 struct ChapterEvidenceInterval {
@@ -13,14 +11,12 @@ struct ChapterEvidenceInterval {
   std::vector<std::int64_t> sampleTimesUs;
 };
 
-// Turns the complete dense timeline scan into uniformly spaced temporal work
-// units. Each unit contains a chronological image sequence rather than an
-// isolated thumbnail. The ten-second evidence cadence follows Chapter-Llama's
-// published no-ASR fallback; grouping adjacent samples into one bounded window
-// lets the VLM observe activity over time without putting an hour-long video
-// into one inference context.
-std::vector<ChapterEvidenceInterval> buildChapterEvidencePlan(
+// Builds Chapter-Llama's published speech-guided frame schedule from the
+// ASR-only planner's chapter predictions. The first boundary at video start is
+// sampled at one second to avoid the common black opening frame, matching the
+// reference ASR-first sampling script.
+std::vector<ChapterEvidenceInterval> buildSpeechGuidedChapterEvidencePlan(
     std::int64_t durationUs,
-    const std::vector<playback_video_analysis::VisualSample> &samples);
+    const std::vector<std::int64_t> &predictedChapterStartsUs);
 
 } // namespace playback_video_chapters

@@ -60,7 +60,9 @@ uint32_t overlayGpuRgb(const Color &color) {
 
 GpuTextGridCell overlayGpuCell(wchar_t ch, const Style &style,
                                uint32_t flags = 0) {
-  return GpuTextGridCell{static_cast<uint32_t>(ch), overlayGpuRgb(style.fg),
+  return GpuTextGridCell{playback_gpu_text_grid::glyphIndex(
+                             static_cast<uint32_t>(ch)),
+                         overlayGpuRgb(style.fg),
                          overlayGpuRgb(style.bg), flags};
 }
 
@@ -618,7 +620,7 @@ void renderChapterMarkersToTarget(
   }
   const playback_video_chapters::MarkerProjection projection =
       playback_video_chapters::projectMarkers(*chapters,
-                                              layout.progressBarWidth);
+                                               layout.progressBarWidth);
   const Style markerStyle{{177, 143, 255}, styles.progressEmptyStyle.bg};
   for (const int cell : projection.boundaryCells) {
     const bool collision =
@@ -639,10 +641,10 @@ void renderVideoEditTimelineToTarget(
     const std::optional<MediaActionConfirmationDialog>
         &mediaActionConfirmationPrompt,
     const playback_video_chapters::Snapshot *chapters) {
-  if ((!edit.active && editPrompt == playback_video_edit::Prompt::None &&
-       !(editExport && editExport->visible()) &&
-       !mediaActionConfirmationPrompt) ||
-      layout.progressBarY < 0 || layout.progressBarWidth <= 0 ||
+  // This function composes timeline layers, not an editor-only surface.  The
+  // edit model may legitimately be empty during ordinary playback while the
+  // chapter layer still has content.
+  if (layout.progressBarY < 0 || layout.progressBarWidth <= 0 ||
       !target.rowVisible(layout.progressBarY)) {
     return;
   }
@@ -871,14 +873,18 @@ void renderChapterOverviewToTarget(
   const int lineCount =
       std::min<int>(panel.height - 2, static_cast<int>(panel.lines.size()));
   for (int index = 0; index < lineCount; ++index) {
-    const bool heading =
-        std::find(panel.headingLines.begin(), panel.headingLines.end(),
-                  static_cast<std::size_t>(index)) != panel.headingLines.end();
-    target.writeText(
-        panel.x + 2, panel.y + 1 + index,
-        utf8TakeDisplayWidth(panel.lines[static_cast<std::size_t>(index)],
-                             contentWidth),
-        heading ? styles.accentStyle : styles.baseStyle);
+    const auto &line = panel.lines[static_cast<std::size_t>(index)];
+    for (const auto &run : line.runs) {
+      if (run.column < 0 || run.column >= contentWidth)
+        continue;
+      target.writeText(
+          panel.x + 2 + run.column, panel.y + 1 + index,
+          utf8TakeDisplayWidth(run.text, contentWidth - run.column),
+          run.role == playback_video_chapters::OverviewPanelLayout::TextRole::
+                          Accent
+              ? styles.accentStyle
+              : styles.baseStyle);
+    }
   }
 }
 

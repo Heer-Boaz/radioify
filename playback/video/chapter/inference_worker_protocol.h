@@ -7,13 +7,16 @@
 
 namespace playback_video_chapters::inference_worker_protocol {
 
-// Schema 5 invalidates checkpoints produced before the guarded planner prompt
-// and aggregate caption-context admission contract.
-inline constexpr int kSchema = 5;
+// Schema 13 carries both published Chapter-Llama stages: ASR-selected visual
+// evidence and the captions-plus-ASR adapter that owns the final plan.
+inline constexpr int kSchema = 13;
 
 // Serializes the parent-owned request before the helper process starts. The
 // matching reader and all schema details remain private to the worker target.
 bool storeRequest(const std::filesystem::path &workspace,
                   const InferenceRequest &request, std::string *error);
+bool storeSpeechChapterPlanRequest(
+    const std::filesystem::path &workspace,
+    const SpeechChapterPlanRequest &request, std::string *error);
 
 } // namespace playback_video_chapters::inference_worker_protocol

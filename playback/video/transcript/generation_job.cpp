@@ -33,10 +33,12 @@ struct GenerationJob::Impl {
   void updateProgress(float fraction, std::string phase) {
     {
       std::lock_guard<std::mutex> lock(mutex);
-      if (!state.running()) return;
-      state.progress = std::max(
-          state.progress, std::clamp(fraction, 0.0f, 1.0f));
-      if (!state.cancelling()) state.phase = std::move(phase);
+      if (!state.running())
+        return;
+      state.progress =
+          std::max(state.progress, std::clamp(fraction, 0.0f, 1.0f));
+      if (!state.cancelling())
+        state.phase = std::move(phase);
     }
     notifyChanged();
   }
@@ -66,6 +68,10 @@ struct GenerationJob::Impl {
       if (succeeded) {
         state.state = GenerationJobState::Succeeded;
         state.progress = 1.0f;
+        const std::filesystem::path published =
+            activeTranscriptPathForVideo(state.sourceFile);
+        if (!published.empty())
+          state.outputFile = published;
         state.error.clear();
         state.diagnosticError.clear();
       } else if (cancelRequested.load(std::memory_order_relaxed)) {
@@ -75,8 +81,8 @@ struct GenerationJob::Impl {
       } else {
         state.state = GenerationJobState::Failed;
         state.diagnosticError.clear();
-        state.error =
-            error.empty() ? "Transcript generation failed unexpectedly."
+        state.error = error.empty()
+                          ? "Transcript generation failed unexpectedly."
                           : std::move(error);
       }
       state.phase.clear();
@@ -85,8 +91,7 @@ struct GenerationJob::Impl {
     notifyChanged();
   }
 
-  void run(std::filesystem::path videoPath,
-           std::filesystem::path outputPath) {
+  void run(std::filesystem::path videoPath, std::filesystem::path outputPath) {
     std::string error;
     bool succeeded = false;
     try {
@@ -96,7 +101,7 @@ struct GenerationJob::Impl {
             updateProgress(fraction, std::move(phase));
           },
           &cancelRequested, [this]() { return beginCommit(); }, &error);
-    } catch (const std::exception& exception) {
+    } catch (const std::exception &exception) {
       error = std::string("Transcript generation failed: ") + exception.what();
     } catch (...) {
       error = "Transcript generation failed unexpectedly.";
@@ -112,7 +117,8 @@ struct GenerationJob::Impl {
         finishedWorker = std::move(worker);
       }
     }
-    if (finishedWorker.joinable()) finishedWorker.join();
+    if (finishedWorker.joinable())
+      finishedWorker.join();
   }
 };
 
@@ -120,15 +126,17 @@ GenerationJob::GenerationJob(Operation operation)
     : GenerationJob(std::move(operation), WakeNotifier{}) {}
 
 GenerationJob::GenerationJob(Operation operation, WakeNotifier ownerWake)
-    : impl_(std::make_unique<Impl>(std::move(operation),
-                                  std::move(ownerWake))) {}
+    : impl_(
+          std::make_unique<Impl>(std::move(operation), std::move(ownerWake))) {}
 
 GenerationJob::~GenerationJob() { cancelAndJoin(); }
 
-bool GenerationJob::tryStart(const std::filesystem::path& videoPath) {
-  if (!impl_) return false;
+bool GenerationJob::tryStart(const std::filesystem::path &videoPath) {
+  if (!impl_)
+    return false;
   const std::filesystem::path outputPath = transcriptPathForVideo(videoPath);
-  if (videoPath.empty() || outputPath.empty()) return false;
+  if (videoPath.empty() || outputPath.empty())
+    return false;
 
   impl_->joinFinishedWorker();
   {
@@ -148,7 +156,7 @@ bool GenerationJob::tryStart(const std::filesystem::path& videoPath) {
           [implementation = impl_.get(), videoPath, outputPath]() mutable {
             implementation->run(std::move(videoPath), std::move(outputPath));
           });
-    } catch (const std::exception& exception) {
+    } catch (const std::exception &exception) {
       impl_->state.state = GenerationJobState::Failed;
       impl_->state.phase.clear();
       impl_->state.error =
@@ -167,10 +175,12 @@ bool GenerationJob::tryStart(const std::filesystem::path& videoPath) {
 }
 
 bool GenerationJob::requestCancel() {
-  if (!impl_) return false;
+  if (!impl_)
+    return false;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (!impl_->state.cancellable()) return false;
+    if (!impl_->state.cancellable())
+      return false;
     impl_->cancelRequested.store(true, std::memory_order_relaxed);
     impl_->state.state = GenerationJobState::Cancelling;
     impl_->state.phase = "Cancelling transcript generation";
@@ -180,42 +190,50 @@ bool GenerationJob::requestCancel() {
 }
 
 void GenerationJob::cancelAndJoin() {
-  if (!impl_) return;
+  if (!impl_)
+    return;
   requestCancel();
   std::thread worker;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (impl_->worker.joinable()) worker = std::move(impl_->worker);
+    if (impl_->worker.joinable())
+      worker = std::move(impl_->worker);
   }
-  if (worker.joinable()) worker.join();
+  if (worker.joinable())
+    worker.join();
 }
 
 GenerationJobSnapshot GenerationJob::snapshot() const {
-  if (!impl_) return {};
+  if (!impl_)
+    return {};
   std::lock_guard<std::mutex> lock(impl_->mutex);
   return impl_->state;
 }
 
 bool GenerationJob::configured() const {
-  if (!impl_) return false;
+  if (!impl_)
+    return false;
   std::lock_guard<std::mutex> lock(impl_->mutex);
   return static_cast<bool>(impl_->operation);
 }
 
 std::optional<GenerationJobSnapshot> GenerationJob::takeCompletion() {
-  if (!impl_) return std::nullopt;
+  if (!impl_)
+    return std::nullopt;
   std::optional<GenerationJobSnapshot> completion;
   std::thread finishedWorker;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (!impl_->completion) return std::nullopt;
+    if (!impl_->completion)
+      return std::nullopt;
     completion = std::move(impl_->completion);
     impl_->completion.reset();
     if (!impl_->state.running() && impl_->worker.joinable()) {
       finishedWorker = std::move(impl_->worker);
     }
   }
-  if (finishedWorker.joinable()) finishedWorker.join();
+  if (finishedWorker.joinable())
+    finishedWorker.join();
   return completion;
 }
 
@@ -227,4 +245,4 @@ NativeWaitHandle GenerationJob::nativeWaitHandle() const {
   return impl_ ? impl_->changed.nativeWaitHandle() : NativeWaitHandle{};
 }
 
-}  // namespace playback_video_transcript
+} // namespace playback_video_transcript

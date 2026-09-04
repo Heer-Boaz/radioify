@@ -80,6 +80,12 @@ struct ChapterNavigationRequest {
       playback_video_chapters::NavigationDirection::Next;
 };
 
+// The chapter presentation view uses the same possibly edited timeline as
+// playback. Overview hits therefore carry a real transport seek target.
+struct SeekToChapter {
+  int64_t timelineStartUs = 0;
+};
+
 struct SetChapterOverviewScroll {
   int offset = 0;
 };
@@ -116,8 +122,8 @@ struct ClearTimelinePreview {
 
 using Command =
     std::variant<CommandAction, TransportRequest, ChapterNavigationRequest,
-                 SetChapterOverviewScroll, VideoEditRequest, ContextMenuRequest,
-                 MoveVideoEditBoundary, PlaybackExitRequest,
+                 SeekToChapter, SetChapterOverviewScroll, VideoEditRequest,
+                 ContextMenuRequest, MoveVideoEditBoundary, PlaybackExitRequest,
                  TimelinePreviewRequest, ClearTimelinePreview,
                  ShowPlaybackControls, SetOverlayControlHover, SetPaused,
                  SeekTo, SeekBy, StepFrame, AdjustVolume>;

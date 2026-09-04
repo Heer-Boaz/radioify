@@ -55,6 +55,14 @@ InferenceResult runInferenceWorker(const InferenceRequest &request,
                                    const OperationControl &control,
                                    const InferenceWorkspaceLease &lease);
 
+// Runs the published ASR-only chapter-planning stage in the same killable
+// worker boundary as visual metadata inference. Its typed boundaries and
+// titles cross back to the parent; native model state remains child-owned.
+SpeechChapterPlanResult runSpeechChapterPlanWorker(
+    const SpeechChapterPlanRequest &request,
+    const OperationControl &control,
+    const InferenceWorkspaceLease &lease);
+
 // Removes only the known private files for an exact source identity. Final
 // chapter documents are owned by cache.cpp and are never touched here.
 void discardInferenceWorkerWorkspace(const InferenceWorkspaceLease &lease);

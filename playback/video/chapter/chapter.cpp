@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
-#include <optional>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
@@ -102,53 +101,25 @@ bool validateAutomaticPartition(std::int64_t durationUs,
   if (chapters.size() < kMinimumAutomaticChapterCount ||
       chapters.size() > kMaximumAutomaticChapterCount) {
     setError(error, "Automatic chapter analysis must produce between one and "
-                    "sixty-four chapters.");
+                    "one hundred chapters.");
     return false;
-  }
-  for (const Chapter &chapter : chapters) {
-    if (chapter.endUs - chapter.startUs < kMinimumAutomaticChapterDurationUs) {
-      setError(error,
-               "Automatic chapter analysis produced a chapter shorter than "
-               "ten seconds.");
-      return false;
-    }
   }
   return true;
 }
 
 bool validateAutomaticAnalysis(std::int64_t durationUs,
-                               std::string_view overview,
                                const std::vector<Chapter> &chapters,
                                std::string *error) {
   if (!validateAutomaticPartition(durationUs, chapters, error))
     return false;
-  if (!validPublishedText(overview, kMaximumAutomaticOverviewBytes, true)) {
-    setError(error, "Automatic chapter analysis returned an invalid overview.");
-    return false;
-  }
-  std::optional<std::pair<std::string, std::string>> firstMetadata;
-  bool allMetadataEqual = true;
-  for (const Chapter &chapter : chapters) {
-    if (!validPublishedText(chapter.title, kMaximumAutomaticTitleBytes) ||
-        !validPublishedText(chapter.summary, kMaximumAutomaticSummaryBytes,
-                            true)) {
-      setError(error, "Automatic chapter analysis returned invalid metadata.");
+  for (std::size_t index = 0; index < chapters.size(); ++index) {
+    const Chapter &chapter = chapters[index];
+    if (!validPublishedText(chapter.title, kMaximumAutomaticTitleBytes)) {
+      setError(error, "Automatic chapter analysis returned an invalid title "
+                      "for chapter " +
+                          std::to_string(index + 1) + ".");
       return false;
     }
-    const std::string title = normalizedMetadata(chapter.title);
-    const std::string summary = normalizedMetadata(chapter.summary);
-    const std::pair<std::string, std::string> metadata{title, summary};
-    if (!firstMetadata) {
-      firstMetadata = metadata;
-    } else if (metadata != *firstMetadata) {
-      allMetadataEqual = false;
-    }
-  }
-  if (chapters.size() > 1 && allMetadataEqual) {
-    setError(error,
-             "The chapter vision model returned the same metadata for every "
-             "chapter. Retry chapter analysis.");
-    return false;
   }
   return true;
 }
@@ -180,6 +151,9 @@ std::optional<std::int64_t> navigationTarget(const Snapshot &snapshot,
   if (found == snapshot.chapters.end())
     return std::nullopt;
   if (direction == NavigationDirection::Previous) {
+    constexpr std::int64_t kRestartChapterThresholdUs = 5'000'000;
+    if (positionUs - found->startUs > kRestartChapterThresholdUs)
+      return found->startUs;
     return found == snapshot.chapters.begin()
                ? std::nullopt
                : std::optional<std::int64_t>((found - 1)->startUs);
@@ -190,15 +164,19 @@ std::optional<std::int64_t> navigationTarget(const Snapshot &snapshot,
              : std::optional<std::int64_t>(found->startUs);
 }
 
-MarkerProjection projectMarkers(const Snapshot &snapshot, int units) {
+namespace {
+
+MarkerProjection projectMarkerTimes(const std::vector<std::int64_t> &timesUs,
+                                    std::int64_t durationUs, int units) {
   MarkerProjection projection;
-  if (!snapshot.ready() || snapshot.durationUs <= 0 || units <= 0) {
+  if (durationUs <= 0 || units <= 0)
     return projection;
-  }
   std::vector<int> counts(static_cast<std::size_t>(units), 0);
-  for (std::size_t index = 1; index < snapshot.chapters.size(); ++index) {
-    const double ratio = static_cast<double>(snapshot.chapters[index].startUs) /
-                         static_cast<double>(snapshot.durationUs);
+  for (const std::int64_t timeUs : timesUs) {
+    if (timeUs <= 0 || timeUs >= durationUs)
+      continue;
+    const double ratio =
+        static_cast<double>(timeUs) / static_cast<double>(durationUs);
     const int cell =
         std::clamp(static_cast<int>(std::llround(
                        ratio * static_cast<double>(std::max(0, units - 1)))),
@@ -214,6 +192,69 @@ MarkerProjection projectMarkers(const Snapshot &snapshot, int units) {
       projection.collisionCells.push_back(cell);
   }
   return projection;
+}
+
+} // namespace
+
+MarkerProjection projectMarkers(const Snapshot &snapshot, int units) {
+  if (!snapshot.ready())
+    return {};
+  std::vector<std::int64_t> timesUs;
+  timesUs.reserve(snapshot.chapters.size());
+  for (std::size_t index = 1; index < snapshot.chapters.size(); ++index)
+    timesUs.push_back(snapshot.chapters[index].startUs);
+  return projectMarkerTimes(timesUs, snapshot.durationUs, units);
+}
+
+std::optional<Snapshot> projectToPresentationTimeline(
+    const Snapshot &snapshot, std::int64_t presentationDurationUs,
+    const std::vector<MarkerTimelineSegment> &segments) {
+  if (!snapshot.ready() || presentationDurationUs <= 0 || segments.empty())
+    return std::nullopt;
+
+  std::int64_t expectedPresentationUs = 0;
+  for (const MarkerTimelineSegment &segment : segments) {
+    if (segment.sourceStartUs < 0 ||
+        segment.sourceEndUs <= segment.sourceStartUs ||
+        segment.sourceEndUs > snapshot.durationUs ||
+        segment.presentationStartUs != expectedPresentationUs) {
+      return std::nullopt;
+    }
+    expectedPresentationUs += segment.sourceEndUs - segment.sourceStartUs;
+  }
+  if (expectedPresentationUs != presentationDurationUs)
+    return std::nullopt;
+
+  Snapshot projected = snapshot;
+  projected.durationUs = presentationDurationUs;
+  projected.chapters.clear();
+  projected.chapters.reserve(snapshot.chapters.size());
+  for (const MarkerTimelineSegment &segment : segments) {
+    for (const Chapter &sourceChapter : snapshot.chapters) {
+      const std::int64_t sourceStartUs =
+          std::max(sourceChapter.startUs, segment.sourceStartUs);
+      const std::int64_t sourceEndUs =
+          std::min(sourceChapter.endUs, segment.sourceEndUs);
+      if (sourceEndUs <= sourceStartUs)
+        continue;
+      Chapter chapter = sourceChapter;
+      chapter.startUs = segment.presentationStartUs + sourceStartUs -
+                        segment.sourceStartUs;
+      chapter.endUs = segment.presentationStartUs + sourceEndUs -
+                      segment.sourceStartUs;
+      if (!projected.chapters.empty() &&
+          projected.chapters.back().id == chapter.id &&
+          projected.chapters.back().endUs == chapter.startUs) {
+        projected.chapters.back().endUs = chapter.endUs;
+      } else {
+        projected.chapters.push_back(std::move(chapter));
+      }
+    }
+  }
+  std::string error;
+  if (!validatePartition(projected.durationUs, projected.chapters, &error))
+    return std::nullopt;
+  return projected;
 }
 
 const char *analysisStateLabel(AnalysisState state) {

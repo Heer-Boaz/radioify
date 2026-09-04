@@ -51,9 +51,9 @@ std::vector<ActionItem> buildActionCatalog(const ActionContext &context) {
   case AnalysisState::Installing:
     return {{Action::CancelInstallation, runningLabel(context.snapshot)}};
   case AnalysisState::Ready:
-    return {{Action::ToggleOverview, context.overviewOpen
-                                         ? "Hide video overview"
-                                         : "Show video overview"}};
+    return {{Action::TogglePanel, context.panelOpen
+                                         ? "Hide chapters"
+                                         : "Show chapters"}};
   case AnalysisState::Unsupported:
     return {{Action::ShowStatus, "Chapter analysis unavailable"}};
   case AnalysisState::Failed:

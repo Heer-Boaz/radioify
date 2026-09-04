@@ -88,7 +88,6 @@ void publishDocument(const std::filesystem::path& file,
       {"english_text_evidence", hasEnglishText},
       {"detail", snapshot.detail},
       {"warning", snapshot.warning},
-      {"overview", snapshot.overview},
   };
   if (request) {
     const std::filesystem::path cachePath =
@@ -106,8 +105,7 @@ void publishDocument(const std::filesystem::path& file,
     chapters.push_back({{"id", chapter.id},
                         {"start_us", chapter.startUs},
                         {"end_us", chapter.endUs},
-                        {"title", chapter.title},
-                        {"summary", chapter.summary}});
+                        {"title", chapter.title}});
   }
   document["chapters"] = std::move(chapters);
   std::cout << document.dump(2) << '\n';

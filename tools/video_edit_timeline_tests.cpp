@@ -351,6 +351,20 @@ int main() {
         expect(removedBackward && removedBackward->sourceUs == 3'000'000 &&
                    removedBackward->presentationUs == 3'000'000,
                "backward source resolution must select the previous cut edge");
+    const playback_video_sequence::Point chapterCursor =
+        sequence->pointAtPlaybackPosition(3'500'000);
+    const auto partiallyVisibleChapter = sequence->pointForSource(
+        4'000'000, playback_video_sequence::SourceBias::Forward);
+    const auto fullyRemovedChapter = sequence->pointForSource(
+        3'500'000, playback_video_sequence::SourceBias::Forward);
+    ok &= expect(
+        chapterCursor.sourceUs == 5'500'000 && partiallyVisibleChapter &&
+            partiallyVisibleChapter->sourceUs < 7'000'000 &&
+            partiallyVisibleChapter->presentationUs == 3'000'000 &&
+            fullyRemovedChapter && fullyRemovedChapter->sourceUs >= 4'500'000,
+        "chapter navigation must convert the program cursor to source time, "
+        "map a partially kept chapter to its first visible frame, and reject "
+        "a fully removed source range");
     ok &= expect(
         sequence->clipIndexAtSource(2'000'000) == std::optional<size_t>(0) &&
             !sequence->clipIndexAtSource(4'000'000) &&
@@ -1022,12 +1036,11 @@ int main() {
       playback_video_chapters::AnalysisState::Unsupported;
   const auto unsupportedChapterControls =
       playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
-  ok &= expect(
-      controlFor(unsupportedChapterControls,
-                 playback_overlay::OverlayControlId::Chapters) ==
-          unsupportedChapterControls.end(),
-      "unsupported automatic analysis must not reserve a dead chapter "
-      "control");
+  ok &= expect(controlFor(unsupportedChapterControls,
+                          playback_overlay::OverlayControlId::Chapters) ==
+                   unsupportedChapterControls.end(),
+               "unsupported automatic analysis must not reserve a dead chapter "
+               "control");
   chapterControlState.chapters.state =
       playback_video_chapters::AnalysisState::Disabled;
   const auto disabledChapterControls =
@@ -1719,8 +1732,8 @@ int main() {
                    transformedHit.progressBar->ratio == 0.5,
                "pixel mouse input must preserve sub-cell progress precision");
   const playback_overlay::InteractionHit transformedChapterRowHit =
-      playback_overlay::interactionHitAtTransformed(
-          interactions, 5.0, 7.0, 2.0, 3.0, 645.0, 202.0);
+      playback_overlay::interactionHitAtTransformed(interactions, 5.0, 7.0, 2.0,
+                                                    3.0, 645.0, 202.0);
   ok &= expect(transformedChapterRowHit.chapterStartUs == 120'000'000,
                "chapter-row targets must survive framebuffer transforms");
 
@@ -1810,15 +1823,13 @@ int main() {
   const auto startChapterCommand = playbackMenu.activate(startChapterToken);
   const auto *startChapterAction =
       startChapterCommand
-          ? std::get_if<playback_video_chapters::Action>(
-                &*startChapterCommand)
+          ? std::get_if<playback_video_chapters::Action>(&*startChapterCommand)
           : nullptr;
   ok &= expect(startChapterAction &&
                    *startChapterAction ==
                        playback_video_chapters::Action::StartAnalysis,
                "the chapter menu item must dispatch a typed chapter action");
-  playbackMenu.open(playback_session::ContextMenuSurface::Terminal, 0.25,
-                    0.75);
+  playbackMenu.open(playback_session::ContextMenuSurface::Terminal, 0.25, 0.75);
   chapterContext.requestActive = true;
   chapterSnapshot.state = playback_video_chapters::AnalysisState::Analyzing;
   chapterSnapshot.progress = 0.37;
@@ -1837,16 +1848,14 @@ int main() {
           : std::nullopt;
   const auto *cancelChapterAction =
       cancelChapterCommand
-          ? std::get_if<playback_video_chapters::Action>(
-                &*cancelChapterCommand)
+          ? std::get_if<playback_video_chapters::Action>(&*cancelChapterCommand)
           : nullptr;
   ok &= expect(cancelChapterAction &&
                    *cancelChapterAction ==
                        playback_video_chapters::Action::CancelAnalysis,
                "a running chapter job must be visible and cancellable from "
                "the active-video context menu without taking toolbar space");
-  playbackMenu.open(playback_session::ContextMenuSurface::Terminal, 0.25,
-                    0.75);
+  playbackMenu.open(playback_session::ContextMenuSurface::Terminal, 0.25, 0.75);
   chapterSnapshot.state = playback_video_chapters::AnalysisState::Unsupported;
   chapterSnapshot.progress.reset();
   chapterSnapshot.detail = "Required runtime is unavailable.";
@@ -1856,7 +1865,8 @@ int main() {
       playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
   ok &= expect(
       std::any_of(unsupportedChapterMenu.items.begin(),
-                  unsupportedChapterMenu.items.end(), [](const auto &item) {
+                  unsupportedChapterMenu.items.end(),
+                  [](const auto &item) {
                     return item.label == "Chapter analysis unavailable";
                   }) &&
           unsupportedChapterMenu.items.size() == 3,

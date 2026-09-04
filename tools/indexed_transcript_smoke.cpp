@@ -12,8 +12,8 @@
 
 namespace {
 
-int runSmoke(const std::filesystem::path& input,
-             const std::filesystem::path& output) {
+int runSmoke(const std::filesystem::path &input,
+             const std::filesystem::path &output) {
   namespace transcript = playback_video_transcript;
   std::atomic<bool> cancelRequested{false};
   std::mutex progressMutex;
@@ -23,9 +23,10 @@ int runSmoke(const std::filesystem::path& input,
   bool monotonicProgress = true;
   bool vulkanConfirmed = false;
   std::string error;
+  std::filesystem::path publishedOutput;
   const bool created = transcript::createIndexedTranscript(
       input, output, transcript::TranscriptPublishMode::CreateNew,
-      [&](const transcript::Progress& progress) {
+      [&](const transcript::Progress &progress) {
         std::lock_guard<std::mutex> lock(progressMutex);
         if (progress.fraction + 0.000001f < lastFraction) {
           monotonicProgress = false;
@@ -41,42 +42,45 @@ int runSmoke(const std::filesystem::path& input,
           lastPhase = progress.phase;
         }
       },
-      &cancelRequested, &error);
+      &cancelRequested, &error, {}, &publishedOutput);
   if (!created) {
     std::cerr << "indexed_transcript_smoke: " << error << '\n';
     return EXIT_FAILURE;
   }
   if (!monotonicProgress) {
-    std::cerr <<
-        "indexed_transcript_smoke: progress moved backwards during the run\n";
+    std::cerr << "indexed_transcript_smoke: progress moved backwards during "
+                 "the run\n";
     return EXIT_FAILURE;
   }
   if (!vulkanConfirmed) {
     std::cerr << "indexed_transcript_smoke: Vulkan backend was not confirmed\n";
     return EXIT_FAILURE;
   }
+  if (publishedOutput.empty() ||
+      !std::filesystem::is_regular_file(publishedOutput)) {
+    std::cerr << "indexed_transcript_smoke: published output is missing\n";
+    return EXIT_FAILURE;
+  }
   std::cout << "indexed_transcript_smoke: PASS output="
-            << toUtf8String(output) << '\n';
+            << toUtf8String(publishedOutput) << '\n';
   return EXIT_SUCCESS;
 }
 
-}  // namespace
+} // namespace
 
 #ifdef _WIN32
-int wmain(int argc, wchar_t** argv) {
+int wmain(int argc, wchar_t **argv) {
   if (argc != 3) {
-    std::cerr <<
-        "Usage: indexed_transcript_smoke <input-media> <output.srt>\n";
+    std::cerr << "Usage: indexed_transcript_smoke <input-media> <output.srt>\n";
     return 2;
   }
   return runSmoke(std::filesystem::path(argv[1]),
                   std::filesystem::path(argv[2]));
 }
 #else
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
   if (argc != 3) {
-    std::cerr <<
-        "Usage: indexed_transcript_smoke <input-media> <output.srt>\n";
+    std::cerr << "Usage: indexed_transcript_smoke <input-media> <output.srt>\n";
     return 2;
   }
   return runSmoke(std::filesystem::path(argv[1]),

@@ -24,10 +24,10 @@
 namespace playback_video_chapters {
 namespace {
 
-// Schema 17 identifies per-frame timestamped Qwen captions, native-timestamp
-// English dialogue, guarded complete-timeline planning, sampler-owned chapter
-// boundaries, and independently generated metadata for each immutable range.
-constexpr int kSchema = 17;
+// Schema 26 binds persisted results to the published HwwwH/MiniCPM-V-2
+// caption turn and captions-plus-ASR Chapter-Llama planner. Earlier Radioify
+// prompt variants and overview/summary artifacts are not compatible.
+constexpr int kSchema = 26;
 
 void setError(std::string *error, std::string value) {
   if (error)
@@ -55,7 +55,8 @@ std::string sourceIdentity(const AnalysisRequest &request) {
            << kModelSha256 << '\n'
            << kProjectorSha256 << '\n'
            << kPlannerModelSha256 << '\n'
-           << kPlannerAdapterSha256 << '\n';
+           << kSpeechPlanAdapterSha256 << '\n'
+           << kChapterPlanAdapterSha256 << '\n';
   if (request.englishText)
     identity << request.englishText->identity;
   return identity.str();
@@ -79,7 +80,6 @@ bool decode(const nlohmann::json &document, std::int64_t durationUs,
   }
   AnalysisResult decoded;
   decoded.status = OperationStatus::Succeeded;
-  decoded.overview = document.value("overview", std::string{});
   for (const nlohmann::json &item : document["chapters"]) {
     if (!item.is_object())
       return false;
@@ -88,11 +88,9 @@ bool decode(const nlohmann::json &document, std::int64_t durationUs,
     chapter.startUs = item.value("start_us", std::int64_t{-1});
     chapter.endUs = item.value("end_us", std::int64_t{-1});
     chapter.title = item.value("title", std::string{});
-    chapter.summary = item.value("summary", std::string{});
     decoded.chapters.push_back(std::move(chapter));
   }
-  if (!validateAutomaticAnalysis(durationUs, decoded.overview,
-                                 decoded.chapters)) {
+  if (!validateAutomaticAnalysis(durationUs, decoded.chapters)) {
     return false;
   }
   *result = std::move(decoded);
@@ -133,8 +131,7 @@ bool storeCachedAnalysis(const AnalysisRequest &request,
   if (error)
     error->clear();
   if (result.status != OperationStatus::Succeeded ||
-      !validateAutomaticAnalysis(request.durationUs, result.overview,
-                                 result.chapters, error)) {
+      !validateAutomaticAnalysis(request.durationUs, result.chapters, error)) {
     return false;
   }
   const std::filesystem::path path = cachePath(request);
@@ -156,12 +153,10 @@ bool storeCachedAnalysis(const AnalysisRequest &request,
     chapters.push_back({{"id", chapter.id},
                         {"start_us", chapter.startUs},
                         {"end_us", chapter.endUs},
-                        {"title", chapter.title},
-                        {"summary", chapter.summary}});
+                        {"title", chapter.title}});
   }
   const nlohmann::json document = {{"schema", kSchema},
                                    {"duration_us", request.durationUs},
-                                   {"overview", result.overview},
                                    {"chapters", std::move(chapters)}};
   std::ofstream output(staging, std::ios::binary | std::ios::trunc);
   if (!output) {

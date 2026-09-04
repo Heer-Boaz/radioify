@@ -42,10 +42,34 @@ std::string singleLine(std::string value, std::size_t maximumBytes) {
   return value;
 }
 
+std::vector<InferenceDialogueCue>
+englishDialogueFor(const AnalysisRequest &request) {
+  std::vector<InferenceDialogueCue> dialogue;
+  if (!request.englishText)
+    return dialogue;
+
+  dialogue.reserve(request.englishText->cues.size());
+  for (const TextCue &cue : request.englishText->cues) {
+    if (cue.startUs < 0 || cue.startUs >= request.durationUs)
+      continue;
+    std::string text = singleLine(cue.text, 600);
+    if (!text.empty())
+      dialogue.push_back({cue.startUs, std::move(text)});
+  }
+  std::stable_sort(
+      dialogue.begin(), dialogue.end(),
+      [](const InferenceDialogueCue &left, const InferenceDialogueCue &right) {
+        return left.timeUs < right.timeUs;
+      });
+  return dialogue;
+}
+
 class DefaultBackend final : public Backend {
 public:
   std::optional<AnalysisResult>
   cached(const AnalysisRequest &request) override {
+    if (englishDialogueFor(request).empty())
+      return std::nullopt;
     std::optional<AnalysisResult> result = loadCachedAnalysis(request);
     if (result) {
       discardInferenceWorkerWorkspaceIfIdle(analysisSourceKey(request));
@@ -56,6 +80,11 @@ public:
 
   CapabilityResult inspect(const AnalysisRequest &request,
                            const OperationControl &control) override {
+    if (englishDialogueFor(request).empty()) {
+      return {CapabilityState::Unsupported,
+              "Automatic chapters require an English timecoded transcript "
+              "or subtitle track."};
+    }
     if (request.durationUs < kMinimumAutomaticChapterVideoDurationUs) {
       return {CapabilityState::Unsupported,
               "Automatic chapters require a video of at least 30 seconds."};
@@ -104,10 +133,18 @@ public:
 
   AnalysisResult analyze(const AnalysisRequest &request,
                          const OperationControl &control) override {
+    const std::vector<InferenceDialogueCue> englishDialogue =
+        englishDialogueFor(request);
+    if (englishDialogue.empty()) {
+      return {OperationStatus::Unsupported,
+              "Automatic chapters require an English timecoded transcript "
+              "or subtitle track.",
+              {},
+              {}};
+    }
     if (request.durationUs < kMinimumAutomaticChapterVideoDurationUs) {
       return {OperationStatus::Unsupported,
               "Automatic chapters require a video of at least 30 seconds.",
-              {},
               {},
               {}};
     }
@@ -115,7 +152,6 @@ public:
       return {OperationStatus::Unsupported,
               "Automatic chapters currently support videos up to 60 "
               "minutes.",
-              {},
               {},
               {}};
     }
@@ -128,10 +164,9 @@ public:
     if (sourceKey.empty()) {
       clearWorkspace();
       return {OperationStatus::Failed,
-              "Could not establish a stable chapter-analysis identity.",
-              {},
-              {},
-              {}};
+               "Could not establish a stable chapter-analysis identity.",
+               {},
+               {}};
     }
     if (sourceKey != workspaceSourceKey_) {
       clearWorkspace();
@@ -149,19 +184,87 @@ public:
                      : OperationStatus::Unsupported);
       if (status != OperationStatus::Yielded)
         clearWorkspace();
-      return {status, gpu.detail, {}, {}, {}};
+      return {status, gpu.detail, {}, {}};
+    }
+
+    InferenceWorkspaceLeaseResult acquired =
+        acquireInferenceWorkspaceLease(sourceKey, control);
+    if (acquired.status != OperationStatus::Succeeded) {
+      if (acquired.status != OperationStatus::Yielded)
+        clearWorkspace();
+      return {acquired.status, std::move(acquired.detail), {}, {}};
+    }
+    // Cache publication and every resumable worker stage share one exact
+    // source-level owner. A second process can neither repeat selection nor
+    // consume a checkpoint while this transaction is active.
+    if (std::optional<AnalysisResult> found = loadCachedAnalysis(request)) {
+      discardInferenceWorkerWorkspace(acquired.lease);
+      clearWorkspace();
+      return *found;
+    }
+
+    if (chapterPlan_.empty()) {
+      SpeechChapterPlanRequest planRequest;
+      planRequest.plannerModel = paths_.plannerModel;
+      planRequest.planAdapter = paths_.speechPlanAdapter;
+      planRequest.durationUs = request.durationUs;
+      planRequest.englishDialogue = englishDialogue;
+      OperationControl planControl = control;
+      planControl.progress = [publish = control.progress](
+                                      std::optional<double> progress,
+                                      const std::string &phase) {
+        if (!publish)
+          return;
+        publish(progress ? std::optional<double>(
+                               0.02 + 0.50 * std::clamp(*progress, 0.0, 1.0))
+                         : std::nullopt,
+                phase);
+      };
+      const SpeechChapterPlanResult plan =
+          runSpeechChapterPlanWorker(planRequest, planControl, acquired.lease);
+      if (plan.status != OperationStatus::Succeeded) {
+        if (plan.status != OperationStatus::Yielded)
+          clearWorkspace();
+        return {plan.status, plan.detail, {}, {}};
+      }
+      chapterPlan_ = plan.chapterPlan;
+      std::vector<std::int64_t> chapterStartsUs;
+      chapterStartsUs.reserve(chapterPlan_.size());
+      for (const GeneratedChapterPlanEntry &chapter : chapterPlan_)
+        chapterStartsUs.push_back(chapter.startUs);
+      evidencePlan_ = buildSpeechGuidedChapterEvidencePlan(
+          request.durationUs, chapterStartsUs);
+      if (evidencePlan_.empty()) {
+        clearWorkspace();
+        return {OperationStatus::Failed,
+                "The speech-guided chapter planner returned an invalid "
+                "frame plan.",
+                {},
+                {}};
+      }
     }
     if (evidenceCheckpoint_.intervals.empty() ||
         evidenceCheckpoint_.windows.size() !=
             evidenceCheckpoint_.intervals.size()) {
       if (control.progress)
-        control.progress(0.0, "Preparing video samples");
-      SampledEvidenceResult evidence =
-          sampleVideoEvidence(request, control, &evidenceCheckpoint_);
+        control.progress(0.52, "Preparing video samples");
+      OperationControl evidenceControl = control;
+      evidenceControl.progress = [publish = control.progress](
+                                     std::optional<double> progress,
+                                     const std::string &phase) {
+        if (!publish)
+          return;
+        publish(progress ? std::optional<double>(
+                               0.52 + 0.04 * std::clamp(*progress, 0.0, 1.0))
+                         : std::nullopt,
+                phase);
+      };
+      SampledEvidenceResult evidence = sampleVideoEvidence(
+          request, evidenceControl, &evidenceCheckpoint_, evidencePlan_);
       if (evidence.status != OperationStatus::Succeeded) {
         if (evidence.status != OperationStatus::Yielded)
           clearWorkspace();
-        return {evidence.status, std::move(evidence.detail), {}, {}, {}};
+        return {evidence.status, std::move(evidence.detail), {}, {}};
       }
     }
     if (control.progress) {
@@ -172,12 +275,9 @@ public:
     inferenceRequest.model = paths_.model;
     inferenceRequest.projector = paths_.projector;
     inferenceRequest.plannerModel = paths_.plannerModel;
-    inferenceRequest.plannerAdapter = paths_.plannerAdapter;
+    inferenceRequest.chapterPlanAdapter = paths_.chapterPlanAdapter;
     inferenceRequest.durationUs = request.durationUs;
     inferenceRequest.windows.reserve(evidenceCheckpoint_.windows.size());
-    std::vector<std::int64_t> boundaryAnchorsUs;
-    boundaryAnchorsUs.reserve(evidenceCheckpoint_.windows.size() * 6u + 1u);
-    boundaryAnchorsUs.push_back(0);
     for (const SampledTemporalWindow &sampledWindow :
          evidenceCheckpoint_.windows) {
       InferenceTemporalWindow window;
@@ -189,61 +289,25 @@ public:
             {frame.width, frame.height, &frame.rgb, frame.timeUs});
       }
       inferenceRequest.windows.push_back(std::move(window));
-      for (const SampledFrame &frame : sampledWindow.frames) {
-        if (frame.timeUs > 0 && frame.timeUs != boundaryAnchorsUs.back())
-          boundaryAnchorsUs.push_back(frame.timeUs);
-      }
     }
-    if (request.englishText) {
-      inferenceRequest.englishDialogue.reserve(
-          request.englishText->cues.size());
-      for (const TextCue &cue : request.englishText->cues) {
-        if (cue.startUs < 0 || cue.startUs >= request.durationUs)
-          continue;
-        std::string text = singleLine(cue.text, 600);
-        if (!text.empty())
-          inferenceRequest.englishDialogue.push_back(
-              {cue.startUs, std::move(text)});
-      }
-      std::stable_sort(inferenceRequest.englishDialogue.begin(),
-                       inferenceRequest.englishDialogue.end(),
-                       [](const InferenceDialogueCue &left,
-                          const InferenceDialogueCue &right) {
-                         return left.timeUs < right.timeUs;
-                       });
-    }
+    inferenceRequest.englishDialogue = englishDialogue;
+    inferenceRequest.chapterPlan = chapterPlan_;
     std::string budgetError;
     if (!validateInferenceInputBudget(inferenceRequest, &budgetError)) {
       clearWorkspace();
-      return {OperationStatus::Unsupported, std::move(budgetError), {}, {}, {}};
-    }
-    InferenceWorkspaceLeaseResult acquired =
-        acquireInferenceWorkspaceLease(sourceKey, control);
-    if (acquired.status != OperationStatus::Succeeded) {
-      if (acquired.status != OperationStatus::Yielded)
-        clearWorkspace();
-      return {acquired.status, std::move(acquired.detail), {}, {}, {}};
-    }
-    // Another process may have completed this exact source while this process
-    // was sampling or waiting for the workspace lease. Recheck only after
-    // acquiring ownership so cache publication and checkpoint cleanup form one
-    // atomic source-level transaction.
-    if (std::optional<AnalysisResult> found = loadCachedAnalysis(request)) {
-      discardInferenceWorkerWorkspace(acquired.lease);
-      clearWorkspace();
-      return *found;
+      return {OperationStatus::Unsupported, std::move(budgetError), {}, {}};
     }
     const InferenceResult inference =
         runInferenceWorker(inferenceRequest, control, acquired.lease);
     if (inference.status != OperationStatus::Succeeded) {
       if (inference.status != OperationStatus::Yielded)
         clearWorkspace();
-      return {inference.status, inference.detail, {}, {}, {}};
+      return {inference.status, inference.detail, {}, {}};
     }
     if (control.progress)
       control.progress(0.996, "Validating chapter output");
-    AnalysisResult result = materializeGeneratedDocument(
-        inference.document, request.durationUs, boundaryAnchorsUs);
+    AnalysisResult result =
+        materializeGeneratedDocument(inference.document, request.durationUs);
     if (result.status != OperationStatus::Succeeded) {
       // A structurally complete but unpublishable artifact must not become a
       // permanent retry loop. Resume checkpoints are valuable only while the
@@ -272,12 +336,16 @@ private:
   void clearWorkspace() {
     workspaceSourceKey_.clear();
     evidenceCheckpoint_ = {};
+    evidencePlan_.clear();
+    chapterPlan_.clear();
   }
 
   ModelPaths paths_;
   InferenceEngine inference_;
   std::string workspaceSourceKey_;
   SampledEvidenceCheckpoint evidenceCheckpoint_;
+  std::vector<ChapterEvidenceInterval> evidencePlan_;
+  std::vector<GeneratedChapterPlanEntry> chapterPlan_;
   bool artifactsVerified_ = false;
 };
 
