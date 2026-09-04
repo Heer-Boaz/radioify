@@ -123,37 +123,15 @@ int main(int argc, char **argv) {
   boundedPrompt.durationUs = kMaximumAutomaticChapterVideoDurationUs;
   boundedPrompt.englishDialogue.push_back(
       {0, "Opening narration establishes the video topic."});
-  boundedPrompt.windows.resize(kMaximumAutomaticEvidenceSampleCount);
-  std::vector<std::int64_t> expectedSampleTimesUs;
-  expectedSampleTimesUs.reserve(boundedPrompt.windows.size());
-  for (std::size_t index = 0; index < boundedPrompt.windows.size(); ++index) {
+  boundedPrompt.frames.resize(kMaximumAutomaticChapterCount);
+  for (std::size_t index = 0; index < boundedPrompt.frames.size(); ++index) {
     const std::int64_t startUs =
         boundedPrompt.durationUs * static_cast<std::int64_t>(index) /
-        static_cast<std::int64_t>(boundedPrompt.windows.size());
+        static_cast<std::int64_t>(boundedPrompt.frames.size());
     boundedPrompt.chapterPlan.push_back(
         {startUs, "Chapter " + std::to_string(index + 1)});
-    expectedSampleTimesUs.push_back(startUs);
-  }
-  expectedSampleTimesUs.front() = 1'000'000;
-  for (std::size_t windowIndex = 0; windowIndex < boundedPrompt.windows.size();
-       ++windowIndex) {
-    InferenceTemporalWindow &window = boundedPrompt.windows[windowIndex];
-    window.intervalStartUs =
-        windowIndex == 0
-            ? 0
-            : expectedSampleTimesUs[windowIndex - 1] +
-                  (expectedSampleTimesUs[windowIndex] -
-                   expectedSampleTimesUs[windowIndex - 1]) /
-                      2;
-    window.intervalEndUs =
-        windowIndex + 1 == boundedPrompt.windows.size()
-            ? boundedPrompt.durationUs
-            : expectedSampleTimesUs[windowIndex] +
-                  (expectedSampleTimesUs[windowIndex + 1] -
-                   expectedSampleTimesUs[windowIndex]) /
-                      2;
-    window.frames.resize(1);
-    window.frames.front().timeUs = expectedSampleTimesUs[windowIndex];
+    boundedPrompt.frames[index].timeUs =
+        index == 0 ? std::int64_t{1'000'000} : startUs;
   }
   std::string budgetError;
   bool ok = expect(validateInferenceInputBudget(boundedPrompt, &budgetError),
@@ -161,7 +139,7 @@ int main(int argc, char **argv) {
                    "fit the planner context by construction");
   for (std::int64_t index = 0; index < 100; ++index) {
     boundedPrompt.englishDialogue.push_back(
-        {index * 1'000, std::string(600, 'x')});
+        {index * 1'000, std::string(2'000, 'x')});
   }
   ok &= expect(!validateInferenceInputBudget(boundedPrompt, &budgetError) &&
                    !budgetError.empty(),

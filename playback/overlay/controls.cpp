@@ -157,10 +157,6 @@ OverlayControlIntent intentForOverlayControl(OverlayControlId id) {
     return OverlayAction::ToggleChapterOverview;
   case OverlayControlId::ChapterOverviewClose:
     return OverlayAction::CloseChapterOverview;
-  case OverlayControlId::ChapterInstall:
-    return OverlayAction::InstallChapterModel;
-  case OverlayControlId::ChapterCancel:
-    return OverlayAction::CancelChapterOperation;
   case OverlayControlId::PictureInPicture:
     return OverlayAction::TogglePictureInPicture;
   case OverlayControlId::EditMarkIn:
@@ -429,14 +425,6 @@ buildOverlayControlSpecs(const PlaybackOverlayState &state,
       chapters.tone = OverlayControlTone::Warning;
     }
   }
-  if (state.chapters.state ==
-             playback_video_chapters::AnalysisState::SetupRequired) {
-    add(OverlayControlId::ChapterInstall, "Install chapter models", false);
-  } else if (state.chapters.state ==
-             playback_video_chapters::AnalysisState::Installing) {
-    add(OverlayControlId::ChapterCancel, "Cancel install", false);
-  }
-
   if (options.includePictureInPicture && state.pictureInPictureAvailable) {
     add(OverlayControlId::PictureInPicture, "PiP",
         state.pictureInPictureActive);

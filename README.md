@@ -50,7 +50,7 @@ PC.
 
 For each active video, Radioify starts asynchronous chapter analysis after
 subtitle discovery completes. This feature is deliberately GPU-only: source
-frames must decode through D3D11VA, the pinned MiniCPM-V 2.0 visual model and
+frames must decode through D3D11VA, the pinned MiniCPM-V 2.6 visual model and
 projector must run through Vulkan, and the Meta Llama 3.1 8B planning model must
 fit completely on a Vulkan device. The llama.cpp adapter verifies the
 projector backend after initialization, so a library-level CPU fallback is
@@ -65,17 +65,18 @@ the Llama 3.1 Community License and Meta's required attribution notice. Use of
 the planner is also subject to the incorporated
 [Llama 3.1 Acceptable Use Policy](https://llama.meta.com/llama3_1/use-policy).
 
-Open `Chapters` in the playback controls to install the fixed,
-SHA-256-verified model artifacts once. Radioify downloads the MiniCPM-V model
-and projector plus the Chapter-Llama base model (about 7.75 GB total) into the
+Choose `Install chapter models` from the active video's context menu to install
+the fixed, SHA-256-verified model artifacts once. Radioify downloads the MiniCPM-V model
+and projector plus the Chapter-Llama base model (about 10.65 GB total) into the
 per-user data directory. Releases include the two small, pinned Chapter-Llama
 adapters and their attribution notice; the base models are not bundled.
 Chapter analysis requires English timecoded text, independently of the
 subtitle track selected for presentation. Radioify uses that complete
 transcript with Chapter-Llama's published ASR adapter to predict candidate
-boundaries, then samples exactly one frame at each candidate. MiniCPM-V captions
-those frames and the published captions-plus-ASR adapter jointly produces the
-final chapter boundaries and navigation titles. Existing English subtitles or
+boundaries, then samples one frame per candidate using the published
+one-second opening-frame normalization. MiniCPM-V captions those frames and the
+published captions-plus-ASR adapter jointly produces the final chapter
+boundaries and navigation titles. Existing English subtitles or
 a persisted English transcript are reused. When neither exists, the same
 asynchronous analysis request runs Whisper's translation task and atomically
 publishes a source-bound `video.ext.radioify.transcript.en.srt` plus provenance
@@ -92,18 +93,20 @@ not a model or worker failure. There is no periodic visual-only fallback.
 
 Automatic runtime analysis currently accepts videos from 30 seconds through
 60 minutes. This is a Radioify admission contract for the single-pass runtime
-implementation, not a claimed limit of the research model. A bounded preflight
-rejects evidence that cannot fit the planner context before either inference
-model is loaded; longer media will require Chapter-Llama's separately published
-iterative procedure rather than silently thinning the timeline.
+implementation, not a claimed limit of the research model. Known evidence is
+bounded structurally before vision work; after captioning, the complete prompt
+is tokenized against the actual loaded planner context. Longer media will
+require Chapter-Llama's separately published iterative procedure rather than
+silently thinning the timeline.
 
 The inference backend links the vcpkg-baseline-pinned `llama` and `libmtmd`
 libraries directly. Their native objects live behind one RAII-owned Radioify
 adapter; libmtmd's published helper API owns multimodal batching, M-RoPE
 positions, and `llama_decode` orchestration instead of duplicating that vendor
 logic in Radioify. Radioify packages both official Chapter-Llama adapters.
-MiniCPM-V 2.0 receives the reference single-image question at each
-ASR-predicted candidate and returns ordinary caption text. Radioify then
+MiniCPM-V 2.6 receives the reference single-image question at each
+ASR-predicted candidate through the chat template embedded in the model and
+returns ordinary caption text. Radioify then
 chronologically interleaves `Caption HH:MM:SS` and `ASR HH:MM:SS` records and
 passes that evidence to the captions-plus-ASR adapter with the published task
 prompt. No Radioify-authored semantic prompt or title-repair stage participates
@@ -121,9 +124,12 @@ participates in inference.
 Because llama.cpp marks `libmtmd` experimental, its version is pinned at the
 build boundary rather than allowed to drift at runtime. The visual model and
 projector come from OpenBMB's published
-[MiniCPM-V 2.0 GGUF repository](https://huggingface.co/openbmb/MiniCPM-V-2-gguf)
+[MiniCPM-V 2.6 GGUF repository](https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf)
 at a fixed revision and are accepted only at their compiled-in sizes and
-SHA-256 hashes. Both planner adapters are MIT-licensed
+SHA-256 hashes. MiniCPM-V 2.6 is an explicit captioner option in the
+Chapter-Llama extraction tooling and is supported natively by the pinned
+libmtmd version; Radioify carries no private vision-model compatibility port.
+Both planner adapters are MIT-licensed
 [Chapter-Llama artifacts](https://huggingface.co/lucas-ventura/chapter-llama)
 at a fixed revision, converted reproducibly for llama.cpp and paired with a
 pinned Meta Llama 3.1 8B Instruct GGUF subject to its community license.
@@ -148,9 +154,9 @@ inputs are analyzed again. Private in-progress inference checkpoints use the
 same identity, so a foreground GPU yield resumes at a completed model-stage
 boundary instead of relabeling partial output. A transient cache-write failure keeps the completed
 in-memory result available for the active session and reports a non-fatal OSD
-warning. In-progress or unsupported analysis never opens an
-empty chapter or timeline-metadata panel; failures remain visible through the
-normal playback status/retry surface.
+warning. In-progress or unsupported analysis never opens an empty chapter or
+timeline-metadata panel; failures remain visible through the normal playback
+status surface.
 
 For a presentation-free production-path diagnostic, run:
 
@@ -361,7 +367,7 @@ to the browser.
   Until usable chapter content exists, the chapter list stays closed and the
   hover preview remains frame-only instead of reserving an empty status panel.
 - Right-click the active video to start chapter analysis manually, inspect a
-  failure, approve model installation, or cancel/retry the current request.
+  failure, approve model installation, or cancel the current request.
   The same typed actions are exposed in terminal and framebuffer playback.
   While analysis runs, its context-menu action reports the current phase or
   progress. `--no-automatic-chapters` disables only the automatic trigger;

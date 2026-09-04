@@ -29,15 +29,15 @@ CapabilityResult inspectPackagedChapterRuntime();
 InstallResult installModelArtifacts(const ModelPaths &paths,
                                     const OperationControl &control);
 
-inline constexpr std::uintmax_t kModelBytes = 1961506240ull;
-inline constexpr std::uintmax_t kProjectorBytes = 866071872ull;
+inline constexpr std::uintmax_t kModelBytes = 4681089344ull;
+inline constexpr std::uintmax_t kProjectorBytes = 1044425152ull;
 inline constexpr std::uintmax_t kPlannerModelBytes = 4920739232ull;
 inline constexpr std::uintmax_t kModelDownloadBytes =
     kModelBytes + kProjectorBytes + kPlannerModelBytes;
 inline constexpr const char *kModelSha256 =
-    "0c4fc8a2a912ec24f1ec8210c603d245430ea824cf6bee491820b34faa3be89f";
+    "3a4078d53b46f22989adbf998ce5a3fd090b6541f112d7e936eb4204a04100b1";
 inline constexpr const char *kProjectorSha256 =
-    "79611c59b5ad5b0547256602e3fb546a3041bcf6db5058091b6bcaa31f3a1c95";
+    "4485f68a0f1aa404c391e788ea88ea653c100d8e98fe572698f701e5809711fd";
 inline constexpr const char *kPlannerModelSha256 =
     "7b064f5842bf9532c91456deda288a1b672397a54fa729aa665952863033557c";
 } // namespace playback_video_chapters

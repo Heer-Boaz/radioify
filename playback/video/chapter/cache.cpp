@@ -25,11 +25,12 @@
 namespace playback_video_chapters {
 namespace {
 
-// Schema 27 binds persisted results to the source file instance and published
-// HwwwH/MiniCPM-V-2
-// caption turn and captions-plus-ASR Chapter-Llama planner. Earlier Radioify
-// prompt variants and overview/summary artifacts are not compatible.
-constexpr int kSchema = 28;
+// Schema 32 binds persisted results to the exact timed-text content and the
+// published Chapter-Llama speech-selector -> exact candidate frame captions ->
+// captions-plus-ASR planner route, including the caption model's own GGUF chat
+// template and published one-second opening-frame normalization. Earlier
+// prompt, sampling and metadata-based evidence identities are not compatible.
+constexpr int kSchema = 32;
 
 void setError(std::string *error, std::string value) {
   if (error)
@@ -57,7 +58,6 @@ std::string sourceIdentity(const AnalysisRequest &request) {
            << request.videoStreamIndex << '\n'
            << request.durationUs << '\n'
            << request.sourceWidth << 'x' << request.sourceHeight << '\n'
-           << static_cast<int>(request.route) << '\n'
            << kModelSha256 << '\n'
            << kProjectorSha256 << '\n'
            << kPlannerModelSha256 << '\n'

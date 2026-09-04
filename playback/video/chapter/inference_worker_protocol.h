@@ -8,9 +8,9 @@
 
 namespace playback_video_chapters::inference_worker_protocol {
 
-// Schema 14 carries the two published Chapter-Llama stages plus killable
-// Whisper chunk inference for automatic English evidence.
-inline constexpr int kSchema = 14;
+// Schema 15 carries one exact frame for every ASR-selected candidate instead
+// of the obsolete temporal-window envelope, plus killable Whisper inference.
+inline constexpr int kSchema = 15;
 
 // Serializes the parent-owned request before the helper process starts. The
 // matching reader and all schema details remain private to the worker target.

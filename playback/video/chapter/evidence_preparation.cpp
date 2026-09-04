@@ -13,17 +13,14 @@
 namespace playback_video_chapters {
 namespace {
 
-std::optional<PreparedEvidence>
-providedEvidence(const AnalysisRequest &request) {
+std::optional<TextEvidence> providedEvidence(const AnalysisRequest &request) {
   if (!request.englishText || request.englishText->cues.empty())
     return std::nullopt;
-  return PreparedEvidence{AnalysisRoute::SpeechGuidedCaptionsAndAsr,
-                          EnglishEvidenceOrigin::SessionSubtitleTrack,
-                          *request.englishText};
+  return *request.englishText;
 }
 
-std::optional<PreparedEvidence>
-generatedEvidence(const AnalysisRequest &request, std::string *detail) {
+std::optional<TextEvidence> generatedEvidence(const AnalysisRequest &request,
+                                              std::string *detail) {
   const auto producer =
       playback_video_transcript::automaticEnglishTranscriptProducerIdentity(
           detail);
@@ -33,9 +30,7 @@ generatedEvidence(const AnalysisRequest &request, std::string *detail) {
                                                    detail);
   if (!evidence)
     return std::nullopt;
-  return PreparedEvidence{AnalysisRoute::SpeechGuidedCaptionsAndAsr,
-                          EnglishEvidenceOrigin::DurableGeneratedTranscript,
-                          std::move(*evidence)};
+  return evidence;
 }
 
 } // namespace
@@ -43,7 +38,7 @@ generatedEvidence(const AnalysisRequest &request, std::string *detail) {
 EvidencePreparation::EvidencePreparation() = default;
 EvidencePreparation::~EvidencePreparation() = default;
 
-std::optional<PreparedEvidence>
+std::optional<TextEvidence>
 EvidencePreparation::discover(const AnalysisRequest &request,
                               std::string *detail) const {
   if (detail)

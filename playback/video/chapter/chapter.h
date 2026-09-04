@@ -13,13 +13,6 @@ inline constexpr std::size_t kMinimumAutomaticChapterCount = 1;
 // This is a storage/admission limit, not an editorial chapter-count policy.
 // It matches Chapter-Llama's published maximum caption-selection cardinality.
 inline constexpr std::size_t kMaximumAutomaticChapterCount = 100;
-// One frame is selected at each ASR-predicted chapter boundary. This defensive
-// bound matches the planner's public chapter cap; Radioify has no periodic
-// visual-only sampling path.
-inline constexpr std::size_t kMaximumAutomaticEvidenceSampleCount = 100;
-inline constexpr std::size_t kMinimumAutomaticEvidenceSampleCount = 1;
-inline constexpr std::size_t kMaximumAutomaticEvidenceFrameCount =
-    kMaximumAutomaticEvidenceSampleCount;
 inline constexpr std::int64_t kMinimumAutomaticChapterVideoDurationUs =
     30'000'000;
 // Radioify's first runtime contract admits 30-second through 60-minute videos.
@@ -66,7 +59,8 @@ struct Snapshot {
   std::uint64_t revision = 0;
 
   bool running() const {
-    return state == AnalysisState::Installing ||
+    return state == AnalysisState::CheckingSupport ||
+           state == AnalysisState::Installing ||
            state == AnalysisState::WaitingForPlayback ||
            state == AnalysisState::Analyzing;
   }

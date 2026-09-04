@@ -1052,6 +1052,13 @@ int main() {
       "analysis must retain its stable entry point and animate a bounded "
       "indeterminate character sweep");
   chapterControlState.chapters.state =
+      playback_video_chapters::AnalysisState::CheckingSupport;
+  ok &= expect(
+      !playback_overlay::chapterControlCharacterHighlights(
+           chapterControlState.chapters, true, 12, 0.25)
+           .empty(),
+      "chapter prerequisite checks must remain visibly active");
+  chapterControlState.chapters.state =
       playback_video_chapters::AnalysisState::WaitingForPlayback;
   ok &= expect(
       !playback_overlay::chapterControlCharacterHighlights(
@@ -1080,25 +1087,18 @@ int main() {
   ok &= expect(
       controlFor(disabledChapterControls,
                  playback_overlay::OverlayControlId::Chapters) !=
-              disabledChapterControls.end() &&
-          controlFor(disabledChapterControls,
-                     playback_overlay::OverlayControlId::ChapterInstall) ==
               disabledChapterControls.end(),
       "an automatic-analysis opt-out must retain a manual chapter entry point");
   chapterControlState.chapters.state =
       playback_video_chapters::AnalysisState::SetupRequired;
   const auto chapterSetupControls =
       playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
-  const auto installChapterModel = controlFor(
-      chapterSetupControls, playback_overlay::OverlayControlId::ChapterInstall);
-  ok &= expect(installChapterModel != chapterSetupControls.end() &&
+  ok &= expect(chapterSetupControls.size() ==
+                       disabledChapterControls.size() &&
                    controlFor(chapterSetupControls,
                               playback_overlay::OverlayControlId::Chapters) !=
-                       chapterSetupControls.end() &&
-                   overlayActionForControl(
-                       playback_overlay::OverlayControlId::ChapterInstall) ==
-                       playback_overlay::OverlayAction::InstallChapterModel,
-               "model setup must remain an explicit chapter action");
+                       chapterSetupControls.end(),
+               "model setup must not add a transient transport control");
   ok &= expect(
       overlayActionForControl(
           playback_overlay::OverlayControlId::ChapterOverviewClose) ==
@@ -1108,13 +1108,12 @@ int main() {
       playback_video_chapters::AnalysisState::Installing;
   const auto chapterInstallingControls =
       playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
-  ok &= expect(controlFor(chapterInstallingControls,
-                          playback_overlay::OverlayControlId::ChapterCancel) !=
-                       chapterInstallingControls.end() &&
-                   overlayActionForControl(
-                       playback_overlay::OverlayControlId::ChapterCancel) ==
-                       playback_overlay::OverlayAction::CancelChapterOperation,
-               "an explicit chapter-model install must remain cancellable");
+  ok &= expect(chapterInstallingControls.size() ==
+                       disabledChapterControls.size() &&
+                   controlFor(chapterInstallingControls,
+                              playback_overlay::OverlayControlId::Chapters) !=
+                       chapterInstallingControls.end(),
+               "model installation must retain one stable chapter entry point");
   chapterControlState.chapters.state =
       playback_video_chapters::AnalysisState::Failed;
   const auto chapterFailedControls =

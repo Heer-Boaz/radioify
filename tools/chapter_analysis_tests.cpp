@@ -121,41 +121,28 @@ bool runChapterDomainTests() {
     }
     visualTimeline.push_back(sample);
   }
-  const std::vector<ChapterEvidenceInterval> evidencePlan =
-      buildSpeechGuidedChapterEvidencePlan(evidenceDurationUs,
-                                           {0, 100'000'000, 160'000'000});
+  const std::vector<std::int64_t> evidencePlan =
+      buildSpeechGuidedFrameSchedule(evidenceDurationUs,
+                                     {0, 100'000'000, 160'000'000});
   ok &= expect(
-      evidencePlan.size() == 3 && evidencePlan.front().startUs == 0 &&
-          evidencePlan.back().endUs == evidenceDurationUs &&
-          evidencePlan[0].sampleTimesUs ==
-              std::vector<std::int64_t>{1'000'000} &&
-          evidencePlan[1].sampleTimesUs ==
-              std::vector<std::int64_t>{100'000'000} &&
-          evidencePlan[2].sampleTimesUs ==
-              std::vector<std::int64_t>{160'000'000} &&
-          evidencePlan[0].endUs == 50'500'000 &&
-          evidencePlan[1].startUs == 50'500'000 &&
-          evidencePlan[1].endUs == 130'000'000 &&
-          evidencePlan[2].startUs == 130'000'000,
-      "speech-guided evidence must sample only ASR-predicted boundaries and "
-      "avoid the black opening frame");
-  const std::vector<ChapterEvidenceInterval> sparseEvidencePlan =
-      buildSpeechGuidedChapterEvidencePlan(evidenceDurationUs,
-                                           {0, 299'000'000});
+      evidencePlan ==
+          std::vector<std::int64_t>{1'000'000, 100'000'000, 160'000'000},
+      "speech-guided evidence must apply Chapter-Llama's published "
+      "one-second opening-frame normalization");
+  const std::vector<std::int64_t> sparseEvidencePlan =
+      buildSpeechGuidedFrameSchedule(evidenceDurationUs,
+                                     {0, 299'000'000});
   ok &= expect(
-      sparseEvidencePlan.size() == 2 &&
-          sparseEvidencePlan[0].sampleTimesUs ==
-              std::vector<std::int64_t>{1'000'000} &&
-          sparseEvidencePlan[1].sampleTimesUs ==
-              std::vector<std::int64_t>{299'000'000},
+      sparseEvidencePlan ==
+          std::vector<std::int64_t>{1'000'000, 299'000'000},
       "large gaps between ASR predictions must never create periodic fallback "
       "samples");
   ok &= expect(
-      buildSpeechGuidedChapterEvidencePlan(evidenceDurationUs,
-                                           {10'000'000, 100'000'000})
+      buildSpeechGuidedFrameSchedule(evidenceDurationUs,
+                                     {10'000'000, 100'000'000})
               .empty() &&
-          buildSpeechGuidedChapterEvidencePlan(evidenceDurationUs,
-                                               {0, 100'000'000, 100'000'000})
+          buildSpeechGuidedFrameSchedule(evidenceDurationUs,
+                                         {0, 100'000'000, 100'000'000})
               .empty(),
       "speech-guided evidence must reject incomplete or duplicate boundary "
       "plans instead of inventing periodic samples");
@@ -192,16 +179,6 @@ bool runChapterDomainTests() {
       "unconstrained upstream-style frame captions must be normalized");
   ok &= expect(!normalizeGeneratedFrameCaption({}, &observation, &error),
                "empty frame captions must be rejected");
-
-  const auto captionerPrompt = buildChapterLlamaMiniCpmV2CaptionPrompt(
-      "(<image>./</image>)", 1024);
-  ok &= expect(
-      captionerPrompt &&
-          *captionerPrompt ==
-              "<user>(<image>./</image>)\nWhat is the content of this "
-              "image?<AI>",
-      "the vision captioner prompt must match HwwwH/MiniCPM-V-2's "
-      "published Chapter-Llama extraction turn byte for byte");
 
   const std::vector<ChapterPromptEvidence> asrPromptEvidence = {
       {0, "Opening narration."}, {5'000'000, "The subject changes."}};
@@ -567,30 +544,24 @@ bool runTextEvidenceTests() {
   ok &= expect(evidence && evidence->label == "English" &&
                    evidence->language == "en" && evidence->cues.size() == 2,
                "full English dialogue must beat forced and commentary tracks");
-  if (evidence) {
-    ok &= expect(textNear(*evidence, 3'000'000, 2'000'000, 64) ==
-                     "Welcome This is the main dialogue",
-                 "VLM text evidence must retain bounded nearby dialogue");
-    ok &= expect(textNear(*evidence, 3'000'000, 2'000'000, 10).size() == 10,
-                 "prompt evidence must obey its byte budget");
-    ok &= expect(textInInterval(*evidence, 0, 2'000'000, 64) == "Welcome" &&
-                     textInInterval(*evidence, 2'000'000, 10'000'000, 64) ==
-                         "This is the main dialogue",
-                 "adjacent sampled intervals must own disjoint subtitle "
-                 "evidence");
-  }
-
-  TextEvidence unicodeEvidence;
-  unicodeEvidence.cues.push_back({0, 1'000'000, "Tokyo 東京"});
-  const std::string unicodePrefix =
-      textNear(unicodeEvidence, 500'000, 1'000'000, 8);
-  ok &= expect(unicodePrefix.size() <= 8 && isValidUtf8(unicodePrefix),
-               "prompt byte limits must not split a UTF-8 code point");
+  std::string initialIdentity = evidence ? evidence->identity : std::string{};
+  tracks.back().cues.back().text = "The dialogue content changed";
+  const auto changedEvidence = selectEnglishTextEvidence(tracks, "movie.mkv");
+  ok &= expect(changedEvidence && !initialIdentity.empty() &&
+                   changedEvidence->identity != initialIdentity,
+               "chapter cache identity must address the exact timed-text "
+               "content instead of file metadata");
 
   tracks.erase(tracks.begin() + 3);
+  ok &= expect(!selectEnglishTextEvidence(tracks, "movie.mkv"),
+               "forced and commentary tracks must not impersonate complete "
+               "dialogue evidence");
+  SubtitleTrack sdh = track("English SDH", "en", false, false, {intro, body});
+  sdh.hearingImpaired = true;
+  tracks.push_back(std::move(sdh));
   const auto fallback = selectEnglishTextEvidence(tracks, "movie.mkv");
-  ok &= expect(fallback && fallback->label == "English forced",
-               "a forced English track must remain a fallback to commentary");
+  ok &= expect(fallback && fallback->label == "English SDH",
+               "a complete English SDH track must remain valid evidence");
 
   const auto stamp =
       std::chrono::steady_clock::now().time_since_epoch().count();

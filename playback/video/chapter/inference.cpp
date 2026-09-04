@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "core/utf8.h"
+#include "playback/video/chapter/evidence_plan.h"
 #include "playback/video/chapter/prompt_contract.h"
 
 namespace playback_video_chapters {
@@ -39,11 +40,6 @@ constexpr int kCaptionTokens = 1024;
 constexpr int kChapterPlanTokens = 1024;
 constexpr std::size_t kMaximumGeneratedBytes = 32u * 1024u;
 constexpr std::size_t kMaximumPromptBytes = 128u * 1024u;
-constexpr std::size_t kMaximumDialogueBytes = 600;
-// Visual evidence owns a fixed part of the Chapter-Llama planner context. Known
-// dialogue and framing are admitted before model loading; generated captions
-// must remain inside this aggregate reservation as they are produced.
-constexpr std::size_t kMaximumCaptionCorpusPromptBytes = 80u * 1024u;
 
 bool cancelled(const OperationControl &control) {
   try {
@@ -236,33 +232,6 @@ std::size_t occurrenceCount(std::string_view text, std::string_view needle) {
 }
 
 std::optional<std::string>
-buildFrameCaptionPrompt(const InferenceTemporalWindow &window) {
-  const char *rawMarker = mtmd_default_marker();
-  if (!rawMarker || !*rawMarker || window.frames.size() != 1) {
-    return std::nullopt;
-  }
-  const std::string marker(rawMarker);
-  const std::optional<std::string> value =
-      buildChapterLlamaMiniCpmV2CaptionPrompt(marker, kMaximumPromptBytes);
-  if (!value || occurrenceCount(*value, marker) != 1) {
-    return std::nullopt;
-  }
-  return value;
-}
-
-bool captionCorpusWithinBudget(const std::vector<std::string> &observations) {
-  std::size_t bytes = 0;
-  for (const std::string &observation : observations) {
-    const std::size_t escapedBytes =
-        escapeChapterLlamaEvidence(observation).size();
-    if (escapedBytes > kMaximumCaptionCorpusPromptBytes - bytes)
-      return false;
-    bytes += escapedBytes;
-  }
-  return true;
-}
-
-std::optional<std::string>
 buildSpeechChapterPlanPrompt(const SpeechChapterPlanRequest &request) {
   std::vector<ChapterPromptEvidence> evidence;
   evidence.reserve(request.englishDialogue.size());
@@ -285,17 +254,14 @@ std::string trimAscii(std::string value) {
 std::optional<std::string> buildChapterPlanPrompt(
     const InferenceRequest &request,
     const std::vector<std::string> &observations) {
-  if (observations.size() != request.windows.size())
+  if (observations.size() != request.frames.size())
     return std::nullopt;
   std::vector<ChapterPromptEvidence> captions;
   std::vector<ChapterPromptEvidence> asr;
   captions.reserve(observations.size());
   asr.reserve(request.englishDialogue.size());
   for (std::size_t index = 0; index < observations.size(); ++index) {
-    if (request.windows[index].frames.size() != 1)
-      return std::nullopt;
-    captions.push_back(
-        {request.windows[index].frames.front().timeUs, observations[index]});
+    captions.push_back({request.frames[index].timeUs, observations[index]});
   }
   for (const InferenceDialogueCue &cue : request.englishDialogue)
     asr.push_back({cue.timeUs, cue.text});
@@ -624,10 +590,9 @@ public:
 
   bool valid() const { return model_ && context_ && vocab_; }
 
-  GenerationResult observeFrame(std::vector<const mtmd_bitmap *> &bitmaps,
-                                const std::string &prompt,
+  GenerationResult captionFrame(const mtmd_bitmap *bitmap,
                                 const StageProgress &progress) {
-    if (bitmaps.size() != 1 || !vision_ || !valid() || !reset()) {
+    if (!bitmap || !vision_ || !valid() || !reset()) {
       if (!continueOperation(control_)) {
         return interruptedGeneration(control_);
       }
@@ -636,10 +601,21 @@ public:
               {}};
     }
     const char *marker = mtmd_default_marker();
-    if (!marker || !*marker ||
-        occurrenceCount(prompt, marker) != bitmaps.size()) {
+    if (!marker || !*marker) {
       return {OperationStatus::Failed,
               "The frame-caption request has invalid media markers.",
+              {}};
+    }
+    // Chapter-Llama's extractor sends this single user turn. Formatting is
+    // owned by the loaded caption model's GGUF chat template; Radioify never
+    // reproduces tokenizer-specific role markers.
+    std::string userContent(marker);
+    userContent += "\nWhat is the content of this image?";
+    const std::optional<std::string> prompt =
+        formatPrompt(model_, {}, userContent);
+    if (!prompt || occurrenceCount(*prompt, marker) != 1) {
+      return {OperationStatus::Failed,
+              "The frame-caption model could not format its chat turn.",
               {}};
     }
     ChunksPtr chunks(mtmd_input_chunks_init(), &mtmd_input_chunks_free);
@@ -648,9 +624,9 @@ public:
               "Could not prepare the frame-caption request.",
               {}};
     }
-    mtmd_input_text text{prompt.c_str(), true, true};
-    if (mtmd_tokenize(vision_, chunks.get(), &text, bitmaps.data(),
-                      bitmaps.size()) != 0) {
+    mtmd_input_text text{prompt->c_str(), true, true};
+    const mtmd_bitmap *bitmaps[] = {bitmap};
+    if (mtmd_tokenize(vision_, chunks.get(), &text, bitmaps, 1) != 0) {
       return {OperationStatus::Failed,
               "The vision-language model could not tokenize a video frame.",
               {}};
@@ -745,36 +721,11 @@ private:
   const OperationControl &control_;
 };
 
-std::vector<std::vector<std::int64_t>>
-sampleTimes(const InferenceRequest &request) {
-  std::vector<std::vector<std::int64_t>> result;
-  result.reserve(request.windows.size());
-  for (const InferenceTemporalWindow &window : request.windows) {
-    std::vector<std::int64_t> windowTimes;
-    windowTimes.reserve(window.frames.size());
-    for (const InferenceFrame &frame : window.frames) {
-      windowTimes.push_back(frame.timeUs);
-    }
-    result.push_back(std::move(windowTimes));
-  }
-  return result;
-}
-
-std::vector<std::int64_t> intervalStarts(const InferenceRequest &request) {
+std::vector<std::int64_t> sampleTimes(const InferenceRequest &request) {
   std::vector<std::int64_t> result;
-  result.reserve(request.windows.size());
-  for (const InferenceTemporalWindow &window : request.windows) {
-    result.push_back(window.intervalStartUs);
-  }
-  return result;
-}
-
-std::vector<std::int64_t> intervalEnds(const InferenceRequest &request) {
-  std::vector<std::int64_t> result;
-  result.reserve(request.windows.size());
-  for (const InferenceTemporalWindow &window : request.windows) {
-    result.push_back(window.intervalEndUs);
-  }
+  result.reserve(request.frames.size());
+  for (const InferenceFrame &frame : request.frames)
+    result.push_back(frame.timeUs);
   return result;
 }
 
@@ -789,8 +740,6 @@ void initializeCheckpoint(const InferenceRequest &request,
   checkpoint->chapterPlanAdapter = request.chapterPlanAdapter;
   checkpoint->durationUs = request.durationUs;
   checkpoint->sampleTimesUs = sampleTimes(request);
-  checkpoint->intervalStartsUs = intervalStarts(request);
-  checkpoint->intervalEndsUs = intervalEnds(request);
   checkpoint->chapterPlan = request.chapterPlan;
 }
 
@@ -833,28 +782,26 @@ bool checkpointMatches(const InferenceCheckpoint &checkpoint,
          checkpoint.chapterPlanAdapter == request.chapterPlanAdapter &&
          checkpoint.durationUs == request.durationUs &&
          checkpoint.sampleTimesUs == sampleTimes(request) &&
-         checkpoint.intervalStartsUs == intervalStarts(request) &&
-         checkpoint.intervalEndsUs == intervalEnds(request) &&
          sameChapterPlan(checkpoint.chapterPlan, request.chapterPlan);
 }
 
 std::optional<std::size_t>
-completedObservationWindows(const InferenceRequest &request,
-                            std::size_t observationCount) {
-  return observationCount <= request.windows.size()
+completedObservationFrames(const InferenceRequest &request,
+                           std::size_t observationCount) {
+  return observationCount <= request.frames.size()
              ? std::optional<std::size_t>(observationCount)
              : std::nullopt;
 }
 
 bool validCheckpoint(const InferenceCheckpoint &checkpoint,
                      const InferenceRequest &request) {
-  const std::size_t expectedObservations = request.windows.size();
+  const std::size_t expectedObservations = request.frames.size();
   if (!validChapterPlan(checkpoint.chapterPlan, request.durationUs) ||
       !sameChapterPlan(checkpoint.chapterPlan, request.chapterPlan)) {
     return false;
   }
   if (checkpoint.observations.size() > expectedObservations ||
-      !completedObservationWindows(request, checkpoint.observations.size())) {
+      !completedObservationFrames(request, checkpoint.observations.size())) {
     return false;
   }
   for (const std::string &observation : checkpoint.observations) {
@@ -864,8 +811,6 @@ bool validCheckpoint(const InferenceCheckpoint &checkpoint,
       return false;
     }
   }
-  if (!captionCorpusWithinBudget(checkpoint.observations))
-    return false;
   if (checkpoint.observations.size() != expectedObservations) {
     return true;
   }
@@ -878,70 +823,42 @@ bool validRequest(const InferenceRequest &request) {
       request.englishDialogue.empty() ||
       request.durationUs < kMinimumAutomaticChapterVideoDurationUs ||
       request.durationUs > kMaximumAutomaticChapterVideoDurationUs ||
-      request.windows.size() < kMinimumAutomaticEvidenceSampleCount ||
-      request.windows.size() > kMaximumAutomaticEvidenceSampleCount ||
-      request.windows.size() != request.chapterPlan.size() ||
+      request.frames.size() < kMinimumAutomaticChapterCount ||
+      request.frames.size() > kMaximumAutomaticChapterCount ||
+      request.frames.size() != request.chapterPlan.size() ||
       !validChapterPlan(request.chapterPlan, request.durationUs)) {
     return false;
   }
-  std::vector<std::int64_t> expectedSampleTimesUs;
-  expectedSampleTimesUs.reserve(request.chapterPlan.size());
+  std::vector<std::int64_t> chapterStartsUs;
+  chapterStartsUs.reserve(request.chapterPlan.size());
   for (const GeneratedChapterPlanEntry &chapter : request.chapterPlan)
-    expectedSampleTimesUs.push_back(chapter.startUs);
-  expectedSampleTimesUs.front() =
-      std::min<std::int64_t>(1'000'000, request.durationUs - 1);
+    chapterStartsUs.push_back(chapter.startUs);
+  const std::vector<std::int64_t> expectedFrameTimesUs =
+      buildSpeechGuidedFrameSchedule(request.durationUs, chapterStartsUs);
+  if (expectedFrameTimesUs.size() != request.frames.size())
+    return false;
+
   std::int64_t previousTimeUs = -1;
-  std::int64_t previousEndUs = 0;
-  for (std::size_t index = 0; index < request.windows.size(); ++index) {
-    const InferenceTemporalWindow &window = request.windows[index];
-    const std::int64_t expectedStartUs =
-        index == 0
-            ? 0
-            : expectedSampleTimesUs[index - 1] +
-                  (expectedSampleTimesUs[index] -
-                   expectedSampleTimesUs[index - 1]) /
-                      2;
-    const std::int64_t expectedEndUs =
-        index + 1 == expectedSampleTimesUs.size()
-            ? request.durationUs
-            : expectedSampleTimesUs[index] +
-                  (expectedSampleTimesUs[index + 1] -
-                   expectedSampleTimesUs[index]) /
-                      2;
-    if (window.frames.size() != 1 ||
-        window.frames.front().timeUs != expectedSampleTimesUs[index] ||
-        window.intervalStartUs != expectedStartUs ||
-        window.intervalEndUs != expectedEndUs ||
-        window.intervalStartUs != previousEndUs ||
-        window.intervalEndUs <= window.intervalStartUs ||
-        window.intervalEndUs > request.durationUs ||
-        (index + 1 == request.windows.size() &&
-         window.intervalEndUs != request.durationUs) ||
-        (index + 1 < request.windows.size() &&
-         window.intervalEndUs > request.windows[index + 1].intervalStartUs)) {
+  for (std::size_t index = 0; index < request.frames.size(); ++index) {
+    const InferenceFrame &frame = request.frames[index];
+    if (frame.timeUs != expectedFrameTimesUs[index] ||
+        !frame.imageRgb || frame.imageRgb->empty() || frame.imageWidth == 0 ||
+        frame.imageHeight == 0 ||
+        frame.imageWidth > (std::numeric_limits<std::size_t>::max)() /
+                               frame.imageHeight / 3u ||
+        frame.imageRgb->size() != static_cast<std::size_t>(frame.imageWidth) *
+                                      frame.imageHeight * 3u ||
+        frame.timeUs <= previousTimeUs || frame.timeUs < 0 ||
+        frame.timeUs >= request.durationUs) {
       return false;
     }
-    for (const InferenceFrame &frame : window.frames) {
-      if (!frame.imageRgb || frame.imageRgb->empty() || frame.imageWidth == 0 ||
-          frame.imageHeight == 0 ||
-          frame.imageWidth > (std::numeric_limits<std::size_t>::max)() /
-                                 frame.imageHeight / 3u ||
-          frame.imageRgb->size() != static_cast<std::size_t>(frame.imageWidth) *
-                                        frame.imageHeight * 3u ||
-          frame.timeUs <= previousTimeUs ||
-          frame.timeUs < window.intervalStartUs ||
-          frame.timeUs >= window.intervalEndUs) {
-        return false;
-      }
-      previousTimeUs = frame.timeUs;
-    }
-    previousEndUs = window.intervalEndUs;
+    previousTimeUs = frame.timeUs;
   }
   std::int64_t previousDialogueUs = -1;
   for (const InferenceDialogueCue &cue : request.englishDialogue) {
     if (cue.timeUs < 0 || cue.timeUs >= request.durationUs ||
         cue.timeUs < previousDialogueUs || cue.text.empty() ||
-        cue.text.size() > kMaximumDialogueBytes || !isValidUtf8(cue.text)) {
+        !isValidUtf8(cue.text)) {
       return false;
     }
     previousDialogueUs = cue.timeUs;
@@ -953,21 +870,19 @@ bool validRequest(const InferenceRequest &request) {
 
 bool validateInferenceInputBudget(const InferenceRequest &request,
                                   std::string *error) {
-  // Serialize the exact known input (timestamps, framing, and required
-  // dialogue), then reserve a separately enforced aggregate budget for the
-  // captions that MiniCPM-V will generate. This admits useful long-form
-  // evidence without pretending every concise caption reaches its per-item
-  // safety cap.
+  // Validate the exact known serialized input before starting vision work.
+  // Generated captions are not guessed or assigned an invented reservation;
+  // the completed prompt is checked against this storage bound and then
+  // tokenized against the actual loaded planner context.
   if (request.englishDialogue.empty()) {
     if (error)
       *error = "Chapter inference requires an English timecoded transcript.";
     return false;
   }
-  const std::vector<std::string> observations(request.windows.size(), "");
+  const std::vector<std::string> observations(request.frames.size(), "");
   const std::optional<std::string> prompt =
       buildChapterPlanPrompt(request, observations);
-  if (prompt && prompt->size() <=
-                    kMaximumPromptBytes - kMaximumCaptionCorpusPromptBytes)
+  if (prompt)
     return true;
   if (error) {
     *error = "The timestamped captions and ASR evidence exceed the bounded "
@@ -1042,7 +957,7 @@ SpeechChapterPlanResult InferenceEngine::planChaptersFromSpeech(
   for (const InferenceDialogueCue &cue : request.englishDialogue) {
     if (cue.timeUs < 0 || cue.timeUs >= request.durationUs ||
         cue.timeUs < previousCueUs || cue.text.empty() ||
-        cue.text.size() > kMaximumDialogueBytes || !isValidUtf8(cue.text)) {
+        !isValidUtf8(cue.text)) {
       return {OperationStatus::Failed,
               "The speech-guided chapter-plan transcript is invalid.",
               {}};
@@ -1222,7 +1137,7 @@ InferenceEngine::run(const InferenceRequest &request,
   // An observation-complete checkpoint is the durable boundary between the
   // two model owners. Resume directly with Chapter-Llama instead of loading
   // MiniCPM-V and its projector only to release them again.
-  const std::size_t expectedObservations = request.windows.size();
+  const std::size_t expectedObservations = request.frames.size();
   if (activeCheckpoint->observations.size() < expectedObservations) {
     LoadProgress loadProgress{&control, 0.58, 0.10};
     modelParams.progress_callback_user_data = &loadProgress;
@@ -1304,52 +1219,37 @@ InferenceEngine::run(const InferenceRequest &request,
     }
     constexpr double kCaptionBegin = 0.70;
     constexpr double kCaptionEnd = 0.92;
-    const std::optional<std::size_t> firstWindow = completedObservationWindows(
+    const std::optional<std::size_t> firstFrame = completedObservationFrames(
         request, activeCheckpoint->observations.size());
-    if (!firstWindow) {
+    if (!firstFrame) {
       return {OperationStatus::Failed,
-              "The temporal-observation checkpoint exceeds the window count.",
+              "The frame-caption checkpoint exceeds the candidate count.",
               {}};
     }
-    for (std::size_t index = *firstWindow; index < request.windows.size();
+    for (std::size_t index = *firstFrame; index < request.frames.size();
          ++index) {
       if (!continueOperation(control))
         return interruptedResult(control);
-      const InferenceTemporalWindow &window = request.windows[index];
-      std::vector<BitmapPtr> ownedBitmaps;
-      std::vector<const mtmd_bitmap *> bitmaps;
-      ownedBitmaps.reserve(window.frames.size());
-      bitmaps.reserve(window.frames.size());
-      for (const InferenceFrame &frame : window.frames) {
-        BitmapPtr bitmap(mtmd_bitmap_init(frame.imageWidth, frame.imageHeight,
-                                          frame.imageRgb->data()),
-                         &mtmd_bitmap_free);
-        if (!bitmap) {
-          return {OperationStatus::Failed,
-                  "Could not prepare a temporal video frame.",
-                  {}};
-        }
-        bitmaps.push_back(bitmap.get());
-        ownedBitmaps.push_back(std::move(bitmap));
-      }
-      const std::optional<std::string> captionPrompt =
-          buildFrameCaptionPrompt(window);
-      if (!captionPrompt) {
+      const InferenceFrame &frame = request.frames[index];
+      BitmapPtr bitmap(mtmd_bitmap_init(frame.imageWidth, frame.imageHeight,
+                                        frame.imageRgb->data()),
+                       &mtmd_bitmap_free);
+      if (!bitmap) {
         return {OperationStatus::Failed,
-                "Could not construct the frame-caption request.",
+                "Could not prepare a chapter candidate frame.",
                 {}};
       }
       const double begin = kCaptionBegin + (kCaptionEnd - kCaptionBegin) *
                                                static_cast<double>(index) /
-                                               request.windows.size();
+                                               request.frames.size();
       const double end = kCaptionBegin + (kCaptionEnd - kCaptionBegin) *
                                              static_cast<double>(index + 1) /
-                                             request.windows.size();
+                                             request.frames.size();
       const std::string phase = "Captioning frame " +
                                 std::to_string(index + 1) + " of " +
-                                std::to_string(request.windows.size());
+                                std::to_string(request.frames.size());
       const GenerationResult generated =
-          session.observeFrame(bitmaps, *captionPrompt, {begin, end, phase});
+          session.captionFrame(bitmap.get(), {begin, end, phase});
       if (generated.status != OperationStatus::Succeeded) {
         return {generated.status, generated.detail, {}};
       }
@@ -1363,12 +1263,6 @@ InferenceEngine::run(const InferenceRequest &request,
                 {}};
       }
       activeCheckpoint->observations.push_back(std::move(caption));
-      if (!captionCorpusWithinBudget(activeCheckpoint->observations)) {
-        return {OperationStatus::Unsupported,
-                "The generated complete-timeline captions exceed the "
-                "bounded Chapter-Llama context.",
-                {}};
-      }
       if (const auto failure =
               publishCheckpoint(checkpointSink, *activeCheckpoint)) {
         return *failure;

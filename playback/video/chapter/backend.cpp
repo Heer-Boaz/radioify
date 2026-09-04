@@ -9,6 +9,7 @@
 #include "ffmpegaudio.h"
 #include "core/utf8.h"
 #include "playback/video/chapter/cache.h"
+#include "playback/video/chapter/evidence_plan.h"
 #include "playback/video/chapter/evidence_preparation.h"
 #include "playback/video/chapter/generated_document.h"
 #include "playback/video/chapter/inference.h"
@@ -28,7 +29,7 @@ std::string trim(std::string value) {
   return value;
 }
 
-std::string singleLine(std::string value, std::size_t maximumBytes) {
+std::string singleLine(std::string value) {
   for (char &ch : value) {
     if (ch == '\r' || ch == '\n' || ch == '\t')
       ch = ' ';
@@ -36,11 +37,6 @@ std::string singleLine(std::string value, std::size_t maximumBytes) {
   value = trim(std::move(value));
   if (!isValidUtf8(value)) {
     value = wideToUtf8Lossy(utf8ToWideLossy(value));
-  }
-  if (value.size() > maximumBytes) {
-    value.resize(maximumBytes);
-    while (!value.empty() && !isValidUtf8(value))
-      value.pop_back();
   }
   return value;
 }
@@ -55,7 +51,7 @@ englishDialogueFor(const AnalysisRequest &request) {
   for (const TextCue &cue : request.englishText->cues) {
     if (cue.startUs < 0 || cue.startUs >= request.durationUs)
       continue;
-    std::string text = singleLine(cue.text, 600);
+    std::string text = singleLine(cue.text);
     if (!text.empty())
       dialogue.push_back({cue.startUs, std::move(text)});
   }
@@ -73,7 +69,7 @@ public:
   cached(const AnalysisRequest &request) override {
     AnalysisRequest preparedRequest = request;
     if (const auto evidence = evidencePreparation_.discover(request))
-      preparedRequest.englishText = evidence->englishText;
+      preparedRequest.englishText = evidence;
     if (englishDialogueFor(preparedRequest).empty())
       return std::nullopt;
     std::optional<AnalysisResult> result = loadCachedAnalysis(preparedRequest);
@@ -97,7 +93,7 @@ public:
     }
     AnalysisRequest preparedRequest = request;
     if (const auto evidence = evidencePreparation_.discover(request))
-      preparedRequest.englishText = evidence->englishText;
+      preparedRequest.englishText = evidence;
     if (!preparedRequest.englishText) {
       FfmpegAudioStreamFormat audio;
       std::string audioDetail;
@@ -170,7 +166,7 @@ public:
         clearWorkspace();
       return {evidence.status, std::move(evidence.detail), {}, {}};
     }
-    preparedRequest.englishText = std::move(evidence.evidence->englishText);
+    preparedRequest.englishText = std::move(evidence.evidence);
 
     const std::vector<InferenceDialogueCue> englishDialogue =
         englishDialogueFor(preparedRequest);
@@ -260,9 +256,9 @@ public:
       chapterStartsUs.reserve(chapterPlan_.size());
       for (const GeneratedChapterPlanEntry &chapter : chapterPlan_)
         chapterStartsUs.push_back(chapter.startUs);
-      evidencePlan_ = buildSpeechGuidedChapterEvidencePlan(
+      sampleTimesUs_ = buildSpeechGuidedFrameSchedule(
           preparedRequest.durationUs, chapterStartsUs);
-      if (evidencePlan_.empty()) {
+      if (sampleTimesUs_.empty()) {
         clearWorkspace();
         return {OperationStatus::Failed,
                 "The speech-guided chapter planner returned an invalid "
@@ -271,9 +267,9 @@ public:
                 {}};
       }
     }
-    if (evidenceCheckpoint_.intervals.empty() ||
-        evidenceCheckpoint_.windows.size() !=
-            evidenceCheckpoint_.intervals.size()) {
+    if (evidenceCheckpoint_.requestedTimesUs.empty() ||
+        evidenceCheckpoint_.frames.size() !=
+            evidenceCheckpoint_.requestedTimesUs.size()) {
       if (control.progress)
         control.progress(0.52, "Preparing video samples");
       OperationControl evidenceControl = control;
@@ -289,7 +285,7 @@ public:
       };
       SampledEvidenceResult evidence =
           sampleVideoEvidence(preparedRequest, evidenceControl,
-                              &evidenceCheckpoint_, evidencePlan_);
+                              &evidenceCheckpoint_, sampleTimesUs_);
       if (evidence.status != OperationStatus::Succeeded) {
         if (evidence.status != OperationStatus::Yielded)
           clearWorkspace();
@@ -306,18 +302,10 @@ public:
     inferenceRequest.plannerModel = paths_.plannerModel;
     inferenceRequest.chapterPlanAdapter = paths_.chapterPlanAdapter;
     inferenceRequest.durationUs = preparedRequest.durationUs;
-    inferenceRequest.windows.reserve(evidenceCheckpoint_.windows.size());
-    for (const SampledTemporalWindow &sampledWindow :
-         evidenceCheckpoint_.windows) {
-      InferenceTemporalWindow window;
-      window.intervalStartUs = sampledWindow.startUs;
-      window.intervalEndUs = sampledWindow.endUs;
-      window.frames.reserve(sampledWindow.frames.size());
-      for (const SampledFrame &frame : sampledWindow.frames) {
-        window.frames.push_back(
-            {frame.width, frame.height, &frame.rgb, frame.timeUs});
-      }
-      inferenceRequest.windows.push_back(std::move(window));
+    inferenceRequest.frames.reserve(evidenceCheckpoint_.frames.size());
+    for (const SampledFrame &frame : evidenceCheckpoint_.frames) {
+      inferenceRequest.frames.push_back(
+          {frame.width, frame.height, &frame.rgb, frame.timeUs});
     }
     inferenceRequest.englishDialogue = englishDialogue;
     inferenceRequest.chapterPlan = chapterPlan_;
@@ -338,9 +326,9 @@ public:
     AnalysisResult result = materializeGeneratedDocument(
         inference.document, preparedRequest.durationUs);
     if (result.status != OperationStatus::Succeeded) {
-      // A structurally complete but unpublishable artifact must not become a
-      // permanent retry loop. Resume checkpoints are valuable only while the
-      // staged document remains capable of passing the public contract.
+      // A structurally complete but unpublishable artifact is terminal. Resume
+      // checkpoints are valuable only while the staged document remains
+      // capable of passing the public contract.
       discardInferenceWorkerWorkspace(acquired.lease);
       clearWorkspace();
       return result;
@@ -352,9 +340,8 @@ public:
           "not be saved for reuse";
       if (!cacheError.empty())
         result.warning += ": " + cacheError;
-    } else {
-      discardInferenceWorkerWorkspace(acquired.lease);
     }
+    discardInferenceWorkerWorkspace(acquired.lease);
     if (control.progress)
       control.progress(1.0, "Chapter analysis complete");
     clearWorkspace();
@@ -366,7 +353,7 @@ private:
     evidencePreparation_.reset();
     workspaceSourceKey_.clear();
     evidenceCheckpoint_ = {};
-    evidencePlan_.clear();
+    sampleTimesUs_.clear();
     chapterPlan_.clear();
   }
 
@@ -375,7 +362,7 @@ private:
   EvidencePreparation evidencePreparation_;
   std::string workspaceSourceKey_;
   SampledEvidenceCheckpoint evidenceCheckpoint_;
-  std::vector<ChapterEvidenceInterval> evidencePlan_;
+  std::vector<std::int64_t> sampleTimesUs_;
   std::vector<GeneratedChapterPlanEntry> chapterPlan_;
   bool artifactsVerified_ = false;
 };

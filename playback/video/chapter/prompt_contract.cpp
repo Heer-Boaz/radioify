@@ -62,23 +62,6 @@ void appendLine(std::ostringstream *prompt, const ProtocolLine &line) {
 
 } // namespace
 
-std::optional<std::string>
-buildChapterLlamaMiniCpmV2CaptionPrompt(std::string_view imageMarker,
-                                       std::size_t maximumBytes) {
-  if (imageMarker.empty() || maximumBytes == 0 ||
-      !isValidUtf8(imageMarker)) {
-    return std::nullopt;
-  }
-  std::string prompt;
-  prompt.reserve(imageMarker.size() + 61);
-  prompt += "<user>";
-  prompt += imageMarker;
-  prompt += "\nWhat is the content of this image?<AI>";
-  if (prompt.size() > maximumBytes)
-    return std::nullopt;
-  return prompt;
-}
-
 std::string escapeChapterLlamaEvidence(std::string_view text) {
   std::string escaped;
   escaped.reserve(text.size());

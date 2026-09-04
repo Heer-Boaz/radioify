@@ -21,12 +21,6 @@ struct InferenceFrame {
   std::int64_t timeUs = 0;
 };
 
-struct InferenceTemporalWindow {
-  std::int64_t intervalStartUs = 0;
-  std::int64_t intervalEndUs = 0;
-  std::vector<InferenceFrame> frames;
-};
-
 struct InferenceDialogueCue {
   std::int64_t timeUs = 0;
   std::string text;
@@ -51,11 +45,12 @@ struct InferenceRequest {
   std::filesystem::path plannerModel;
   std::filesystem::path chapterPlanAdapter;
   std::int64_t durationUs = 0;
-  std::vector<InferenceTemporalWindow> windows;
+  std::vector<InferenceFrame> frames;
   std::vector<InferenceDialogueCue> englishDialogue;
   // The ASR adapter supplies candidate boundaries used only to select one
-  // visual sample per candidate. The captions-plus-ASR adapter owns the final
-  // published boundaries and titles.
+  // visual sample per candidate, so there is no independent sampling
+  // cardinality. The captions-plus-ASR adapter owns the final published
+  // boundaries and titles.
   std::vector<GeneratedChapterPlanEntry> chapterPlan;
 };
 
@@ -65,9 +60,9 @@ struct InferenceResult {
   GeneratedDocument document;
 };
 
-// Checks the worst-case serialized Chapter-Llama prompt before any expensive
-// model is loaded. Temporal observations are generated later, so their published
-// aggregate bound is reserved while dialogue is measured exactly.
+// Checks the exact known serialized Chapter-Llama input before vision work.
+// Generated captions are validated after generation and the complete prompt
+// is tokenized against the actual loaded planner context.
 bool validateInferenceInputBudget(const InferenceRequest &request,
                                   std::string *error = nullptr);
 
@@ -84,9 +79,7 @@ struct InferenceCheckpoint {
   std::filesystem::path plannerModel;
   std::filesystem::path chapterPlanAdapter;
   std::int64_t durationUs = 0;
-  std::vector<std::vector<std::int64_t>> sampleTimesUs;
-  std::vector<std::int64_t> intervalStartsUs;
-  std::vector<std::int64_t> intervalEndsUs;
+  std::vector<std::int64_t> sampleTimesUs;
   // One independent frame caption for every evidence item, in chronological
   // order. Checkpoints are committed only after a complete caption.
   std::vector<std::string> observations;

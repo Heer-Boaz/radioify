@@ -25,8 +25,6 @@ enum class OverlayControlId {
   PictureInPicture,
   Chapters,
   ChapterOverviewClose,
-  ChapterInstall,
-  ChapterCancel,
   EditMarkIn,
   EditMarkOut,
   EditClearSelection,

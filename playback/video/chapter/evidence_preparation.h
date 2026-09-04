@@ -12,22 +12,10 @@ class IndexedTranscriptOperation;
 
 namespace playback_video_chapters {
 
-enum class EnglishEvidenceOrigin : std::uint8_t {
-  SessionSubtitleTrack,
-  DurableGeneratedTranscript,
-};
-
-struct PreparedEvidence {
-  AnalysisRoute route = AnalysisRoute::SpeechGuidedCaptionsAndAsr;
-  EnglishEvidenceOrigin origin =
-      EnglishEvidenceOrigin::DurableGeneratedTranscript;
-  TextEvidence englishText;
-};
-
 struct EvidencePreparationResult {
   OperationStatus status = OperationStatus::Failed;
   std::string detail;
-  std::optional<PreparedEvidence> evidence;
+  std::optional<TextEvidence> evidence;
 };
 
 // Owns acquisition of the timed-English prerequisite. It deliberately does
@@ -42,7 +30,7 @@ public:
   EvidencePreparation(const EvidencePreparation &) = delete;
   EvidencePreparation &operator=(const EvidencePreparation &) = delete;
 
-  std::optional<PreparedEvidence>
+  std::optional<TextEvidence>
   discover(const AnalysisRequest &request, std::string *detail = nullptr) const;
   EvidencePreparationResult prepare(const AnalysisRequest &request,
                                     const OperationControl &control);

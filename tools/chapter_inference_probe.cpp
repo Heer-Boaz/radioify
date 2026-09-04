@@ -15,9 +15,11 @@
 #include <vector>
 
 #include "playback/video/chapter/chapter.h"
+#include "playback/video/chapter/evidence_plan.h"
 #include "playback/video/chapter/generated_document.h"
 #include "playback/video/chapter/inference.h"
 #include "playback/video/chapter/inference_worker.h"
+#include "playback/video/chapter/inference_worker_protocol.h"
 #include "playback/video/chapter/sampled_evidence.h"
 #include "playback/video/transcript/document.h"
 #include "playback/video/image_wic.h"
@@ -29,12 +31,6 @@ struct OwnedFrame {
   std::uint32_t height = 0;
   std::vector<std::uint8_t> rgb;
   std::int64_t timeUs = 0;
-};
-
-struct OwnedWindow {
-  std::int64_t startUs = 0;
-  std::int64_t endUs = 0;
-  std::vector<OwnedFrame> frames;
 };
 
 bool rgbaToRgb(const playback_video_image::RgbaImage &source,
@@ -94,43 +90,32 @@ bool loadEvidenceCache(const std::filesystem::path &path,
     if (!document.is_object() || !document.contains("observations")) {
       throw std::runtime_error("evidence cache has invalid fields");
     }
-    std::vector<std::vector<std::int64_t>> sampleTimes;
-    std::vector<std::int64_t> intervalStarts;
-    std::vector<std::int64_t> intervalEnds;
-    for (const auto &window : request.windows) {
-      std::vector<std::int64_t> times;
-      for (const auto &frame : window.frames)
-        times.push_back(frame.timeUs);
-      sampleTimes.push_back(std::move(times));
-      intervalStarts.push_back(window.intervalStartUs);
-      intervalEnds.push_back(window.intervalEndUs);
-    }
+    std::vector<std::int64_t> sampleTimes;
+    sampleTimes.reserve(request.frames.size());
+    for (const auto &frame : request.frames)
+      sampleTimes.push_back(frame.timeUs);
     const bool visualIdentityMatches =
         document.value("model", std::string{}) ==
             request.model.generic_u8string() &&
         document.value("projector", std::string{}) ==
             request.projector.generic_u8string() &&
         document.value("duration_us", std::int64_t{0}) == request.durationUs &&
-        document.value("sample_times_us",
-                       std::vector<std::vector<std::int64_t>>{}) ==
-            sampleTimes &&
-        document.value("interval_starts_us", std::vector<std::int64_t>{}) ==
-            intervalStarts &&
-        document.value("interval_ends_us", std::vector<std::int64_t>{}) ==
-            intervalEnds;
+        document.value("sample_times_us", std::vector<std::int64_t>{}) ==
+            sampleTimes;
     nlohmann::json chapterPlan = nlohmann::json::array();
     for (const auto &chapter : request.chapterPlan) {
       chapterPlan.push_back(
           {{"start_us", chapter.startUs}, {"title", chapter.title}});
     }
-    const bool current = document.value("schema", 0) == 13 &&
-                         document.size() == 11 && visualIdentityMatches &&
-                         document.value("planner_model", std::string{}) ==
-                             request.plannerModel.generic_u8string() &&
-                         document.value("chapter_plan_adapter", std::string{}) ==
-                             request.chapterPlanAdapter.generic_u8string() &&
-                         document.value("chapter_plan", nlohmann::json{}) ==
-                             chapterPlan;
+    const bool current =
+        document.value("schema", 0) ==
+            playback_video_chapters::inference_worker_protocol::kSchema &&
+        document.size() == 9 && visualIdentityMatches &&
+        document.value("planner_model", std::string{}) ==
+            request.plannerModel.generic_u8string() &&
+        document.value("chapter_plan_adapter", std::string{}) ==
+            request.chapterPlanAdapter.generic_u8string() &&
+        document.value("chapter_plan", nlohmann::json{}) == chapterPlan;
     if (!current) {
       throw std::runtime_error("evidence cache does not match this request");
     }
@@ -144,8 +129,6 @@ bool loadEvidenceCache(const std::filesystem::path &path,
     checkpoint->observations =
         document["observations"].get<std::vector<std::string>>();
     checkpoint->sampleTimesUs = std::move(sampleTimes);
-    checkpoint->intervalStartsUs = std::move(intervalStarts);
-    checkpoint->intervalEndsUs = std::move(intervalEnds);
     return true;
   } catch (const std::exception &error) {
     if (detail)
@@ -167,7 +150,8 @@ bool storeEvidenceCache(
           {{"start_us", chapter.startUs}, {"title", chapter.title}});
     }
     nlohmann::json document = {
-        {"schema", 13},
+        {"schema",
+         playback_video_chapters::inference_worker_protocol::kSchema},
         {"model", checkpoint.model.generic_u8string()},
         {"projector", checkpoint.projector.generic_u8string()},
         {"planner_model", checkpoint.plannerModel.generic_u8string()},
@@ -176,8 +160,6 @@ bool storeEvidenceCache(
         {"chapter_plan", std::move(chapterPlan)},
         {"duration_us", checkpoint.durationUs},
         {"sample_times_us", checkpoint.sampleTimesUs},
-        {"interval_starts_us", checkpoint.intervalStartsUs},
-        {"interval_ends_us", checkpoint.intervalEndsUs},
         {"observations", checkpoint.observations}};
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     if (!output)
@@ -220,7 +202,7 @@ int main(int argc, char **argv) {
     return 2;
   }
   const std::filesystem::path input = argv[6];
-  std::vector<OwnedWindow> windows;
+  std::vector<OwnedFrame> frames;
   std::error_code error;
   if (std::filesystem::is_directory(input, error) && !error) {
     std::vector<std::filesystem::path> files;
@@ -233,11 +215,11 @@ int main(int argc, char **argv) {
       }
     }
     std::sort(files.begin(), files.end());
-    if (error || files.size() < kMinimumAutomaticEvidenceSampleCount ||
-        files.size() > kMaximumAutomaticEvidenceSampleCount) {
-      std::cerr << "expected " << kMinimumAutomaticEvidenceSampleCount
-                << " through " << kMaximumAutomaticEvidenceSampleCount
-                << " chronological PNG interval frames, found " << files.size()
+    if (error || files.size() < kMinimumAutomaticChapterCount ||
+        files.size() > kMaximumAutomaticChapterCount) {
+      std::cerr << "expected " << kMinimumAutomaticChapterCount
+                << " through " << kMaximumAutomaticChapterCount
+                << " chronological PNG candidate frames, found " << files.size()
                 << '\n';
       return 2;
     }
@@ -248,23 +230,15 @@ int main(int argc, char **argv) {
       std::cerr << detail << '\n';
       return 2;
     }
-    windows.resize(files.size());
+    frames.resize(files.size());
     for (std::size_t index = 0; index < files.size(); ++index) {
-      windows[index].frames.resize(1);
       playback_video_image::RgbaImage decoded;
       if (!codec.decodeFile(files[index], &decoded, {}, &detail) ||
-          !rgbaToRgb(decoded, &windows[index].frames.front())) {
+          !rgbaToRgb(decoded, &frames[index])) {
         std::cerr << "could not decode " << files[index] << ": " << detail
                   << '\n';
         return 2;
       }
-      windows[index].startUs = durationUs * static_cast<std::int64_t>(index) /
-                               static_cast<std::int64_t>(files.size());
-      windows[index].endUs = durationUs * static_cast<std::int64_t>(index + 1) /
-                             static_cast<std::int64_t>(files.size());
-      windows[index].frames.front().timeUs =
-          windows[index].startUs +
-          (windows[index].endUs - windows[index].startUs) / 2;
     }
   } else {
     std::cerr << "input is not a chronological PNG directory; direct video "
@@ -330,42 +304,29 @@ int main(int argc, char **argv) {
               << "): " << plan.detail << '\n';
     return 1;
   }
-  if (plan.chapterPlan.size() != windows.size()) {
+  if (plan.chapterPlan.size() != frames.size()) {
     std::cerr << "expected one chronological PNG for each of the "
               << plan.chapterPlan.size() << " ASR-planned chapters, found "
-              << windows.size() << '\n';
+              << frames.size() << '\n';
     return 2;
   }
   request.chapterPlan = std::move(plan.chapterPlan);
-  std::vector<std::int64_t> sampleTimesUs;
-  sampleTimesUs.reserve(request.chapterPlan.size());
-  for (const auto &chapter : request.chapterPlan)
-    sampleTimesUs.push_back(chapter.startUs);
-  sampleTimesUs.front() =
-      std::min<std::int64_t>(1'000'000, durationUs - 1);
-  for (std::size_t index = 0; index < windows.size(); ++index) {
-    const std::int64_t sampleUs = sampleTimesUs[index];
-    windows[index].startUs =
-        index == 0
-            ? 0
-            : sampleTimesUs[index - 1] +
-                  (sampleUs - sampleTimesUs[index - 1]) / 2;
-    windows[index].endUs =
-        index + 1 == windows.size()
-            ? durationUs
-            : sampleUs + (sampleTimesUs[index + 1] - sampleUs) / 2;
-    windows[index].frames.front().timeUs = sampleUs;
+  std::vector<std::int64_t> chapterStartsUs;
+  chapterStartsUs.reserve(request.chapterPlan.size());
+  for (const GeneratedChapterPlanEntry &chapter : request.chapterPlan)
+    chapterStartsUs.push_back(chapter.startUs);
+  const std::vector<std::int64_t> sampleTimesUs =
+      buildSpeechGuidedFrameSchedule(request.durationUs, chapterStartsUs);
+  if (sampleTimesUs.size() != frames.size()) {
+    std::cerr << "speech plan returned an invalid frame schedule\n";
+    return 2;
   }
-  request.windows.reserve(windows.size());
-  for (OwnedWindow &owned : windows) {
-    InferenceTemporalWindow window;
-    window.intervalStartUs = owned.startUs;
-    window.intervalEndUs = owned.endUs;
-    for (OwnedFrame &frame : owned.frames) {
-      window.frames.push_back(
-          {frame.width, frame.height, &frame.rgb, frame.timeUs});
-    }
-    request.windows.push_back(std::move(window));
+  request.frames.reserve(frames.size());
+  for (std::size_t index = 0; index < frames.size(); ++index) {
+    OwnedFrame &frame = frames[index];
+    frame.timeUs = sampleTimesUs[index];
+    request.frames.push_back(
+        {frame.width, frame.height, &frame.rgb, frame.timeUs});
   }
 
   InferenceCheckpoint checkpoint;
@@ -429,16 +390,11 @@ int main(int argc, char **argv) {
     return 1;
   }
   const auto emitEvidence = [&](std::ostream &output) {
-    std::size_t observation = 0;
-    for (const OwnedWindow &window : windows) {
-      for (const OwnedFrame &frame : window.frames) {
-        if (observation >= checkpoint.observations.size())
-          return;
-        output << "EVIDENCE\t" << observation + 1 << '\t' << window.startUs
-               << '\t' << window.endUs << '\t' << frame.timeUs << '\t'
-               << checkpoint.observations[observation] << '\n';
-        ++observation;
-      }
+    for (std::size_t index = 0;
+         index < frames.size() && index < checkpoint.observations.size();
+         ++index) {
+      output << "EVIDENCE\t" << index + 1 << '\t' << frames[index].timeUs
+             << '\t' << checkpoint.observations[index] << '\n';
     }
   };
   AnalysisResult result =

@@ -24,10 +24,10 @@ namespace playback_video_chapters {
 namespace {
 
 constexpr const wchar_t *kVisionRevision =
-    L"3a38804c39d96c935a6b542581f51171aefa06a5";
+    L"48fe6436abf57b3df6ec34f73cdc1fb4b740acb0";
 constexpr const wchar_t *kHost = L"huggingface.co";
 constexpr const wchar_t *kVisionRepository =
-    L"/openbmb/MiniCPM-V-2-gguf/resolve/";
+    L"/openbmb/MiniCPM-V-2_6-gguf/resolve/";
 constexpr const wchar_t *kModelFile = L"ggml-model-Q4_K_M.gguf";
 constexpr const wchar_t *kProjectorFile = L"mmproj-model-f16.gguf";
 constexpr const wchar_t *kPlannerRevision =
@@ -489,7 +489,7 @@ downloadOne(const std::filesystem::path &destination, const wchar_t *repository,
 ModelPaths resolveModelPaths() {
   ModelPaths paths;
   paths.directory =
-      radioifyWritableDataDir() / "models" / "minicpm-v-2-q4-k-m";
+      radioifyWritableDataDir() / "models" / "minicpm-v-2-6-q4-k-m";
   paths.model = paths.directory / kModelFile;
   paths.projector = paths.directory / kProjectorFile;
   paths.plannerDirectory =
@@ -578,7 +578,7 @@ CapabilityResult inspectPackagedChapterRuntime() {
 CapabilityResult inspectModelArtifacts(const ModelPaths &paths,
                                        const OperationControl &control) {
   if (control.progress) {
-    control.progress(std::nullopt, "Verifying MiniCPM-V 2.0 model");
+    control.progress(std::nullopt, "Verifying MiniCPM-V 2.6 model");
   }
   std::string error;
   const bool modelReady =
@@ -679,7 +679,7 @@ InstallResult installModelArtifacts(const ModelPaths &paths,
   if (!modelReady) {
     InstallResult model =
         downloadOne(paths.model, kVisionRepository, kVisionRevision, kModelFile,
-                    "Downloading MiniCPM-V 2.0 visual model", kModelBytes,
+                    "Downloading MiniCPM-V 2.6 visual model", kModelBytes,
                     kModelSha256, 0, control);
     if (model.status != OperationStatus::Succeeded)
       return model;
@@ -698,7 +698,7 @@ InstallResult installModelArtifacts(const ModelPaths &paths,
   if (!projectorReady) {
     InstallResult projector =
         downloadOne(paths.projector, kVisionRepository, kVisionRevision,
-                    kProjectorFile, "Downloading MiniCPM-V 2.0 projector",
+                    kProjectorFile, "Downloading MiniCPM-V 2.6 projector",
                     kProjectorBytes, kProjectorSha256, kModelBytes, control);
     if (projector.status != OperationStatus::Succeeded)
       return projector;

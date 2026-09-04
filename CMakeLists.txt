@@ -485,6 +485,7 @@ endfunction()
 
 add_executable(radioify_chapter_worker
   ${CMAKE_SOURCE_DIR}/tools/chapter_inference_worker.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/evidence_plan.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_protocol.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/prompt_contract.cpp
@@ -1011,6 +1012,7 @@ add_executable(chapter_inference_tests)
 target_sources(chapter_inference_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_chapter_inference_tests>
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/evidence_plan.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/generated_document.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/prompt_contract.cpp

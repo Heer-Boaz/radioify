@@ -16,13 +16,6 @@ struct ChapterPromptEvidence {
   std::string_view text;
 };
 
-// Builds the exact HwwwH/MiniCPM-V-2 chat turn used by Chapter-Llama's
-// published frame-caption extractor. The caller supplies llama.cpp's image
-// marker in place of the extractor's (<image>./</image>) placeholder.
-std::optional<std::string>
-buildChapterLlamaMiniCpmV2CaptionPrompt(std::string_view imageMarker,
-                                       std::size_t maximumBytes);
-
 // Builds the exact single-modality frame-selector prompt used by PromptASR.
 std::optional<std::string> buildChapterLlamaSpeechPrompt(
     std::int64_t durationUs,

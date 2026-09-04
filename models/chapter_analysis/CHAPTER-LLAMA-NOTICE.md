@@ -3,7 +3,7 @@
 `chapter-llama-asr-10k-f16.gguf` is a deterministic llama.cpp GGUF conversion
 of the Chapter-Llama authors' `asr-10k` PEFT adapter, published under the MIT
 license. Radioify uses it to select the candidate timestamps whose frames are
-captioned by MiniCPM-V 2.0.
+captioned by its pinned MiniCPM-V runtime.
 
 - Source repository: `lucas-ventura/chapter-llama`
 - Source revision: `a3837e908f05eb3697873acba2870b2370b1e92d`

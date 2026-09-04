@@ -157,31 +157,25 @@ bool writeRequestFiles(const std::filesystem::path &workspace,
                        const InferenceRequest &request, std::string *error) {
   std::error_code ignoredAudio;
   std::filesystem::remove(workspace / kAudioName, ignoredAudio);
-  nlohmann::json windows = nlohmann::json::array();
+  nlohmann::json frames = nlohmann::json::array();
   std::uintmax_t totalBytes = 0;
-  for (const InferenceTemporalWindow &window : request.windows) {
-    nlohmann::json frames = nlohmann::json::array();
-    for (const InferenceFrame &frame : window.frames) {
-      if (!frame.imageRgb ||
-          !validRgbSize(frame.imageWidth, frame.imageHeight,
-                        frame.imageRgb->size()) ||
-          totalBytes > kMaximumFrameBytes - frame.imageRgb->size()) {
-        setError(error, "The chapter worker received invalid frame data.");
-        return false;
-      }
-      totalBytes += frame.imageRgb->size();
-      frames.push_back({{"time_us", frame.timeUs},
-                        {"width", frame.imageWidth},
-                        {"height", frame.imageHeight},
-                        {"bytes", frame.imageRgb->size()}});
+  for (const InferenceFrame &frame : request.frames) {
+    if (!frame.imageRgb ||
+        !validRgbSize(frame.imageWidth, frame.imageHeight,
+                      frame.imageRgb->size()) ||
+        totalBytes > kMaximumFrameBytes - frame.imageRgb->size()) {
+      setError(error, "The chapter worker received invalid frame data.");
+      return false;
     }
-    windows.push_back({{"start_us", window.intervalStartUs},
-                       {"end_us", window.intervalEndUs},
-                       {"frames", std::move(frames)}});
+    totalBytes += frame.imageRgb->size();
+    frames.push_back({{"time_us", frame.timeUs},
+                      {"width", frame.imageWidth},
+                      {"height", frame.imageHeight},
+                      {"bytes", frame.imageRgb->size()}});
   }
   if (totalBytes == 0 || totalBytes > kMaximumFrameBytes ||
       request.englishDialogue.size() > kMaximumDialogueCues ||
-      request.chapterPlan.size() != request.windows.size() ||
+      request.chapterPlan.size() != request.frames.size() ||
       request.chapterPlan.size() < kMinimumAutomaticChapterCount ||
       request.chapterPlan.size() > kMaximumAutomaticChapterCount) {
     setError(error, "The chapter worker request exceeds its storage bounds.");
@@ -195,17 +189,15 @@ bool writeRequestFiles(const std::filesystem::path &workspace,
     setError(error, "Could not create the chapter frame staging file.");
     return false;
   }
-  for (const InferenceTemporalWindow &window : request.windows) {
-    for (const InferenceFrame &frame : window.frames) {
-      frameOutput.write(reinterpret_cast<const char *>(frame.imageRgb->data()),
-                        static_cast<std::streamsize>(frame.imageRgb->size()));
-      if (!frameOutput) {
-        frameOutput.close();
-        std::error_code ignored;
-        std::filesystem::remove(framesStaging, ignored);
-        setError(error, "Could not finish the chapter frame staging file.");
-        return false;
-      }
+  for (const InferenceFrame &frame : request.frames) {
+    frameOutput.write(reinterpret_cast<const char *>(frame.imageRgb->data()),
+                      static_cast<std::streamsize>(frame.imageRgb->size()));
+    if (!frameOutput) {
+      frameOutput.close();
+      std::error_code ignored;
+      std::filesystem::remove(framesStaging, ignored);
+      setError(error, "Could not finish the chapter frame staging file.");
+      return false;
     }
   }
   frameOutput.flush();
@@ -231,7 +223,7 @@ bool writeRequestFiles(const std::filesystem::path &workspace,
       {"planner_model", pathUtf8(request.plannerModel)},
       {"chapter_plan_adapter", pathUtf8(request.chapterPlanAdapter)},
       {"frame_bytes", totalBytes},
-      {"windows", std::move(windows)},
+      {"frames", std::move(frames)},
       {"english_dialogue", std::move(dialogue)},
       {"chapter_plan", std::move(chapterPlan)}};
   return writeJson(workspace / kRequestName, manifest, error);
@@ -409,8 +401,8 @@ bool loadRequest(const std::filesystem::path &workspace, OwnedRequest *owned,
     *owned = std::move(decoded);
     return true;
   }
-  if (operation != "analyze" || !manifest->contains("windows") ||
-      !(*manifest)["windows"].is_array() ||
+  if (operation != "analyze" || !manifest->contains("frames") ||
+      !(*manifest)["frames"].is_array() ||
       !manifest->contains("chapter_plan") ||
       !(*manifest)["chapter_plan"].is_array()) {
     setError(error, "The chapter worker operation is invalid.");
@@ -432,23 +424,20 @@ bool loadRequest(const std::filesystem::path &workspace, OwnedRequest *owned,
     return false;
   }
 
-  const auto &jsonWindows = (*manifest)["windows"];
-  if (jsonWindows.size() < kMinimumAutomaticEvidenceSampleCount ||
-      jsonWindows.size() > kMaximumAutomaticEvidenceSampleCount ||
-      (*manifest)["chapter_plan"].size() != jsonWindows.size()) {
+  const auto &jsonFrames = (*manifest)["frames"];
+  if (jsonFrames.size() < kMinimumAutomaticChapterCount ||
+      jsonFrames.size() > kMaximumAutomaticChapterCount ||
+      (*manifest)["chapter_plan"].size() != jsonFrames.size()) {
     setError(error, "The chapter worker request has an invalid timeline.");
     return false;
   }
-  std::size_t totalFrames = 0;
-  for (const auto &window : jsonWindows) {
-    if (!window.is_object() || !window.contains("frames") ||
-        !window["frames"].is_array() || window["frames"].size() != 1) {
-      setError(error, "The chapter worker request has invalid frame groups.");
+  for (const auto &frame : jsonFrames) {
+    if (!frame.is_object()) {
+      setError(error, "The chapter worker request has invalid frames.");
       return false;
     }
-    totalFrames += window["frames"].size();
   }
-  decoded.pixels.resize(totalFrames);
+  decoded.pixels.resize(jsonFrames.size());
 
   std::ifstream frameInput(workspace / kFramesName, std::ios::binary);
   if (!frameInput) {
@@ -458,27 +447,25 @@ bool loadRequest(const std::filesystem::path &workspace, OwnedRequest *owned,
   std::size_t frameIndex = 0;
   std::uintmax_t totalBytes = 0;
   try {
-    for (const auto &window : jsonWindows) {
-      for (const auto &frame : window["frames"]) {
-        const std::uint32_t width = frame.at("width").get<std::uint32_t>();
-        const std::uint32_t height = frame.at("height").get<std::uint32_t>();
-        const std::size_t bytes = frame.at("bytes").get<std::size_t>();
-        if (!validRgbSize(width, height, bytes) ||
-            totalBytes > kMaximumFrameBytes - bytes) {
-          setError(error, "The chapter worker frame dimensions are invalid.");
-          return false;
-        }
-        totalBytes += bytes;
-        decoded.pixels[frameIndex].resize(bytes);
-        frameInput.read(
-            reinterpret_cast<char *>(decoded.pixels[frameIndex].data()),
-            static_cast<std::streamsize>(bytes));
-        if (!frameInput) {
-          setError(error, "The chapter worker frame data is truncated.");
-          return false;
-        }
-        ++frameIndex;
+    for (const auto &frame : jsonFrames) {
+      const std::uint32_t width = frame.at("width").get<std::uint32_t>();
+      const std::uint32_t height = frame.at("height").get<std::uint32_t>();
+      const std::size_t bytes = frame.at("bytes").get<std::size_t>();
+      if (!validRgbSize(width, height, bytes) ||
+          totalBytes > kMaximumFrameBytes - bytes) {
+        setError(error, "The chapter worker frame dimensions are invalid.");
+        return false;
       }
+      totalBytes += bytes;
+      decoded.pixels[frameIndex].resize(bytes);
+      frameInput.read(
+          reinterpret_cast<char *>(decoded.pixels[frameIndex].data()),
+          static_cast<std::streamsize>(bytes));
+      if (!frameInput) {
+        setError(error, "The chapter worker frame data is truncated.");
+        return false;
+      }
+      ++frameIndex;
     }
   } catch (const nlohmann::json::exception &) {
     setError(error, "The chapter worker frame manifest is invalid.");
@@ -493,22 +480,16 @@ bool loadRequest(const std::filesystem::path &workspace, OwnedRequest *owned,
     return false;
   }
 
-  decoded.request.windows.reserve(jsonWindows.size());
+  decoded.request.frames.reserve(jsonFrames.size());
   frameIndex = 0;
   try {
-    for (const auto &jsonWindow : jsonWindows) {
-      InferenceTemporalWindow window;
-      window.intervalStartUs = jsonWindow.at("start_us").get<std::int64_t>();
-      window.intervalEndUs = jsonWindow.at("end_us").get<std::int64_t>();
-      window.frames.reserve(jsonWindow["frames"].size());
-      for (const auto &jsonFrame : jsonWindow["frames"]) {
-        window.frames.push_back({jsonFrame.at("width").get<std::uint32_t>(),
-                                 jsonFrame.at("height").get<std::uint32_t>(),
-                                 &decoded.pixels[frameIndex],
-                                 jsonFrame.at("time_us").get<std::int64_t>()});
-        ++frameIndex;
-      }
-      decoded.request.windows.push_back(std::move(window));
+    for (const auto &jsonFrame : jsonFrames) {
+      decoded.request.frames.push_back(
+          {jsonFrame.at("width").get<std::uint32_t>(),
+           jsonFrame.at("height").get<std::uint32_t>(),
+           &decoded.pixels[frameIndex],
+           jsonFrame.at("time_us").get<std::int64_t>()});
+      ++frameIndex;
     }
     for (const auto &cue : (*manifest)["english_dialogue"]) {
       if (decoded.request.englishDialogue.size() >= kMaximumDialogueCues)
@@ -541,8 +522,6 @@ nlohmann::json checkpointJson(const InferenceCheckpoint &checkpoint) {
   return {{"schema", inference_worker_protocol::kSchema},
           {"duration_us", checkpoint.durationUs},
           {"sample_times_us", checkpoint.sampleTimesUs},
-          {"interval_starts_us", checkpoint.intervalStartsUs},
-          {"interval_ends_us", checkpoint.intervalEndsUs},
           {"observations", checkpoint.observations},
           {"chapter_plan", std::move(plan)}};
 }
@@ -574,12 +553,8 @@ bool loadCheckpoint(const std::filesystem::path &workspace,
   decoded.chapterPlanAdapter = request.chapterPlanAdapter;
   try {
     decoded.durationUs = document->at("duration_us").get<std::int64_t>();
-    decoded.sampleTimesUs = document->at("sample_times_us")
-                                .get<std::vector<std::vector<std::int64_t>>>();
-    decoded.intervalStartsUs =
-        document->at("interval_starts_us").get<std::vector<std::int64_t>>();
-    decoded.intervalEndsUs =
-        document->at("interval_ends_us").get<std::vector<std::int64_t>>();
+    decoded.sampleTimesUs =
+        document->at("sample_times_us").get<std::vector<std::int64_t>>();
     decoded.observations =
         document->at("observations").get<std::vector<std::string>>();
     for (const auto &entry : document->at("chapter_plan")) {

@@ -1057,12 +1057,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       chapterOverviewScrollOffset = 0;
       syncOverlayPresentation();
       return true;
-    case Action::InstallChapterModel:
-      return executeChapterAction(
-          playback_video_chapters::Action::InstallModels);
-    case Action::CancelChapterOperation:
-      return executeChapterAction(
-          playback_video_chapters::Action::CancelInstallation);
     case Action::ToggleWindowPresentation: {
       const bool changed = presentationController.toggleWindow();
       redraw = redraw || changed;
