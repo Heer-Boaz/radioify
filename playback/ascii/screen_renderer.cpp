@@ -472,6 +472,8 @@ void renderPlaybackScreen(const PlaybackScreenResources &resources,
           screen, overlayLayout, overlayStyles, ratio, &overlayState.videoEdit,
           &overlayState.videoEditExport, overlayState.videoEditPrompt,
           overlayState.mediaActionConfirmationPrompt, &overlayState.chapters,
+          overlayState.chapterActivityPhase,
+          overlayState.chapterActivityMotionEnabled,
           overlayState.chapterOverviewOpen,
           overlayState.chapterOverviewScrollOffset, artTop, height);
     }

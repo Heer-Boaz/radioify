@@ -1022,23 +1022,52 @@ int main() {
   };
   playback_overlay::PlaybackOverlayState chapterControlState;
   chapterControlState.chapterControlVisible = true;
+  chapterControlState.chapterActivityPhase = 0.25;
   chapterControlState.chapters.state =
       playback_video_chapters::AnalysisState::Analyzing;
   chapterControlState.chapters.progress = 0.37;
   const auto analyzingChapterControls =
       playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
+  const std::vector<float> earlyChapterSweep =
+      playback_overlay::indeterminateCharacterSweep(12, 0.25);
+  const std::vector<float> lateChapterSweep =
+      playback_overlay::indeterminateCharacterSweep(12, 0.65);
+  const std::vector<float> reducedMotionChapterState =
+      playback_overlay::chapterControlCharacterHighlights(
+          chapterControlState.chapters, false, 12, 0.25);
+  const auto litCellCount = [](const std::vector<float> &sweep) {
+    return std::count_if(sweep.begin(), sweep.end(),
+                         [](float intensity) { return intensity > 0.0f; });
+  };
   ok &= expect(
       controlFor(analyzingChapterControls,
                  playback_overlay::OverlayControlId::Chapters) !=
-          analyzingChapterControls.end(),
-      "the chapter entry point must remain stable while analysis is running");
+              analyzingChapterControls.end() &&
+          earlyChapterSweep != lateChapterSweep &&
+          litCellCount(earlyChapterSweep) <= 4 &&
+          litCellCount(lateChapterSweep) <= 4 &&
+          reducedMotionChapterState == std::vector<float>(12, 0.75f) &&
+          *std::max_element(earlyChapterSweep.begin(),
+                            earlyChapterSweep.end()) == 1.0f,
+      "analysis must retain its stable entry point and animate a bounded "
+      "indeterminate character sweep");
+  chapterControlState.chapters.state =
+      playback_video_chapters::AnalysisState::WaitingForPlayback;
+  ok &= expect(
+      !playback_overlay::chapterControlCharacterHighlights(
+           chapterControlState.chapters, true, 12, 0.25)
+           .empty(),
+      "a chapter request waiting for GPU playback admission must remain visibly active");
   chapterControlState.chapters.state =
       playback_video_chapters::AnalysisState::Unsupported;
   const auto unsupportedChapterControls =
       playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
   ok &= expect(controlFor(unsupportedChapterControls,
                           playback_overlay::OverlayControlId::Chapters) !=
-                   unsupportedChapterControls.end(),
+                       unsupportedChapterControls.end() &&
+                   playback_overlay::chapterControlCharacterHighlights(
+                       chapterControlState.chapters, true, 12, 0.25)
+                       .empty(),
                "unsupported analysis must retain its stable details entry point");
   chapterControlState.chapters.state =
       playback_video_chapters::AnalysisState::Disabled;

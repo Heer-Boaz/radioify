@@ -131,6 +131,9 @@ buildPlaybackOverlayState(const PlaybackOverlayInputs &inputs) {
   state.mediaTaskActivity = inputs.mediaTaskActivity;
   state.chapters = inputs.chapters;
   state.chapterControlVisible = inputs.chapterControlVisible;
+  state.chapterActivityPhase =
+      std::clamp(inputs.chapterActivityPhase, 0.0, 1.0);
+  state.chapterActivityMotionEnabled = inputs.chapterActivityMotionEnabled;
   state.chapterOverviewOpen = inputs.chapterOverviewOpen;
   state.chapterOverviewScrollOffset = inputs.chapterOverviewScrollOffset;
   state.chromeVisible =
@@ -429,6 +432,8 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState &state,
   ui.videoEditPrompt = state.videoEditPrompt;
   ui.mediaActionConfirmationPrompt = state.mediaActionConfirmationPrompt;
   ui.chapters = state.chapters;
+  ui.chapterActivityPhase = state.chapterActivityPhase;
+  ui.chapterActivityMotionEnabled = state.chapterActivityMotionEnabled;
   ui.chapterOverviewOpen = state.chapterOverviewOpen;
   ui.chapterOverviewScrollOffset = state.chapterOverviewScrollOffset;
   return ui;
@@ -898,7 +903,9 @@ void renderOverlayToTarget(
     playback_video_edit::Prompt videoEditPrompt,
     const std::optional<MediaActionConfirmationDialog>
         &mediaActionConfirmationPrompt,
-    const playback_video_chapters::Snapshot *chapters, bool chapterOverviewOpen,
+    const playback_video_chapters::Snapshot *chapters,
+    double chapterActivityPhase, bool chapterActivityMotionEnabled,
+    bool chapterOverviewOpen,
     int chapterOverviewScrollOffset) {
   if (!target.isDrawable())
     return;
@@ -918,6 +925,33 @@ void renderOverlayToTarget(
       style = {style.bg, style.fg};
     }
     target.writeControlText(item.text, item.y, item.x, item.width, style);
+    if (item.id == OverlayControlId::Chapters && !item.hovered && chapters) {
+      // An indeterminate highlight travels through the existing affordance.
+      // The violet tail reuses the chapter-marker color family; the warm head
+      // uses the player's accent. Spaces remain untouched so the effect reads
+      // as character illumination rather than a second progress bar.
+      const std::vector<float> sweep = chapterControlCharacterHighlights(
+          *chapters, chapterActivityMotionEnabled, item.width,
+          chapterActivityPhase);
+      const std::wstring glyphs = overlayUtf8ToWide(item.text);
+      for (int column = 0;
+           column < item.width && column < static_cast<int>(glyphs.size()) &&
+           column < static_cast<int>(sweep.size());
+           ++column) {
+        const float intensity = sweep[static_cast<std::size_t>(column)];
+        if (intensity <= 0.0f ||
+            glyphs[static_cast<std::size_t>(column)] == L' ') {
+          continue;
+        }
+        Style sweepStyle = style;
+        sweepStyle.fg = intensity >= 1.0f
+                            ? styles.accentStyle.fg
+                            : lerpColor(style.fg, Color{177, 143, 255},
+                                        intensity);
+        target.writeChar(item.x + column, item.y,
+                         glyphs[static_cast<std::size_t>(column)], sweepStyle);
+      }
+    }
   }
 
   if (modalDialog)
@@ -1035,13 +1069,17 @@ void renderOverlayToScreen(
     playback_video_edit::Prompt videoEditPrompt,
     const std::optional<MediaActionConfirmationDialog>
         &mediaActionConfirmationPrompt,
-    const playback_video_chapters::Snapshot *chapters, bool chapterOverviewOpen,
+    const playback_video_chapters::Snapshot *chapters,
+    double chapterActivityPhase, bool chapterActivityMotionEnabled,
+    bool chapterOverviewOpen,
     int chapterOverviewScrollOffset, int minY, int maxY) {
   ScreenOverlayTarget target(screen, minY, maxY);
   renderOverlayToTarget(target, layout, styles, progress, videoEdit,
                         videoEditExport, videoEditPrompt,
                         mediaActionConfirmationPrompt, chapters,
-                        chapterOverviewOpen, chapterOverviewScrollOffset);
+                        chapterActivityPhase, chapterActivityMotionEnabled,
+                        chapterOverviewOpen,
+                        chapterOverviewScrollOffset);
 }
 
 void renderTransientMessageToScreen(ConsoleScreen &screen,
@@ -1086,7 +1124,9 @@ bool renderWindowUiToGpuTextGrid(
     renderOverlayToTarget(target, overlayLayout, styles, ui.progress,
                           &ui.videoEdit, &ui.videoEditExport,
                           ui.videoEditPrompt, ui.mediaActionConfirmationPrompt,
-                          &ui.chapters, ui.chapterOverviewOpen,
+                          &ui.chapters, ui.chapterActivityPhase,
+                          ui.chapterActivityMotionEnabled,
+                          ui.chapterOverviewOpen,
                           ui.chapterOverviewScrollOffset);
     rendered = true;
   }

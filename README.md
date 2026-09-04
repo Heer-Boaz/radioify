@@ -339,10 +339,12 @@ to the browser.
 - `Chapters` is a stable player control. It starts manual analysis when the
   automatic trigger is disabled, reports the current lifecycle state when
   content is not ready, and toggles the responsive chapter drawer once results
-  exist. The drawer has a persistent `Close` action, and `Esc`/Back closes it
-  before leaving playback. It is confined to video-content space and never
-  covers the title, controls, status, or timeline. Chapter boundaries appear
-  on the shared timeline in both ASCII and framebuffer presentation. Hovering
+  exist. While analysis runs, a character highlight sweep with a short
+  afterglow animates inside the existing control; it adds no status text or
+  layout width. The drawer has a persistent `Close` action, and `Esc`/Back
+  closes it before leaving playback. It is confined to video-content space and
+  never covers the title, controls, status, or timeline. Chapter boundaries
+  appear on the shared timeline in both ASCII and framebuffer presentation. Hovering
   anywhere on that timeline keeps the existing preview frame and adds the
   chapter title and time range; metadata wraps to the responsive panel width.
   Until usable chapter content exists, the chapter list stays closed and the

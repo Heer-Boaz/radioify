@@ -117,6 +117,8 @@ struct WindowUiState {
   playback_overlay::ContextMenuSnapshot contextMenu;
   playback_video_timeline_preview::Snapshot timelinePreview;
   playback_video_chapters::Snapshot chapters;
+  double chapterActivityPhase = 0.0;
+  bool chapterActivityMotionEnabled = true;
   bool chapterOverviewOpen = false;
   int chapterOverviewScrollOffset = 0;
   playback_video_edit::EditSnapshot videoEdit;

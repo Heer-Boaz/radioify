@@ -1,5 +1,13 @@
 #include "loop.h"
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -95,6 +103,12 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   static constexpr auto kEditMessageDuration = std::chrono::milliseconds(2200);
   static constexpr auto kAnalysisMessageDuration =
       std::chrono::milliseconds(6000);
+  static constexpr auto kChapterActivityFrameInterval =
+      std::chrono::milliseconds(60);
+  static constexpr auto kChapterActivityPeriod =
+      std::chrono::milliseconds(1500);
+  static constexpr auto kAnimationPreferenceRefreshInterval =
+      std::chrono::seconds(1);
 
   ConsoleScreen &screen;
   AudioPlaybackRuntime &audioPlayback;
@@ -130,6 +144,11 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   playback_session::BackgroundGpuAdmissionPolicy chapterGpuAdmission;
   std::chrono::steady_clock::time_point lastChapterGpuHeartbeat =
       std::chrono::steady_clock::time_point::min();
+  std::chrono::steady_clock::time_point lastChapterActivityFrame =
+      std::chrono::steady_clock::time_point::min();
+  std::chrono::steady_clock::time_point lastAnimationPreferenceRefresh =
+      std::chrono::steady_clock::time_point::min();
+  bool clientAreaAnimationsEnabled = true;
   int overlayControlHover = -1;
 
   PlaybackPresentationController presentationController;
@@ -1303,6 +1322,66 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
            contextMenuController.visible();
   }
 
+  bool chapterActivityControlVisible() const {
+    return chapterSnapshot.running() && overlayVisible() &&
+           !contextMenuController.visible() &&
+           !mediaActionConfirmation.snapshot() &&
+           videoEditPrompt() == playback_video_edit::Prompt::None &&
+           !videoEditWorkspace.edit().active;
+  }
+
+  bool chapterActivityMotionVisible() const {
+    return chapterActivityControlVisible() && clientAreaAnimationsEnabled;
+  }
+
+  void refreshAnimationPreference() {
+    if (!chapterSnapshot.running())
+      return;
+    const auto now = std::chrono::steady_clock::now();
+    if (lastAnimationPreferenceRefresh !=
+            std::chrono::steady_clock::time_point::min() &&
+        now - lastAnimationPreferenceRefresh <
+            kAnimationPreferenceRefreshInterval) {
+      return;
+    }
+    BOOL enabled = TRUE;
+    if (SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &enabled, 0)) {
+      const bool nextEnabled = enabled != FALSE;
+      if (nextEnabled != clientAreaAnimationsEnabled) {
+        clientAreaAnimationsEnabled = nextEnabled;
+        redraw = true;
+      }
+    }
+    lastAnimationPreferenceRefresh = now;
+  }
+
+  double chapterActivityPhase() const {
+    if (!chapterActivityMotionVisible())
+      return 0.0;
+    const auto elapsed = std::chrono::steady_clock::now().time_since_epoch();
+    const auto period =
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            kChapterActivityPeriod);
+    const auto withinPeriod = elapsed % period;
+    return std::chrono::duration<double>(withinPeriod).count() /
+           std::chrono::duration<double>(period).count();
+  }
+
+  void updateChapterActivityAnimation() {
+    if (!chapterActivityMotionVisible()) {
+      lastChapterActivityFrame = std::chrono::steady_clock::time_point::min();
+      return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (lastChapterActivityFrame !=
+            std::chrono::steady_clock::time_point::min() &&
+        now - lastChapterActivityFrame < kChapterActivityFrameInterval) {
+      return;
+    }
+    lastChapterActivityFrame = now;
+    redraw = true;
+  }
+
   playback_overlay::PlaybackOsdSnapshot osdSnapshot() const {
     playback_overlay::PlaybackOsdSnapshot snapshot = osd.snapshot();
     snapshot.controlsVisible = snapshot.controlsVisible || config.debugOverlay;
@@ -1613,6 +1692,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     projection.mediaTaskActivity = mediaTaskActivity;
     projection.chapters = chapterPresentationSnapshot(projection.videoEdit);
     projection.chapterControlVisible = true;
+    projection.chapterActivityPhase = chapterActivityPhase();
+    projection.chapterActivityMotionEnabled = clientAreaAnimationsEnabled;
     projection.chapterOverviewOpen = chapterOverviewOpen;
     projection.chapterOverviewScrollOffset = chapterOverviewScrollOffset;
     if (config.debugOverlay &&
@@ -1688,6 +1769,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     if (presentationController.terminalRole() ==
         PlaybackShellTerminalRole::Browser) {
       publishPresentation(buildScreenModel(false, presented));
+      if (chapterActivityControlVisible() && output.windowOpen())
+        output.requestWindowPresent();
       redraw = false;
       forceRefreshArt = false;
       copiedFrameNeedsRender = false;
@@ -1699,6 +1782,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         buildScreenModel(forceRefreshArt || renderCopiedFrame,
                          presented || renderCopiedFrame);
     publishPresentation(model);
+    if (chapterActivityControlVisible() && output.windowOpen())
+      output.requestWindowPresent();
     renderTerminal(model);
     auto t1 = std::chrono::steady_clock::now();
     lastDebugRefresh = t1;
@@ -1889,6 +1974,21 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         core.playbackState() == PlaybackSessionState::Active) {
       wake_schedule::include(deadline, now + kTerminalPlaybackRefreshInterval);
     }
+    if (chapterActivityMotionVisible()) {
+      wake_schedule::include(
+          deadline,
+          lastChapterActivityFrame == wake_schedule::TimePoint::min()
+              ? now
+              : lastChapterActivityFrame + kChapterActivityFrameInterval);
+    }
+    if (chapterActivityControlVisible()) {
+      wake_schedule::include(
+          deadline,
+          lastAnimationPreferenceRefresh == wake_schedule::TimePoint::min()
+              ? now
+              : lastAnimationPreferenceRefresh +
+                    kAnimationPreferenceRefreshInterval);
+    }
     if (perfLog.enabled) {
       wake_schedule::include(deadline,
                              lastUiHeartbeat + kTimingLogHeartbeatInterval);
@@ -1936,6 +2036,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     if (chapterRequestId && chapterAnalysis.consumeChanged()) {
       refreshChapterSnapshot();
     }
+    refreshAnimationPreference();
+    updateChapterActivityAnimation();
     updateChapterGpuPriority();
     pollVideoEditExport();
     pollVideoEditBoundaryCommit();

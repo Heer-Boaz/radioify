@@ -1,6 +1,7 @@
 #include "playback/overlay/overlay.h"
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -62,6 +63,40 @@ OverlayControlSpec makeOverlayTextControlSpec(OverlayControlId id,
   spec.active = active;
   spec.enabled = enabled;
   return spec;
+}
+
+std::vector<float> indeterminateCharacterSweep(int width, double phase) {
+  constexpr int kAfterglowCells = 4;
+  const int safeWidth = std::max(0, width);
+  std::vector<float> intensities(static_cast<std::size_t>(safeWidth), 0.0f);
+  if (safeWidth == 0)
+    return intensities;
+
+  double normalizedPhase = std::isfinite(phase) ? phase - std::floor(phase)
+                                                 : 0.0;
+  if (normalizedPhase < 0.0)
+    normalizedPhase += 1.0;
+  const int head = static_cast<int>(std::floor(
+      normalizedPhase * static_cast<double>(safeWidth + kAfterglowCells)));
+  for (int column = 0; column < safeWidth; ++column) {
+    const int distance = head - column;
+    if (distance >= 0 && distance < kAfterglowCells) {
+      intensities[static_cast<std::size_t>(column)] =
+          1.0f - static_cast<float>(distance) / kAfterglowCells;
+    }
+  }
+  return intensities;
+}
+
+std::vector<float> chapterControlCharacterHighlights(
+    const playback_video_chapters::Snapshot &chapters, bool motionEnabled,
+    int width, double phase) {
+  if (!chapters.running())
+    return {};
+  if (motionEnabled)
+    return indeterminateCharacterSweep(width, phase);
+  return std::vector<float>(static_cast<std::size_t>(std::max(0, width)),
+                            0.75f);
 }
 
 std::vector<OverlayCellControlInput>

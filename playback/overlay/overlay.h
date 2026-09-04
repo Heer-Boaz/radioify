@@ -197,6 +197,8 @@ struct PlaybackOverlayInputs {
   std::optional<playback_media_processing::Activity> mediaTaskActivity;
   playback_video_chapters::Snapshot chapters;
   bool chapterControlVisible = false;
+  double chapterActivityPhase = 0.0;
+  bool chapterActivityMotionEnabled = true;
   bool chapterOverviewOpen = false;
   int chapterOverviewScrollOffset = 0;
 };
@@ -244,6 +246,8 @@ struct PlaybackOverlayState {
   std::optional<playback_media_processing::Activity> mediaTaskActivity;
   playback_video_chapters::Snapshot chapters;
   bool chapterControlVisible = false;
+  double chapterActivityPhase = 0.0;
+  bool chapterActivityMotionEnabled = true;
   bool chapterOverviewOpen = false;
   int chapterOverviewScrollOffset = 0;
 };
@@ -305,6 +309,13 @@ std::string buildWindowOverlayTopLine(const PlaybackOverlayState &state);
 WindowUiState buildWindowUiState(const PlaybackOverlayState &state,
                                  int hoverControlToken);
 
+// Returns a left-to-right indeterminate highlight with a short trailing glow.
+// The normalized phase may wrap; callers own the animation clock.
+std::vector<float> indeterminateCharacterSweep(int width, double phase);
+std::vector<float> chapterControlCharacterHighlights(
+    const playback_video_chapters::Snapshot &chapters, bool motionEnabled,
+    int width, double phase);
+
 struct OverlayRenderStyles {
   Style baseStyle{{219, 224, 230}, {5, 6, 7}};
   Style accentStyle{{250, 176, 51}, baseStyle.bg};
@@ -327,7 +338,9 @@ void renderOverlayToScreen(
     playback_video_edit::Prompt videoEditPrompt,
     const std::optional<MediaActionConfirmationDialog>
         &mediaActionConfirmationPrompt,
-    const playback_video_chapters::Snapshot *chapters, bool chapterOverviewOpen,
+    const playback_video_chapters::Snapshot *chapters,
+    double chapterActivityPhase, bool chapterActivityMotionEnabled,
+    bool chapterOverviewOpen,
     int chapterOverviewScrollOffset, int minY, int maxY);
 
 void renderTransientMessageToScreen(ConsoleScreen &screen,
