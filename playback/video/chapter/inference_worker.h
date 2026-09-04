@@ -4,6 +4,7 @@
 #include <string>
 
 #include "playback/video/chapter/inference.h"
+#include "playback/video/transcript/worker_types.h"
 
 namespace playback_video_chapters {
 
@@ -62,6 +63,10 @@ SpeechChapterPlanResult runSpeechChapterPlanWorker(
     const SpeechChapterPlanRequest &request,
     const OperationControl &control,
     const InferenceWorkspaceLease &lease);
+
+playback_video_transcript::SpeechWorkerResult runSpeechTranscriptionWorker(
+    const playback_video_transcript::SpeechWorkerRequest &request,
+    const OperationControl &control, const InferenceWorkspaceLease &lease);
 
 // Removes only the known private files for an exact source identity. Final
 // chapter documents are owned by cache.cpp and are never touched here.

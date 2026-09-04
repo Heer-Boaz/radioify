@@ -1,14 +1,19 @@
 #include <algorithm>
+#include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "core/file_output.h"
 #include "core/unicode_display_width.h"
 #include "core/utf8.h"
 #include "playback/video/analysis/visual_timeline_scan.h"
 #include "playback/video/chapter/chapter.h"
+#include "playback/video/chapter/cache.h"
 #include "playback/video/chapter/evidence_plan.h"
 #include "playback/video/chapter/generated_document.h"
 #include "playback/video/chapter/integrity.h"
@@ -18,6 +23,9 @@
 #include "playback/video/chapter/text_evidence.h"
 #include "playback/video/subtitle/manager.h"
 #include "playback/video/timeline_preview_types.h"
+#include "playback/video/transcript/artifact.h"
+#include "playback/video/transcript/document.h"
+#include "playback/video/transcript/provenance.h"
 
 namespace {
 
@@ -571,6 +579,129 @@ bool runTextEvidenceTests() {
   const auto fallback = selectEnglishTextEvidence(tracks, "movie.mkv");
   ok &= expect(fallback && fallback->label == "English forced",
                "a forced English track must remain a fallback to commentary");
+
+  const auto stamp =
+      std::chrono::steady_clock::now().time_since_epoch().count();
+  const std::filesystem::path testDir =
+      std::filesystem::temp_directory_path() /
+      ("radioify-chapter-text-" + std::to_string(stamp));
+  std::error_code filesystemError;
+  std::filesystem::create_directories(testDir, filesystemError);
+  const std::filesystem::path video = testDir / "movie.webm";
+  const std::filesystem::path generated =
+      playback_video_transcript::generatedEnglishTranscriptPathForVideo(video);
+  const std::string generatedProducer = "radioify-test-producer-v1";
+  std::string generatedError;
+  {
+    std::ofstream source(video, std::ios::binary);
+    source << "representative media identity";
+  }
+  const auto sourceIdentity =
+      playback_video_transcript::captureTranscriptSourceIdentity(
+          video, &generatedError);
+  auto generatedTransaction = file_output::TransactionGroup::begin(
+      {{generated, file_output::PublishMode::CreateNew},
+       {playback_video_transcript::transcriptProvenancePath(generated),
+        file_output::PublishMode::CreateNew}},
+      &generatedError);
+  const bool generatedPublished =
+      sourceIdentity && generatedTransaction &&
+      playback_video_transcript::writeIndexedTranscriptStaging(
+          generatedTransaction->temporaryPath(0),
+          {{1'000'000, 2'000'000, "Persisted speech"}}, &generatedError) &&
+      playback_video_transcript::writeTranscriptProvenanceStaging(
+          *sourceIdentity, generatedProducer, generated,
+          generatedTransaction->temporaryPath(0),
+          generatedTransaction->temporaryPath(1), &generatedError) &&
+      generatedTransaction->publish(&generatedError);
+  ok &= expect(!filesystemError && generatedPublished,
+               "the generated-English evidence fixture must be publishable");
+  const auto generatedEvidence =
+      loadGeneratedEnglishTextEvidence(video, generatedProducer,
+                                       &generatedError);
+  ok &= expect(!loadGeneratedEnglishTextEvidence(
+                   video, "radioify-test-producer-v2"),
+               "generated English evidence must be invalidated when its "
+               "model or transcript algorithm identity changes");
+  const auto rediscoveredEvidence =
+      loadGeneratedEnglishTextEvidence(video, generatedProducer);
+  ok &= expect(generatedEvidence && generatedError.empty() &&
+                   generatedEvidence->language == "en" &&
+                   generatedEvidence->cues.size() == 1 &&
+                   generatedEvidence->cues.front().text == "Persisted speech" &&
+                   rediscoveredEvidence &&
+                   generatedEvidence->identity == rediscoveredEvidence->identity,
+               "chapter analysis must consume an English ASR sidecar created "
+               "after subtitle discovery with the same cache identity used "
+               "after reopening playback");
+#ifdef _WIN32
+  std::wstring caseVariantText = video.wstring();
+  if (!caseVariantText.empty() && caseVariantText.front() >= L'A' &&
+      caseVariantText.front() <= L'Z') {
+    caseVariantText.front() =
+        static_cast<wchar_t>(caseVariantText.front() - L'A' + L'a');
+  }
+  const std::filesystem::path caseVariantVideo(caseVariantText);
+  const auto caseVariantEvidence =
+      loadGeneratedEnglishTextEvidence(caseVariantVideo, generatedProducer);
+  ok &= expect(caseVariantEvidence.has_value(),
+               "Windows path casing must not invalidate generated transcript "
+               "provenance");
+  if (generatedEvidence && caseVariantEvidence) {
+    AnalysisRequest originalRequest;
+    originalRequest.file = video;
+    originalRequest.durationUs = 10'000'000;
+    originalRequest.englishText = generatedEvidence;
+    AnalysisRequest caseVariantRequest = originalRequest;
+    caseVariantRequest.file = caseVariantVideo;
+    caseVariantRequest.englishText = caseVariantEvidence;
+    ok &= expect(analysisSourceKey(originalRequest) ==
+                     analysisSourceKey(caseVariantRequest),
+                 "Windows path casing must not create a second chapter cache "
+                 "identity");
+  }
+#endif
+  const std::uintmax_t originalSize =
+      std::filesystem::file_size(video, filesystemError);
+  const auto originalTime =
+      std::filesystem::last_write_time(video, filesystemError);
+  const std::filesystem::path replacement = testDir / "replacement.webm";
+  {
+    std::ofstream changedSource(replacement, std::ios::binary);
+    changedSource << std::string(static_cast<std::size_t>(originalSize), 'x');
+  }
+  std::filesystem::remove(video, filesystemError);
+  std::filesystem::rename(replacement, video, filesystemError);
+  std::filesystem::last_write_time(video, originalTime, filesystemError);
+  ok &= expect(!loadGeneratedEnglishTextEvidence(video, generatedProducer),
+               "a generated transcript must not survive same-size, same-time "
+               "replacement of its source video at the same path");
+  const auto replacementIdentity =
+      playback_video_transcript::captureTranscriptSourceIdentity(
+          video, &generatedError);
+  auto repairTransaction = file_output::TransactionGroup::begin(
+      {{generated, file_output::PublishMode::ReplaceExisting},
+       {playback_video_transcript::transcriptProvenancePath(generated),
+        file_output::PublishMode::ReplaceExisting}},
+      &generatedError);
+  const bool repaired =
+      replacementIdentity && repairTransaction &&
+      playback_video_transcript::writeIndexedTranscriptStaging(
+          repairTransaction->temporaryPath(0),
+          {{2'000'000, 3'000'000, "Replacement speech"}}, &generatedError) &&
+      playback_video_transcript::writeTranscriptProvenanceStaging(
+          *replacementIdentity, generatedProducer, generated,
+          repairTransaction->temporaryPath(0),
+          repairTransaction->temporaryPath(1), &generatedError) &&
+      repairTransaction->publish(&generatedError);
+  const auto repairedEvidence =
+      loadGeneratedEnglishTextEvidence(video, generatedProducer);
+  ok &= expect(repaired && repairedEvidence &&
+                   repairedEvidence->cues.front().text ==
+                       "Replacement speech",
+               "a stale Radioify-owned transcript pair must be repairable as "
+               "one atomic publication after source replacement");
+  std::filesystem::remove_all(testDir, filesystemError);
   return ok;
 }
 

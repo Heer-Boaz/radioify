@@ -208,6 +208,41 @@ int main(int argc, char **argv) {
                "the worker protocol must preserve the typed ASR planner "
                "operation independently of frame-analysis requests");
 
+  std::vector<float> speechSamples(1600, 0.25f);
+  playback_video_transcript::SpeechWorkerRequest speechProtocol;
+  speechProtocol.model = "whisper.bin";
+  speechProtocol.alignmentPreset =
+      playback_video_transcript::WhisperAlignmentPreset::Base;
+  speechProtocol.task =
+      playback_video_transcript::WhisperTask::TranslateToEnglish;
+  speechProtocol.samples = speechSamples.data();
+  speechProtocol.sampleCount = speechSamples.size();
+  bool speechProtocolValid =
+      inference_worker_protocol::storeSpeechTranscriptionRequest(
+          protocolWorkspace, speechProtocol, &protocolDetail);
+  if (speechProtocolValid) {
+    try {
+      std::ifstream input(protocolWorkspace / "request.json",
+                          std::ios::binary);
+      nlohmann::json document;
+      input >> document;
+      speechProtocolValid =
+          input && document.is_object() &&
+          document.value("schema", 0) == inference_worker_protocol::kSchema &&
+          document.value("operation", std::string{}) ==
+              "transcribe_speech" &&
+          document.value("sample_count", std::size_t{0}) ==
+              speechSamples.size() &&
+          std::filesystem::file_size(protocolWorkspace / "audio.f32") ==
+              speechSamples.size() * sizeof(float);
+    } catch (...) {
+      speechProtocolValid = false;
+    }
+  }
+  ok &= expect(speechProtocolValid,
+               "the killable worker protocol must preserve an exact owned "
+               "PCM chunk without media seeking or text serialization");
+
   InferenceEngine engine;
   OperationControl cancelled;
   cancelled.cancelled = [] { return true; };

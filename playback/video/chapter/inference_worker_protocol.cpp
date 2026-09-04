@@ -31,12 +31,15 @@ namespace {
 constexpr std::uintmax_t kMaximumManifestBytes = 16u * 1024u * 1024u;
 constexpr std::uintmax_t kMaximumCheckpointBytes = 4u * 1024u * 1024u;
 constexpr std::uintmax_t kMaximumFrameBytes = 1024ull * 1024ull * 1024ull;
+constexpr std::size_t kMaximumSpeechSamples =
+    60ull * playback_video_transcript::WhisperEngine::kSampleRate;
 constexpr std::size_t kMaximumDialogueCues = 200'000;
 
 std::atomic<std::uint64_t> gStagingSequence{0};
 
 const std::filesystem::path kRequestName = L"request.json";
 const std::filesystem::path kFramesName = L"frames.rgb";
+const std::filesystem::path kAudioName = L"audio.f32";
 const std::filesystem::path kCheckpointName = L"checkpoint.json";
 const std::filesystem::path kProgressName = L"progress.json";
 const std::filesystem::path kResultName = L"result.json";
@@ -44,10 +47,13 @@ const std::filesystem::path kResultName = L"result.json";
 struct OwnedRequest {
   enum class Operation {
     Analyze,
-    PlanChaptersFromSpeech
+    PlanChaptersFromSpeech,
+    TranscribeSpeech,
   } operation = Operation::Analyze;
   InferenceRequest request;
   SpeechChapterPlanRequest planRequest;
+  playback_video_transcript::SpeechWorkerRequest speechRequest;
+  std::vector<float> speechSamples;
   std::vector<std::vector<std::uint8_t>> pixels;
 };
 
@@ -149,6 +155,8 @@ bool validRgbSize(std::uint32_t width, std::uint32_t height,
 
 bool writeRequestFiles(const std::filesystem::path &workspace,
                        const InferenceRequest &request, std::string *error) {
+  std::error_code ignoredAudio;
+  std::filesystem::remove(workspace / kAudioName, ignoredAudio);
   nlohmann::json windows = nlohmann::json::array();
   std::uintmax_t totalBytes = 0;
   for (const InferenceTemporalWindow &window : request.windows) {
@@ -245,6 +253,7 @@ bool writeSpeechChapterPlanRequestFiles(
   }
   std::error_code ignored;
   std::filesystem::remove(workspace / kFramesName, ignored);
+  std::filesystem::remove(workspace / kAudioName, ignored);
   return writeJson(workspace / kRequestName,
                    {{"schema", inference_worker_protocol::kSchema},
                     {"operation", "plan_chapters_from_speech"},
@@ -253,6 +262,50 @@ bool writeSpeechChapterPlanRequestFiles(
                     {"plan_adapter", pathUtf8(request.planAdapter)},
                     {"english_dialogue", std::move(dialogue)}},
                    error);
+}
+
+bool writeSpeechTranscriptionRequestFiles(
+    const std::filesystem::path &workspace,
+    const playback_video_transcript::SpeechWorkerRequest &request,
+    std::string *error) {
+  if (request.model.empty() || !request.samples || request.sampleCount == 0 ||
+      request.sampleCount > kMaximumSpeechSamples) {
+    setError(error,
+             "The chapter worker received an invalid speech request.");
+    return false;
+  }
+  const std::filesystem::path audioPath = workspace / kAudioName;
+  const std::filesystem::path audioStaging = stagingPath(audioPath);
+  std::ofstream output(audioStaging, std::ios::binary | std::ios::trunc);
+  if (!output) {
+    setError(error, "Could not create the speech staging file.");
+    return false;
+  }
+  output.write(reinterpret_cast<const char *>(request.samples),
+               static_cast<std::streamsize>(request.sampleCount *
+                                            sizeof(float)));
+  output.flush();
+  output.close();
+  if (!output) {
+    std::error_code ignored;
+    std::filesystem::remove(audioStaging, ignored);
+    setError(error, "Could not finish the speech staging file.");
+    return false;
+  }
+  if (!publish(audioStaging, audioPath, error))
+    return false;
+  std::error_code ignored;
+  std::filesystem::remove(workspace / kFramesName, ignored);
+  return writeJson(
+      workspace / kRequestName,
+      {{"schema", inference_worker_protocol::kSchema},
+       {"operation", "transcribe_speech"},
+       {"model", pathUtf8(request.model)},
+       {"alignment_preset", static_cast<int>(request.alignmentPreset)},
+       {"source_language", request.sourceLanguage},
+       {"task", static_cast<int>(request.task)},
+       {"sample_count", request.sampleCount}},
+      error);
 }
 
 bool loadRequest(const std::filesystem::path &workspace, OwnedRequest *owned,
@@ -264,14 +317,69 @@ bool loadRequest(const std::filesystem::path &workspace, OwnedRequest *owned,
   const auto manifest =
       readJson(workspace / kRequestName, kMaximumManifestBytes, error);
   if (!manifest || !manifest->is_object() ||
-      manifest->value("schema", 0) != inference_worker_protocol::kSchema ||
-      !manifest->contains("english_dialogue") ||
-      !(*manifest)["english_dialogue"].is_array()) {
+      manifest->value("schema", 0) != inference_worker_protocol::kSchema) {
     setError(error, "The chapter worker request manifest is invalid.");
     return false;
   }
   OwnedRequest decoded;
   const std::string operation = manifest->value("operation", std::string{});
+  if (operation == "transcribe_speech") {
+    decoded.operation = OwnedRequest::Operation::TranscribeSpeech;
+    try {
+      const int alignment = manifest->at("alignment_preset").get<int>();
+      const int task = manifest->at("task").get<int>();
+      const std::size_t sampleCount =
+          manifest->at("sample_count").get<std::size_t>();
+      if (alignment < static_cast<int>(
+                          playback_video_transcript::WhisperAlignmentPreset::
+                              None) ||
+          alignment > static_cast<int>(
+                          playback_video_transcript::WhisperAlignmentPreset::
+                              LargeV3Turbo) ||
+          task < static_cast<int>(
+                     playback_video_transcript::WhisperTask::Transcribe) ||
+          task > static_cast<int>(playback_video_transcript::WhisperTask::
+                                      TranslateToEnglish) ||
+          sampleCount == 0 || sampleCount > kMaximumSpeechSamples) {
+        setError(error, "The chapter worker speech request is invalid.");
+        return false;
+      }
+      decoded.speechSamples.resize(sampleCount);
+      decoded.speechRequest.model =
+          pathFromUtf8(manifest->at("model").get<std::string>());
+      decoded.speechRequest.alignmentPreset =
+          static_cast<playback_video_transcript::WhisperAlignmentPreset>(
+              alignment);
+      decoded.speechRequest.sourceLanguage =
+          manifest->at("source_language").get<std::string>();
+      decoded.speechRequest.task =
+          static_cast<playback_video_transcript::WhisperTask>(task);
+      decoded.speechRequest.samples = decoded.speechSamples.data();
+      decoded.speechRequest.sampleCount = decoded.speechSamples.size();
+      std::ifstream audio(workspace / kAudioName, std::ios::binary);
+      audio.read(reinterpret_cast<char *>(decoded.speechSamples.data()),
+                 static_cast<std::streamsize>(decoded.speechSamples.size() *
+                                              sizeof(float)));
+      if (!audio || audio.peek() != std::ifstream::traits_type::eof()) {
+        setError(error, "The chapter worker speech data is truncated.");
+        return false;
+      }
+    } catch (const nlohmann::json::exception &) {
+      setError(error, "The chapter worker speech manifest is invalid.");
+      return false;
+    } catch (const std::bad_alloc &) {
+      setError(error, "The chapter worker speech request exceeds its bounds.");
+      return false;
+    }
+    *owned = std::move(decoded);
+    owned->speechRequest.samples = owned->speechSamples.data();
+    return true;
+  }
+  if (!manifest->contains("english_dialogue") ||
+      !(*manifest)["english_dialogue"].is_array()) {
+    setError(error, "The chapter worker request has no dialogue timeline.");
+    return false;
+  }
   if (operation == "plan_chapters_from_speech") {
     decoded.operation = OwnedRequest::Operation::PlanChaptersFromSpeech;
     try {
@@ -520,6 +628,37 @@ bool storeSpeechChapterPlanResult(const std::filesystem::path &workspace,
       error);
 }
 
+bool storeSpeechTranscriptionResult(
+    const std::filesystem::path &workspace,
+    const playback_video_transcript::SpeechWorkerResult &result,
+    std::string *error) {
+  nlohmann::json segments = nlohmann::json::array();
+  for (const playback_video_transcript::RecognizedSegment &segment :
+       result.document.segments) {
+    nlohmann::json tokens = nlohmann::json::array();
+    for (const playback_video_transcript::RecognizedToken &token :
+         segment.tokens) {
+      tokens.push_back({{"start_us", token.startUs},
+                        {"end_us", token.endUs},
+                        {"alignment_us", token.alignmentUs},
+                        {"text", token.text}});
+    }
+    segments.push_back({{"start_us", segment.startUs},
+                        {"end_us", segment.endUs},
+                        {"text", segment.text},
+                        {"tokens", std::move(tokens)}});
+  }
+  return writeJson(
+      workspace / kResultName,
+      {{"schema", inference_worker_protocol::kSchema},
+       {"operation", "transcribe_speech"},
+       {"status", static_cast<int>(result.status)},
+       {"detail", result.detail},
+       {"source_language", result.document.sourceLanguage},
+       {"segments", std::move(segments)}},
+      error);
+}
+
 class ProgressPublisher final {
 public:
   explicit ProgressPublisher(std::filesystem::path workspace)
@@ -568,6 +707,13 @@ bool inference_worker_protocol::storeSpeechChapterPlanRequest(
   return writeSpeechChapterPlanRequestFiles(workspace, request, error);
 }
 
+bool inference_worker_protocol::storeSpeechTranscriptionRequest(
+    const std::filesystem::path &workspace,
+    const playback_video_transcript::SpeechWorkerRequest &request,
+    std::string *error) {
+  return writeSpeechTranscriptionRequestFiles(workspace, request, error);
+}
+
 int inferenceWorkerMain(const std::filesystem::path &workspace) {
   std::string error;
   OwnedRequest owned;
@@ -586,6 +732,45 @@ int inferenceWorkerMain(const std::filesystem::path &workspace) {
     progress.publish(fraction, phase);
   };
   InferenceEngine engine;
+  if (owned.operation == OwnedRequest::Operation::TranscribeSpeech) {
+    playback_video_transcript::SpeechWorkerResult result;
+    playback_video_transcript::WhisperEngine whisper;
+    std::string device;
+    progress.publish(0.0, "Loading Vulkan speech model");
+    if (!whisper.initialize(
+            owned.speechRequest.model,
+            owned.speechRequest.alignmentPreset,
+            owned.speechRequest.sourceLanguage, &device, &result.detail)) {
+      result.status = playback_video_transcript::SpeechWorkerStatus::Failed;
+    } else {
+      progress.publish(0.02, "Vulkan ready on " + device);
+      const bool succeeded = whisper.transcribe(
+          owned.speechRequest.samples, owned.speechRequest.sampleCount,
+          [&](int value) {
+            progress.publish(
+                std::clamp(static_cast<double>(value) / 100.0, 0.0, 1.0),
+                owned.speechRequest.task ==
+                        playback_video_transcript::WhisperTask::
+                            TranslateToEnglish
+                    ? "Translating speech to English"
+                    : "Transcribing audio");
+          },
+          [] { return false; }, &result.document.segments, &result.detail,
+          owned.speechRequest.task);
+      result.status = succeeded
+                          ? playback_video_transcript::SpeechWorkerStatus::
+                                Succeeded
+                          : playback_video_transcript::SpeechWorkerStatus::
+                                Failed;
+      result.document.sourceLanguage = whisper.sourceLanguage();
+    }
+    if (!storeSpeechTranscriptionResult(workspace, result, &error))
+      return 3;
+    return result.status ==
+                   playback_video_transcript::SpeechWorkerStatus::Succeeded
+               ? 0
+               : 4;
+  }
   if (owned.operation == OwnedRequest::Operation::PlanChaptersFromSpeech) {
     const SpeechChapterPlanResult result =
         engine.planChaptersFromSpeech(owned.planRequest, control);

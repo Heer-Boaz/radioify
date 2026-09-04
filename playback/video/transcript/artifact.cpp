@@ -60,6 +60,26 @@ languageTaggedTranscriptPathForVideo(const std::filesystem::path &videoPath,
   return output;
 }
 
+std::filesystem::path generatedEnglishTranscriptPathForVideo(
+    const std::filesystem::path &videoPath) {
+  if (videoPath.filename().empty())
+    return {};
+  std::filesystem::path output = videoPath.parent_path() / videoPath.filename();
+  output += L".radioify.transcript.en.srt";
+  return output;
+}
+
+bool isGeneratedEnglishTranscriptPath(
+    const std::filesystem::path &videoPath,
+    const std::filesystem::path &candidatePath) {
+  if (videoPath.empty() || candidatePath.empty())
+    return false;
+  std::wstring expected = lowercase(
+      generatedEnglishTranscriptPathForVideo(videoPath).lexically_normal().wstring());
+  std::wstring candidate = lowercase(candidatePath.lexically_normal().wstring());
+  return expected == candidate;
+}
+
 std::filesystem::path
 activeTranscriptPathForVideo(const std::filesystem::path &videoPath) {
   const std::filesystem::path canonical = transcriptPathForVideo(videoPath);

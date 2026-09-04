@@ -25,32 +25,33 @@
 #include "playback/video/chapter/text_evidence.h"
 #include "playback/video/decoder.h"
 #include "playback/video/subtitle/manager.h"
+#include "playback/video/transcript/transcriber.h"
 
 namespace {
 
 using playback_video_chapters::AnalysisState;
 using playback_video_chapters::Snapshot;
 
-const char* stateName(AnalysisState state) {
+const char *stateName(AnalysisState state) {
   switch (state) {
-    case AnalysisState::Disabled:
-      return "disabled";
-    case AnalysisState::CheckingSupport:
-      return "checking-support";
-    case AnalysisState::SetupRequired:
-      return "setup-required";
-    case AnalysisState::Installing:
-      return "installing";
-    case AnalysisState::WaitingForPlayback:
-      return "waiting-for-gpu";
-    case AnalysisState::Analyzing:
-      return "analyzing";
-    case AnalysisState::Ready:
-      return "ready";
-    case AnalysisState::Unsupported:
-      return "unsupported";
-    case AnalysisState::Failed:
-      return "failed";
+  case AnalysisState::Disabled:
+    return "disabled";
+  case AnalysisState::CheckingSupport:
+    return "checking-support";
+  case AnalysisState::SetupRequired:
+    return "setup-required";
+  case AnalysisState::Installing:
+    return "installing";
+  case AnalysisState::WaitingForPlayback:
+    return "waiting-for-gpu";
+  case AnalysisState::Analyzing:
+    return "analyzing";
+  case AnalysisState::Ready:
+    return "ready";
+  case AnalysisState::Unsupported:
+    return "unsupported";
+  case AnalysisState::Failed:
+    return "failed";
   }
   return "unknown";
 }
@@ -64,20 +65,20 @@ bool terminal(AnalysisState state) {
 
 int exitCode(AnalysisState state) {
   switch (state) {
-    case AnalysisState::Ready:
-      return 0;
-    case AnalysisState::SetupRequired:
-      return 2;
-    case AnalysisState::Unsupported:
-      return 3;
-    default:
-      return 4;
+  case AnalysisState::Ready:
+    return 0;
+  case AnalysisState::SetupRequired:
+    return 2;
+  case AnalysisState::Unsupported:
+    return 3;
+  default:
+    return 4;
   }
 }
 
-void publishDocument(const std::filesystem::path& file,
-                     const playback_video_chapters::AnalysisRequest* request,
-                     const Snapshot& snapshot, bool cacheHit,
+void publishDocument(const std::filesystem::path &file,
+                     const playback_video_chapters::AnalysisRequest *request,
+                     const Snapshot &snapshot, bool cacheHit,
                      bool hasEnglishText) {
   nlohmann::json document = {
       {"schema", 1},
@@ -93,15 +94,15 @@ void publishDocument(const std::filesystem::path& file,
     const std::filesystem::path cachePath =
         playback_video_chapters::analysisCachePath(*request);
     std::error_code error;
-    const bool persisted = std::filesystem::is_regular_file(cachePath, error) &&
-                           !error;
+    const bool persisted =
+        std::filesystem::is_regular_file(cachePath, error) && !error;
     document["cache_key"] =
         playback_video_chapters::analysisSourceKey(*request);
     document["cache_path"] = toUtf8String(cachePath);
     document["persisted"] = persisted;
   }
   nlohmann::json chapters = nlohmann::json::array();
-  for (const playback_video_chapters::Chapter& chapter : snapshot.chapters) {
+  for (const playback_video_chapters::Chapter &chapter : snapshot.chapters) {
     chapters.push_back({{"id", chapter.id},
                         {"start_us", chapter.startUs},
                         {"end_us", chapter.endUs},
@@ -111,7 +112,7 @@ void publishDocument(const std::filesystem::path& file,
   std::cout << document.dump(2) << '\n';
 }
 
-void reportProgress(const Snapshot& snapshot) {
+void reportProgress(const Snapshot &snapshot) {
   std::cerr << "chapter-analysis state=" << stateName(snapshot.state);
   if (snapshot.progress) {
     std::cerr << " progress=" << std::fixed << std::setprecision(3)
@@ -122,24 +123,23 @@ void reportProgress(const Snapshot& snapshot) {
   std::cerr << '\n';
 }
 
-bool progressMilestone(const Snapshot& snapshot,
+bool progressMilestone(const Snapshot &snapshot,
                        std::optional<AnalysisState> previousState,
-                       const std::string& previousPhase,
-                       int previousPercent) {
+                       const std::string &previousPhase, int previousPercent) {
   if (!previousState || snapshot.state != *previousState ||
       snapshot.phase != previousPhase || terminal(snapshot.state)) {
     return true;
   }
-  const int percent = snapshot.progress
-                          ? static_cast<int>(std::floor(
-                                std::clamp(*snapshot.progress, 0.0, 1.0) * 100.0))
-                          : -1;
+  const int percent =
+      snapshot.progress ? static_cast<int>(std::floor(
+                              std::clamp(*snapshot.progress, 0.0, 1.0) * 100.0))
+                        : -1;
   return percent != previousPercent;
 }
 
-}  // namespace
+} // namespace
 
-int runChapterAnalysisCli(const std::filesystem::path& file) {
+int runChapterAnalysisCli(const std::filesystem::path &file) {
   try {
     VideoMetadata metadata;
     std::string probeError;
@@ -165,10 +165,17 @@ int runChapterAnalysisCli(const std::filesystem::path& file) {
     request.sourceHeight = metadata.height;
     request.englishText =
         playback_video_chapters::selectEnglishTextEvidence(subtitles, file);
+    const auto transcriptProducer = playback_video_transcript::
+        automaticEnglishTranscriptProducerIdentity();
+    if (!request.englishText && transcriptProducer) {
+      request.englishText =
+          playback_video_chapters::loadGeneratedEnglishTextEvidence(
+              file, *transcriptProducer);
+    }
 
     const bool cacheHit =
         playback_video_chapters::loadCachedAnalysis(request).has_value();
-    const bool hasEnglishText = request.englishText.has_value();
+    bool hasEnglishText = request.englishText.has_value();
     playback_video_chapters::Service service;
     const playback_video_chapters::Service::RequestId requestId =
         service.start(request);
@@ -184,10 +191,11 @@ int runChapterAnalysisCli(const std::filesystem::path& file) {
         reportProgress(snapshot);
         reportedState = snapshot.state;
         reportedPhase = snapshot.phase;
-        reportedPercent = snapshot.progress
-                              ? static_cast<int>(std::floor(std::clamp(
-                                    *snapshot.progress, 0.0, 1.0) * 100.0))
-                              : -1;
+        reportedPercent =
+            snapshot.progress
+                ? static_cast<int>(std::floor(
+                      std::clamp(*snapshot.progress, 0.0, 1.0) * 100.0))
+                : -1;
       }
       if (terminal(snapshot.state))
         break;
@@ -214,10 +222,16 @@ int runChapterAnalysisCli(const std::filesystem::path& file) {
       snapshot = service.snapshot(requestId);
     }
 
+    if (!request.englishText && transcriptProducer) {
+      request.englishText =
+          playback_video_chapters::loadGeneratedEnglishTextEvidence(
+              file, *transcriptProducer);
+      hasEnglishText = request.englishText.has_value();
+    }
     publishDocument(file, &request, snapshot, cacheHit, hasEnglishText);
     service.cancel(requestId);
     return exitCode(snapshot.state);
-  } catch (const std::exception& error) {
+  } catch (const std::exception &error) {
     Snapshot failed;
     failed.state = AnalysisState::Failed;
     failed.detail = std::string("Chapter analysis failed: ") + error.what();

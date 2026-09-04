@@ -15,6 +15,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/file_instance.h"
 #include "core/path_identity.h"
 #include "core/runtime_helpers.h"
 #include "playback/video/chapter/integrity.h"
@@ -24,10 +25,11 @@
 namespace playback_video_chapters {
 namespace {
 
-// Schema 26 binds persisted results to the published HwwwH/MiniCPM-V-2
+// Schema 27 binds persisted results to the source file instance and published
+// HwwwH/MiniCPM-V-2
 // caption turn and captions-plus-ASR Chapter-Llama planner. Earlier Radioify
 // prompt variants and overview/summary artifacts are not compatible.
-constexpr int kSchema = 26;
+constexpr int kSchema = 27;
 
 void setError(std::string *error, std::string value) {
   if (error)
@@ -44,11 +46,14 @@ std::string sourceIdentity(const AnalysisRequest &request) {
   const std::int64_t ticks =
       error ? 0
             : static_cast<std::int64_t>(modified.time_since_epoch().count());
+  const auto instance = fileInstanceIdentity(request.file);
   std::ostringstream identity;
   identity << "radioify-video-chapters-v" << kSchema << '\n'
-           << toUtf8String(path.normalizedPath) << '\n'
+           << toUtf8String(pathIdentityKey(path)) << '\n'
            << stableSize << '\n'
            << ticks << '\n'
+           << (instance ? instance->device : 0) << '\n'
+           << (instance ? instance->file : 0) << '\n'
            << request.videoStreamIndex << '\n'
            << request.durationUs << '\n'
            << request.sourceWidth << 'x' << request.sourceHeight << '\n'

@@ -11,7 +11,6 @@
 #include <utility>
 
 #include "playback/video/transcript/device_selection.h"
-#include "runtime_helpers.h"
 
 namespace playback_video_transcript {
 namespace {
@@ -227,7 +226,9 @@ bool WhisperEngine::initialize(const std::filesystem::path &modelPath,
     parameters.dtw_aheads_preset = whisperAlignmentPreset(alignmentPreset);
   }
 
-  const std::string modelPathUtf8 = toUtf8String(modelPath);
+  const auto modelPathBytes = modelPath.u8string();
+  const std::string modelPathUtf8(modelPathBytes.begin(),
+                                  modelPathBytes.end());
   WhisperContextPtr context(
       whisper_init_from_file_with_params(modelPathUtf8.c_str(), parameters));
 
@@ -256,7 +257,7 @@ bool WhisperEngine::transcribe(const float *samples, size_t sampleCount,
                                const ProgressCallback &onProgress,
                                const AbortCheck &shouldAbort,
                                std::vector<RecognizedSegment> *segments,
-                               std::string *error) {
+                               std::string *error, WhisperTask task) {
   if (error)
     error->clear();
   if (segments)
@@ -273,6 +274,13 @@ bool WhisperEngine::transcribe(const float *samples, size_t sampleCount,
     setError(error, "The Whisper audio chunk is too large.");
     return false;
   }
+  if (task == WhisperTask::TranslateToEnglish &&
+      !whisper_is_multilingual(impl_->context.get())) {
+    setError(error,
+             "Automatic English speech evidence requires a multilingual "
+             "Whisper model.");
+    return false;
+  }
 
   WhisperCallbackBridge bridge;
   bridge.progress = &onProgress;
@@ -281,7 +289,7 @@ bool WhisperEngine::transcribe(const float *samples, size_t sampleCount,
   whisper_full_params parameters =
       whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
   parameters.n_threads = inferenceThreadCount();
-  parameters.translate = false;
+  parameters.translate = task == WhisperTask::TranslateToEnglish;
   parameters.language =
       impl_->sourceLanguage.empty() ? "auto" : impl_->sourceLanguage.c_str();
   // "auto" detects a language and then transcribes it. In whisper.cpp,
@@ -301,8 +309,12 @@ bool WhisperEngine::transcribe(const float *samples, size_t sampleCount,
   // segmentation. Enabling token timestamps without Whisper's max_len split
   // keeps those responsibilities separate and prevents model-created orphan
   // words at an arbitrary character boundary.
-  parameters.token_timestamps = true;
-  parameters.thold_pt = 0.01f;
+  // Whisper's translation task does not provide trustworthy word-level
+  // alignment. Preserve its source-audio segment intervals and only request
+  // DTW/token timing for same-language transcription.
+  parameters.token_timestamps = task == WhisperTask::Transcribe;
+  if (parameters.token_timestamps)
+    parameters.thold_pt = 0.01f;
   parameters.progress_callback = whisperProgress;
   parameters.progress_callback_user_data = &bridge;
   parameters.abort_callback = whisperAbort;
@@ -338,7 +350,10 @@ bool WhisperEngine::transcribe(const float *samples, size_t sampleCount,
       continue;
     segment.text = text;
 
-    const int tokenCount = whisper_full_n_tokens(impl_->context.get(), index);
+    const int tokenCount = parameters.token_timestamps
+                               ? whisper_full_n_tokens(impl_->context.get(),
+                                                       index)
+                               : 0;
     segment.tokens.reserve(static_cast<size_t>(std::max(0, tokenCount)));
     const whisper_token firstSpecialToken =
         whisper_token_eot(impl_->context.get());

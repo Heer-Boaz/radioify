@@ -16,6 +16,17 @@ std::filesystem::path
 languageTaggedTranscriptPathForVideo(const std::filesystem::path &videoPath,
                                      std::string_view language);
 
+// Private, Radioify-owned English evidence produced as a prerequisite for
+// automatic chapter analysis. Keeping it outside the conventional
+// <video>.transcript.en.srt namespace means user-authored subtitles and older
+// transcript exports are never overwritten by background work.
+std::filesystem::path generatedEnglishTranscriptPathForVideo(
+    const std::filesystem::path &videoPath);
+
+bool isGeneratedEnglishTranscriptPath(
+    const std::filesystem::path &videoPath,
+    const std::filesystem::path &candidatePath);
+
 // Resolves the transcript consumed by playback and analysis. The canonical
 // artifact wins whenever it exists. Numbered files from older Radioify builds
 // are considered only as a migration fallback, newest first.

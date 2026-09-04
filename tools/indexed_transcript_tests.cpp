@@ -211,6 +211,14 @@ int main() {
               .empty(),
       "generated transcript paths must persist an ISO 639-1 language without "
       "guessing");
+  ok &= expect(
+      transcript::generatedEnglishTranscriptPathForVideo("film.mkv") ==
+              std::filesystem::path(
+                  "film.mkv.radioify.transcript.en.srt") &&
+          transcript::generatedEnglishTranscriptPathForVideo("film.mp4") !=
+              transcript::generatedEnglishTranscriptPathForVideo("film.mkv"),
+      "background English evidence must use a Radioify-owned path unique to "
+      "the complete source filename");
 
   const auto stamp =
       std::chrono::steady_clock::now().time_since_epoch().count();

@@ -34,6 +34,7 @@ constexpr std::uintmax_t kMaximumResultBytes = 2u * 1024u * 1024u;
 
 const std::filesystem::path kRequestName = L"request.json";
 const std::filesystem::path kFramesName = L"frames.rgb";
+const std::filesystem::path kAudioName = L"audio.f32";
 const std::filesystem::path kCheckpointName = L"checkpoint.json";
 const std::filesystem::path kProgressName = L"progress.json";
 const std::filesystem::path kResultName = L"result.json";
@@ -214,10 +215,72 @@ loadSpeechChapterPlanResult(const std::filesystem::path &workspace) {
   }
 }
 
+std::optional<playback_video_transcript::SpeechWorkerResult>
+loadSpeechTranscriptionResult(const std::filesystem::path &workspace) {
+  constexpr std::size_t kMaximumSegments = 20'000;
+  constexpr std::size_t kMaximumTokens = 200'000;
+  try {
+    const std::filesystem::path path = workspace / kResultName;
+    std::error_code sizeError;
+    const std::uintmax_t size = std::filesystem::file_size(path, sizeError);
+    if (sizeError || size == 0 || size > kMaximumResultBytes)
+      return std::nullopt;
+    std::ifstream input(path, std::ios::binary);
+    nlohmann::json document;
+    input >> document;
+    if (!input || !document.is_object() ||
+        document.value("schema", 0) != inference_worker_protocol::kSchema ||
+        document.value("operation", std::string{}) != "transcribe_speech" ||
+        !document.contains("segments") || !document["segments"].is_array() ||
+        document["segments"].size() > kMaximumSegments) {
+      return std::nullopt;
+    }
+    const int rawStatus = document.value("status", -1);
+    if (rawStatus < static_cast<int>(
+                        playback_video_transcript::SpeechWorkerStatus::
+                            Succeeded) ||
+        rawStatus > static_cast<int>(
+                        playback_video_transcript::SpeechWorkerStatus::Failed)) {
+      return std::nullopt;
+    }
+    playback_video_transcript::SpeechWorkerResult result;
+    result.status =
+        static_cast<playback_video_transcript::SpeechWorkerStatus>(rawStatus);
+    result.detail = document.value("detail", std::string{});
+    result.document.sourceLanguage =
+        document.value("source_language", std::string{});
+    std::size_t totalTokens = 0;
+    for (const auto &item : document["segments"]) {
+      if (!item.is_object() || !item.contains("tokens") ||
+          !item["tokens"].is_array() ||
+          item["tokens"].size() > kMaximumTokens - totalTokens) {
+        return std::nullopt;
+      }
+      playback_video_transcript::RecognizedSegment segment;
+      segment.startUs = item.at("start_us").get<std::int64_t>();
+      segment.endUs = item.at("end_us").get<std::int64_t>();
+      segment.text = item.at("text").get<std::string>();
+      totalTokens += item["tokens"].size();
+      segment.tokens.reserve(item["tokens"].size());
+      for (const auto &tokenItem : item["tokens"]) {
+        segment.tokens.push_back(
+            {tokenItem.at("start_us").get<std::int64_t>(),
+             tokenItem.at("end_us").get<std::int64_t>(),
+             tokenItem.at("alignment_us").get<std::int64_t>(),
+             tokenItem.at("text").get<std::string>()});
+      }
+      result.document.segments.push_back(std::move(segment));
+    }
+    return result;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
 bool isKnownStagingFile(const std::filesystem::path &path) {
   const std::wstring name = path.filename().wstring();
   for (const std::filesystem::path &base :
-       {kRequestName, kFramesName, kCheckpointName, kProgressName,
+       {kRequestName, kFramesName, kAudioName, kCheckpointName, kProgressName,
         kResultName}) {
     const std::wstring prefix = base.wstring() + L".partial-";
     if (name.compare(0, prefix.size(), prefix) == 0)
@@ -252,7 +315,7 @@ void discardWorkspaceUnlocked(const std::string &sourceKey) {
     return;
   removeStaleStagingFiles(workspace);
   for (const std::filesystem::path &name :
-       {kRequestName, kFramesName, kCheckpointName, kProgressName,
+       {kRequestName, kFramesName, kAudioName, kCheckpointName, kProgressName,
         kResultName}) {
     std::error_code ignored;
     std::filesystem::remove(workspace / name, ignored);
@@ -484,6 +547,34 @@ SpeechChapterPlanResult runSpeechChapterPlanWorker(
   return {OperationStatus::Failed,
           "The chapter speech-plan worker exited without a valid result "
           "(code " +
+              std::to_string(outcome.exitCode) + ").",
+          {}};
+}
+
+playback_video_transcript::SpeechWorkerResult runSpeechTranscriptionWorker(
+    const playback_video_transcript::SpeechWorkerRequest &request,
+    const OperationControl &control, const InferenceWorkspaceLease &lease) {
+  const WorkerProcessOutcome outcome = runWorkerProcess(
+      control, lease, [&](const std::filesystem::path &workspace,
+                          std::string *error) {
+        return inference_worker_protocol::storeSpeechTranscriptionRequest(
+            workspace, request, error);
+      });
+  if (outcome.status != OperationStatus::Succeeded) {
+    playback_video_transcript::SpeechWorkerStatus status =
+        playback_video_transcript::SpeechWorkerStatus::Failed;
+    if (outcome.status == OperationStatus::Yielded) {
+      status = playback_video_transcript::SpeechWorkerStatus::Yielded;
+    } else if (outcome.status == OperationStatus::Cancelled) {
+      status = playback_video_transcript::SpeechWorkerStatus::Cancelled;
+    }
+    return {status, outcome.detail, {}};
+  }
+  const std::filesystem::path workspace = workspacePath(lease.sourceKey());
+  if (const auto result = loadSpeechTranscriptionResult(workspace))
+    return *result;
+  return {playback_video_transcript::SpeechWorkerStatus::Failed,
+          "The speech worker exited without a valid result (code " +
               std::to_string(outcome.exitCode) + ").",
           {}};
 }

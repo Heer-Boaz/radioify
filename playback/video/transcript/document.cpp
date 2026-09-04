@@ -220,6 +220,45 @@ bool writeIndexedTranscript(const std::filesystem::path& outputPath,
     }
   }
 
+  const std::filesystem::path parent = outputPath.parent_path();
+  if (!parent.empty()) {
+    std::error_code ec;
+    const bool isDirectory = std::filesystem::is_directory(parent, ec);
+    if (ec || !isDirectory) {
+      setError(error, "Transcript directory does not exist: " +
+                          toUtf8String(parent));
+      return false;
+    }
+  }
+
+  const file_output::PublishMode outputMode =
+      publishMode == TranscriptPublishMode::ReplaceExisting
+          ? file_output::PublishMode::ReplaceExisting
+          : file_output::PublishMode::CreateNew;
+  std::optional<file_output::Transaction> transaction =
+      file_output::Transaction::begin(outputPath, outputMode, error);
+  if (!transaction) return false;
+
+  if (!writeIndexedTranscriptStaging(transaction->temporaryPath(), segments,
+                                     error)) {
+    return false;
+  }
+
+  if (outputCommitStarted && !outputCommitStarted()) {
+    setError(error, "Transcript cancelled before publication.");
+    return false;
+  }
+  return transaction->publish(error);
+}
+
+bool writeIndexedTranscriptStaging(const std::filesystem::path& stagingPath,
+                                   const std::vector<Segment>& segments,
+                                   std::string* error) {
+  if (error) error->clear();
+  if (stagingPath.empty() || stagingPath.filename().empty()) {
+    setError(error, "Transcript staging path is empty.");
+    return false;
+  }
   std::vector<Segment> cues;
   cues.reserve(segments.size());
   for (const Segment& segment : segments) {
@@ -242,31 +281,12 @@ bool writeIndexedTranscript(const std::filesystem::path& outputPath,
                      return lhs.endUs < rhs.endUs;
                    });
 
-  const std::filesystem::path parent = outputPath.parent_path();
-  if (!parent.empty()) {
-    std::error_code ec;
-    const bool isDirectory = std::filesystem::is_directory(parent, ec);
-    if (ec || !isDirectory) {
-      setError(error, "Transcript directory does not exist: " +
-                          toUtf8String(parent));
-      return false;
-    }
-  }
-
-  const file_output::PublishMode outputMode =
-      publishMode == TranscriptPublishMode::ReplaceExisting
-          ? file_output::PublishMode::ReplaceExisting
-          : file_output::PublishMode::CreateNew;
-  std::optional<file_output::Transaction> transaction =
-      file_output::Transaction::begin(outputPath, outputMode, error);
-  if (!transaction) return false;
-
   {
-    std::ofstream output(transaction->temporaryPath(),
+    std::ofstream output(stagingPath,
                          std::ios::binary | std::ios::trunc);
     if (!output) {
       setError(error, "Could not create transcript: " +
-                          toUtf8String(outputPath));
+                          toUtf8String(stagingPath));
       return false;
     }
     for (size_t index = 0; index < cues.size(); ++index) {
@@ -279,16 +299,12 @@ bool writeIndexedTranscript(const std::filesystem::path& outputPath,
     if (!output) {
       output.close();
       setError(error, "Could not finish writing transcript: " +
-                          toUtf8String(outputPath));
+                          toUtf8String(stagingPath));
       return false;
     }
   }
 
-  if (outputCommitStarted && !outputCommitStarted()) {
-    setError(error, "Transcript cancelled before publication.");
-    return false;
-  }
-  return transaction->publish(error);
+  return true;
 }
 
 }  // namespace playback_video_transcript

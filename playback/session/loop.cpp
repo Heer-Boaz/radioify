@@ -295,23 +295,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     request.sourceHeight = core.player().sourceHeight();
     request.englishText = playback_video_chapters::selectEnglishTextEvidence(
         subtitleManager, file);
-    if (!request.englishText || request.englishText->cues.empty()) {
-      chapterRequestId.reset();
-      chapterGpuAdmission.reset();
-      lastChapterGpuHeartbeat = std::chrono::steady_clock::time_point::min();
-      chapterSnapshot = {};
-      chapterSnapshot.durationUs = request.durationUs;
-      chapterSnapshot.state =
-          trigger == ChapterAnalysisTrigger::Manual
-              ? playback_video_chapters::AnalysisState::Unsupported
-              : playback_video_chapters::AnalysisState::Disabled;
-      chapterSnapshot.detail =
-          "Automatic chapters require an English timecoded transcript or "
-          "subtitle track.";
-      if (trigger == ChapterAnalysisTrigger::Manual)
-        showEditMessage(chapterSnapshot.detail);
-      return;
-    }
     chapterRequestId = chapterAnalysis.start(std::move(request));
     chapterSnapshot = chapterAnalysis.snapshot(*chapterRequestId);
     chapterGpuAdmission.reset();
@@ -1139,11 +1122,11 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         playback_video_chapters::chapterAt(chapters, transport.positionUs);
     if (!current)
       return false;
-    auto chapter = std::find_if(
-        chapters.chapters.begin(), chapters.chapters.end(),
-        [&](const playback_video_chapters::Chapter &candidate) {
-          return candidate.id == current->id;
-        });
+    auto chapter =
+        std::find_if(chapters.chapters.begin(), chapters.chapters.end(),
+                     [&](const playback_video_chapters::Chapter &candidate) {
+                       return candidate.id == current->id;
+                     });
     if (chapter == chapters.chapters.end())
       return false;
     const std::optional<std::int64_t> target =
@@ -1156,14 +1139,15 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   bool executeInputCommand(playback_session_input::SeekToChapter request) {
     const playback_video_chapters::Snapshot chapters =
         chapterPresentationSnapshot(videoEditWorkspace.edit());
-    const auto chapter = std::find_if(
-        chapters.chapters.begin(), chapters.chapters.end(),
-        [&](const playback_video_chapters::Chapter &candidate) {
-          return candidate.startUs == request.timelineStartUs;
-        });
+    const auto chapter =
+        std::find_if(chapters.chapters.begin(), chapters.chapters.end(),
+                     [&](const playback_video_chapters::Chapter &candidate) {
+                       return candidate.startUs == request.timelineStartUs;
+                     });
     if (chapter == chapters.chapters.end())
       return false;
-    return executeInputCommand(playback_session_input::SeekTo{chapter->startUs});
+    return executeInputCommand(
+        playback_session_input::SeekTo{chapter->startUs});
   }
 
   bool executeInputCommand(
@@ -1571,8 +1555,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     if (snapshot.hoverActive) {
       const playback_video_chapters::Snapshot chapters =
           chapterPresentationSnapshot(videoEditWorkspace.edit());
-      snapshot.metadataLines = playback_video_chapters::previewMetadata(
-          chapters, snapshot.targetUs);
+      snapshot.metadataLines =
+          playback_video_chapters::previewMetadata(chapters, snapshot.targetUs);
     }
     return snapshot;
   }

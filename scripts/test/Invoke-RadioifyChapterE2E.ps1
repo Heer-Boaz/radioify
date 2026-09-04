@@ -4,7 +4,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$VideoPath,
     [ValidateRange(1, 240)]
-    [int]$TimeoutMinutes = 60
+    [int]$TimeoutMinutes = 60,
+    [string]$ScratchRoot = [System.IO.Path]::GetTempPath(),
+    [switch]$RequireGeneratedTranscript
 )
 
 Set-StrictMode -Version Latest
@@ -110,6 +112,10 @@ if (-not (Test-Path -LiteralPath $resolvedApplication -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $resolvedVideo -PathType Leaf)) {
     throw "Video input not found: '$resolvedVideo'."
 }
+$resolvedScratchRoot = [System.IO.Path]::GetFullPath($ScratchRoot)
+if (-not (Test-Path -LiteralPath $resolvedScratchRoot -PathType Container)) {
+    throw "E2E scratch root not found: '$resolvedScratchRoot'."
+}
 
 $timeoutMilliseconds = [int]($TimeoutMinutes * 60 * 1000)
 $isolatedCacheRoot = Join-Path ([System.IO.Path]::GetTempPath()) `
@@ -121,18 +127,53 @@ if (($cacheItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
     throw "The newly created E2E cache root is a reparse point."
 }
 
+# A cache-only sandbox missed the production bug where analysis silently
+# depended on a sibling transcript left by an earlier run. Materialize the
+# media in a private scratch directory as well, preferring a zero-copy hard
+# link where the source and scratch volumes support one.
+$isolatedMediaRoot = Join-Path $resolvedScratchRoot `
+    (".radioify-chapter-e2e-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $isolatedMediaRoot -ErrorAction Stop |
+    Out-Null
+$mediaItem = Get-Item -LiteralPath $isolatedMediaRoot -Force
+if (($mediaItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "The newly created E2E media root is a reparse point."
+}
+$isolatedVideo = Join-Path $isolatedMediaRoot `
+    ([System.IO.Path]::GetFileName($resolvedVideo))
+$generatedTranscript = Join-Path $isolatedMediaRoot `
+    ([System.IO.Path]::GetFileName($resolvedVideo) +
+        ".radioify.transcript.en.srt")
+$generatedProvenance = $generatedTranscript + ".radioify.json"
 try {
-    Write-Host "Running cold production chapter analysis without presentation..."
+    try {
+        New-Item -ItemType HardLink -Path $isolatedVideo -Target $resolvedVideo `
+            -ErrorAction Stop | Out-Null
+        Write-Host "Created zero-copy isolated media fixture."
+    } catch {
+        Write-Host "Hard links are unavailable; copying the isolated media fixture..."
+        Copy-Item -LiteralPath $resolvedVideo -Destination $isolatedVideo `
+            -ErrorAction Stop
+    }
+
+    Write-Host "Running cold production chapter analysis without cache or sidecars..."
     $first = ConvertFrom-AnalysisResult `
         -ProcessResult (Invoke-HeadlessAnalysis `
             -Application $resolvedApplication `
-            -Video $resolvedVideo `
+            -Video $isolatedVideo `
             -CacheRoot $isolatedCacheRoot `
             -TimeoutMilliseconds $timeoutMilliseconds) `
         -RunName "Initial chapter analysis"
 
     if ($first.cache_hit) {
         throw "The isolated initial run unexpectedly resolved a warm cache."
+    }
+    if ($RequireGeneratedTranscript) {
+        if (-not $first.english_text_evidence -or
+            -not (Test-Path -LiteralPath $generatedTranscript -PathType Leaf) -or
+            -not (Test-Path -LiteralPath $generatedProvenance -PathType Leaf)) {
+            throw "The initial run did not publish its required English ASR sidecar and provenance record."
+        }
     }
     $expectedCachePrefix =
         [System.IO.Path]::GetFullPath($isolatedCacheRoot).TrimEnd('\', '/') +
@@ -148,7 +189,7 @@ try {
     $second = ConvertFrom-AnalysisResult `
         -ProcessResult (Invoke-HeadlessAnalysis `
             -Application $resolvedApplication `
-            -Video $resolvedVideo `
+            -Video $isolatedVideo `
             -CacheRoot $isolatedCacheRoot `
             -TimeoutMilliseconds $timeoutMilliseconds) `
         -RunName "Cached chapter analysis"
@@ -171,5 +212,13 @@ try {
             throw "Refusing to clean an E2E cache root that became a reparse point."
         }
         Remove-Item -LiteralPath $isolatedCacheRoot -Recurse -Force
+    }
+    $mediaItem = Get-Item -LiteralPath $isolatedMediaRoot -Force `
+        -ErrorAction SilentlyContinue
+    if ($mediaItem) {
+        if (($mediaItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Refusing to clean an E2E media root that became a reparse point."
+        }
+        Remove-Item -LiteralPath $isolatedMediaRoot -Recurse -Force
     }
 }

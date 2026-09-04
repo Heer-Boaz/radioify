@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <utility>
 #include <vector>
 
+#include "ffmpegaudio.h"
 #include "core/utf8.h"
 #include "playback/video/chapter/cache.h"
 #include "playback/video/chapter/generated_document.h"
@@ -12,9 +14,21 @@
 #include "playback/video/chapter/inference_worker.h"
 #include "playback/video/chapter/model.h"
 #include "playback/video/chapter/sampled_evidence.h"
+#include "playback/video/transcript/artifact.h"
+#include "playback/video/transcript/transcriber.h"
 
 namespace playback_video_chapters {
 namespace {
+
+std::optional<TextEvidence> loadCurrentGeneratedEnglishEvidence(
+    const std::filesystem::path &videoPath, std::string *error = nullptr) {
+  const auto producer =
+      playback_video_transcript::automaticEnglishTranscriptProducerIdentity(
+          error);
+  if (!producer)
+    return std::nullopt;
+  return loadGeneratedEnglishTextEvidence(videoPath, *producer, error);
+}
 
 std::string trim(std::string value) {
   const auto nonSpace = [](unsigned char ch) { return !std::isspace(ch); };
@@ -68,11 +82,16 @@ class DefaultBackend final : public Backend {
 public:
   std::optional<AnalysisResult>
   cached(const AnalysisRequest &request) override {
-    if (englishDialogueFor(request).empty())
+    AnalysisRequest preparedRequest = request;
+    if (!preparedRequest.englishText) {
+      preparedRequest.englishText =
+          loadCurrentGeneratedEnglishEvidence(request.file);
+    }
+    if (englishDialogueFor(preparedRequest).empty())
       return std::nullopt;
-    std::optional<AnalysisResult> result = loadCachedAnalysis(request);
+    std::optional<AnalysisResult> result = loadCachedAnalysis(preparedRequest);
     if (result) {
-      discardInferenceWorkerWorkspaceIfIdle(analysisSourceKey(request));
+      discardInferenceWorkerWorkspaceIfIdle(analysisSourceKey(preparedRequest));
       clearWorkspace();
     }
     return result;
@@ -80,11 +99,6 @@ public:
 
   CapabilityResult inspect(const AnalysisRequest &request,
                            const OperationControl &control) override {
-    if (englishDialogueFor(request).empty()) {
-      return {CapabilityState::Unsupported,
-              "Automatic chapters require an English timecoded transcript "
-              "or subtitle track."};
-    }
     if (request.durationUs < kMinimumAutomaticChapterVideoDurationUs) {
       return {CapabilityState::Unsupported,
               "Automatic chapters require a video of at least 30 seconds."};
@@ -93,6 +107,22 @@ public:
       return {CapabilityState::Unsupported,
               "Automatic chapters currently support videos up to 60 "
               "minutes."};
+    }
+    AnalysisRequest preparedRequest = request;
+    if (!preparedRequest.englishText) {
+      preparedRequest.englishText =
+          loadCurrentGeneratedEnglishEvidence(request.file);
+    }
+    if (!preparedRequest.englishText) {
+      FfmpegAudioStreamFormat audio;
+      std::string audioDetail;
+      if (!probeFfmpegAudioStream(request.file, &audio, &audioDetail)) {
+        return {CapabilityState::Unsupported,
+                audioDetail.empty()
+                    ? "Automatic chapters need timed English text or a "
+                      "decodable audio stream."
+                    : std::move(audioDetail)};
+      }
     }
     paths_ = resolveModelPaths();
     const CapabilityResult gpu = inference_.inspect(control);
@@ -133,15 +163,6 @@ public:
 
   AnalysisResult analyze(const AnalysisRequest &request,
                          const OperationControl &control) override {
-    const std::vector<InferenceDialogueCue> englishDialogue =
-        englishDialogueFor(request);
-    if (englishDialogue.empty()) {
-      return {OperationStatus::Unsupported,
-              "Automatic chapters require an English timecoded transcript "
-              "or subtitle track.",
-              {},
-              {}};
-    }
     if (request.durationUs < kMinimumAutomaticChapterVideoDurationUs) {
       return {OperationStatus::Unsupported,
               "Automatic chapters require a video of at least 30 seconds.",
@@ -155,18 +176,163 @@ public:
               {},
               {}};
     }
-    if (std::optional<AnalysisResult> found = loadCachedAnalysis(request)) {
-      discardInferenceWorkerWorkspaceIfIdle(analysisSourceKey(request));
+
+    AnalysisRequest preparedRequest = request;
+    if (!preparedRequest.englishText) {
+      preparedRequest.englishText =
+          loadCurrentGeneratedEnglishEvidence(request.file);
+    }
+    if (!preparedRequest.englishText) {
+      AnalysisRequest mediaIdentityRequest = request;
+      mediaIdentityRequest.englishText.reset();
+      const std::string preparationSourceKey =
+          analysisSourceKey(mediaIdentityRequest);
+      if (preparationSourceKey.empty()) {
+        clearWorkspace();
+        return {OperationStatus::Failed,
+                "Could not establish a stable transcript identity.",
+                {},
+                {}};
+      }
+      if (preparationSourceKey_ != preparationSourceKey) {
+        clearWorkspace();
+        preparationSourceKey_ = preparationSourceKey;
+        transcriptPreparation_ = std::make_unique<
+            playback_video_transcript::IndexedTranscriptOperation>();
+      }
+      if (!transcriptLease_) {
+        InferenceWorkspaceLeaseResult acquired =
+            acquireInferenceWorkspaceLease(preparationSourceKey, control);
+        if (acquired.status != OperationStatus::Succeeded) {
+          if (acquired.status != OperationStatus::Yielded)
+            clearWorkspace();
+          return {acquired.status, std::move(acquired.detail), {}, {}};
+        }
+        transcriptLease_ = std::move(acquired.lease);
+        // Another process may have completed the prerequisite while this
+        // request waited for exact-source ownership.
+        preparedRequest.englishText =
+            loadCurrentGeneratedEnglishEvidence(request.file);
+        if (preparedRequest.englishText) {
+          transcriptPreparation_.reset();
+          preparationSourceKey_.clear();
+          discardInferenceWorkerWorkspace(transcriptLease_);
+          transcriptLease_ = {};
+        }
+      }
+      if (!preparedRequest.englishText) {
+        if (!transcriptPreparation_) {
+          transcriptPreparation_ = std::make_unique<
+              playback_video_transcript::IndexedTranscriptOperation>();
+        }
+
+        playback_video_transcript::TranscriptOperationControl transcriptControl;
+        transcriptControl.cancelled = control.cancelled;
+        transcriptControl.backgroundGpuAllowed = control.backgroundGpuAllowed;
+        transcriptControl.progress =
+            [publish = control.progress](
+                const playback_video_transcript::Progress &progress) {
+              if (!publish)
+                return;
+              publish(0.20 * std::clamp(static_cast<double>(progress.fraction),
+                                        0.0, 1.0),
+                      progress.phase);
+            };
+        transcriptControl.runSpeechChunk =
+            [this, &control](
+                const playback_video_transcript::SpeechWorkerRequest &request,
+                const std::function<void(int)> &progress) {
+              OperationControl workerControl = control;
+              workerControl.progress =
+                  [progress](std::optional<double> fraction,
+                             const std::string &) {
+                    if (progress && fraction) {
+                      progress(static_cast<int>(std::lround(
+                          std::clamp(*fraction, 0.0, 1.0) * 100.0)));
+                    }
+                  };
+              return runSpeechTranscriptionWorker(request, workerControl,
+                                                   transcriptLease_);
+            };
+        const auto transcript = transcriptPreparation_->resume(
+            request.file,
+            playback_video_transcript::generatedEnglishTranscriptPathForVideo(
+                request.file),
+            playback_video_transcript::TranscriptPublishMode::ReplaceOwned,
+            playback_video_transcript::TranscriptLanguageMode::
+                TranslateToEnglish,
+            transcriptControl, [cancelled = control.cancelled,
+                                gpuAllowed = control.backgroundGpuAllowed]() {
+              return (!cancelled || !cancelled()) &&
+                     (!gpuAllowed || gpuAllowed());
+            });
+        if (transcript.status !=
+            playback_video_transcript::TranscriptOperationStatus::Succeeded) {
+          const OperationStatus status =
+              transcript.status == playback_video_transcript::
+                                       TranscriptOperationStatus::Yielded
+                  ? OperationStatus::Yielded
+                  : (transcript.status ==
+                             playback_video_transcript::
+                                 TranscriptOperationStatus::Cancelled
+                         ? OperationStatus::Cancelled
+                         : OperationStatus::Failed);
+          if (status != OperationStatus::Yielded)
+            clearWorkspace();
+          return {status,
+                  transcript.detail.empty()
+                      ? "Could not prepare English speech evidence."
+                      : transcript.detail,
+                  {},
+                  {}};
+        }
+        transcriptPreparation_.reset();
+        preparationSourceKey_.clear();
+        discardInferenceWorkerWorkspace(transcriptLease_);
+        transcriptLease_ = {};
+        std::string evidenceError;
+        preparedRequest.englishText =
+            loadCurrentGeneratedEnglishEvidence(request.file, &evidenceError);
+        if (!preparedRequest.englishText) {
+          clearWorkspace();
+          return {
+              OperationStatus::Failed,
+              evidenceError.empty()
+                  ? "Speech transcription produced no usable English text."
+                  : std::move(evidenceError),
+              {},
+              {}};
+        }
+      }
+    } else {
+      transcriptPreparation_.reset();
+      preparationSourceKey_.clear();
+      discardInferenceWorkerWorkspace(transcriptLease_);
+      transcriptLease_ = {};
+    }
+
+    const std::vector<InferenceDialogueCue> englishDialogue =
+        englishDialogueFor(preparedRequest);
+    if (englishDialogue.empty()) {
+      clearWorkspace();
+      return {OperationStatus::Failed,
+              "English speech evidence contains no usable timed dialogue.",
+              {},
+              {}};
+    }
+    if (std::optional<AnalysisResult> found =
+            loadCachedAnalysis(preparedRequest)) {
+      discardInferenceWorkerWorkspaceIfIdle(analysisSourceKey(preparedRequest));
       clearWorkspace();
       return *found;
     }
-    const std::string sourceKey = analysisSourceKey(request);
+    const std::string sourceKey = analysisSourceKey(preparedRequest);
     if (sourceKey.empty()) {
       clearWorkspace();
       return {OperationStatus::Failed,
-               "Could not establish a stable chapter-analysis identity.",
-               {},
-               {}};
+              "Could not establish a stable chapter-analysis identity.",
+              {},
+              {}};
     }
     if (sourceKey != workspaceSourceKey_) {
       clearWorkspace();
@@ -197,7 +363,8 @@ public:
     // Cache publication and every resumable worker stage share one exact
     // source-level owner. A second process can neither repeat selection nor
     // consume a checkpoint while this transaction is active.
-    if (std::optional<AnalysisResult> found = loadCachedAnalysis(request)) {
+    if (std::optional<AnalysisResult> found =
+            loadCachedAnalysis(preparedRequest)) {
       discardInferenceWorkerWorkspace(acquired.lease);
       clearWorkspace();
       return *found;
@@ -207,16 +374,16 @@ public:
       SpeechChapterPlanRequest planRequest;
       planRequest.plannerModel = paths_.plannerModel;
       planRequest.planAdapter = paths_.speechPlanAdapter;
-      planRequest.durationUs = request.durationUs;
+      planRequest.durationUs = preparedRequest.durationUs;
       planRequest.englishDialogue = englishDialogue;
       OperationControl planControl = control;
       planControl.progress = [publish = control.progress](
-                                      std::optional<double> progress,
-                                      const std::string &phase) {
+                                 std::optional<double> progress,
+                                 const std::string &phase) {
         if (!publish)
           return;
         publish(progress ? std::optional<double>(
-                               0.02 + 0.50 * std::clamp(*progress, 0.0, 1.0))
+                               0.20 + 0.32 * std::clamp(*progress, 0.0, 1.0))
                          : std::nullopt,
                 phase);
       };
@@ -233,7 +400,7 @@ public:
       for (const GeneratedChapterPlanEntry &chapter : chapterPlan_)
         chapterStartsUs.push_back(chapter.startUs);
       evidencePlan_ = buildSpeechGuidedChapterEvidencePlan(
-          request.durationUs, chapterStartsUs);
+          preparedRequest.durationUs, chapterStartsUs);
       if (evidencePlan_.empty()) {
         clearWorkspace();
         return {OperationStatus::Failed,
@@ -259,8 +426,9 @@ public:
                          : std::nullopt,
                 phase);
       };
-      SampledEvidenceResult evidence = sampleVideoEvidence(
-          request, evidenceControl, &evidenceCheckpoint_, evidencePlan_);
+      SampledEvidenceResult evidence =
+          sampleVideoEvidence(preparedRequest, evidenceControl,
+                              &evidenceCheckpoint_, evidencePlan_);
       if (evidence.status != OperationStatus::Succeeded) {
         if (evidence.status != OperationStatus::Yielded)
           clearWorkspace();
@@ -276,7 +444,7 @@ public:
     inferenceRequest.projector = paths_.projector;
     inferenceRequest.plannerModel = paths_.plannerModel;
     inferenceRequest.chapterPlanAdapter = paths_.chapterPlanAdapter;
-    inferenceRequest.durationUs = request.durationUs;
+    inferenceRequest.durationUs = preparedRequest.durationUs;
     inferenceRequest.windows.reserve(evidenceCheckpoint_.windows.size());
     for (const SampledTemporalWindow &sampledWindow :
          evidenceCheckpoint_.windows) {
@@ -306,8 +474,8 @@ public:
     }
     if (control.progress)
       control.progress(0.996, "Validating chapter output");
-    AnalysisResult result =
-        materializeGeneratedDocument(inference.document, request.durationUs);
+    AnalysisResult result = materializeGeneratedDocument(
+        inference.document, preparedRequest.durationUs);
     if (result.status != OperationStatus::Succeeded) {
       // A structurally complete but unpublishable artifact must not become a
       // permanent retry loop. Resume checkpoints are valuable only while the
@@ -317,7 +485,7 @@ public:
       return result;
     }
     std::string cacheError;
-    if (!storeCachedAnalysis(request, result, &cacheError)) {
+    if (!storeCachedAnalysis(preparedRequest, result, &cacheError)) {
       result.warning =
           "Chapter analysis is available for this session, but it could "
           "not be saved for reuse";
@@ -334,6 +502,10 @@ public:
 
 private:
   void clearWorkspace() {
+    transcriptPreparation_.reset();
+    discardInferenceWorkerWorkspace(transcriptLease_);
+    transcriptLease_ = {};
+    preparationSourceKey_.clear();
     workspaceSourceKey_.clear();
     evidenceCheckpoint_ = {};
     evidencePlan_.clear();
@@ -342,6 +514,10 @@ private:
 
   ModelPaths paths_;
   InferenceEngine inference_;
+  std::unique_ptr<playback_video_transcript::IndexedTranscriptOperation>
+      transcriptPreparation_;
+  InferenceWorkspaceLease transcriptLease_;
+  std::string preparationSourceKey_;
   std::string workspaceSourceKey_;
   SampledEvidenceCheckpoint evidenceCheckpoint_;
   std::vector<ChapterEvidenceInterval> evidencePlan_;

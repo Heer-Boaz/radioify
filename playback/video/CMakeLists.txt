@@ -56,6 +56,7 @@ radioify_add_module_object_library(radioify_transcript_artifact
 
 radioify_add_module_object_library(radioify_transcript_document
   ${CMAKE_CURRENT_SOURCE_DIR}/transcript/document.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/transcript/provenance.cpp
 )
 
 radioify_add_module_object_library(radioify_transcript_text_export

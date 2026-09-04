@@ -32,7 +32,9 @@ The default build enables whisper.cpp's Vulkan backend and downloads the
 SHA-256-verified multilingual Whisper base model used for offline,
 GPU-accelerated transcript generation. Set
 `RADIOIFY_WHISPER_MODEL` to use another compatible whisper.cpp model at
-runtime. Custom models use ordinary token timestamps unless the matching
+runtime. Automatic English evidence rejects English-only checkpoints because
+Whisper's translation task requires a multilingual model. Custom models use
+ordinary token timestamps unless the matching
 official alignment-head preset is explicitly selected with
 `RADIOIFY_WHISPER_DTW_PRESET` (for example `base.en`, `small`, or
 `large.v3.turbo`; use `none` to disable DTW). Invalid explicit configuration
@@ -73,8 +75,15 @@ subtitle track selected for presentation. Radioify uses that complete
 transcript with Chapter-Llama's published ASR adapter to predict candidate
 boundaries, then samples exactly one frame at each candidate. MiniCPM-V captions
 those frames and the published captions-plus-ASR adapter jointly produces the
-final chapter boundaries and navigation titles. A source without English
-subtitles or a generated English transcript is not admitted; there is no
+final chapter boundaries and navigation titles. Existing English subtitles or
+a persisted English transcript are reused. When neither exists, the same
+asynchronous analysis request runs Whisper's translation task and atomically
+publishes a source-bound `video.ext.radioify.transcript.en.srt` plus provenance
+record before planning. The private name prevents background work from ever
+overwriting a user-authored subtitle or transcript. Foreground playback can
+preempt each Whisper chunk; Radioify releases the Vulkan model allocation,
+retains the exact decoded PCM transaction, and resumes without an approximate
+media seek. Sources without decodable speech fail explicitly. There is no
 periodic visual-only fallback.
 
 Automatic runtime analysis currently accepts videos from 30 seconds through
@@ -138,9 +147,9 @@ For a presentation-free production-path diagnostic, run:
 .\dist\radioify.exe analyze-chapters "C:\path\to\video.mkv"
 ```
 
-This uses the same metadata probe, English-subtitle selection, chapter service,
-GPU backend, validation, and durable cache as playback. Progress goes to
-stderr; the final JSON document on stdout reports the cache key, cache path,
+This uses the same metadata probe, English-evidence preparation, chapter
+service, GPU backend, validation, and durable cache as playback. Progress goes
+to stderr; the final JSON document on stdout reports the cache key, cache path,
 and whether the completed result is persisted. It never opens a playback
 window and never installs models without explicit user interaction.
 
@@ -151,12 +160,17 @@ of its durable result:
 ```powershell
 .\scripts\test\Invoke-RadioifyChapterE2E.ps1 `
   -ApplicationPath .\dist\radioify.exe `
-  -VideoPath "C:\path\to\video.mkv"
+  -VideoPath "C:\path\to\video.mkv" `
+  -RequireGeneratedTranscript
 ```
 
 This test is intentionally separate from CTest because it requires supported
 GPU hardware, locally installed model artifacts, and representative media. It
-uses hidden child processes and does not require an installed MSIX package.
+uses a private scratch media fixture so cache and sidecar discovery both start
+cold (a hard link where supported, otherwise an isolated copy), uses hidden
+child processes, and does not require an installed MSIX package. Pass
+`-ScratchRoot` when the system temp volume cannot hold the representative
+video.
 
 ## Windows Package
 Build a distributable Windows x64 bundle and zip:

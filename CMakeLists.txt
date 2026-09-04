@@ -374,6 +374,8 @@ add_subdirectory(tui)
 
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(miniaudio CONFIG REQUIRED)
+target_link_libraries(radioify_transcript_document PRIVATE
+  nlohmann_json::nlohmann_json)
 if (NOT TARGET miniaudio::miniaudio)
   message(FATAL_ERROR
     "The miniaudio package does not publish its compiled library target. Run "
@@ -488,12 +490,15 @@ add_executable(radioify_chapter_worker
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/prompt_contract.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/generated_document.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/transcript/device_selection.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/transcript/whisper_engine.cpp
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
 )
 radioify_link_repo_target(radioify_chapter_worker)
 target_link_libraries(radioify_chapter_worker PRIVATE
   nlohmann_json::nlohmann_json
-  llama::mtmd)
+  llama::mtmd
+  whisper)
 set_target_properties(radioify_chapter_worker PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
@@ -970,7 +975,11 @@ add_test(NAME timeline_preview_tests
 add_executable(chapter_analysis_tests)
 target_sources(chapter_analysis_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_chapter_analysis_tests>
+  $<TARGET_OBJECTS:radioify_video_sidecar_identity>
+  $<TARGET_OBJECTS:radioify_transcript_artifact>
+  $<TARGET_OBJECTS:radioify_transcript_document>
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/cache.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/evidence_plan.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/generated_document.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/integrity.cpp
@@ -979,8 +988,10 @@ target_sources(chapter_analysis_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/transcript/cue_semantics.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/presentation.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/prompt_contract.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/chapter/storage.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/text_evidence.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/timeline_preview_policy.cpp
+  ${CMAKE_SOURCE_DIR}/core/file_output.cpp
   ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
@@ -1004,12 +1015,14 @@ target_sources(chapter_inference_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_client.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_protocol.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/storage.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/transcript/device_selection.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/transcript/whisper_engine.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
 radioify_link_repo_target(chapter_inference_tests)
-target_link_libraries(chapter_inference_tests PRIVATE llama::mtmd)
+target_link_libraries(chapter_inference_tests PRIVATE llama::mtmd whisper)
 add_test(NAME chapter_inference_tests
          COMMAND $<TARGET_FILE:chapter_inference_tests>)
 
@@ -1029,6 +1042,8 @@ target_sources(chapter_inference_probe PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_client.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_protocol.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/storage.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/transcript/device_selection.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/transcript/whisper_engine.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/chapter/sampled_evidence.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/analysis/visual_timeline_checkpoint.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/analysis/scene_analysis.cpp
@@ -1044,7 +1059,7 @@ target_sources(chapter_inference_probe PRIVATE
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
 radioify_link_repo_target(chapter_inference_probe)
-target_link_libraries(chapter_inference_probe PRIVATE llama::mtmd)
+target_link_libraries(chapter_inference_probe PRIVATE llama::mtmd whisper)
 add_dependencies(chapter_inference_probe radioify_chapter_worker)
 add_custom_command(TARGET chapter_inference_probe POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -2721,6 +2736,8 @@ if (NOT GGML_VULKAN)
     "whisper-cpp must be built with its Vulkan feature; CPU-only indexed transcripts are disabled.")
 endif()
 target_link_libraries(radioify_transcript_engine PRIVATE whisper)
+target_compile_definitions(radioify_transcript_engine PRIVATE
+  RADIOIFY_WHISPER_MODEL_SHA256="${RADIOIFY_WHISPER_MODEL_SHA256}")
 target_link_libraries(radioify_tool_whisper_gpu_contract_tests PRIVATE whisper)
 target_link_libraries(radioify PRIVATE whisper)
 target_link_libraries(whisper_gpu_contract_tests PRIVATE whisper)

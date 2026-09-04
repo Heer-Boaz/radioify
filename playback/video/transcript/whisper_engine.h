@@ -12,6 +12,11 @@
 
 namespace playback_video_transcript {
 
+enum class WhisperTask : std::uint8_t {
+  Transcribe,
+  TranslateToEnglish,
+};
+
 struct RecognizedToken {
   int64_t startUs = 0;
   int64_t endUs = 0;
@@ -51,7 +56,8 @@ public:
   bool transcribe(const float *samples, size_t sampleCount,
                   const ProgressCallback &onProgress,
                   const AbortCheck &shouldAbort,
-                  std::vector<RecognizedSegment> *segments, std::string *error);
+                  std::vector<RecognizedSegment> *segments, std::string *error,
+                  WhisperTask task = WhisperTask::Transcribe);
   // Returns the explicit or first successfully detected ISO 639-1 language.
   // The value becomes stable after the first chunk containing speech.
   std::string sourceLanguage() const;

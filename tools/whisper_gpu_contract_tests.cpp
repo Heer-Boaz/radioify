@@ -46,6 +46,11 @@ int main(int argc, char** argv) {
     std::cerr << "whisper_gpu_contract_tests: control initialization failed\n";
     return EXIT_FAILURE;
   }
+  if (!whisper_is_multilingual(cpuAllowed.get())) {
+    std::cerr << "whisper_gpu_contract_tests: packaged model cannot translate "
+                 "speech to English\n";
+    return EXIT_FAILURE;
+  }
 
   WhisperContextPtr gpuRequired(loadModel(modelPath, true));
   if (gpuRequired) {

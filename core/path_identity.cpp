@@ -95,6 +95,31 @@ bool samePathIdentity(const PathIdentity& left, const PathIdentity& right) {
   return left.normalizedPath == right.normalizedPath;
 }
 
+std::filesystem::path pathIdentityKey(const PathIdentity& identity) {
+  if (identity.empty()) {
+    return {};
+  }
+#ifdef _WIN32
+  const std::wstring& input = identity.normalizedPath.native();
+  if (input.size() <= static_cast<size_t>((std::numeric_limits<int>::max)())) {
+    const int required = LCMapStringEx(
+        LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE, input.data(),
+        static_cast<int>(input.size()), nullptr, 0, nullptr, nullptr, 0);
+    if (required > 0) {
+      std::wstring mapped(static_cast<size_t>(required), L'\0');
+      const int written = LCMapStringEx(
+          LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE, input.data(),
+          static_cast<int>(input.size()), mapped.data(), required, nullptr,
+          nullptr, 0);
+      if (written == required) {
+        return std::filesystem::path(std::move(mapped));
+      }
+    }
+  }
+#endif
+  return identity.normalizedPath;
+}
+
 bool samePath(const std::filesystem::path& left,
               const std::filesystem::path& right) {
   if (left == right) {
