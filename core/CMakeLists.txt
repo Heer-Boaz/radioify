@@ -4,6 +4,11 @@ radioify_add_module_object_library(radioify_core_runtime
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime_helpers.cpp
 )
 
+radioify_add_module_object_library(radioify_core_sha256
+  ${CMAKE_CURRENT_SOURCE_DIR}/sha256.cpp
+)
+target_link_libraries(radioify_core_sha256 PUBLIC bcrypt)
+
 radioify_add_module_object_library(radioify_core
   ${CMAKE_CURRENT_SOURCE_DIR}/file_output.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_artwork_sidecar.cpp

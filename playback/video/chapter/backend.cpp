@@ -9,26 +9,15 @@
 #include "ffmpegaudio.h"
 #include "core/utf8.h"
 #include "playback/video/chapter/cache.h"
+#include "playback/video/chapter/evidence_preparation.h"
 #include "playback/video/chapter/generated_document.h"
 #include "playback/video/chapter/inference.h"
 #include "playback/video/chapter/inference_worker.h"
 #include "playback/video/chapter/model.h"
 #include "playback/video/chapter/sampled_evidence.h"
-#include "playback/video/transcript/artifact.h"
-#include "playback/video/transcript/transcriber.h"
 
 namespace playback_video_chapters {
 namespace {
-
-std::optional<TextEvidence> loadCurrentGeneratedEnglishEvidence(
-    const std::filesystem::path &videoPath, std::string *error = nullptr) {
-  const auto producer =
-      playback_video_transcript::automaticEnglishTranscriptProducerIdentity(
-          error);
-  if (!producer)
-    return std::nullopt;
-  return loadGeneratedEnglishTextEvidence(videoPath, *producer, error);
-}
 
 std::string trim(std::string value) {
   const auto nonSpace = [](unsigned char ch) { return !std::isspace(ch); };
@@ -83,10 +72,8 @@ public:
   std::optional<AnalysisResult>
   cached(const AnalysisRequest &request) override {
     AnalysisRequest preparedRequest = request;
-    if (!preparedRequest.englishText) {
-      preparedRequest.englishText =
-          loadCurrentGeneratedEnglishEvidence(request.file);
-    }
+    if (const auto evidence = evidencePreparation_.discover(request))
+      preparedRequest.englishText = evidence->englishText;
     if (englishDialogueFor(preparedRequest).empty())
       return std::nullopt;
     std::optional<AnalysisResult> result = loadCachedAnalysis(preparedRequest);
@@ -109,10 +96,8 @@ public:
               "minutes."};
     }
     AnalysisRequest preparedRequest = request;
-    if (!preparedRequest.englishText) {
-      preparedRequest.englishText =
-          loadCurrentGeneratedEnglishEvidence(request.file);
-    }
+    if (const auto evidence = evidencePreparation_.discover(request))
+      preparedRequest.englishText = evidence->englishText;
     if (!preparedRequest.englishText) {
       FfmpegAudioStreamFormat audio;
       std::string audioDetail;
@@ -178,144 +163,20 @@ public:
     }
 
     AnalysisRequest preparedRequest = request;
-    if (!preparedRequest.englishText) {
-      preparedRequest.englishText =
-          loadCurrentGeneratedEnglishEvidence(request.file);
-    }
-    if (!preparedRequest.englishText) {
-      AnalysisRequest mediaIdentityRequest = request;
-      mediaIdentityRequest.englishText.reset();
-      const std::string preparationSourceKey =
-          analysisSourceKey(mediaIdentityRequest);
-      if (preparationSourceKey.empty()) {
+    EvidencePreparationResult evidence =
+        evidencePreparation_.prepare(request, control);
+    if (evidence.status != OperationStatus::Succeeded || !evidence.evidence) {
+      if (evidence.status != OperationStatus::Yielded)
         clearWorkspace();
-        return {OperationStatus::Failed,
-                "Could not establish a stable transcript identity.",
-                {},
-                {}};
-      }
-      if (preparationSourceKey_ != preparationSourceKey) {
-        clearWorkspace();
-        preparationSourceKey_ = preparationSourceKey;
-        transcriptPreparation_ = std::make_unique<
-            playback_video_transcript::IndexedTranscriptOperation>();
-      }
-      if (!transcriptLease_) {
-        InferenceWorkspaceLeaseResult acquired =
-            acquireInferenceWorkspaceLease(preparationSourceKey, control);
-        if (acquired.status != OperationStatus::Succeeded) {
-          if (acquired.status != OperationStatus::Yielded)
-            clearWorkspace();
-          return {acquired.status, std::move(acquired.detail), {}, {}};
-        }
-        transcriptLease_ = std::move(acquired.lease);
-        // Another process may have completed the prerequisite while this
-        // request waited for exact-source ownership.
-        preparedRequest.englishText =
-            loadCurrentGeneratedEnglishEvidence(request.file);
-        if (preparedRequest.englishText) {
-          transcriptPreparation_.reset();
-          preparationSourceKey_.clear();
-          discardInferenceWorkerWorkspace(transcriptLease_);
-          transcriptLease_ = {};
-        }
-      }
-      if (!preparedRequest.englishText) {
-        if (!transcriptPreparation_) {
-          transcriptPreparation_ = std::make_unique<
-              playback_video_transcript::IndexedTranscriptOperation>();
-        }
-
-        playback_video_transcript::TranscriptOperationControl transcriptControl;
-        transcriptControl.cancelled = control.cancelled;
-        transcriptControl.backgroundGpuAllowed = control.backgroundGpuAllowed;
-        transcriptControl.progress =
-            [publish = control.progress](
-                const playback_video_transcript::Progress &progress) {
-              if (!publish)
-                return;
-              publish(0.20 * std::clamp(static_cast<double>(progress.fraction),
-                                        0.0, 1.0),
-                      progress.phase);
-            };
-        transcriptControl.runSpeechChunk =
-            [this, &control](
-                const playback_video_transcript::SpeechWorkerRequest &request,
-                const std::function<void(int)> &progress) {
-              OperationControl workerControl = control;
-              workerControl.progress =
-                  [progress](std::optional<double> fraction,
-                             const std::string &) {
-                    if (progress && fraction) {
-                      progress(static_cast<int>(std::lround(
-                          std::clamp(*fraction, 0.0, 1.0) * 100.0)));
-                    }
-                  };
-              return runSpeechTranscriptionWorker(request, workerControl,
-                                                   transcriptLease_);
-            };
-        const auto transcript = transcriptPreparation_->resume(
-            request.file,
-            playback_video_transcript::generatedEnglishTranscriptPathForVideo(
-                request.file),
-            playback_video_transcript::TranscriptPublishMode::ReplaceOwned,
-            playback_video_transcript::TranscriptLanguageMode::
-                TranslateToEnglish,
-            transcriptControl, [cancelled = control.cancelled,
-                                gpuAllowed = control.backgroundGpuAllowed]() {
-              return (!cancelled || !cancelled()) &&
-                     (!gpuAllowed || gpuAllowed());
-            });
-        if (transcript.status !=
-            playback_video_transcript::TranscriptOperationStatus::Succeeded) {
-          const OperationStatus status =
-              transcript.status == playback_video_transcript::
-                                       TranscriptOperationStatus::Yielded
-                  ? OperationStatus::Yielded
-                  : (transcript.status ==
-                             playback_video_transcript::
-                                 TranscriptOperationStatus::Cancelled
-                         ? OperationStatus::Cancelled
-                         : OperationStatus::Failed);
-          if (status != OperationStatus::Yielded)
-            clearWorkspace();
-          return {status,
-                  transcript.detail.empty()
-                      ? "Could not prepare English speech evidence."
-                      : transcript.detail,
-                  {},
-                  {}};
-        }
-        transcriptPreparation_.reset();
-        preparationSourceKey_.clear();
-        discardInferenceWorkerWorkspace(transcriptLease_);
-        transcriptLease_ = {};
-        std::string evidenceError;
-        preparedRequest.englishText =
-            loadCurrentGeneratedEnglishEvidence(request.file, &evidenceError);
-        if (!preparedRequest.englishText) {
-          clearWorkspace();
-          return {
-              OperationStatus::Failed,
-              evidenceError.empty()
-                  ? "Speech transcription produced no usable English text."
-                  : std::move(evidenceError),
-              {},
-              {}};
-        }
-      }
-    } else {
-      transcriptPreparation_.reset();
-      preparationSourceKey_.clear();
-      discardInferenceWorkerWorkspace(transcriptLease_);
-      transcriptLease_ = {};
+      return {evidence.status, std::move(evidence.detail), {}, {}};
     }
+    preparedRequest.englishText = std::move(evidence.evidence->englishText);
 
     const std::vector<InferenceDialogueCue> englishDialogue =
         englishDialogueFor(preparedRequest);
     if (englishDialogue.empty()) {
       clearWorkspace();
-      return {OperationStatus::Failed,
+      return {OperationStatus::Unsupported,
               "English speech evidence contains no usable timed dialogue.",
               {},
               {}};
@@ -502,10 +363,7 @@ public:
 
 private:
   void clearWorkspace() {
-    transcriptPreparation_.reset();
-    discardInferenceWorkerWorkspace(transcriptLease_);
-    transcriptLease_ = {};
-    preparationSourceKey_.clear();
+    evidencePreparation_.reset();
     workspaceSourceKey_.clear();
     evidenceCheckpoint_ = {};
     evidencePlan_.clear();
@@ -514,10 +372,7 @@ private:
 
   ModelPaths paths_;
   InferenceEngine inference_;
-  std::unique_ptr<playback_video_transcript::IndexedTranscriptOperation>
-      transcriptPreparation_;
-  InferenceWorkspaceLease transcriptLease_;
-  std::string preparationSourceKey_;
+  EvidencePreparation evidencePreparation_;
   std::string workspaceSourceKey_;
   SampledEvidenceCheckpoint evidenceCheckpoint_;
   std::vector<ChapterEvidenceInterval> evidencePlan_;

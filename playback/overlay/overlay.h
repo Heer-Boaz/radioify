@@ -30,6 +30,7 @@ struct OverlayControlSpec {
   std::string renderText;
   bool active = false;
   bool enabled = true;
+  OverlayControlTone tone = OverlayControlTone::Normal;
   int width = 0;
 };
 
@@ -72,6 +73,7 @@ struct OverlayCellControlInput {
   bool active = false;
   bool hovered = false;
   bool enabled = true;
+  OverlayControlTone tone = OverlayControlTone::Normal;
 };
 
 struct OverlayCellLayoutInput {
@@ -92,6 +94,7 @@ struct OverlayCellControlLayoutItem {
   bool active = false;
   bool hovered = false;
   bool enabled = true;
+  OverlayControlTone tone = OverlayControlTone::Normal;
 };
 
 struct OverlayCellTextLine {
@@ -319,6 +322,8 @@ std::vector<float> chapterControlCharacterHighlights(
 struct OverlayRenderStyles {
   Style baseStyle{{219, 224, 230}, {5, 6, 7}};
   Style accentStyle{{250, 176, 51}, baseStyle.bg};
+  Style warningStyle{{255, 205, 92}, baseStyle.bg};
+  Style errorStyle{{255, 128, 112}, baseStyle.bg};
   Style progressEmptyStyle{{32, 38, 46}, {32, 38, 46}};
   Style progressFrameStyle{{160, 170, 182}, baseStyle.bg};
   Color progressStart{110, 231, 183};

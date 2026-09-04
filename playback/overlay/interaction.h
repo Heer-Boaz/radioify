@@ -53,6 +53,15 @@ enum class OverlayControlId {
   MediaActionSecondary,
 };
 
+// Semantic presentation is independent from interaction state. In
+// particular, an asynchronous failure must not be encoded as an "active"
+// toggle merely to obtain a different color.
+enum class OverlayControlTone : std::uint8_t {
+  Normal,
+  Warning,
+  Error,
+};
+
 constexpr int overlayControlToken(OverlayControlId id) {
   return static_cast<int>(id);
 }

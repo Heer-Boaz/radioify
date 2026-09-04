@@ -80,11 +80,15 @@ a persisted English transcript are reused. When neither exists, the same
 asynchronous analysis request runs Whisper's translation task and atomically
 publishes a source-bound `video.ext.radioify.transcript.en.srt` plus provenance
 record before planning. The private name prevents background work from ever
-overwriting a user-authored subtitle or transcript. Foreground playback can
+overwriting a user-authored subtitle or transcript. The transcript and its
+provenance record are one recoverable publication: source identity and
+producer identity are stored separately from the SHA-256 identity of the
+finished transcript, so a staging file handle is never mistaken for the
+published artifact. Foreground playback can
 preempt each Whisper chunk; Radioify releases the Vulkan model allocation,
 retains the exact decoded PCM transaction, and resumes without an approximate
-media seek. Sources without decodable speech fail explicitly. There is no
-periodic visual-only fallback.
+media seek. A source with no usable speech is an unsupported evidence route,
+not a model or worker failure. There is no periodic visual-only fallback.
 
 Automatic runtime analysis currently accepts videos from 30 seconds through
 60 minutes. This is a Radioify admission contract for the single-pass runtime
@@ -124,8 +128,15 @@ SHA-256 hashes. Both planner adapters are MIT-licensed
 at a fixed revision, converted reproducibly for llama.cpp and paired with a
 pinned Meta Llama 3.1 8B Instruct GGUF subject to its community license.
 
-The architecture follows the complete published
-[Chapter-Llama inference pipeline](https://github.com/lucas-ventura/chapter-llama).
+The architecture follows Chapter-Llama's published ASR selector and
+captions-plus-ASR model contracts from the
+[Chapter-Llama codebase](https://github.com/lucas-ventura/chapter-llama).
+Radioify deliberately does not implement the dataset pipeline's ten-second
+no-ASR fallback: the official single-video command currently documents an
+audio-only route, while the research fallback periodically samples frames.
+Only the speech-guided route is admitted here, and it is represented explicitly
+in the cache identity rather than selected implicitly from whichever evidence
+happens to be present.
 Its persistent chapter artifact follows the same start-time-and-title product
 shape used by [Mux AI](https://github.com/muxinc/ai/blob/main/src/workflows/chapters.ts).
 

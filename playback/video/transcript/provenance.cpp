@@ -17,11 +17,12 @@
 
 #include "core/file_instance.h"
 #include "core/runtime_helpers.h"
+#include "core/sha256.h"
 
 namespace playback_video_transcript {
 namespace {
 
-constexpr int kSchema = 2;
+constexpr int kSchema = 3;
 constexpr std::uintmax_t kMaximumManifestBytes = 64u * 1024u;
 
 struct FileIdentity {
@@ -30,6 +31,12 @@ struct FileIdentity {
   std::int64_t modified = 0;
   std::uint64_t device = 0;
   std::uint64_t file = 0;
+};
+
+struct ArtifactIdentity {
+  std::string path;
+  std::uintmax_t size = 0;
+  std::string sha256;
 };
 
 void setError(std::string *error, std::string value) {
@@ -121,6 +128,65 @@ bool same(const FileIdentity &left, const FileIdentity &right) {
          left.modified == right.modified;
 }
 
+bool samePath(const std::string &left, const std::string &right) {
+#ifdef _WIN32
+  const std::wstring leftPath = pathFromUtf8String(left).wstring();
+  const std::wstring rightPath = pathFromUtf8String(right).wstring();
+  return CompareStringOrdinal(
+             leftPath.c_str(), static_cast<int>(leftPath.size()),
+             rightPath.c_str(), static_cast<int>(rightPath.size()), TRUE) ==
+         CSTR_EQUAL;
+#else
+  return left == right;
+#endif
+}
+
+nlohmann::json encode(const ArtifactIdentity &identity) {
+  return {{"path", identity.path},
+          {"size", identity.size},
+          {"sha256", identity.sha256}};
+}
+
+bool decode(const nlohmann::json &document, ArtifactIdentity *identity) {
+  if (!identity || !document.is_object() || !document.contains("path") ||
+      !document["path"].is_string() || !document.contains("size") ||
+      !document["size"].is_number_unsigned() ||
+      !document.contains("sha256") || !document["sha256"].is_string()) {
+    return false;
+  }
+  identity->path = document["path"].get<std::string>();
+  identity->size = document["size"].get<std::uintmax_t>();
+  identity->sha256 = document["sha256"].get<std::string>();
+  return !identity->path.empty() && identity->sha256.size() == 64;
+}
+
+bool artifactIdentityFor(const std::filesystem::path &contentPath,
+                         const std::filesystem::path &identityPath,
+                         ArtifactIdentity *identity, std::string *error) {
+  if (!identity)
+    return false;
+  std::error_code pathError;
+  std::filesystem::path normalized =
+      std::filesystem::weakly_canonical(identityPath, pathError);
+  if (pathError) {
+    pathError.clear();
+    normalized = std::filesystem::absolute(identityPath, pathError)
+                     .lexically_normal();
+  }
+  if (pathError || normalized.empty()) {
+    setError(error, "Could not identify the transcript destination.");
+    return false;
+  }
+  std::uintmax_t size = 0;
+  std::string digest;
+  if (!core_sha256::file(contentPath, {}, &size, &digest, error))
+    return false;
+  identity->path = toUtf8String(normalized);
+  identity->size = size;
+  identity->sha256 = std::move(digest);
+  return true;
+}
+
 } // namespace
 
 std::filesystem::path transcriptProvenancePath(
@@ -167,9 +233,9 @@ bool writeTranscriptProvenanceStaging(
     setError(error, "Transcript producer identity is empty.");
     return false;
   }
-  FileIdentity transcript;
-  if (!identityFor(transcriptStaging, &transcript, transcriptDestination)) {
-    setError(error, "Could not identify the staged transcript.");
+  ArtifactIdentity transcript;
+  if (!artifactIdentityFor(transcriptStaging, transcriptDestination,
+                           &transcript, error)) {
     return false;
   }
   std::ofstream output(provenanceStaging,
@@ -218,7 +284,7 @@ TranscriptProvenanceState verifyTranscriptProvenance(
     nlohmann::json document;
     input >> document;
     FileIdentity recordedVideo;
-    FileIdentity recordedTranscript;
+    ArtifactIdentity recordedTranscript;
     if (!input || !document.is_object() ||
         document.value("schema", 0) != kSchema ||
         producerIdentity.empty() ||
@@ -230,13 +296,20 @@ TranscriptProvenanceState verifyTranscriptProvenance(
       return TranscriptProvenanceState::Invalid;
     }
     FileIdentity currentVideo;
-    FileIdentity currentTranscript;
+    ArtifactIdentity currentTranscript;
+    std::string artifactError;
     if (!identityFor(videoPath, &currentVideo) ||
-        !identityFor(transcriptPath, &currentTranscript)) {
+        !artifactIdentityFor(transcriptPath, transcriptPath,
+                             &currentTranscript, &artifactError)) {
+      if (error && !artifactError.empty())
+        *error = std::move(artifactError);
       return TranscriptProvenanceState::Mismatch;
     }
-    return same(recordedVideo, currentVideo) &&
-                   same(recordedTranscript, currentTranscript)
+    const bool sameTranscript =
+        samePath(recordedTranscript.path, currentTranscript.path) &&
+        recordedTranscript.size == currentTranscript.size &&
+        recordedTranscript.sha256 == currentTranscript.sha256;
+    return same(recordedVideo, currentVideo) && sameTranscript
                ? TranscriptProvenanceState::Matches
                : TranscriptProvenanceState::Mismatch;
   } catch (const nlohmann::json::exception &) {

@@ -673,6 +673,23 @@ bool runTextEvidenceTests() {
                  "identity");
   }
 #endif
+  {
+    const auto transcriptTime =
+        std::filesystem::last_write_time(generated, filesystemError);
+    std::fstream tampered(generated,
+                          std::ios::binary | std::ios::in | std::ios::out);
+    char firstByte = 0;
+    tampered.read(&firstByte, 1);
+    tampered.seekp(0);
+    firstByte = firstByte == 'X' ? 'Y' : 'X';
+    tampered.write(&firstByte, 1);
+    tampered.close();
+    std::filesystem::last_write_time(generated, transcriptTime,
+                                     filesystemError);
+  }
+  ok &= expect(!loadGeneratedEnglishTextEvidence(video, generatedProducer),
+               "same-size, same-time transcript tampering must invalidate "
+               "content-addressed provenance");
   const std::uintmax_t originalSize =
       std::filesystem::file_size(video, filesystemError);
   const auto originalTime =

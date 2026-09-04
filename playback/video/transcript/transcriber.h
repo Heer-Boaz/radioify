@@ -28,6 +28,7 @@ enum class TranscriptLanguageMode : std::uint8_t {
 
 enum class TranscriptOperationStatus : std::uint8_t {
   Succeeded,
+  NoSpeech,
   Yielded,
   Cancelled,
   Failed,

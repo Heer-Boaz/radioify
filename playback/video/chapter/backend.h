@@ -12,12 +12,19 @@
 
 namespace playback_video_chapters {
 
+enum class AnalysisRoute : std::uint8_t {
+  // Chapter-Llama's ASR planner selects frame locations, MiniCPM-V captions
+  // those frames, and the captions-plus-ASR adapter produces the partition.
+  SpeechGuidedCaptionsAndAsr,
+};
+
 struct AnalysisRequest {
   std::filesystem::path file;
   int videoStreamIndex = -1;
   std::int64_t durationUs = 0;
   int sourceWidth = 0;
   int sourceHeight = 0;
+  AnalysisRoute route = AnalysisRoute::SpeechGuidedCaptionsAndAsr;
   std::optional<TextEvidence> englishText;
 };
 

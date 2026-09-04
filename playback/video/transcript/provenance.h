@@ -32,9 +32,11 @@ bool transcriptSourceMatches(const TranscriptSourceIdentity &expected,
                              const std::filesystem::path &videoPath);
 
 // Writes the commit record for a transcript that is still in staging. The
-// record contains the final destination identity, but takes size and mtime
-// from the staged file because rename preserves those values. Caller publishes
-// both staging files with one TransactionGroup.
+// source retains filesystem-instance identity; the produced artifact is bound
+// to its final path, byte length and SHA-256 content digest. A staging file's
+// filesystem identity is deliberately never persisted because replacement
+// publication is allowed to give the destination a different file identity.
+// Caller publishes both staging files with one TransactionGroup.
 bool writeTranscriptProvenanceStaging(
     const TranscriptSourceIdentity &source,
     const std::string &producerIdentity,

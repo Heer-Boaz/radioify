@@ -114,6 +114,7 @@ buildOverlayCellControlInputs(const std::vector<OverlayControlSpec> &specs,
     control.active = spec.active;
     control.hovered = hovered;
     control.enabled = spec.enabled;
+    control.tone = spec.tone;
     controls.push_back(std::move(control));
   }
   return controls;
@@ -419,6 +420,16 @@ buildOverlayControlSpecs(const PlaybackOverlayState &state,
   // panel itself remains content-only and is opened only when data is ready.
   if (state.chapterControlVisible) {
     add(OverlayControlId::Chapters, "Chapters", state.chapterOverviewOpen);
+    OverlayControlSpec &chapters = out.back();
+    if (state.chapters.state ==
+        playback_video_chapters::AnalysisState::Failed) {
+      chapters.tone = OverlayControlTone::Error;
+    } else if (state.chapters.state ==
+                   playback_video_chapters::AnalysisState::SetupRequired ||
+               state.chapters.state ==
+                   playback_video_chapters::AnalysisState::Unsupported) {
+      chapters.tone = OverlayControlTone::Warning;
+    }
   }
   if (state.chapters.state ==
              playback_video_chapters::AnalysisState::SetupRequired) {
@@ -429,6 +440,7 @@ buildOverlayControlSpecs(const PlaybackOverlayState &state,
   } else if (state.chapters.state ==
              playback_video_chapters::AnalysisState::Failed) {
     add(OverlayControlId::ChapterRetry, "Retry chapters", false);
+    out.back().tone = OverlayControlTone::Error;
   }
 
   if (options.includePictureInPicture && state.pictureInPictureAvailable) {

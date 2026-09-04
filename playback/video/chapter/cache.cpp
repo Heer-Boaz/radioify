@@ -29,7 +29,7 @@ namespace {
 // HwwwH/MiniCPM-V-2
 // caption turn and captions-plus-ASR Chapter-Llama planner. Earlier Radioify
 // prompt variants and overview/summary artifacts are not compatible.
-constexpr int kSchema = 27;
+constexpr int kSchema = 28;
 
 void setError(std::string *error, std::string value) {
   if (error)
@@ -57,6 +57,7 @@ std::string sourceIdentity(const AnalysisRequest &request) {
            << request.videoStreamIndex << '\n'
            << request.durationUs << '\n'
            << request.sourceWidth << 'x' << request.sourceHeight << '\n'
+           << static_cast<int>(request.route) << '\n'
            << kModelSha256 << '\n'
            << kProjectorSha256 << '\n'
            << kPlannerModelSha256 << '\n'

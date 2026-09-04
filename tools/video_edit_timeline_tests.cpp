@@ -1065,6 +1065,10 @@ int main() {
   ok &= expect(controlFor(unsupportedChapterControls,
                           playback_overlay::OverlayControlId::Chapters) !=
                        unsupportedChapterControls.end() &&
+                   controlFor(unsupportedChapterControls,
+                              playback_overlay::OverlayControlId::Chapters)
+                           ->tone ==
+                       playback_overlay::OverlayControlTone::Warning &&
                    playback_overlay::chapterControlCharacterHighlights(
                        chapterControlState.chapters, true, 12, 0.25)
                        .empty(),
@@ -1117,13 +1121,36 @@ int main() {
       playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
   const auto retryChapterAnalysis = controlFor(
       chapterFailedControls, playback_overlay::OverlayControlId::ChapterRetry);
+  const auto failedChapterEntry = controlFor(
+      chapterFailedControls, playback_overlay::OverlayControlId::Chapters);
+  const auto failedChapterInputs =
+      playback_overlay::buildOverlayCellControlInputs(chapterFailedControls,
+                                                       -1);
+  const auto failedChapterWindowLayout =
+      playback_overlay::layoutOverlayControlCells(failedChapterInputs, 120);
+  const auto failedWindowEntry =
+      std::find_if(failedChapterWindowLayout.controls.begin(),
+                   failedChapterWindowLayout.controls.end(),
+                   [](const auto &control) {
+                     return control.id ==
+                            playback_overlay::OverlayControlId::Chapters;
+                   });
   ok &= expect(retryChapterAnalysis != chapterFailedControls.end() &&
+                   failedChapterEntry != chapterFailedControls.end() &&
+                   failedWindowEntry !=
+                       failedChapterWindowLayout.controls.end() &&
                    retryChapterAnalysis->enabled &&
+                   retryChapterAnalysis->tone ==
+                       playback_overlay::OverlayControlTone::Error &&
+                   failedChapterEntry->tone ==
+                       playback_overlay::OverlayControlTone::Error &&
+                   failedWindowEntry->tone ==
+                       playback_overlay::OverlayControlTone::Error &&
                    overlayActionForControl(
                        playback_overlay::OverlayControlId::ChapterRetry) ==
                        playback_overlay::OverlayAction::RetryChapterAnalysis,
-               "a failed background analysis must remain visible and retryable "
-               "without opening an empty content panel");
+               "a failed background analysis must remain visibly erroneous "
+               "and retryable without opening an empty content panel");
   const auto mediaCancellationControls =
       playback_overlay::buildOverlayControlSpecs(playbackSuffixState, -1);
   ok &= expect(

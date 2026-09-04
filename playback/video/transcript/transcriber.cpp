@@ -590,6 +590,10 @@ TranscriptOperationResult IndexedTranscriptOperation::resume(
     return interruptedResult(control);
 
   finalizeSubtitleCueTimeline(&impl_->segments);
+  if (impl_->segments.empty()) {
+    return {TranscriptOperationStatus::NoSpeech,
+            "Speech transcription found no usable dialogue.", {}};
+  }
   report(control.progress, 0.98f, "Saving transcript");
   std::filesystem::path publishedPath = impl_->outputPath;
   if (impl_->languageMode == TranscriptLanguageMode::TranslateToEnglish) {

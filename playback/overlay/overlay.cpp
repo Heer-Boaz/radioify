@@ -372,6 +372,7 @@ OverlayCellLayout layoutWindowOverlayCells(const WindowUiState &ui, int width,
     control.active = ui.controlButtons[i].active;
     control.hovered = ui.controlButtons[i].hovered;
     control.enabled = ui.controlButtons[i].enabled;
+    control.tone = ui.controlButtons[i].tone;
     input.controls.push_back(std::move(control));
   }
   return layoutOverlayCells(input);
@@ -412,6 +413,7 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState &state,
     btn.text = controlSpecs[i].renderText;
     btn.active = controlSpecs[i].active;
     btn.enabled = controlSpecs[i].enabled;
+    btn.tone = controlSpecs[i].tone;
     btn.hovered = controlSpecs[i].enabled &&
                   overlayControlToken(controlSpecs[i].id) == hoverControlToken;
     ui.controlButtons.push_back(std::move(btn));
@@ -916,11 +918,17 @@ void renderOverlayToTarget(
   }
 
   for (const auto &item : layout.controls) {
-    Style style =
-        item.enabled
-            ? (item.active ? styles.accentStyle : styles.baseStyle)
-            : Style{lerpColor(styles.baseStyle.fg, styles.baseStyle.bg, 0.55f),
-                    styles.baseStyle.bg};
+    Style style = Style{lerpColor(styles.baseStyle.fg, styles.baseStyle.bg,
+                                  0.55f),
+                        styles.baseStyle.bg};
+    if (item.enabled) {
+      if (item.tone == OverlayControlTone::Error)
+        style = styles.errorStyle;
+      else if (item.tone == OverlayControlTone::Warning)
+        style = styles.warningStyle;
+      else
+        style = item.active ? styles.accentStyle : styles.baseStyle;
+    }
     if (item.enabled && item.hovered) {
       style = {style.bg, style.fg};
     }

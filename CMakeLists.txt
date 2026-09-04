@@ -611,6 +611,7 @@ if (MSVC)
 endif()
 radioify_link_repo_target(radioify)
 target_link_libraries(radioify PRIVATE
+  radioify_core_sha256
   llama::mtmd
   miniaudio::miniaudio)
 add_custom_command(TARGET radioify POST_BUILD
@@ -999,6 +1000,7 @@ target_sources(chapter_analysis_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
 radioify_link_repo_target(chapter_analysis_tests)
+target_link_libraries(chapter_analysis_tests PRIVATE radioify_core_sha256)
 if (WIN32)
   target_link_libraries(chapter_analysis_tests PRIVATE bcrypt)
 endif()
@@ -1059,7 +1061,7 @@ target_sources(chapter_inference_probe PRIVATE
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
 radioify_link_repo_target(chapter_inference_probe)
-target_link_libraries(chapter_inference_probe PRIVATE llama::mtmd whisper)
+target_link_libraries(chapter_inference_probe PRIVATE radioify_core_sha256 llama::mtmd whisper)
 add_dependencies(chapter_inference_probe radioify_chapter_worker)
 add_custom_command(TARGET chapter_inference_probe POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -1542,6 +1544,7 @@ target_sources(indexed_transcript_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
 radioify_link_repo_target(indexed_transcript_tests)
+target_link_libraries(indexed_transcript_tests PRIVATE radioify_core_sha256)
 add_test(NAME indexed_transcript_tests
          COMMAND $<TARGET_FILE:indexed_transcript_tests>)
 
@@ -1738,6 +1741,7 @@ target_sources(media_export_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
 )
 radioify_link_repo_target(media_export_tests)
+target_link_libraries(media_export_tests PRIVATE radioify_core_sha256)
 add_test(NAME media_export_tests COMMAND $<TARGET_FILE:media_export_tests>)
 
 add_executable(audio_export_smoke)
@@ -1780,6 +1784,7 @@ target_sources(indexed_transcript_smoke PRIVATE
   ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
 )
 radioify_link_repo_target(indexed_transcript_smoke)
+target_link_libraries(indexed_transcript_smoke PRIVATE radioify_core_sha256)
 
 add_executable(scene_analysis_tests)
 target_sources(scene_analysis_tests PRIVATE
@@ -1834,6 +1839,7 @@ target_sources(scene_analysis_smoke PRIVATE
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
 radioify_link_repo_target(scene_analysis_smoke)
+target_link_libraries(scene_analysis_smoke PRIVATE radioify_core_sha256)
 
 if (RADIOIFY_HAS_AUDIO_SEPARATION)
   add_executable(audio_separation_tests)

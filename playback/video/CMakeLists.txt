@@ -100,6 +100,7 @@ radioify_add_module_object_library(radioify_video_chapters
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/cache.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/chapter.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/evidence_plan.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/evidence_preparation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/generated_document.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/inference_worker_client.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chapter/inference_worker_protocol.cpp

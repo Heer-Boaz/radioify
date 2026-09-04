@@ -45,6 +45,8 @@ struct WindowUiState {
     bool active = false;
     bool hovered = false;
     bool enabled = true;
+    playback_overlay::OverlayControlTone tone =
+        playback_overlay::OverlayControlTone::Normal;
   };
 
   struct SubtitleCue {
