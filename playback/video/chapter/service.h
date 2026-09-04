@@ -28,7 +28,6 @@ class Service {
   Snapshot snapshot(RequestId requestId) const;
   bool requestInstallation(RequestId requestId);
   bool cancelInstallation(RequestId requestId);
-  bool retry(RequestId requestId);
 
   // Playback is the foreground GPU owner. False interrupts sparse decode and
   // aborts native VLM inference. Native GPU allocations are released while

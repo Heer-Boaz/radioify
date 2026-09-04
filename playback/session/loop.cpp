@@ -811,17 +811,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       }
       showEditMessage("Cancelling chapter model installation");
       return true;
-    case Action::RetryAnalysis:
-      if (!chapterRequestId || !chapterAnalysis.retry(*chapterRequestId)) {
-        return false;
-      }
-      chapterSnapshot = chapterAnalysis.snapshot(*chapterRequestId);
-      chapterGpuAdmission.reset();
-      chapterOverviewOpen = false;
-      chapterOverviewScrollOffset = 0;
-      syncOverlayPresentation();
-      showEditMessage("Retrying chapter analysis");
-      return true;
     case Action::TogglePanel:
       if (!chapterSnapshot.ready())
         return false;
@@ -1074,9 +1063,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     case Action::CancelChapterOperation:
       return executeChapterAction(
           playback_video_chapters::Action::CancelInstallation);
-    case Action::RetryChapterAnalysis:
-      return executeChapterAction(
-          playback_video_chapters::Action::RetryAnalysis);
     case Action::ToggleWindowPresentation: {
       const bool changed = presentationController.toggleWindow();
       redraw = redraw || changed;

@@ -444,24 +444,6 @@ bool Service::cancelInstallation(RequestId requestId) {
   return true;
 }
 
-bool Service::retry(RequestId requestId) {
-  {
-    std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (!impl_->active || impl_->active->id != requestId ||
-        impl_->published.state != AnalysisState::Failed ||
-        impl_->installInProgress) {
-      return false;
-    }
-    impl_->published = initialSnapshot(impl_->active->request);
-    impl_->published.revision = impl_->nextRevision++;
-    impl_->gpuAllowed.store(false, std::memory_order_release);
-    impl_->generation.fetch_add(1, std::memory_order_acq_rel);
-  }
-  impl_->condition.notify_all();
-  impl_->changed.signal();
-  return true;
-}
-
 void Service::setBackgroundGpuAllowed(RequestId requestId, bool allowed) {
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);

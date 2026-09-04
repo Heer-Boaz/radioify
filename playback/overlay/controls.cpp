@@ -161,8 +161,6 @@ OverlayControlIntent intentForOverlayControl(OverlayControlId id) {
     return OverlayAction::InstallChapterModel;
   case OverlayControlId::ChapterCancel:
     return OverlayAction::CancelChapterOperation;
-  case OverlayControlId::ChapterRetry:
-    return OverlayAction::RetryChapterAnalysis;
   case OverlayControlId::PictureInPicture:
     return OverlayAction::TogglePictureInPicture;
   case OverlayControlId::EditMarkIn:
@@ -437,10 +435,6 @@ buildOverlayControlSpecs(const PlaybackOverlayState &state,
   } else if (state.chapters.state ==
              playback_video_chapters::AnalysisState::Installing) {
     add(OverlayControlId::ChapterCancel, "Cancel install", false);
-  } else if (state.chapters.state ==
-             playback_video_chapters::AnalysisState::Failed) {
-    add(OverlayControlId::ChapterRetry, "Retry chapters", false);
-    out.back().tone = OverlayControlTone::Error;
   }
 
   if (options.includePictureInPicture && state.pictureInPictureAvailable) {

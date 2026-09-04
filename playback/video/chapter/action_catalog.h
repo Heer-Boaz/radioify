@@ -15,7 +15,6 @@ enum class Action : std::uint8_t {
   CancelAnalysis,
   InstallModels,
   CancelInstallation,
-  RetryAnalysis,
   TogglePanel,
   ShowStatus,
 };

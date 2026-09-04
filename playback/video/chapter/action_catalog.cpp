@@ -57,8 +57,7 @@ std::vector<ActionItem> buildActionCatalog(const ActionContext &context) {
   case AnalysisState::Unsupported:
     return {{Action::ShowStatus, "Chapter analysis unavailable"}};
   case AnalysisState::Failed:
-    return {{Action::RetryAnalysis, "Retry chapter analysis"},
-            {Action::ShowStatus, "Chapter analysis details"}};
+    return {{Action::ShowStatus, "Chapter analysis details"}};
   }
   return {};
 }

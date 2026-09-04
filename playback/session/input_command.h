@@ -26,7 +26,6 @@ enum class CommandAction : std::uint8_t {
   CloseChapterOverview,
   InstallChapterModel,
   CancelChapterOperation,
-  RetryChapterAnalysis,
   ToggleWindowPresentation,
   TogglePictureInPicture,
   ToggleFullscreen,

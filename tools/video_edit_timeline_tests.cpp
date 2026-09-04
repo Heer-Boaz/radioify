@@ -1119,8 +1119,6 @@ int main() {
       playback_video_chapters::AnalysisState::Failed;
   const auto chapterFailedControls =
       playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
-  const auto retryChapterAnalysis = controlFor(
-      chapterFailedControls, playback_overlay::OverlayControlId::ChapterRetry);
   const auto failedChapterEntry = controlFor(
       chapterFailedControls, playback_overlay::OverlayControlId::Chapters);
   const auto failedChapterInputs =
@@ -1135,22 +1133,17 @@ int main() {
                      return control.id ==
                             playback_overlay::OverlayControlId::Chapters;
                    });
-  ok &= expect(retryChapterAnalysis != chapterFailedControls.end() &&
-                   failedChapterEntry != chapterFailedControls.end() &&
+  ok &= expect(failedChapterEntry != chapterFailedControls.end() &&
+                   chapterFailedControls.size() ==
+                       unsupportedChapterControls.size() &&
                    failedWindowEntry !=
                        failedChapterWindowLayout.controls.end() &&
-                   retryChapterAnalysis->enabled &&
-                   retryChapterAnalysis->tone ==
-                       playback_overlay::OverlayControlTone::Error &&
                    failedChapterEntry->tone ==
                        playback_overlay::OverlayControlTone::Error &&
                    failedWindowEntry->tone ==
-                       playback_overlay::OverlayControlTone::Error &&
-                   overlayActionForControl(
-                       playback_overlay::OverlayControlId::ChapterRetry) ==
-                       playback_overlay::OverlayAction::RetryChapterAnalysis,
-               "a failed background analysis must remain visibly erroneous "
-               "and retryable without opening an empty content panel");
+                       playback_overlay::OverlayControlTone::Error,
+               "a failed background analysis must keep one visibly erroneous "
+               "chapter entry without adding a retry transport control");
   const auto mediaCancellationControls =
       playback_overlay::buildOverlayControlSpecs(playbackSuffixState, -1);
   ok &= expect(
@@ -1951,6 +1944,25 @@ int main() {
           unsupportedChapterMenu.items.size() == 3,
       "an unsupported request must remain diagnosable without presenting a "
       "retry that cannot change its prerequisites");
+  playbackMenu.open(playback_session::ContextMenuSurface::Terminal, 0.25, 0.75);
+  chapterSnapshot.state = playback_video_chapters::AnalysisState::Failed;
+  chapterSnapshot.detail = "Inference returned invalid output.";
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext,
+                       chapterContext);
+  const auto failedChapterMenu =
+      playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
+  ok &= expect(
+      failedChapterMenu.items.size() == 3 &&
+          std::count_if(failedChapterMenu.items.begin(),
+                        failedChapterMenu.items.end(), [](const auto &item) {
+                          return item.label == "Chapter analysis details";
+                        }) == 1 &&
+          std::none_of(failedChapterMenu.items.begin(),
+                       failedChapterMenu.items.end(), [](const auto &item) {
+                         return item.label.find("Retry") != std::string::npos;
+                       }),
+      "a terminal analysis failure must expose diagnostics without suggesting "
+      "that repeating identical inputs is a recovery strategy");
   chapterContext.requestActive = false;
   chapterSnapshot = {};
   chapterSnapshot.state = playback_video_chapters::AnalysisState::Disabled;

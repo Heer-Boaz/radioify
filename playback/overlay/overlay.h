@@ -60,7 +60,6 @@ enum class OverlayAction : std::uint8_t {
   CloseChapterOverview,
   InstallChapterModel,
   CancelChapterOperation,
-  RetryChapterAnalysis,
 };
 
 using OverlayControlIntent =

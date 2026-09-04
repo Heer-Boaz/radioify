@@ -123,7 +123,7 @@ public:
   std::atomic<bool> firstAttemptEntered{false};
 };
 
-class FailOnceBackend final : public Backend {
+class FailingBackend final : public Backend {
 public:
   std::optional<AnalysisResult> cached(const AnalysisRequest &) override {
     return std::nullopt;
@@ -133,12 +133,10 @@ public:
     return {CapabilityState::Ready, {}};
   }
   InstallResult install(const OperationControl &) override { return {}; }
-  AnalysisResult analyze(const AnalysisRequest &request,
+  AnalysisResult analyze(const AnalysisRequest &,
                          const OperationControl &) override {
-    if (++attempts == 1) {
-      return {OperationStatus::Failed, "invalid chapter output", {}, {}};
-    }
-    return validResult(request.durationUs);
+    ++attempts;
+    return {OperationStatus::Failed, "invalid chapter output", {}, {}};
   }
 
   std::atomic<int> attempts{0};
@@ -272,9 +270,9 @@ bool runPlaybackYieldTest() {
   return ok;
 }
 
-bool runExplicitRetryTest() {
-  auto backend = std::make_unique<FailOnceBackend>();
-  FailOnceBackend *observed = backend.get();
+bool runTerminalFailureTest() {
+  auto backend = std::make_unique<FailingBackend>();
+  FailingBackend *observed = backend.get();
   Service service(std::move(backend));
   const Service::RequestId id = service.start(request());
   service.setBackgroundGpuAllowed(id, true);
@@ -284,19 +282,13 @@ bool runExplicitRetryTest() {
                        observed->attempts.load() == 1,
                    "a failed automatic analysis must publish a durable "
                    "terminal state");
-  ok &= expect(service.retry(id),
-               "the active failed request must expose an explicit retry");
-  ok &= expect(waitUntil([&]() {
-                 return service.snapshot(id).state ==
-                        AnalysisState::WaitingForPlayback;
-               }) &&
-                   observed->attempts.load() == 1,
-               "retry must reacquire background GPU admission instead of "
-               "retaining a stale foreground lease");
+  service.setBackgroundGpuAllowed(id, false);
   service.setBackgroundGpuAllowed(id, true);
-  ok &= expect(waitUntil([&]() { return service.snapshot(id).ready(); }) &&
-                   observed->attempts.load() == 2 && !service.retry(id),
-               "retry must restart the same owner-bound request exactly once");
+  std::this_thread::sleep_for(25ms);
+  ok &= expect(service.snapshot(id).state == AnalysisState::Failed &&
+                   observed->attempts.load() == 1,
+               "GPU admission changes must not turn a terminal failure into an "
+               "unprincipled retry");
   return ok;
 }
 
@@ -340,7 +332,7 @@ bool runRequestOwnedInstallTest() {
 int main() {
   return runCachedResultTest() && runInvalidSourceTest() &&
                  runExplicitSetupTest() && runPlaybackYieldTest() &&
-                 runExplicitRetryTest() && runNonFatalWarningTest() &&
+                 runTerminalFailureTest() && runNonFatalWarningTest() &&
                  runRequestOwnedInstallTest()
              ? 0
              : 1;
