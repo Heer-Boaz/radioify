@@ -8,7 +8,7 @@ Console media browser/player with selectable period-radio receiver models.
 - MSVC (Visual Studio Build Tools)
 - vcpkg (for `-InstallDeps`)
 - A Vulkan-capable GPU and current graphics driver (generated transcripts and
-  automatic video chapters)
+  on-demand editing analysis)
 
 ## Build
 For the repo-specific Windows build/run flow and common failure recovery, see
@@ -25,7 +25,7 @@ Quick start:
 
 The binary is written to `dist/radioify.exe`.
 `-Tests` builds every executable registered with CTest before running the
-suite, and validates chapter resources from an isolated staged directory. It
+suite. It
 does not install or launch the MSIX package.
 
 The default build enables whisper.cpp's Vulkan backend and downloads the
@@ -48,146 +48,71 @@ silently falls back to CPU. The normal static build keeps the static MSVC
 runtime; it does not require a Visual C++ redistributable install on another
 PC.
 
-For each active video, Radioify starts asynchronous chapter analysis after
-subtitle discovery completes. This feature is deliberately GPU-only: source
-frames must decode through D3D11VA, the pinned MiniCPM-V 2.6 visual model and
-projector must run through Vulkan, and the Meta Llama 3.1 8B planning model must
-fit completely on a Vulkan device. The llama.cpp adapter verifies the
-projector backend after initialization, so a library-level CPU fallback is
-rejected rather than merely requested away. Playback remains the foreground
-GPU owner. Model inference runs in a private Windows Job Object: complete stage
-boundaries are atomically checkpointed, and Radioify terminates the worker to
-reclaim all Vulkan allocations whenever playback buffers, seeks, or starves.
-Pass `--no-automatic-chapters` to disable automatic chapters for a launch.
+## Editing review
 
-**Built with Llama.** The packaged `models/chapter_analysis` directory includes
-the Llama 3.1 Community License and Meta's required attribution notice. Use of
-the planner is also subject to the incorporated
-[Llama 3.1 Acceptable Use Policy](https://llama.meta.com/llama3_1/use-policy).
+In video edit mode, open **Edit suggestions** in the editor controls or context
+menu. The panel explains the scope, download and limitations before you choose
+**Start analysis**. This is a
+manual archive-editing job over the original source, independent of playback
+position. It proposes **Keep**,
+**Shorten**, or **Review**, with visual reasons. Filter and preview proposals;
+select one to set the editor's range, then use the existing editing commands.
+Analysis never changes the edit decision list or deletes the source.
 
-Choose `Install chapter models` from the active video's context menu to install
-the fixed, SHA-256-verified model artifacts once. Radioify downloads the MiniCPM-V model
-and projector plus the Chapter-Llama base model (about 10.65 GB total) into the
-per-user data directory. Releases include the two small, pinned Chapter-Llama
-adapters and their attribution notice; the base models are not bundled.
-Chapter analysis requires English timecoded text, independently of the
-subtitle track selected for presentation. Radioify uses that complete
-transcript with Chapter-Llama's published ASR adapter to predict candidate
-boundaries, then samples one frame per candidate using the published
-one-second opening-frame normalization. MiniCPM-V captions those frames and the
-published captions-plus-ASR adapter jointly produces the final chapter
-boundaries and navigation titles. Existing English subtitles or
-a persisted English transcript are reused. When neither exists, the same
-asynchronous analysis request runs Whisper's translation task and atomically
-publishes a source-bound `video.ext.radioify.transcript.en.srt` plus provenance
-record before planning. The private name prevents background work from ever
-overwriting a user-authored subtitle or transcript. The transcript and its
-provenance record are one recoverable publication: source identity and
-producer identity are stored separately from the SHA-256 identity of the
-finished transcript, so a staging file handle is never mistaken for the
-published artifact. Foreground playback can
-preempt each Whisper chunk; Radioify releases the Vulkan model allocation,
-retains the exact decoded PCM transaction, and resumes without an approximate
-media seek. A source with no usable speech is an unsupported evidence route,
-not a model or worker failure. There is no periodic visual-only fallback.
+The local backbone is the official Qwen3-VL 8B Instruct GGUF, with native
+temporal video input in llama.cpp. Visual observations are grouped across windows
+into events; a separate call classifies each fixed event from its original
+observations. The application owns the retention policy, ordering and source
+boundaries.
+Each 30-second interval receives two seconds
+of neighbouring context on either side and samples at 2 fps. There is no fixed
+image limit for the entire recording. All intervals are scheduled, but this is
+**not every-frame inspection or a guarantee that every event is found**.
+This first editing-review route is visual-only: audio and speech are not model
+inputs. Tiny text, brief events and long-range narrative dependencies can be
+missed. Keep includes context handles; uncertainty and missing assessments
+take priority over Shorten. Model judgments remain suggestions to inspect.
+Real-video validation found over-fragmented encounters, incorrect names and
+over-retention of ordinary movement. Earlier variants also proposed shortening
+parts of story scenes and encounter setup. The route is experimental and has **not passed
+semantic acceptance**; inspect proposed cuts before using them. See
+[editing-review validation](docs/video-editing-review.md#validation-on-2026-09-06).
 
-Automatic runtime analysis currently accepts videos from 30 seconds through
-60 minutes. This is a Radioify admission contract for the single-pass runtime
-implementation, not a claimed limit of the research model. Known evidence is
-bounded structurally before vision work; after captioning, the complete prompt
-is tokenized against the actual loaded planner context. Longer media will
-require Chapter-Llama's separately published iterative procedure rather than
-silently thinning the timeline.
+The first run installs the pinned, checksum-verified
+[Qwen3-VL 8B model and projector](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF)
+(about 6.19 GB combined) in the per-user model directory. No video is uploaded.
+The job currently requires NVIDIA driver-wide memory telemetry (NVML), waits
+for at least 11 GiB free before loading and yields below 2 GiB free while
+running. These are conservative admission limits, not measured peak usage.
+Other Radioify model jobs share a device lease; another application's models
+are never unloaded. Unsupported telemetry is reported explicitly.
 
-The inference backend links the vcpkg-baseline-pinned `llama` and `libmtmd`
-libraries directly. Their native objects live behind one RAII-owned Radioify
-adapter; libmtmd's published helper API owns multimodal batching, M-RoPE
-positions, and `llama_decode` orchestration instead of duplicating that vendor
-logic in Radioify. Radioify packages both official Chapter-Llama adapters.
-MiniCPM-V 2.6 receives the reference single-image question at each
-ASR-predicted candidate through the chat template embedded in the model and
-returns ordinary caption text. Radioify then
-chronologically interleaves `Caption HH:MM:SS` and `ASR HH:MM:SS` records and
-passes that evidence to the captions-plus-ASR adapter with the published task
-prompt. No Radioify-authored semantic prompt or title-repair stage participates
-in chapter planning.
+**Pause analysis** stops its private worker and releases its model
+memory. **Resume analysis** reuses completed windows, including after
+reopening the video. Atomic checkpoints live under
+`%LOCALAPPDATA%\Radioify\cache\video-edit-review`, bound to the source file
+instance, timestamps, stream, model hashes, runtime revision and task contract.
+Changing these starts a new assessment; old results are not migrated.
+Failed/incomplete jobs do not publish a finished review.
 
-The final adapter's second-resolution boundary times and titles are accepted
-only when they begin at zero, strictly increase, remain inside the source, and
-form a complete partition. Invalid or over-budget output is rejected rather
-than sorted, snapped, deduplicated, summarized, or repaired. Only that complete
-validated chapter domain object is published. The private helper
-uses a bounded, schema-versioned file protocol and atomically published
-checkpoints; no shell command, temporary PNG, or diagnostic-log parsing
-participates in inference.
+See [implementation and validation](docs/video-editing-review.md) for the
+reference approach, limitations and tests still pending. This is an offline job
+with asynchronous progress, not a promised real-time analyzer.
 
-Because llama.cpp marks `libmtmd` experimental, its version is pinned at the
-build boundary rather than allowed to drift at runtime. The visual model and
-projector come from OpenBMB's published
-[MiniCPM-V 2.6 GGUF repository](https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf)
-at a fixed revision and are accepted only at their compiled-in sizes and
-SHA-256 hashes. MiniCPM-V 2.6 is an explicit captioner option in the
-Chapter-Llama extraction tooling and is supported natively by the pinned
-libmtmd version; Radioify carries no private vision-model compatibility port.
-Both planner adapters are MIT-licensed
-[Chapter-Llama artifacts](https://huggingface.co/lucas-ventura/chapter-llama)
-at a fixed revision, converted reproducibly for llama.cpp and paired with a
-pinned Meta Llama 3.1 8B Instruct GGUF subject to its community license.
+## Video analysis
 
-The architecture follows Chapter-Llama's published ASR selector and
-captions-plus-ASR model contracts from the
-[Chapter-Llama codebase](https://github.com/lucas-ventura/chapter-llama).
-Radioify deliberately does not implement the dataset pipeline's ten-second
-no-ASR fallback: the official single-video command currently documents an
-audio-only route, while the research fallback periodically samples frames.
-Only the speech-guided route is admitted here, and it is represented explicitly
-in the cache identity rather than selected implicitly from whichever evidence
-happens to be present.
-Its persistent chapter artifact follows the same start-time-and-title product
-shape used by [Mux AI](https://github.com/muxinc/ai/blob/main/src/workflows/chapters.ts).
+AI runs only when requested in the video editor. Ordinary playback does not
+start analysis, download models, or generate AI chapters. The former playback
+chapter pipeline was retired because its output was not reliable enough.
+Existing transcripts, cached chapter files and downloaded models are left intact.
 
-A completed result is atomically cached under
-`%LOCALAPPDATA%\Radioify\cache\video-chapters`. Its identity includes the
-source file, selected stream, every model/adapter hash, and English text
-evidence, so reopening unchanged media publishes the result immediately while changed
-inputs are analyzed again. Private in-progress inference checkpoints use the
-same identity, so a foreground GPU yield resumes at a completed model-stage
-boundary instead of relabeling partial output. A transient cache-write failure keeps the completed
-in-memory result available for the active session and reports a non-fatal OSD
-warning. In-progress or unsupported analysis never opens an empty chapter or
-timeline-metadata panel; failures remain visible through the normal playback
-status surface.
+Editor review combines video at 2 fps with time-aligned English speech. Existing
+English subtitles or a saved transcript are reused. If needed, Whisper creates
+one English SRT beside the source video; no companion manifest is created.
+Translation retains source segment times and does not run word alignment.
+Names mentioned in dialogue are not evidence that those characters are visible.
 
-For a presentation-free production-path diagnostic, run:
-
-```powershell
-.\dist\radioify.exe analyze-chapters "C:\path\to\video.mkv"
-```
-
-This uses the same metadata probe, English-evidence preparation, chapter
-service, GPU backend, validation, and durable cache as playback. Progress goes
-to stderr; the final JSON document on stdout reports the cache key, cache path,
-and whether the completed result is persisted. It never opens a playback
-window and never installs models without explicit user interaction.
-
-The explicit hardware/model end-to-end test uses a fresh isolated cache, runs
-that production path twice, and requires a cold first run followed by discovery
-of its durable result:
-
-```powershell
-.\scripts\test\Invoke-RadioifyChapterE2E.ps1 `
-  -ApplicationPath .\dist\radioify.exe `
-  -VideoPath "C:\path\to\video.mkv" `
-  -RequireGeneratedTranscript
-```
-
-This test is intentionally separate from CTest because it requires supported
-GPU hardware, locally installed model artifacts, and representative media. It
-uses a private scratch media fixture so cache and sidecar discovery both start
-cold (a hard link where supported, otherwise an isolated copy), uses hidden
-child processes, and does not require an installed MSIX package. Pass
-`-ScratchRoot` when the system temp volume cannot hold the representative
-video.
+See [editing review](docs/video-editing-review.md) for limitations and validation.
 
 ## Windows Package
 Build a distributable Windows x64 bundle and zip:
@@ -353,32 +278,12 @@ to the browser.
   focus its `Cancel` and `Hide` buttons; hiding the panel leaves a footer
   indicator that can restore it. Task failures open a separate detailed dialog
   with `Retry` when that operation supports retrying.
-- `Chapters` is a stable player control. It starts manual analysis when the
-  automatic trigger is disabled, reports the current lifecycle state when
-  content is not ready, and toggles the responsive chapter drawer once results
-  exist. While analysis runs, a character highlight sweep with a short
-  afterglow animates inside the existing control; it adds no status text or
-  layout width. The drawer has a persistent `Close` action, and `Esc`/Back
-  closes it before leaving playback. It is confined to video-content space and
-  never covers the title, controls, status, or timeline. Chapter boundaries
-  appear on the shared timeline in both ASCII and framebuffer presentation. Hovering
-  anywhere on that timeline keeps the existing preview frame and adds the
-  chapter title and time range; metadata wraps to the responsive panel width.
-  Until usable chapter content exists, the chapter list stays closed and the
-  hover preview remains frame-only instead of reserving an empty status panel.
-- Right-click the active video to start chapter analysis manually, inspect a
-  failure, approve model installation, or cancel the current request.
-  The same typed actions are exposed in terminal and framebuffer playback.
-  While analysis runs, its context-menu action reports the current phase or
-  progress. `--no-automatic-chapters` disables only the automatic trigger;
-  the stable control and context-menu action can still start manual analysis.
 - Enter: open folder / play file
 - Backspace: up
 - Arrows: move selection
 - PgUp/PgDn: page
 - Space or Media Play/Pause: pause/resume
 - Media Previous/Next: previous/next track
-- Ctrl+Left/Right: previous/next video chapter (when chapters are ready)
 - Media Stop: stop playback
 - Left/Right or [ ]: seek +/-5s
 - , / .: previous/next video frame
@@ -392,10 +297,14 @@ to the browser.
 - Drag the visible I/O handles on the program timeline to adjust either boundary; handles clamp instead of crossing
 - In the video editor: Ctrl+Z/Ctrl+Y undo/redo; Ctrl+R resets all edits
 - The editor bar keeps playback, In/Out, Remove, Keep only, and Done visible.
-  `Suggestions` detects useful segments and opens a persistent review workflow
-  with filters for cutscenes, dialogue, gameplay, and menu/loading ranges.
-  Previous/Next seeks between suggestions, Select range only sets In/Out, Hide
-  is reversible with Undo hide, and no suggestion changes the edit by itself.
+  `Edit suggestions` opens a review panel without starting or pausing a job.
+  Start explicitly, then review Keep / Shorten / Review ranges and full reasons.
+  Previous/Next (or Up/Down) changes focus without seeking. Preview plays the
+  range and pauses at its end; Select range sets In/Out and seeks to its start.
+  Hide suggestion is reversible with Undo hide. Only Remove or Keep only changes
+  the edit. Closing the panel keeps analysis running and preserves review focus.
+  Analyse again asks for confirmation before replacing suggestions (R confirms;
+  Enter or Escape preserves the existing results).
   Right-click remains available for secondary history, export, and discard
   actions.
 - Done only leaves edit mode; it never starts or cancels an export. Committed

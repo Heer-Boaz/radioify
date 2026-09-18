@@ -4,6 +4,8 @@
 #include <cmath>
 #include <utility>
 
+#include "playback/video/edit/suggestion_panel.h"
+
 namespace playback_session {
 
 std::optional<size_t> ContextMenuController::itemIndex(
@@ -43,8 +45,7 @@ playback_overlay::ContextMenuItemToken ContextMenuController::tokenFor(
 void ContextMenuController::refresh(
     const playback_video_edit::EditSnapshot& edit,
     const playback_video_edit::ExportProgress& editExport,
-    playback_media_actions::Context sourceContext,
-    const playback_video_chapters::ActionContext& chapterContext) {
+    playback_media_actions::Context sourceContext) {
   std::optional<ContextMenuCommand> selectedCommand;
   if (selected_ < items_.size()) selectedCommand = items_[selected_].command;
 
@@ -57,44 +58,10 @@ void ContextMenuController::refresh(
        playback_media_actions::build(sourceContext)) {
     next.push_back({item.action, std::move(item.label)});
   }
-  for (playback_video_chapters::ActionItem& item :
-       playback_video_chapters::buildActionCatalog(chapterContext)) {
-    next.push_back({item.action, std::move(item.label)});
-  }
 
   if (edit.active) {
-    if (edit.sceneAnalysisStatus ==
-        playback_video_edit::SceneAnalysisStatus::Running) {
-      next.push_back({playback_video_edit::Command::CancelSceneAnalysis,
-                      "Cancel segment detection"});
-    } else if (edit.sceneAnalysisStatus ==
-               playback_video_edit::SceneAnalysisStatus::Ready) {
-      next.push_back({playback_video_edit::Command::ToggleSceneSuggestions,
-                      edit.suggestionReview.visible
-                          ? "Hide suggestions"
-                          : "Show suggestions"});
-      next.push_back({playback_video_edit::Command::StartSceneAnalysis,
-                      "Detect segments again"});
-    } else {
-      next.push_back(
-          {playback_video_edit::Command::StartSceneAnalysis,
-           edit.sceneAnalysisStatus ==
-                   playback_video_edit::SceneAnalysisStatus::Failed
-               ? "Retry segment detection"
-               : "Detect segments..."});
-    }
-    if (edit.suggestionReview.visible) {
-      if (edit.suggestionReview.selectedId) {
-        next.push_back({playback_video_edit::Command::SelectSceneSuggestion,
-                        "Select suggested segment"});
-        next.push_back({playback_video_edit::Command::DismissSceneSuggestion,
-                        "Hide suggestion"});
-      }
-      if (edit.suggestionReview.canUndoHide) {
-        next.push_back(
-            {playback_video_edit::Command::UndoDismissSceneSuggestion,
-             "Undo hidden suggestion"});
-      }
+    for (const auto& action : playback_video_edit::buildSuggestionPresentation(edit).actions) {
+      if (action.enabled) next.push_back({action.command, action.label});
     }
     if (edit.inTimelineUs) {
       next.push_back(

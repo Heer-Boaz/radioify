@@ -1,4 +1,5 @@
 #include "playback/video/edit/scene_suggestion_review.h"
+#include "playback/video/edit/suggestion_preview.h"
 
 #include <iostream>
 #include <string>
@@ -12,15 +13,15 @@ bool expect(bool condition, const std::string& message) {
   return false;
 }
 
-playback_video_analysis::SceneSuggestion suggestion(
+playback_video_analysis::EditProposal suggestion(
     uint64_t id, int64_t startUs, int64_t endUs,
-    playback_video_analysis::SceneKind kind) {
-  playback_video_analysis::SceneSuggestion out;
+    playback_video_analysis::EditDisposition kind) {
+  playback_video_analysis::EditProposal out;
   out.id = id;
   out.startUs = startUs;
   out.endUs = endUs;
-  out.kind = kind;
-  out.confidence = 0.8f;
+  out.disposition = kind;
+  out.reason = "Observed activity";
   return out;
 }
 
@@ -32,13 +33,13 @@ int main() {
   bool ok = true;
 
   constexpr int64_t second = 1'000'000;
-  const std::vector<analysis::SceneSuggestion> suggestions = {
-      suggestion(1, 0 * second, 20 * second, analysis::SceneKind::Gameplay),
-      suggestion(2, 20 * second, 40 * second, analysis::SceneKind::Cutscene),
-      suggestion(3, 40 * second, 60 * second, analysis::SceneKind::Dialogue),
-      suggestion(4, 60 * second, 80 * second, analysis::SceneKind::Cutscene),
+  const std::vector<analysis::EditProposal> suggestions = {
+      suggestion(1, 0 * second, 20 * second, analysis::EditDisposition::Review),
+      suggestion(2, 20 * second, 40 * second, analysis::EditDisposition::Keep),
+      suggestion(3, 40 * second, 60 * second, analysis::EditDisposition::Shorten),
+      suggestion(4, 60 * second, 80 * second, analysis::EditDisposition::Keep),
       suggestion(5, 80 * second, 100 * second,
-                 analysis::SceneKind::MenuOrLoading),
+                 analysis::EditDisposition::Review),
   };
   edit::Timeline timeline(100 * second);
   edit::SceneSuggestionReview review;
@@ -55,7 +56,7 @@ int main() {
                "around the current playhead");
 
   ok &= expect(review.cycleFilter(suggestions, timeline) ==
-                       edit::SceneSuggestionFilter::Cutscenes &&
+                       edit::SceneSuggestionFilter::Keep &&
                    review.filteredCount(suggestions, timeline) == 2 &&
                    review.selectedId() == std::optional<uint64_t>(4),
                "filtering must retain a selection that remains visible");
@@ -77,7 +78,7 @@ int main() {
                "Hide must select the nearest remaining item and publish Undo");
 
   ok &= expect(review.cycleFilter(suggestions, timeline) ==
-                       edit::SceneSuggestionFilter::Dialogue &&
+                       edit::SceneSuggestionFilter::Shorten &&
                    review.selectedId() == std::optional<uint64_t>(3),
                "changing filters must repair selection inside that filter");
   ok &= expect(review.undoHide(suggestions, timeline) ==
@@ -94,8 +95,9 @@ int main() {
                    !snapshot.selectedId,
                "a closed review must not leak stale projected selection");
   ok &= expect(review.togglePanel(suggestions, timeline) &&
-                   review.selectedId() == std::optional<uint64_t>(1),
-               "reopening review must establish a valid selection");
+                   review.selectedId() == std::optional<uint64_t>(4),
+               "reopening review must retain its selected suggestion");
+  review.select(1, suggestions, timeline);
 
   ok &= expect(timeline.rippleDelete({0, 20 * second}),
                "the timeline fixture must remove the selected suggestion");
@@ -110,6 +112,30 @@ int main() {
   snapshot = review.snapshot(suggestions, timeline, true);
   ok &= expect(!snapshot.visible && !snapshot.selectedId,
                "leaving the editor must close review and clear its focus");
+
+  edit::SuggestionPreview preview;
+  using Update = edit::SuggestionPreview::Update;
+  ok &= expect(!preview.start(-1, second, 1) && !preview.start(second, second, 1) &&
+                   !preview.active(), "invalid preview bounds must not activate transport policy");
+  ok &= expect(preview.start(2 * second, 4 * second, 7) && preview.active(),
+               "a preview must own its program-time end and its seek generation");
+  ok &= expect(preview.observe(9 * second, 7, 6, true, false) == Update::None &&
+                   preview.observe(9 * second, 7, 6, false, false) == Update::None && preview.active(),
+               "the old playhead must not end a preview before its seek is acknowledged");
+  ok &= expect(preview.observe(3 * second, 7, 7, false, false) == Update::None &&
+                   preview.observe(4 * second, 7, 7, false, false) == Update::EndReached &&
+                   !preview.active() && preview.observe(5 * second, 7, 7, false, false) == Update::None,
+               "preview completion must request one synchronized pause at its end");
+  preview.start(2 * second, 4 * second, 8);
+  ok &= expect(preview.observe(6 * second, 9, 8, true, false) == Update::Superseded &&
+                   !preview.active(), "a user seek must disarm preview without pausing that new seek");
+  preview.start(2 * second, 4 * second, 10);
+  ok &= expect(preview.stop() && !preview.stop() &&
+                   preview.observe(5 * second, 10, 10, false, false) == Update::None,
+               "stopping a preview must remove its end policy exactly once");
+  preview.start(2 * second, 4 * second, 11);
+  ok &= expect(preview.observe(4 * second - 1, 11, 11, false, true) == Update::EndReached &&
+                   !preview.active(), "EOF must complete the final preview even when the last frame precedes duration");
 
   return ok ? 0 : 1;
 }

@@ -2,7 +2,7 @@
 
 #include <utility>
 
-#include "playback/video/analysis/scene_analyzer.h"
+#include "playback/video/analysis/edit_review_backend.h"
 
 namespace playback_video_analysis {
 
@@ -12,12 +12,9 @@ SceneAnalysisJob::SceneAnalysisJob(WakeNotifier ownerWake)
     : SceneAnalysisJob(
           [](const JobRequest& request,
              const ProgressReporter& reportProgress,
-             const std::atomic<bool>* cancelled, AnalysisResult* result,
+             const std::atomic<bool>* cancelled, ReviewJobResult* result,
              std::string* error) {
-            return analyzeVideoScenes(
-                request.sourcePath, request.videoStreamIndex,
-                request.durationUs, reportProgress, cancelled,
-                !request.forceReanalysis, result, error);
+            return reviewVideoForEditing(request, reportProgress, cancelled, result, error);
           },
           std::move(ownerWake)) {}
 

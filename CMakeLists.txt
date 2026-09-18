@@ -212,29 +212,6 @@ set(RADIOIFY_AUDIO_SEPARATION_MODEL_PATH
     CACHE FILEPATH "Path to Radioify's BandIt v2 mask model")
 set(RADIOIFY_AUDIO_SEPARATION_MODEL_SHA256
     "4694632688ae0b9a3e4c46918c0f9bb4f2af18c393d8e7d55f3e1e276d6fa6c7")
-set(RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_PATH
-    "${CMAKE_SOURCE_DIR}/models/chapter_analysis/chapter-llama-asr-10k-f16.gguf")
-set(RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_SIZE 13640320)
-set(RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_SHA256
-    "7d160d379d3d654386967bf402f80c09ff24380dd71d54c1317818353a575b05")
-set(RADIOIFY_CHAPTER_PLAN_ADAPTER_PATH
-    "${CMAKE_SOURCE_DIR}/models/chapter_analysis/chapter-llama-captions-asr-10k-f16.gguf")
-set(RADIOIFY_CHAPTER_PLAN_ADAPTER_SIZE 13640320)
-set(RADIOIFY_CHAPTER_PLAN_ADAPTER_SHA256
-    "4e07a53dfa65e356e691716645d795697427c30dc983b198faf9e84d7eeec6da")
-file(MAKE_DIRECTORY
-  "${CMAKE_BINARY_DIR}/generated/playback/video/chapter")
-configure_file(
-  "${CMAKE_SOURCE_DIR}/cmake/chapter_model_contract.h.in"
-  "${CMAKE_BINARY_DIR}/generated/playback/video/chapter/model_contract.h"
-  @ONLY)
-set(RADIOIFY_CHAPTER_PLANNER_NOTICE_PATH
-    "${CMAKE_SOURCE_DIR}/models/chapter_analysis/CHAPTER-LLAMA-NOTICE.md")
-set(RADIOIFY_LLAMA_31_LICENSE_PATH
-    "${CMAKE_SOURCE_DIR}/models/chapter_analysis/LLAMA-3.1-LICENSE")
-set(RADIOIFY_LLAMA_31_NOTICE_PATH
-    "${CMAKE_SOURCE_DIR}/models/chapter_analysis/NOTICE")
-
 set(RADIOIFY_PROJECT_INCLUDE_DIRS
   ${CMAKE_SOURCE_DIR}/app
   ${CMAKE_SOURCE_DIR}/audio
@@ -373,6 +350,7 @@ add_subdirectory(tools)
 add_subdirectory(tui)
 
 find_package(nlohmann_json CONFIG REQUIRED)
+target_link_libraries(radioify_scene_analysis PRIVATE nlohmann_json::nlohmann_json)
 find_package(miniaudio CONFIG REQUIRED)
 target_link_libraries(radioify_transcript_document PRIVATE
   nlohmann_json::nlohmann_json)
@@ -387,13 +365,23 @@ target_link_libraries(radioify_loopsplit PRIVATE miniaudio::miniaudio)
 target_link_libraries(radioify_tui PRIVATE miniaudio::miniaudio)
 
 find_package(llama CONFIG REQUIRED)
+if (NOT LLAMA_BUILD_COMMIT MATCHES "^[0-9a-f]+$" OR
+    LLAMA_BUILD_COMMIT STREQUAL "unknown")
+  message(FATAL_ERROR
+    "The inference runtime must publish its pinned source revision. Run "
+    ".\\build.ps1 -Static -InstallDeps to update the llama-cpp package.")
+endif()
+configure_file(
+  "${CMAKE_SOURCE_DIR}/cmake/analysis_runtime_contract.h.in"
+  "${CMAKE_BINARY_DIR}/generated/playback/video/analysis/runtime_contract.h"
+  @ONLY)
 if (NOT TARGET llama::mtmd)
   message(FATAL_ERROR
     "The llama-cpp package does not publish its mtmd target. Run "
     ".\\build.ps1 -Static -InstallDeps to install Radioify's pinned "
     "llama-cpp overlay.")
 endif()
-target_link_libraries(radioify_video_chapters PRIVATE
+target_link_libraries(radioify_analysis_inference PRIVATE
   nlohmann_json::nlohmann_json
   llama::mtmd)
 find_file(RADIOIFY_LLAMA_CPP_LICENSE
@@ -405,107 +393,32 @@ find_file(RADIOIFY_LLAMA_CPP_LICENSE
 if (NOT RADIOIFY_LLAMA_CPP_LICENSE)
   message(FATAL_ERROR "The llama.cpp third-party license file was not found.")
 endif()
-if (NOT EXISTS "${RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_PATH}")
-  message(FATAL_ERROR
-    "Chapter-Llama ASR plan adapter not found at "
-    "${RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_PATH}. Ensure Git LFS objects were fetched.")
-endif()
-file(SIZE "${RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_PATH}"
-     _radioify_chapter_speech_plan_adapter_size)
-if (NOT _radioify_chapter_speech_plan_adapter_size EQUAL
-    RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_SIZE)
-  message(FATAL_ERROR
-    "Chapter-Llama ASR plan adapter size mismatch. Expected "
-    "${RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_SIZE}, got "
-    "${_radioify_chapter_speech_plan_adapter_size}.")
-endif()
-file(SHA256 "${RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_PATH}"
-     _radioify_chapter_speech_plan_adapter_hash)
-if (NOT _radioify_chapter_speech_plan_adapter_hash STREQUAL
-    RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_SHA256)
-  message(FATAL_ERROR
-    "Chapter-Llama ASR plan adapter hash mismatch. Expected "
-    "${RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_SHA256}, got "
-    "${_radioify_chapter_speech_plan_adapter_hash}.")
-endif()
-if (NOT EXISTS "${RADIOIFY_CHAPTER_PLAN_ADAPTER_PATH}")
-  message(FATAL_ERROR
-    "Chapter-Llama captions-plus-ASR adapter not found at "
-    "${RADIOIFY_CHAPTER_PLAN_ADAPTER_PATH}. Ensure Git LFS objects were fetched.")
-endif()
-file(SIZE "${RADIOIFY_CHAPTER_PLAN_ADAPTER_PATH}"
-     _radioify_chapter_plan_adapter_size)
-if (NOT _radioify_chapter_plan_adapter_size EQUAL
-    RADIOIFY_CHAPTER_PLAN_ADAPTER_SIZE)
-  message(FATAL_ERROR
-    "Chapter-Llama captions-plus-ASR adapter size mismatch. Expected "
-    "${RADIOIFY_CHAPTER_PLAN_ADAPTER_SIZE}, got "
-    "${_radioify_chapter_plan_adapter_size}.")
-endif()
-file(SHA256 "${RADIOIFY_CHAPTER_PLAN_ADAPTER_PATH}"
-     _radioify_chapter_plan_adapter_hash)
-if (NOT _radioify_chapter_plan_adapter_hash STREQUAL
-    RADIOIFY_CHAPTER_PLAN_ADAPTER_SHA256)
-  message(FATAL_ERROR
-    "Chapter-Llama captions-plus-ASR adapter hash mismatch. Expected "
-    "${RADIOIFY_CHAPTER_PLAN_ADAPTER_SHA256}, got "
-    "${_radioify_chapter_plan_adapter_hash}.")
-endif()
-if (NOT EXISTS "${RADIOIFY_CHAPTER_PLANNER_NOTICE_PATH}")
-  message(FATAL_ERROR "The Chapter-Llama attribution notice was not found.")
-endif()
-if (NOT EXISTS "${RADIOIFY_LLAMA_31_LICENSE_PATH}" OR
-    NOT EXISTS "${RADIOIFY_LLAMA_31_NOTICE_PATH}")
-  message(FATAL_ERROR
-    "The required Llama 3.1 license or attribution notice was not found.")
-endif()
-
-function(radioify_deploy_chapter_planner target_name)
-  add_custom_command(TARGET ${target_name} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:${target_name}>/models/chapter_analysis"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${RADIOIFY_CHAPTER_SPEECH_PLAN_ADAPTER_PATH}"
-            "$<TARGET_FILE_DIR:${target_name}>/models/chapter_analysis/chapter-llama-asr-10k-f16.gguf"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${RADIOIFY_CHAPTER_PLAN_ADAPTER_PATH}"
-            "$<TARGET_FILE_DIR:${target_name}>/models/chapter_analysis/chapter-llama-captions-asr-10k-f16.gguf"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${RADIOIFY_CHAPTER_PLANNER_NOTICE_PATH}"
-            "$<TARGET_FILE_DIR:${target_name}>/models/chapter_analysis/CHAPTER-LLAMA-NOTICE.md"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${RADIOIFY_LLAMA_31_LICENSE_PATH}"
-            "$<TARGET_FILE_DIR:${target_name}>/models/chapter_analysis/LLAMA-3.1-LICENSE"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${RADIOIFY_LLAMA_31_NOTICE_PATH}"
-            "$<TARGET_FILE_DIR:${target_name}>/models/chapter_analysis/NOTICE"
-    COMMENT "Publishing the pinned Chapter-Llama adapters for ${target_name}"
-    VERBATIM)
-endfunction()
-
-add_executable(radioify_chapter_worker
-  ${CMAKE_SOURCE_DIR}/tools/chapter_inference_worker.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/evidence_plan.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_protocol.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/prompt_contract.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/generated_document.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
+add_executable(radioify_analysis_worker
+  ${CMAKE_SOURCE_DIR}/tools/analysis_inference_worker.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/inference_worker_protocol.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/inference.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/transcript/device_selection.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/transcript/whisper_engine.cpp
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
+  $<TARGET_OBJECTS:radioify_image_codec>
+  ${CMAKE_SOURCE_DIR}/playback/video/frame_conversion.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/decoder.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/sequence.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/timing/timeline.cpp
+  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
+  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
-radioify_link_repo_target(radioify_chapter_worker)
-target_link_libraries(radioify_chapter_worker PRIVATE
+radioify_link_repo_target(radioify_analysis_worker)
+target_link_libraries(radioify_analysis_worker PRIVATE
   nlohmann_json::nlohmann_json
   llama::mtmd
   whisper)
-set_target_properties(radioify_chapter_worker PROPERTIES
+set_target_properties(radioify_analysis_worker PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
   string(TOUPPER "${config}" config_upper)
-  set_target_properties(radioify_chapter_worker PROPERTIES
+  set_target_properties(radioify_analysis_worker PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_${config_upper}
       "${CMAKE_BINARY_DIR}/bin/${config}"
   )
@@ -568,7 +481,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
 endif()
 
 add_executable(radioify)
-add_dependencies(radioify radioify_chapter_worker)
+add_dependencies(radioify radioify_analysis_worker)
 if (WIN32)
   set_source_files_properties("${CMAKE_SOURCE_DIR}/app/radioify.rc"
     PROPERTIES
@@ -590,7 +503,7 @@ target_sources(radioify PRIVATE
   $<TARGET_OBJECTS:radioify_transcript_job>
   $<TARGET_OBJECTS:radioify_transcript_engine>
   $<TARGET_OBJECTS:radioify_scene_analysis>
-  $<TARGET_OBJECTS:radioify_video_chapters>
+  $<TARGET_OBJECTS:radioify_analysis_inference>
   $<TARGET_OBJECTS:radioify_image_codec>
   $<TARGET_OBJECTS:radioify_video>
   $<TARGET_OBJECTS:radioify_audio>
@@ -616,14 +529,11 @@ target_link_libraries(radioify PRIVATE
   llama::mtmd
   miniaudio::miniaudio)
 add_custom_command(TARGET radioify POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E rm -f
-          "$<TARGET_FILE_DIR:radioify>/radioify-chapter-engine.exe"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${RADIOIFY_LLAMA_CPP_LICENSE}"
           "$<TARGET_FILE_DIR:radioify>/llama-cpp-LICENSE.txt"
   COMMENT "Publishing the pinned in-process llama.cpp license"
   VERBATIM)
-radioify_deploy_chapter_planner(radioify)
 if (RADIOIFY_HAS_AUDIO_SEPARATION)
   target_link_libraries(radioify PRIVATE WindowsML::Runtime)
   radioify_deploy_windows_ml(radioify)
@@ -632,17 +542,21 @@ if (WIN32)
   find_program(RADIOIFY_POWERSHELL_EXECUTABLE
     NAMES powershell.exe pwsh.exe
     REQUIRED)
-  add_test(NAME chapter_runtime_layout_tests
-    COMMAND "${RADIOIFY_POWERSHELL_EXECUTABLE}"
-            -NoProfile
-            -ExecutionPolicy Bypass
-            -File
-            "${CMAKE_SOURCE_DIR}/scripts/test/Verify-RadioifyChapterRuntimeLayout.ps1"
-            -ApplicationPath "$<TARGET_FILE:radioify>"
-            -WindowsMlRuntime "${RADIOIFY_HAS_AUDIO_SEPARATION}")
-  set_tests_properties(chapter_runtime_layout_tests PROPERTIES
-    LABELS "chapter;runtime-layout")
+  add_test(NAME analysis_runtime_layout_tests
+    COMMAND "${RADIOIFY_POWERSHELL_EXECUTABLE}" -NoProfile -ExecutionPolicy Bypass
+      -File "${CMAKE_SOURCE_DIR}/scripts/test/Verify-RadioifyAnalysisRuntimeLayout.ps1"
+      -ApplicationPath "$<TARGET_FILE:radioify>"
+      -WindowsMlRuntime "${RADIOIFY_HAS_AUDIO_SEPARATION}")
+  set_tests_properties(analysis_runtime_layout_tests PROPERTIES LABELS "analysis;runtime-layout")
 endif()
+
+add_executable(sha256_tests)
+target_sources(sha256_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_sha256_tests>
+)
+radioify_link_repo_target(sha256_tests)
+target_link_libraries(sha256_tests PRIVATE radioify_core_sha256)
+add_test(NAME sha256_tests COMMAND $<TARGET_FILE:sha256_tests>)
 
 add_executable(radio_measurements)
 target_sources(radio_measurements PRIVATE
@@ -791,6 +705,7 @@ target_sources(playback_session_input_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/session/input.cpp
   ${CMAKE_SOURCE_DIR}/playback/session/overlay_control_pointer.cpp
   ${CMAKE_SOURCE_DIR}/playback/overlay/controls.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/suggestion_panel.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/scene_suggestions.cpp
   ${CMAKE_SOURCE_DIR}/core/unicode_display_width.cpp
 )
@@ -872,15 +787,6 @@ target_sources(osd_timeline_tests PRIVATE
 radioify_link_repo_target(osd_timeline_tests)
 add_test(NAME osd_timeline_tests
          COMMAND $<TARGET_FILE:osd_timeline_tests>)
-
-add_executable(background_gpu_admission_tests)
-target_sources(background_gpu_admission_tests PRIVATE
-  $<TARGET_OBJECTS:radioify_tool_background_gpu_admission_tests>
-  ${CMAKE_SOURCE_DIR}/playback/session/background_gpu_admission.cpp
-)
-radioify_link_repo_target(background_gpu_admission_tests)
-add_test(NAME background_gpu_admission_tests
-         COMMAND $<TARGET_FILE:background_gpu_admission_tests>)
 
 add_executable(presentation_policy_tests)
 target_sources(presentation_policy_tests PRIVATE
@@ -974,24 +880,18 @@ radioify_link_repo_target(timeline_preview_tests)
 add_test(NAME timeline_preview_tests
          COMMAND $<TARGET_FILE:timeline_preview_tests>)
 
-add_executable(chapter_analysis_tests)
-target_sources(chapter_analysis_tests PRIVATE
-  $<TARGET_OBJECTS:radioify_tool_chapter_analysis_tests>
+add_executable(speech_evidence_tests)
+target_sources(speech_evidence_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_speech_evidence_tests>
   $<TARGET_OBJECTS:radioify_video_sidecar_identity>
   $<TARGET_OBJECTS:radioify_transcript_artifact>
   $<TARGET_OBJECTS:radioify_transcript_document>
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/cache.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/evidence_plan.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/generated_document.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/integrity.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/integrity.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/analysis/visual_timeline_checkpoint.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/analysis/scene_analysis.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/transcript/cue_semantics.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/presentation.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/prompt_contract.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/storage.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/text_evidence.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/storage.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/text_evidence.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/timeline_preview_policy.cpp
   ${CMAKE_SOURCE_DIR}/core/file_output.cpp
   ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
@@ -1000,55 +900,50 @@ target_sources(chapter_analysis_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/core/unicode_display_width.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
-radioify_link_repo_target(chapter_analysis_tests)
-target_link_libraries(chapter_analysis_tests PRIVATE radioify_core_sha256)
+radioify_link_repo_target(speech_evidence_tests)
+target_link_libraries(speech_evidence_tests PRIVATE radioify_core_sha256)
 if (WIN32)
-  target_link_libraries(chapter_analysis_tests PRIVATE bcrypt)
+  target_link_libraries(speech_evidence_tests PRIVATE bcrypt)
 endif()
-add_test(NAME chapter_analysis_tests
-         COMMAND $<TARGET_FILE:chapter_analysis_tests>)
+add_test(NAME speech_evidence_tests
+         COMMAND $<TARGET_FILE:speech_evidence_tests>)
 
-add_executable(chapter_inference_tests)
-target_sources(chapter_inference_tests PRIVATE
-  $<TARGET_OBJECTS:radioify_tool_chapter_inference_tests>
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/evidence_plan.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/generated_document.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/prompt_contract.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_client.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_protocol.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/storage.cpp
+add_executable(analysis_inference_tests)
+target_sources(analysis_inference_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_analysis_inference_tests>
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/inference.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/inference_worker_client.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/inference_worker_protocol.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/storage.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/transcript/device_selection.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/transcript/whisper_engine.cpp
   ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
+  $<TARGET_OBJECTS:radioify_image_codec>
+  ${CMAKE_SOURCE_DIR}/playback/video/frame_conversion.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/decoder.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/sequence.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/timing/timeline.cpp
 )
-radioify_link_repo_target(chapter_inference_tests)
-target_link_libraries(chapter_inference_tests PRIVATE llama::mtmd whisper)
-add_test(NAME chapter_inference_tests
-         COMMAND $<TARGET_FILE:chapter_inference_tests>)
+radioify_link_repo_target(analysis_inference_tests)
+target_link_libraries(analysis_inference_tests PRIVATE llama::mtmd whisper)
+add_test(NAME analysis_inference_tests
+         COMMAND $<TARGET_FILE:analysis_inference_tests>)
 
 # Explicit opt-in hardware/model integration harness. It is intentionally not
 # registered with CTest because model artifacts and a Vulkan GPU are optional
 # developer-machine capabilities.
-add_executable(chapter_inference_probe)
-target_sources(chapter_inference_probe PRIVATE
-  $<TARGET_OBJECTS:radioify_tool_chapter_inference_probe>
+add_executable(analysis_inference_probe)
+target_sources(analysis_inference_probe PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_analysis_inference_probe>
   $<TARGET_OBJECTS:radioify_image_codec>
   $<TARGET_OBJECTS:radioify_transcript_document>
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/evidence_plan.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/generated_document.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/prompt_contract.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_client.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/inference_worker_protocol.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/storage.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/inference.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/inference_worker_client.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/inference_worker_protocol.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/storage.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/transcript/device_selection.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/transcript/whisper_engine.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/sampled_evidence.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/analysis/visual_timeline_checkpoint.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/analysis/scene_analysis.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/analysis/visual_timeline_scan.cpp
@@ -1062,28 +957,52 @@ target_sources(chapter_inference_probe PRIVATE
   ${CMAKE_SOURCE_DIR}/core/utf8.cpp
   ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
 )
-radioify_link_repo_target(chapter_inference_probe)
-target_link_libraries(chapter_inference_probe PRIVATE radioify_core_sha256 llama::mtmd whisper)
-add_dependencies(chapter_inference_probe radioify_chapter_worker)
-add_custom_command(TARGET chapter_inference_probe POST_BUILD
+radioify_link_repo_target(analysis_inference_probe)
+target_link_libraries(analysis_inference_probe PRIVATE radioify_core_sha256 llama::mtmd whisper)
+add_dependencies(analysis_inference_probe radioify_analysis_worker)
+foreach(_review_runtime_target IN ITEMS radioify_analysis_worker analysis_inference_tests analysis_inference_probe)
+  target_sources(${_review_runtime_target} PRIVATE
+    ${CMAKE_SOURCE_DIR}/playback/video/gpu/memory_budget.cpp
+    ${CMAKE_SOURCE_DIR}/playback/video/analysis/edit_review.cpp
+    ${CMAKE_SOURCE_DIR}/playback/video/analysis/edit_review_store.cpp
+  )
+  target_link_libraries(${_review_runtime_target} PRIVATE radioify_core_sha256)
+endforeach()
+target_sources(radioify_analysis_worker PRIVATE
+  ${CMAKE_SOURCE_DIR}/core/file_output.cpp
+  ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
+)
+target_sources(analysis_inference_tests PRIVATE
+  ${CMAKE_SOURCE_DIR}/core/file_output.cpp
+  ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
+)
+target_sources(analysis_inference_probe PRIVATE
+  $<TARGET_OBJECTS:radioify_video_sidecar_identity>
+  $<TARGET_OBJECTS:radioify_transcript_artifact>
+  $<TARGET_OBJECTS:radioify_transcript_engine>
+  ${CMAKE_SOURCE_DIR}/audio/ffmpegaudio.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/evidence_preparation.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/text_evidence.cpp
+  ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/edit_review_backend.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/model.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/integrity.cpp
+)
+target_link_libraries(analysis_inference_probe PRIVATE winhttp)
+
+add_executable(edit_review_tests
+  ${CMAKE_SOURCE_DIR}/tools/edit_review_tests.cpp
+  ${CMAKE_SOURCE_DIR}/core/utf8.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/analysis/edit_review.cpp)
+radioify_configure_repo_target(edit_review_tests)
+target_link_libraries(edit_review_tests PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME edit_review_tests COMMAND $<TARGET_FILE:edit_review_tests>)
+add_custom_command(TARGET analysis_inference_probe POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
-          "$<TARGET_FILE:radioify_chapter_worker>"
-          "$<TARGET_FILE_DIR:chapter_inference_probe>/radioify_chapter_worker.exe"
+          "$<TARGET_FILE:radioify_analysis_worker>"
+          "$<TARGET_FILE_DIR:analysis_inference_probe>/radioify_analysis_worker.exe"
   COMMENT "Publishing the isolated inference worker for the hardware probe"
   VERBATIM)
-radioify_deploy_chapter_planner(chapter_inference_probe)
-
-add_executable(chapter_service_tests)
-target_sources(chapter_service_tests PRIVATE
-  $<TARGET_OBJECTS:radioify_tool_chapter_service_tests>
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/chapter.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/service.cpp
-  ${CMAKE_SOURCE_DIR}/core/utf8.cpp
-  ${CMAKE_SOURCE_DIR}/core/waitable_signal.cpp
-)
-radioify_link_repo_target(chapter_service_tests)
-add_test(NAME chapter_service_tests
-         COMMAND $<TARGET_FILE:chapter_service_tests>)
 
 add_executable(video_edit_timeline_tests)
 target_sources(video_edit_timeline_tests PRIVATE
@@ -1094,13 +1013,13 @@ target_sources(video_edit_timeline_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/overlay/interaction.cpp
   ${CMAKE_SOURCE_DIR}/playback/session/context_menu_controller.cpp
   ${CMAKE_SOURCE_DIR}/playback/media_action_catalog.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/chapter/action_catalog.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/composition/render_plan.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/frame_step_prefetch_mapping.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/sequence.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/scene_suggestions.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/timeline.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/overlay_model.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/suggestion_panel.cpp
   $<TARGET_OBJECTS:radioify_text_grid_ui>
   ${CMAKE_SOURCE_DIR}/core/unicode_display_width.cpp
 )
@@ -1414,6 +1333,7 @@ target_sources(browser_action_strip_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_browser_action_strip_tests>
   ${CMAKE_SOURCE_DIR}/tui/ui/browser_action_strip.cpp
   ${CMAKE_SOURCE_DIR}/playback/overlay/controls.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/suggestion_panel.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/scene_suggestions.cpp
   ${CMAKE_SOURCE_DIR}/core/unicode_display_width.cpp
 )
@@ -1428,6 +1348,7 @@ target_sources(browser_chrome_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/tui/ui/browser_action_strip.cpp
   ${CMAKE_SOURCE_DIR}/tui/ui/ui_footer_layout.cpp
   ${CMAKE_SOURCE_DIR}/playback/overlay/controls.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/suggestion_panel.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/edit/scene_suggestions.cpp
   ${CMAKE_SOURCE_DIR}/core/unicode_display_width.cpp
 )
@@ -2574,7 +2495,7 @@ if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
-  target_link_directories(chapter_inference_probe PRIVATE ${FFMPEG_LIBRARY_DIRS})
+  target_link_directories(analysis_inference_probe PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_edit_export_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_edit_timeline_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(indexed_transcript_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
@@ -2598,7 +2519,9 @@ target_link_libraries(audio_export_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARIES})
-target_link_libraries(chapter_inference_probe PRIVATE ${FFMPEG_LIBRARIES})
+target_link_libraries(analysis_inference_probe PRIVATE ${FFMPEG_LIBRARIES})
+target_link_libraries(analysis_inference_tests PRIVATE ${FFMPEG_LIBRARIES})
+target_link_libraries(radioify_analysis_worker PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_edit_export_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_edit_timeline_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(indexed_transcript_smoke PRIVATE ${FFMPEG_LIBRARIES})
@@ -3077,7 +3000,9 @@ if (WIN32)
   target_link_libraries(radioify PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys comctl32 bcrypt winhttp)
   target_link_libraries(video_frame_step_smoke PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys)
   target_link_libraries(timeline_preview_tests PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
-  target_link_libraries(chapter_inference_probe PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
+  target_link_libraries(analysis_inference_probe PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
+  target_link_libraries(analysis_inference_tests PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
+  target_link_libraries(radioify_analysis_worker PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
   target_link_libraries(scene_analysis_smoke PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32)
   target_link_libraries(video_edit_export_smoke PRIVATE mfplat mfreadwrite mfuuid ole32 bcrypt ws2_32)
 endif()
@@ -3088,11 +3013,13 @@ endif()
 
 # CTest never builds its command executables. Keep the registered test graph
 # as the source of truth for a check target that first refreshes every test
-# binary and the production application, then runs the suite. The three tests
+# binary and the production application, then runs the suite. Also compile the
+# opt-in analysis GPU integration probe; inference itself is not a unit test.
+# The three tests
 # whose command names intentionally differ from their executable targets are
 # included explicitly.
 get_property(_radioify_registered_tests DIRECTORY PROPERTY TESTS)
-set(_radioify_test_targets radioify)
+set(_radioify_test_targets radioify analysis_inference_probe)
 foreach(_radioify_test_name IN LISTS _radioify_registered_tests)
   if (TARGET "${_radioify_test_name}")
     list(APPEND _radioify_test_targets "${_radioify_test_name}")

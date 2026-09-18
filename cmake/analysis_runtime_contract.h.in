@@ -1,0 +1,10 @@
+#pragma once
+
+#include <cstdint>
+
+namespace playback_video_analysis {
+
+// The installed native runtime owns this value, not an application schema.
+inline constexpr const char *kInferenceRuntimeRevision = "@LLAMA_BUILD_COMMIT@";
+
+} // namespace playback_video_analysis

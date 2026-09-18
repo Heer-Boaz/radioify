@@ -12,6 +12,7 @@
 #include "playback/video/edit/view.h"
 
 class Player;
+class SubtitleManager;
 
 namespace playback_video_timeline_preview {
 class HoverModel;
@@ -22,7 +23,7 @@ namespace playback_session {
 
 struct VideoEditActionResult {
   bool handled = false;
-  bool pausePlayback = false;
+  std::optional<bool> playbackPaused;
   std::string message;
   bool exportStarted = false;
 };
@@ -38,6 +39,7 @@ struct VideoEditPollResult {
   bool changed = false;
   VideoEditExportCompletion completion = VideoEditExportCompletion::None;
   std::string message;
+  std::optional<bool> playbackPaused;
 };
 
 // Application-level owner of a video's edit document, export job, and live
@@ -46,7 +48,7 @@ struct VideoEditPollResult {
 class VideoEditWorkspace {
  public:
   VideoEditWorkspace(
-      std::filesystem::path sourcePath, Player& player,
+      std::filesystem::path sourcePath, Player& player, SubtitleManager& subtitles,
       playback_video_timeline_preview::HoverModel& timelinePreview,
       playback_video_timeline_preview::Provider& timelinePreviewProvider);
   ~VideoEditWorkspace();
@@ -64,6 +66,8 @@ class VideoEditWorkspace {
   VideoEditActionResult navigateBack();
   bool selectCutAt(int64_t timelineUs, int64_t toleranceUs);
   bool selectSceneSuggestionAt(int64_t timelineUs, int64_t toleranceUs);
+  VideoEditActionResult focusSceneSuggestion(uint64_t id);
+  bool scrollSuggestions(int offset);
   void clearCutSelection();
   bool moveBoundary(playback_video_edit::EditBoundary boundary,
                     int64_t timelineUs);

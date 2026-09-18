@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "playback/debug/lines.h"
-#include "playback/video/chapter/presentation.h"
 #include "playback/video/gpu/gpu_runtime.h"
 #include "playback/video/image.h"
 #include "playback/video/state/machine.h"
@@ -440,21 +439,11 @@ void renderPlaybackScreen(const PlaybackScreenResources &resources,
       ratio = std::clamp(displaySec / totalSec, 0.0, 1.0);
     }
     if (showPlaybackChrome) {
-      std::optional<playback_overlay::ChapterOverviewRegion> overviewRegion;
-      if (overlayState.chapterOverviewOpen) {
-        const auto panel = playback_video_chapters::layoutOverviewPanel(
-            overlayState.chapters, overlayLayout.width, overlayLayout.height,
-            overlayLayout.topY,
-            overlayState.chapterOverviewScrollOffset);
-        overviewRegion =
-            playback_overlay::chapterOverviewRegionForLayout(panel);
-      }
       frameOutput.overlayInteractions =
           playback_overlay::buildOverlayInteractionMap(
               overlayLayout, &overlayState.videoEdit,
               overlayState.videoEditPrompt,
-              overlayState.mediaActionConfirmationPrompt.has_value(),
-              overviewRegion ? &*overviewRegion : nullptr);
+              overlayState.mediaActionConfirmationPrompt.has_value());
     }
     if (showContextMenu && contextMenuLayout.drawable()) {
       frameOutput.overlayInteractions =
@@ -471,11 +460,7 @@ void renderPlaybackScreen(const PlaybackScreenResources &resources,
       playback_overlay::renderOverlayToScreen(
           screen, overlayLayout, overlayStyles, ratio, &overlayState.videoEdit,
           &overlayState.videoEditExport, overlayState.videoEditPrompt,
-          overlayState.mediaActionConfirmationPrompt, &overlayState.chapters,
-          overlayState.chapterActivityPhase,
-          overlayState.chapterActivityMotionEnabled,
-          overlayState.chapterOverviewOpen,
-          overlayState.chapterOverviewScrollOffset, artTop, height);
+          overlayState.mediaActionConfirmationPrompt, artTop, height);
     }
   }
 

@@ -86,6 +86,8 @@ void queueSeekRequest(SessionPort& session,
                       PlaybackSeekGestureState& seekState, double targetSec);
 void sendSeekRequest(SessionPort& session,
                      PlaybackSeekGestureState& seekState, double targetSec);
+// Consume older gesture input before another owner issues a transport intent.
+void commitQueuedSeek(SessionPort& session, PlaybackSeekGestureState& seekState);
 
 void handlePlaybackInputEvent(SessionPort& session,
                               PlaybackSeekGestureState& seekState,

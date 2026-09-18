@@ -1,0 +1,50 @@
+diff --git a/cmake/llama-config.cmake.in b/cmake/llama-config.cmake.in
+index 6db7357..b430a2b 100644
+--- a/cmake/llama-config.cmake.in
++++ b/cmake/llama-config.cmake.in
+@@ -6,7 +6,7 @@ set(LLAMA_SHARED_LIB   @BUILD_SHARED_LIBS@)
+ @PACKAGE_INIT@
+ 
+ set_and_check(LLAMA_INCLUDE_DIR "@PACKAGE_LLAMA_INCLUDE_INSTALL_DIR@")
+-set_and_check(LLAMA_LIB_DIR     "@PACKAGE_LLAMA_LIB_INSTALL_DIR@")
++# Library lookup is owned by the vcpkg toolchain (release/debug).
+ set(LLAMA_BIN_DIR "@PACKAGE_LLAMA_BIN_INSTALL_DIR@")
+ 
+ find_package(ggml REQUIRED HINTS ${LLAMA_LIB_DIR}/cmake)
+@@ -17,8 +17,8 @@ find_library(llama_LIBRARY llama
+     NO_CMAKE_FIND_ROOT_PATH
+ )
+ 
+-add_library(llama UNKNOWN IMPORTED)
+-set_target_properties(llama
++add_library(llama::llama UNKNOWN IMPORTED)
++set_target_properties(llama::llama
+     PROPERTIES
+         INTERFACE_INCLUDE_DIRECTORIES "${LLAMA_INCLUDE_DIR}"
+         INTERFACE_LINK_LIBRARIES "ggml::ggml;ggml::ggml-base;"
+@@ -27,4 +27,13 @@ set_target_properties(llama
+         INTERFACE_COMPILE_FEATURES c_std_90
+         POSITION_INDEPENDENT_CODE ON)
+ 
++find_package(Threads REQUIRED)
++find_library(mtmd_LIBRARY mtmd REQUIRED)
++find_library(mtmd_HASH_LIBRARY vendor-hash REQUIRED)
++add_library(llama::mtmd UNKNOWN IMPORTED)
++set_target_properties(llama::mtmd PROPERTIES
++    IMPORTED_LOCATION "${mtmd_LIBRARY}"
++    INTERFACE_INCLUDE_DIRECTORIES "${LLAMA_INCLUDE_DIR}"
++    INTERFACE_LINK_LIBRARIES "llama::llama;ggml::ggml;Threads::Threads;${mtmd_HASH_LIBRARY}")
++
+ check_required_components(Llama)
+diff --git a/vendor/hash/CMakeLists.txt b/vendor/hash/CMakeLists.txt
+index 1654eb1..b56ee00 100644
+--- a/vendor/hash/CMakeLists.txt
++++ b/vendor/hash/CMakeLists.txt
+@@ -17,6 +17,7 @@ add_library(${TARGET} STATIC
+ )
+ 
+ add_library(vendor::hash ALIAS ${TARGET})
++install(TARGETS ${TARGET} ARCHIVE DESTINATION lib)
+ 
+ target_compile_features(${TARGET} PRIVATE cxx_std_17)
+ 

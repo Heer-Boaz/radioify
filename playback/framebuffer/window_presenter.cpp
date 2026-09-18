@@ -72,13 +72,12 @@ struct WindowPresenter::Impl {
   PumpableWorkerThread thread;
   Impl(Player& player, GpuRuntime& gpu, std::string mediaTitle,
        std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
-           presentationSource,
-       SystemMediaCommandOwner systemMediaCommandOwner)
+           presentationSource)
       : player(player),
         gpu(gpu),
         nativeWindowTitle(nativePlaybackWindowTitle(mediaTitle)),
         presentationSource(std::move(presentationSource)),
-        window(gpu, systemMediaCommandOwner) {
+        window(gpu) {
     if (!this->presentationSource) {
       throw std::invalid_argument(
           "WindowPresenter requires a presentation source");
@@ -321,11 +320,9 @@ struct WindowPresenter::Impl {
 WindowPresenter::WindowPresenter(
     Player& player, GpuRuntime& gpu, std::string mediaTitle,
     std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
-        presentationSource,
-    SystemMediaCommandOwner systemMediaCommandOwner)
-    : impl_(std::make_unique<Impl>(
-          player, gpu, std::move(mediaTitle),
-          std::move(presentationSource), systemMediaCommandOwner)) {}
+        presentationSource)
+    : impl_(std::make_unique<Impl>(player, gpu, std::move(mediaTitle),
+                                   std::move(presentationSource))) {}
 
 WindowPresenter::~WindowPresenter() = default;
 

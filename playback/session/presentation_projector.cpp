@@ -115,12 +115,6 @@ projectPlaybackOverlay(OverlayProjection projection) {
   inputs.videoEditExport = std::move(projection.videoEditExport);
   inputs.videoEditPrompt = projection.videoEditPrompt;
   inputs.mediaTaskActivity = std::move(projection.mediaTaskActivity);
-  inputs.chapters = std::move(projection.chapters);
-  inputs.chapterControlVisible = projection.chapterControlVisible;
-  inputs.chapterActivityPhase = projection.chapterActivityPhase;
-  inputs.chapterActivityMotionEnabled = projection.chapterActivityMotionEnabled;
-  inputs.chapterOverviewOpen = projection.chapterOverviewOpen;
-  inputs.chapterOverviewScrollOffset = projection.chapterOverviewScrollOffset;
   if (projection.mediaActionConfirmationPrompt) {
     inputs.mediaActionConfirmationPrompt = projectMediaActionConfirmationDialog(
         *projection.mediaActionConfirmationPrompt);

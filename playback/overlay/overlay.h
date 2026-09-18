@@ -15,7 +15,6 @@
 #include "playback/overlay/interaction.h"
 #include "playback/overlay/media_action_confirmation_presentation.h"
 #include "playback/overlay/osd_state.h"
-#include "playback/video/chapter/chapter.h"
 #include "playback/video/edit/command.h"
 #include "playback/video/edit/view.h"
 #include "playback/video/framebuffer/window/window.h"
@@ -56,8 +55,6 @@ enum class OverlayAction : std::uint8_t {
   CancelMediaTask,
   ConfirmMediaAction,
   DismissMediaAction,
-  ToggleChapterOverview,
-  CloseChapterOverview,
 };
 
 using OverlayControlIntent =
@@ -195,12 +192,6 @@ struct PlaybackOverlayInputs {
       playback_video_edit::Prompt::None;
   std::optional<MediaActionConfirmationDialog> mediaActionConfirmationPrompt;
   std::optional<playback_media_processing::Activity> mediaTaskActivity;
-  playback_video_chapters::Snapshot chapters;
-  bool chapterControlVisible = false;
-  double chapterActivityPhase = 0.0;
-  bool chapterActivityMotionEnabled = true;
-  bool chapterOverviewOpen = false;
-  int chapterOverviewScrollOffset = 0;
 };
 
 struct PlaybackOverlayState {
@@ -244,12 +235,6 @@ struct PlaybackOverlayState {
       playback_video_edit::Prompt::None;
   std::optional<MediaActionConfirmationDialog> mediaActionConfirmationPrompt;
   std::optional<playback_media_processing::Activity> mediaTaskActivity;
-  playback_video_chapters::Snapshot chapters;
-  bool chapterControlVisible = false;
-  double chapterActivityPhase = 0.0;
-  bool chapterActivityMotionEnabled = true;
-  bool chapterOverviewOpen = false;
-  int chapterOverviewScrollOffset = 0;
 };
 
 PlaybackOverlayState
@@ -288,6 +273,9 @@ std::vector<OverlayDialogButtonInput> buildMediaActionConfirmationDialogButtons(
 OverlayControlIntent intentForOverlayControl(OverlayControlId id);
 
 OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput &input);
+// Shared transient-message geometry for terminal and GPU text-grid renderers.
+std::vector<OverlayCellTextLine>
+layoutTransientMessageCells(const std::string &message, int width, int height);
 OverlayCellLayout
 layoutOverlayControlCells(const std::vector<OverlayCellControlInput> &controls,
                           int width);
@@ -308,13 +296,6 @@ std::string buildWindowOverlayTopLine(const PlaybackOverlayState &state);
 
 WindowUiState buildWindowUiState(const PlaybackOverlayState &state,
                                  int hoverControlToken);
-
-// Returns a left-to-right indeterminate highlight with a short trailing glow.
-// The normalized phase may wrap; callers own the animation clock.
-std::vector<float> indeterminateCharacterSweep(int width, double phase);
-std::vector<float> chapterControlCharacterHighlights(
-    const playback_video_chapters::Snapshot &chapters, bool motionEnabled,
-    int width, double phase);
 
 struct OverlayRenderStyles {
   Style baseStyle{{219, 224, 230}, {5, 6, 7}};
@@ -340,10 +321,7 @@ void renderOverlayToScreen(
     playback_video_edit::Prompt videoEditPrompt,
     const std::optional<MediaActionConfirmationDialog>
         &mediaActionConfirmationPrompt,
-    const playback_video_chapters::Snapshot *chapters,
-    double chapterActivityPhase, bool chapterActivityMotionEnabled,
-    bool chapterOverviewOpen,
-    int chapterOverviewScrollOffset, int minY, int maxY);
+    int minY, int maxY);
 
 void renderTransientMessageToScreen(ConsoleScreen &screen,
                                     const std::string &message,

@@ -177,6 +177,7 @@ struct WhisperEngine::Impl {
   // contains recognized speech, retain its detected language so later music,
   // effects, or short utterances cannot make auto-detection switch scripts.
   std::string sourceLanguage;
+  WhisperTask task = WhisperTask::Transcribe;
 };
 
 WhisperEngine::WhisperEngine() = default;
@@ -184,7 +185,7 @@ WhisperEngine::~WhisperEngine() = default;
 
 bool WhisperEngine::initialize(const std::filesystem::path &modelPath,
                                WhisperAlignmentPreset alignmentPreset,
-                               std::string sourceLanguage,
+                               WhisperTask task, std::string sourceLanguage,
                                std::string *deviceDescription,
                                std::string *error) {
   impl_.reset();
@@ -221,14 +222,16 @@ bool WhisperEngine::initialize(const std::filesystem::path &modelPath,
   // GGML Flash Attention's padded-mask precondition is not met for every
   // short decode window, so keep the stable Vulkan kernels for this workload.
   parameters.flash_attn = false;
-  if (alignmentPreset != WhisperAlignmentPreset::None) {
+  // DTW is context-owned: disabling per-call token timestamps does not disable
+  // alignment. Translation uses source-audio segment timing instead.
+  if (task == WhisperTask::Transcribe &&
+      alignmentPreset != WhisperAlignmentPreset::None) {
     parameters.dtw_token_timestamps = true;
     parameters.dtw_aheads_preset = whisperAlignmentPreset(alignmentPreset);
   }
 
   const auto modelPathBytes = modelPath.u8string();
-  const std::string modelPathUtf8(modelPathBytes.begin(),
-                                  modelPathBytes.end());
+  const std::string modelPathUtf8(modelPathBytes.begin(), modelPathBytes.end());
   WhisperContextPtr context(
       whisper_init_from_file_with_params(modelPathUtf8.c_str(), parameters));
 
@@ -243,6 +246,7 @@ bool WhisperEngine::initialize(const std::filesystem::path &modelPath,
   auto impl = std::make_unique<Impl>();
   impl->context = std::move(context);
   impl->sourceLanguage = std::move(sourceLanguage);
+  impl->task = task;
   std::string selectedDescription =
       device.description.empty() ? device.name : device.description;
   if (selectedDescription.empty())
@@ -257,7 +261,7 @@ bool WhisperEngine::transcribe(const float *samples, size_t sampleCount,
                                const ProgressCallback &onProgress,
                                const AbortCheck &shouldAbort,
                                std::vector<RecognizedSegment> *segments,
-                               std::string *error, WhisperTask task) {
+                               std::string *error) {
   if (error)
     error->clear();
   if (segments)
@@ -274,11 +278,11 @@ bool WhisperEngine::transcribe(const float *samples, size_t sampleCount,
     setError(error, "The Whisper audio chunk is too large.");
     return false;
   }
+  const auto task = impl_->task;
   if (task == WhisperTask::TranslateToEnglish &&
       !whisper_is_multilingual(impl_->context.get())) {
-    setError(error,
-             "Automatic English speech evidence requires a multilingual "
-             "Whisper model.");
+    setError(error, "Automatic English speech evidence requires a multilingual "
+                    "Whisper model.");
     return false;
   }
 
@@ -350,10 +354,10 @@ bool WhisperEngine::transcribe(const float *samples, size_t sampleCount,
       continue;
     segment.text = text;
 
-    const int tokenCount = parameters.token_timestamps
-                               ? whisper_full_n_tokens(impl_->context.get(),
-                                                       index)
-                               : 0;
+    const int tokenCount =
+        parameters.token_timestamps
+            ? whisper_full_n_tokens(impl_->context.get(), index)
+            : 0;
     segment.tokens.reserve(static_cast<size_t>(std::max(0, tokenCount)));
     const whisper_token firstSpecialToken =
         whisper_token_eot(impl_->context.get());

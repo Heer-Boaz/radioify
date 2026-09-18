@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -22,6 +23,7 @@ enum class Prompt : uint8_t {
   LeaveEditMode,
   DiscardEdits,
   LeavePlayback,
+  RestartAnalysis,
 };
 
 struct EditClipSnapshot {
@@ -41,24 +43,23 @@ struct EditCutSnapshot {
 enum class SceneAnalysisStatus : uint8_t {
   Idle,
   Running,
+  Pausing,
   Ready,
   Failed,
   Cancelled,
 };
 
 enum class SceneSuggestionKind : uint8_t {
-  Gameplay,
-  Dialogue,
-  Cutscene,
-  MenuOrLoading,
+  Keep,
+  Shorten,
+  Review,
 };
 
 enum class SceneSuggestionFilter : uint8_t {
   All,
-  Cutscenes,
-  Dialogue,
-  Gameplay,
-  MenuOrLoading,
+  Keep,
+  Shorten,
+  Review,
 };
 
 struct SceneSuggestionSpanSnapshot {
@@ -69,8 +70,8 @@ struct SceneSuggestionSpanSnapshot {
 struct SceneSuggestionSnapshot {
   uint64_t id = 0;
   SourceRange source;
-  SceneSuggestionKind kind = SceneSuggestionKind::Gameplay;
-  float confidence = 0.0f;
+  SceneSuggestionKind kind = SceneSuggestionKind::Review;
+  std::string reason;
   bool selected = false;
   std::vector<SceneSuggestionSpanSnapshot> spans;
 };
@@ -85,6 +86,10 @@ struct SceneSuggestionReviewSnapshot {
   bool canUndoHide = false;
   std::vector<SceneSuggestionSnapshot> suggestions;
   std::optional<uint64_t> selectedId;
+  // -1 follows the selected item; an explicit offset permits independent scrolling.
+  int scrollOffset = -1;
+  std::array<int64_t, 3> durationByKindUs{};
+  bool previewing = false;
 };
 
 // Immutable value state consumed by both ASCII and framebuffer renderers.
@@ -116,7 +121,6 @@ struct EditSnapshot {
   double sceneAnalysisProgress = 0.0;
   std::string sceneAnalysisPhase;
   std::string sceneAnalysisError;
-  bool sceneAnalysisUsedTranscript = false;
   SceneSuggestionReviewSnapshot suggestionReview;
   std::optional<CutTransition> selectedCutTransition;
   std::optional<int64_t> inSourceUs;

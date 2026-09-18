@@ -22,9 +22,6 @@ struct Options {
   bool splitLoop = false;
   bool extractSheet = false;
   bool renderRadio = false;
-  bool verifyChapterModels = false;
-  bool verifyChapterRuntime = false;
-  bool analyzeChapters = false;
   bool force50Hz = false;
   int bwHz = kDefaultRadioBandwidthHz;
   double noise = kDefaultRadioNoiseAmount;
@@ -40,7 +37,6 @@ struct Options {
   bool enableAudio = kDefaultAudioPlaybackEnabled;
   bool enableRadio = kDefaultRadioFilterEnabled;
   bool enableWindow = kDefaultWindowPlaybackEnabled;
-  bool enableAutomaticChapterAnalysis = true;
   bool asciiDebugOverlay = false;
   bool shellOpen = false;
   std::optional<OpenPresentationDirective> shellOpenPresentationOverride;

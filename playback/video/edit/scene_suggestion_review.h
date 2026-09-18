@@ -5,7 +5,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "playback/video/analysis/scene_analysis.h"
+#include "playback/video/analysis/edit_review.h"
 #include "playback/video/edit/timeline.h"
 #include "playback/video/edit/view.h"
 
@@ -21,7 +21,7 @@ enum class SceneSuggestionNavigation : uint8_t {
 // renderers consume only SceneSuggestionReviewSnapshot.
 class SceneSuggestionReview {
  public:
-  using Suggestion = playback_video_analysis::SceneSuggestion;
+  using Suggestion = playback_video_analysis::EditProposal;
 
   bool panelVisible() const { return panelVisible_; }
   SceneSuggestionFilter filter() const { return filter_; }
@@ -32,6 +32,7 @@ class SceneSuggestionReview {
   bool togglePanel(const std::vector<Suggestion>& suggestions,
                    const Timeline& timeline);
   void closePanel();
+  bool scrollTo(int offset);
   SceneSuggestionFilter cycleFilter(
       const std::vector<Suggestion>& suggestions, const Timeline& timeline);
   size_t filteredCount(const std::vector<Suggestion>& suggestions,
@@ -73,6 +74,7 @@ class SceneSuggestionReview {
   std::optional<uint64_t> selectedId_;
   std::unordered_set<uint64_t> hiddenIds_;
   std::vector<uint64_t> hiddenHistory_;
+  int scrollOffset_ = -1;
 };
 
 }  // namespace playback_video_edit

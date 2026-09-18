@@ -24,12 +24,7 @@
         "vulkan"
       ]
     },
-    {
-      "name": "llama-cpp",
-      "features": [
-        "tools"
-      ]
-    },
+    "llama-cpp",
     "miniaudio",
     "nlohmann-json",
     {

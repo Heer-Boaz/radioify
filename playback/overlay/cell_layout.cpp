@@ -136,6 +136,56 @@ OverlayCellControlLayoutItem placeControl(const PendingControl& item, int y) {
 
 }  // namespace
 
+std::vector<OverlayCellTextLine>
+layoutTransientMessageCells(const std::string &message, int width, int height) {
+  if (message.empty() || width <= 0 || height <= 0)
+    return {};
+  const int inset = width > 2 ? 1 : 0;
+  const int availableWidth = width - inset * 2;
+  const int padding = availableWidth > 2 ? 1 : 0;
+  const int contentWidth = availableWidth - padding * 2;
+  const int top = height > 1 ? 1 : 0;
+  const auto maximumRows = static_cast<std::size_t>(height - top);
+
+  std::vector<std::string> textLines;
+  std::size_t start = 0;
+  while (start < message.size() && textLines.size() <= maximumRows) {
+    const auto end = message.find('\n', start);
+    auto block = std::string_view(message).substr(
+        start, end == std::string::npos ? end : end - start);
+    if (!block.empty() && block.back() == '\r')
+      block.remove_suffix(1);
+    auto wrapped = utf8WrapDisplayWidth(block, contentWidth);
+    if (wrapped.empty())
+      wrapped.emplace_back();
+    for (auto &line : wrapped)
+      textLines.push_back(fitLayoutText(line, contentWidth));
+    if (end == std::string::npos)
+      break;
+    start = end + 1;
+  }
+  if (textLines.size() > maximumRows) {
+    textLines.resize(maximumRows);
+    textLines.back() =
+        utf8TakeDisplayWidth(textLines.back(), contentWidth - 1) + "~";
+  }
+  int blockWidth = 0;
+  for (const auto &line : textLines)
+    blockWidth = std::max(blockWidth, utf8DisplayWidth(line));
+  blockWidth += padding * 2;
+  const int left = width - inset - blockWidth;
+  std::vector<OverlayCellTextLine> lines;
+  for (const auto &text : textLines) {
+    OverlayCellTextLine line;
+    line.x = left;
+    line.y = top + static_cast<int>(lines.size());
+    line.text = std::string(padding, ' ') + text;
+    line.text.append(blockWidth - utf8DisplayWidth(line.text), ' ');
+    lines.push_back(std::move(line));
+  }
+  return lines;
+}
+
 std::string buildWindowOverlayProgressSuffix(
     const PlaybackOverlayState& state) {
   // Edit mode owns the row above the timeline, including frame-accurate

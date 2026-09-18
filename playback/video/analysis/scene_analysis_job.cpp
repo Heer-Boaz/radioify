@@ -68,7 +68,7 @@ struct SceneAnalysisJob::Impl {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     const HRESULT comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool uninitializeCom = SUCCEEDED(comResult);
-    AnalysisResult result;
+    ReviewJobResult result;
     std::string error;
     bool succeeded = false;
     try {
@@ -79,9 +79,9 @@ struct SceneAnalysisJob::Impl {
           },
           &cancelled, &result, &error);
     } catch (const std::exception& exception) {
-      error = std::string("Segment detection failed: ") + exception.what();
+      error = std::string("Video editing review failed: ") + exception.what();
     } catch (...) {
-      error = "Segment detection failed unexpectedly.";
+      error = "Video editing review failed unexpectedly.";
     }
     if (uninitializeCom) CoUninitialize();
 
@@ -90,18 +90,17 @@ struct SceneAnalysisJob::Impl {
       if (succeeded) {
         state.state = JobState::Succeeded;
         state.progress = 1.0;
-        state.phase = "Segment detection complete";
+        state.phase = "Video editing review complete";
         state.visualSampleCount = result.visualSampleCount;
-        state.usedIndexedTranscript = !result.transcriptPath.empty();
         state.suggestions = std::move(result.suggestions);
       } else if (cancelled.load(std::memory_order_relaxed)) {
         state.state = JobState::Cancelled;
-        state.phase = "Segment detection cancelled";
+        state.phase = "Video editing review paused";
         state.error.clear();
       } else {
         state.state = JobState::Failed;
-        state.phase = "Segment detection failed";
-        state.error = error.empty() ? "Segment detection failed unexpectedly."
+        state.phase = "Video editing review failed";
+        state.error = error.empty() ? "Video editing review failed unexpectedly."
                                     : std::move(error);
       }
       completion = state;
@@ -126,14 +125,14 @@ bool SceneAnalysisJob::start(JobRequest request) {
   }
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (!impl_->operation || impl_->state.state == JobState::Running ||
+    if (!impl_->operation || impl_->state.busy() ||
         impl_->completion || impl_->worker.joinable()) {
       return false;
     }
     impl_->cancelled.store(false, std::memory_order_relaxed);
     impl_->state = JobSnapshot{};
     impl_->state.state = JobState::Running;
-    impl_->state.phase = "Starting segment detection";
+    impl_->state.phase = "Starting video editing review";
     impl_->lastProgressNotification =
         std::chrono::steady_clock::time_point::min();
     bool started = false;
@@ -147,8 +146,8 @@ bool SceneAnalysisJob::start(JobRequest request) {
     }
     if (!started) {
       impl_->state.state = JobState::Failed;
-      impl_->state.phase = "Segment detection failed";
-      impl_->state.error = "Could not start the segment-detection worker.";
+      impl_->state.phase = "Video editing review failed";
+      impl_->state.error = "Could not start the video-review worker.";
       impl_->completion = impl_->state;
       impl_->notifyChanged();
       return false;
@@ -165,6 +164,8 @@ bool SceneAnalysisJob::cancel() {
       impl_->cancelled.exchange(true, std::memory_order_relaxed)) {
     return false;
   }
+  impl_->state.state = JobState::Pausing;
+  impl_->state.phase = "Pausing analysis...";
   impl_->notifyChanged();
   return true;
 }
@@ -183,9 +184,9 @@ bool SceneAnalysisJob::finishStop() {
   if (!impl_ || !impl_->worker.finish()) return !impl_;
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (impl_->state.state == JobState::Running) {
+    if (impl_->state.busy()) {
       impl_->state.state = JobState::Cancelled;
-      impl_->state.phase = "Segment detection cancelled";
+      impl_->state.phase = "Video editing review paused";
     }
   }
   impl_->changed.clear();

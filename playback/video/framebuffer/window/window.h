@@ -17,11 +17,9 @@
 #include "display_lifecycle.h"
 #include "input_controller.h"
 #include "input_event.h"
-#include "playback/input/media_keys.h"
 #include "playback/overlay/context_menu.h"
 #include "playback/overlay/interaction.h"
 #include "playback/overlay/media_action_confirmation_presentation.h"
-#include "playback/video/chapter/chapter.h"
 #include "playback/video/color.h"
 #include "playback/video/edit/view.h"
 #include "playback/video/framebuffer/frame_snapshot.h"
@@ -118,11 +116,6 @@ struct WindowUiState {
   std::vector<std::string> debugLines;
   playback_overlay::ContextMenuSnapshot contextMenu;
   playback_video_timeline_preview::Snapshot timelinePreview;
-  playback_video_chapters::Snapshot chapters;
-  double chapterActivityPhase = 0.0;
-  bool chapterActivityMotionEnabled = true;
-  bool chapterOverviewOpen = false;
-  int chapterOverviewScrollOffset = 0;
   playback_video_edit::EditSnapshot videoEdit;
   playback_video_edit::ExportProgress videoEditExport;
   playback_video_edit::Prompt videoEditPrompt =
@@ -151,7 +144,7 @@ public:
   static constexpr int kDefaultVideoClientWidth = 1280;
   static constexpr int kDefaultVideoClientHeight = 720;
 
-  VideoWindow(GpuRuntime &gpu, SystemMediaCommandOwner systemMediaCommandOwner);
+  explicit VideoWindow(GpuRuntime &gpu);
   ~VideoWindow();
 
   // Creates the native resources without exposing an intermediate window.
@@ -413,7 +406,6 @@ private:
   WindowRestoreState m_pictureInPictureRestoreState;
   WindowDisplayLifecycle m_displayLifecycle;
   bool m_captureAllMouseInput = false;
-  const SystemMediaCommandOwner m_systemMediaCommandOwner;
   bool m_leftMouseCaptureActive = false;
   bool m_editBoundaryCaptureActive = false;
   std::atomic<bool> m_cursorVisible{true};

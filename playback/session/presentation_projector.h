@@ -39,12 +39,6 @@ struct OverlayProjection {
       playback_video_edit::Prompt::None;
   std::optional<MediaActionConfirmationPrompt> mediaActionConfirmationPrompt;
   std::optional<playback_media_processing::Activity> mediaTaskActivity;
-  playback_video_chapters::Snapshot chapters;
-  bool chapterControlVisible = false;
-  double chapterActivityPhase = 0.0;
-  bool chapterActivityMotionEnabled = true;
-  bool chapterOverviewOpen = false;
-  int chapterOverviewScrollOffset = 0;
 };
 
 playback_overlay::PlaybackOverlayState

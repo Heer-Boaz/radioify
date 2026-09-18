@@ -370,21 +370,19 @@ int main() {
                            kPlaybackShortcutContextShared |
                            kPlaybackShortcutContextImageViewer),
                "chapter navigation must not leak into the image viewer");
-  ok &= expect(resolvePlaybackAction(
+  ok &= expect(!resolvePlaybackAction(
                    makeKey(VK_LEFT, 0, kPlaybackShortcutCtrlMask),
                    kPlaybackShortcutContextGlobal |
                        kPlaybackShortcutContextShared |
                        kPlaybackShortcutContextPlaybackSession |
-                       kPlaybackShortcutContextVideoPlayback)
-                   .value() == PlaybackAction::PreviousChapter &&
-                   resolvePlaybackAction(
+                       kPlaybackShortcutContextVideoPlayback) &&
+                   !resolvePlaybackAction(
                        makeKey(VK_RIGHT, 0, kPlaybackShortcutCtrlMask),
                        kPlaybackShortcutContextGlobal |
                            kPlaybackShortcutContextShared |
                            kPlaybackShortcutContextPlaybackSession |
-                           kPlaybackShortcutContextVideoPlayback)
-                           .value() == PlaybackAction::NextChapter,
-               "Ctrl+Left/Right must match YouTube chapter navigation in "
+                           kPlaybackShortcutContextVideoPlayback),
+               "Ctrl+Left/Right must have no retired AI chapter action in "
                "video playback");
   ok &= expect(!resolvePlaybackAction(
                    makeKey(VK_OEM_PERIOD, '.'),

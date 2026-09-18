@@ -81,11 +81,12 @@ std::uint32_t keyDownRepeatCount(LPARAM lParam) {
   return count == 0 ? 1 : count;
 }
 
-KeyDownTranslation translateKeyDown(WORD key, LPARAM lParam,
-                                    SystemMediaCommandOwner owner) {
+KeyDownTranslation translateKeyDown(WORD key, LPARAM lParam) {
   const bool repeated = isRepeatedKeyDown(lParam);
   if (isSystemMediaVirtualKey(key)) {
-    if (!localInputOwnsSystemMediaCommands(owner) || repeated) {
+    // WM_APPCOMMAND carries no repeat phase, so a held media key would arrive
+    // as a run of indistinguishable presses.
+    if (repeated) {
       return {KeyDownRoute::Consume, std::nullopt};
     }
     return {KeyDownRoute::DelegateToDefaultWindowProcedure, std::nullopt};
@@ -122,9 +123,10 @@ std::optional<InputEvent> inputEventFromXButton(WPARAM wParam) {
   }
 }
 
-AppCommandTranslation translateAppCommand(
-    LPARAM lParam, SystemMediaCommandOwner owner) {
-  const bool translateMedia = localInputOwnsSystemMediaCommands(owner);
+// Media commands are translated unconditionally. Whether this press is also
+// reported through the process-wide SMTC session is not knowable here, so the
+// duplicate is resolved once, at the ingress, by the arbiter.
+AppCommandTranslation translateAppCommand(LPARAM lParam) {
   const int command = GET_APPCOMMAND_LPARAM(lParam);
   switch (command) {
     case APPCOMMAND_BROWSER_BACKWARD:
@@ -132,36 +134,19 @@ AppCommandTranslation translateAppCommand(
     case APPCOMMAND_BROWSER_FORWARD:
       return {true, inputActionEvent(InputAction::Forward)};
     case APPCOMMAND_MEDIA_PLAY_PAUSE:
-      return {true, translateMedia
-                        ? std::optional<InputEvent>(
-                              keyEvent(VK_MEDIA_PLAY_PAUSE))
-                        : std::nullopt};
+      return {true, keyEvent(VK_MEDIA_PLAY_PAUSE)};
     case APPCOMMAND_MEDIA_PLAY:
-      return {true, translateMedia
-                        ? std::optional<InputEvent>(
-                              keyEvent(kPlaybackVkMediaPlay))
-                        : std::nullopt};
+      return {true, keyEvent(kPlaybackVkMediaPlay)};
     case APPCOMMAND_MEDIA_PAUSE:
-      return {true, translateMedia
-                        ? std::optional<InputEvent>(
-                              keyEvent(kPlaybackVkMediaPause))
-                        : std::nullopt};
+      return {true, keyEvent(kPlaybackVkMediaPause)};
     case APPCOMMAND_MEDIA_STOP:
-      return {true, translateMedia
-                        ? std::optional<InputEvent>(keyEvent(VK_MEDIA_STOP))
-                        : std::nullopt};
+      return {true, keyEvent(VK_MEDIA_STOP)};
     case APPCOMMAND_MEDIA_PREVIOUSTRACK:
     case APPCOMMAND_MEDIA_CHANNEL_DOWN:
-      return {true, translateMedia
-                        ? std::optional<InputEvent>(
-                              keyEvent(VK_MEDIA_PREV_TRACK))
-                        : std::nullopt};
+      return {true, keyEvent(VK_MEDIA_PREV_TRACK)};
     case APPCOMMAND_MEDIA_NEXTTRACK:
     case APPCOMMAND_MEDIA_CHANNEL_UP:
-      return {true, translateMedia
-                        ? std::optional<InputEvent>(
-                              keyEvent(VK_MEDIA_NEXT_TRACK))
-                        : std::nullopt};
+      return {true, keyEvent(VK_MEDIA_NEXT_TRACK)};
     default:
       return {};
   }

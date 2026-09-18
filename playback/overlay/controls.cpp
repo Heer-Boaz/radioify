@@ -6,7 +6,7 @@
 #include <string>
 #include <utility>
 
-#include "playback/video/edit/scene_suggestions.h"
+#include "playback/video/edit/suggestion_panel.h"
 #include "unicode_display_width.h"
 
 namespace playback_overlay {
@@ -49,6 +49,25 @@ OverlayControlSpec makePlayPauseSpec(const PlaybackOverlayState &state) {
   return spec;
 }
 
+OverlayControlId suggestionControlId(playback_video_edit::Command command) {
+  using Command = playback_video_edit::Command;
+  switch (command) {
+  case Command::ToggleSceneSuggestions: return OverlayControlId::EditSuggestions;
+  case Command::StartSceneAnalysis: return OverlayControlId::EditStartAnalysis;
+  case Command::CancelSceneAnalysis: return OverlayControlId::EditPauseAnalysis;
+  case Command::RestartSceneAnalysis: return OverlayControlId::EditRestartAnalysis;
+  case Command::CycleSceneSuggestionFilter: return OverlayControlId::EditSuggestionFilter;
+  case Command::PreviousSceneSuggestion: return OverlayControlId::EditPreviousSuggestion;
+  case Command::NextSceneSuggestion: return OverlayControlId::EditNextSuggestion;
+  case Command::PreviewSceneSuggestion: return OverlayControlId::EditPreviewSuggestion;
+  case Command::StopScenePreview: return OverlayControlId::EditStopPreview;
+  case Command::SelectSceneSuggestion: return OverlayControlId::EditSelectSuggestion;
+  case Command::DismissSceneSuggestion: return OverlayControlId::EditHideSuggestion;
+  case Command::UndoDismissSceneSuggestion: return OverlayControlId::EditUndoHideSuggestion;
+  default: throw std::invalid_argument("Unknown edit-suggestion action.");
+  }
+}
+
 } // namespace
 
 OverlayControlSpec makeOverlayTextControlSpec(OverlayControlId id,
@@ -65,39 +84,7 @@ OverlayControlSpec makeOverlayTextControlSpec(OverlayControlId id,
   return spec;
 }
 
-std::vector<float> indeterminateCharacterSweep(int width, double phase) {
-  constexpr int kAfterglowCells = 4;
-  const int safeWidth = std::max(0, width);
-  std::vector<float> intensities(static_cast<std::size_t>(safeWidth), 0.0f);
-  if (safeWidth == 0)
-    return intensities;
 
-  double normalizedPhase = std::isfinite(phase) ? phase - std::floor(phase)
-                                                 : 0.0;
-  if (normalizedPhase < 0.0)
-    normalizedPhase += 1.0;
-  const int head = static_cast<int>(std::floor(
-      normalizedPhase * static_cast<double>(safeWidth + kAfterglowCells)));
-  for (int column = 0; column < safeWidth; ++column) {
-    const int distance = head - column;
-    if (distance >= 0 && distance < kAfterglowCells) {
-      intensities[static_cast<std::size_t>(column)] =
-          1.0f - static_cast<float>(distance) / kAfterglowCells;
-    }
-  }
-  return intensities;
-}
-
-std::vector<float> chapterControlCharacterHighlights(
-    const playback_video_chapters::Snapshot &chapters, bool motionEnabled,
-    int width, double phase) {
-  if (!chapters.running())
-    return {};
-  if (motionEnabled)
-    return indeterminateCharacterSweep(width, phase);
-  return std::vector<float>(static_cast<std::size_t>(std::max(0, width)),
-                            0.75f);
-}
 
 std::vector<OverlayCellControlInput>
 buildOverlayCellControlInputs(const std::vector<OverlayControlSpec> &specs,
@@ -153,10 +140,6 @@ OverlayControlIntent intentForOverlayControl(OverlayControlId id) {
     return OverlayAction::CycleAudioTrack;
   case OverlayControlId::Subtitles:
     return OverlayAction::ToggleSubtitles;
-  case OverlayControlId::Chapters:
-    return OverlayAction::ToggleChapterOverview;
-  case OverlayControlId::ChapterOverviewClose:
-    return OverlayAction::CloseChapterOverview;
   case OverlayControlId::PictureInPicture:
     return OverlayAction::TogglePictureInPicture;
   case OverlayControlId::EditMarkIn:
@@ -171,6 +154,18 @@ OverlayControlIntent intentForOverlayControl(OverlayControlId id) {
     return playback_video_edit::Command::Trim;
   case OverlayControlId::EditSuggestions:
     return playback_video_edit::Command::ToggleSceneSuggestions;
+  case OverlayControlId::EditSuggestionsClose:
+    return playback_video_edit::Command::CloseSceneSuggestions;
+  case OverlayControlId::EditStartAnalysis:
+    return playback_video_edit::Command::StartSceneAnalysis;
+  case OverlayControlId::EditPauseAnalysis:
+    return playback_video_edit::Command::CancelSceneAnalysis;
+  case OverlayControlId::EditRestartAnalysis:
+    return playback_video_edit::Command::RestartSceneAnalysis;
+  case OverlayControlId::EditPreviewSuggestion:
+    return playback_video_edit::Command::PreviewSceneSuggestion;
+  case OverlayControlId::EditStopPreview:
+    return playback_video_edit::Command::StopScenePreview;
   case OverlayControlId::EditSuggestionFilter:
     return playback_video_edit::Command::CycleSceneSuggestionFilter;
   case OverlayControlId::EditPreviousSuggestion:
@@ -249,6 +244,12 @@ buildOverlayControlSpecs(const PlaybackOverlayState &state,
     finish();
     return out;
   }
+  if (state.videoEditPrompt == playback_video_edit::Prompt::RestartAnalysis) {
+    add(OverlayControlId::EditConfirmPrompt, "Analyse again", false);
+    add(OverlayControlId::EditCancelPrompt, "Keep suggestions", true);
+    finish();
+    return out;
+  }
 
   if (state.videoEditPrompt == playback_video_edit::Prompt::LeavePlayback) {
     const playback_video_edit::ExitExportAction exportAction =
@@ -308,49 +309,10 @@ buildOverlayControlSpecs(const PlaybackOverlayState &state,
     if (hasMarks) {
       add(OverlayControlId::EditClearSelection, "Cancel", false);
     }
-    const bool detectingSegments =
-        state.videoEdit.sceneAnalysisStatus ==
-        playback_video_edit::SceneAnalysisStatus::Running;
-    const bool suggestionsReady =
-        state.videoEdit.sceneAnalysisStatus ==
-        playback_video_edit::SceneAnalysisStatus::Ready;
-    const bool suggestionsFailed =
-        state.videoEdit.sceneAnalysisStatus ==
-        playback_video_edit::SceneAnalysisStatus::Failed;
-    std::string suggestionsLabel;
-    if (detectingSegments) {
-      suggestionsLabel = "Cancel detection";
-    } else if (suggestionsFailed) {
-      suggestionsLabel = "Retry suggestions";
-    } else if (suggestionsReady) {
-      suggestionsLabel =
-          "Suggestions " +
-          std::to_string(state.videoEdit.suggestionReview.totalCount);
-    } else {
-      suggestionsLabel = "Suggestions";
-    }
-    add(OverlayControlId::EditSuggestions, suggestionsLabel,
-        detectingSegments || state.videoEdit.suggestionReview.visible);
-
-    if (suggestionsReady && state.videoEdit.suggestionReview.visible) {
-      add(OverlayControlId::EditSuggestionFilter,
-          std::string("Filter: ") +
-              playback_video_edit::sceneSuggestionFilterLabel(
-                  state.videoEdit.suggestionReview.filter),
-          state.videoEdit.suggestionReview.filter !=
-              playback_video_edit::SceneSuggestionFilter::All);
-      const bool hasSuggestion =
-          state.videoEdit.suggestionReview.selectedId.has_value();
-      add(OverlayControlId::EditPreviousSuggestion, "Previous", false,
-          hasSuggestion);
-      add(OverlayControlId::EditNextSuggestion, "Next", false, hasSuggestion);
-      add(OverlayControlId::EditSelectSuggestion, "Select range", false,
-          hasSuggestion);
-      add(OverlayControlId::EditHideSuggestion, "Hide", false, hasSuggestion);
-      if (state.videoEdit.suggestionReview.canUndoHide) {
-        add(OverlayControlId::EditUndoHideSuggestion, "Undo hide", false);
-      }
-    }
+    for (const auto& action :
+         playback_video_edit::buildSuggestionPresentation(state.videoEdit).actions)
+      add(suggestionControlId(action.command), action.label, action.active,
+          action.enabled);
     out.push_back(makePlayPauseSpec(state));
     add(OverlayControlId::EditDone, "Done", false);
     if (showPictureInPicture && !state.pictureInPictureActive) {
@@ -409,22 +371,6 @@ buildOverlayControlSpecs(const PlaybackOverlayState &state,
     add(OverlayControlId::Subtitles, subtitleLabel, subtitlesActive);
   }
 
-  // Chapters are a stable player capability. Keep their entry point in one
-  // place while its content moves through asynchronous lifecycle states; the
-  // panel itself remains content-only and is opened only when data is ready.
-  if (state.chapterControlVisible) {
-    add(OverlayControlId::Chapters, "Chapters", state.chapterOverviewOpen);
-    OverlayControlSpec &chapters = out.back();
-    if (state.chapters.state ==
-        playback_video_chapters::AnalysisState::Failed) {
-      chapters.tone = OverlayControlTone::Error;
-    } else if (state.chapters.state ==
-                   playback_video_chapters::AnalysisState::SetupRequired ||
-               state.chapters.state ==
-                   playback_video_chapters::AnalysisState::Unsupported) {
-      chapters.tone = OverlayControlTone::Warning;
-    }
-  }
   if (options.includePictureInPicture && state.pictureInPictureAvailable) {
     add(OverlayControlId::PictureInPicture, "PiP",
         state.pictureInPictureActive);

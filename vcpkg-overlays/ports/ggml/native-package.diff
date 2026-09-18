@@ -1,0 +1,104 @@
+diff --git a/ggml/cmake/ggml-config.cmake.in b/ggml/cmake/ggml-config.cmake.in
+index a28e49e..c24f10d 100644
+--- a/ggml/cmake/ggml-config.cmake.in
++++ b/ggml/cmake/ggml-config.cmake.in
+@@ -107,7 +107,7 @@ if (NOT GGML_SHARED_LIB)
+ endif()
+ 
+ set_and_check(GGML_INCLUDE_DIR "@PACKAGE_GGML_INCLUDE_INSTALL_DIR@")
+-set_and_check(GGML_LIB_DIR "@PACKAGE_GGML_LIB_INSTALL_DIR@")
++# Library lookup is owned by the vcpkg toolchain (release/debug).
+ #set_and_check(GGML_BIN_DIR "@PACKAGE_GGML_BIN_INSTALL_DIR@")
+ 
+ if (NOT GGML_SHARED_LIB AND GGML_CPU_KLEIDIAI)
+diff --git a/ggml/src/ggml-vulkan/CMakeLists.txt b/ggml/src/ggml-vulkan/CMakeLists.txt
+index e733ad5..66d2821 100644
+--- a/ggml/src/ggml-vulkan/CMakeLists.txt
++++ b/ggml/src/ggml-vulkan/CMakeLists.txt
+@@ -148,55 +148,14 @@ if (Vulkan_FOUND)
+         target_link_libraries(ggml-vulkan PRIVATE ggml-cpu)
+     endif()
+ 
+-    # Set up toolchain for host compilation whether cross-compiling or not
+-    if (CMAKE_CROSSCOMPILING)
+-        if (GGML_VULKAN_SHADERS_GEN_TOOLCHAIN)
+-            set(HOST_CMAKE_TOOLCHAIN_FILE ${GGML_VULKAN_SHADERS_GEN_TOOLCHAIN})
+-        else()
+-            detect_host_compiler()
+-            if (NOT HOST_C_COMPILER OR NOT HOST_CXX_COMPILER)
+-                message(FATAL_ERROR "Host compiler not found")
+-            else()
+-                message(STATUS "Host compiler: ${HOST_C_COMPILER} ${HOST_CXX_COMPILER}")
+-            endif()
+-            configure_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake/host-toolchain.cmake.in ${CMAKE_BINARY_DIR}/host-toolchain.cmake @ONLY)
+-            set(HOST_CMAKE_TOOLCHAIN_FILE ${CMAKE_BINARY_DIR}/host-toolchain.cmake)
+-        endif()
++    # Reuse vcpkg's host toolchain instead of a nested external build.
++    if(DEFINED VULKAN_SHADERS_GEN_EXECUTABLE)
++        add_executable(vulkan-shaders-gen IMPORTED)
++        set_target_properties(vulkan-shaders-gen PROPERTIES IMPORTED_LOCATION "${VULKAN_SHADERS_GEN_EXECUTABLE}")
+     else()
+-        # For non-cross-compiling, use empty toolchain (use host compiler)
+-        set(HOST_CMAKE_TOOLCHAIN_FILE "")
++        add_subdirectory(vulkan-shaders)
+     endif()
+-
+-    include(ExternalProject)
+-
+-    if (CMAKE_CROSSCOMPILING)
+-        list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -DCMAKE_TOOLCHAIN_FILE=${HOST_CMAKE_TOOLCHAIN_FILE})
+-        message(STATUS "vulkan-shaders-gen toolchain file: ${HOST_CMAKE_TOOLCHAIN_FILE}")
+-    endif()
+-
+-    ExternalProject_Add(
+-        vulkan-shaders-gen
+-        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders
+-        CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/$<CONFIG>
+-                   -DCMAKE_INSTALL_BINDIR=.
+-                   -DCMAKE_BUILD_TYPE=$<CONFIG>
+-                   ${VULKAN_SHADER_GEN_CMAKE_ARGS}
+-
+-        BUILD_COMMAND ${CMAKE_COMMAND} --build . --config $<CONFIG>
+-        BUILD_ALWAYS  TRUE
+-
+-        # NOTE: When DESTDIR is set using Makefile generators and
+-        # "make install" triggers the build step, vulkan-shaders-gen
+-        # would be installed into the DESTDIR prefix, so it is unset
+-        # to ensure that does not happen.
+-
+-        INSTALL_COMMAND ${CMAKE_COMMAND} -E env --unset=DESTDIR
+-                        ${CMAKE_COMMAND} --install . --config $<CONFIG>
+-    )
+-
+-    set (_ggml_vk_host_suffix $<IF:$<STREQUAL:${CMAKE_HOST_SYSTEM_NAME},Windows>,.exe,>)
+-    set (_ggml_vk_genshaders_dir "${CMAKE_BINARY_DIR}/$<CONFIG>")
+-    set (_ggml_vk_genshaders_cmd "${_ggml_vk_genshaders_dir}/vulkan-shaders-gen${_ggml_vk_host_suffix}")
++    set(_ggml_vk_genshaders_cmd "$<TARGET_FILE:vulkan-shaders-gen>")
+     set (_ggml_vk_header     "${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan-shaders.hpp")
+     set (_ggml_vk_input_dir  "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders")
+     set (_ggml_vk_output_dir "${CMAKE_CURRENT_BINARY_DIR}/vulkan-shaders.spv")
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+index a04a6b2..07fdb62 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -7460,9 +7460,9 @@ static bool ggml_vk_instance_portability_enumeration_ext_available(const std::ve
+ static bool ggml_vk_instance_debug_utils_ext_available(const std::vector<vk::ExtensionProperties> & instance_extensions);
+ static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev);
+ 
+-static DispatchLoaderDynamic ggml_vk_default_dispatcher_instance;
+ DispatchLoaderDynamic & ggml_vk_default_dispatcher() {
+-    return ggml_vk_default_dispatcher_instance;
++    static DispatchLoaderDynamic instance;
++    return instance;
+ }
+ 
+ static void ggml_vk_instance_init() {
+@@ -7472,7 +7472,7 @@ static void ggml_vk_instance_init() {
+     VK_LOG_DEBUG("ggml_vk_instance_init()");
+ 
+     // See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
+-    ggml_vk_default_dispatcher_instance.init(vkGetInstanceProcAddr);
++    ggml_vk_default_dispatcher().init(vkGetInstanceProcAddr);
+ 
+     uint32_t api_version = vk::enumerateInstanceVersion();
+ 

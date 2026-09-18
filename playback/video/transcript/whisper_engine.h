@@ -50,14 +50,13 @@ public:
   WhisperEngine &operator=(const WhisperEngine &) = delete;
 
   bool initialize(const std::filesystem::path &modelPath,
-                  WhisperAlignmentPreset alignmentPreset,
+                  WhisperAlignmentPreset alignmentPreset, WhisperTask task,
                   std::string sourceLanguage, std::string *deviceDescription,
                   std::string *error);
   bool transcribe(const float *samples, size_t sampleCount,
                   const ProgressCallback &onProgress,
                   const AbortCheck &shouldAbort,
-                  std::vector<RecognizedSegment> *segments, std::string *error,
-                  WhisperTask task = WhisperTask::Transcribe);
+                  std::vector<RecognizedSegment> *segments, std::string *error);
   // Returns the explicit or first successfully detected ISO 639-1 language.
   // The value becomes stable after the first chunk containing speech.
   std::string sourceLanguage() const;

@@ -14,7 +14,6 @@
 #include "core/native_wait_handle.h"
 #include "console_key_input.h"
 #include "input_event.h"
-#include "playback/input/media_keys.h"
 #include "terminal_input_sequence.h"
 
 struct BreadcrumbLine;
@@ -29,7 +28,6 @@ class ConsoleInput {
   void init();
   void restore();
   void enableTerminalMouseInput();
-  void setSystemMediaCommandOwner(SystemMediaCommandOwner owner);
   bool poll(InputEvent& out);
   bool active() const;
   NativeWaitHandle waitHandle() const;
@@ -50,8 +48,6 @@ class ConsoleInput {
   tui_console_key_input::State keyPressState_;
   DWORD consoleMouseButtonState_ = 0;
   bool terminalMouseInput_ = false;
-  SystemMediaCommandOwner systemMediaCommandOwner_ =
-      SystemMediaCommandOwner::LocalInputFallback;
   std::wstring originalConsoleTitle_;
   std::wstring activeConsoleTitle_;
   TerminalInputSequenceParser terminalParser_;

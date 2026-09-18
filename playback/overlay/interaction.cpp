@@ -1,7 +1,7 @@
 #include "overlay.h"
 
-#include "playback/video/chapter/presentation.h"
 #include "playback/video/edit/overlay_model.h"
+#include "playback/video/edit/suggestion_panel.h"
 
 #include <algorithm>
 #include <cmath>
@@ -22,8 +22,7 @@ InteractionMap
 buildOverlayInteractionMap(const OverlayCellLayout &layout,
                            const playback_video_edit::EditSnapshot *videoEdit,
                            playback_video_edit::Prompt videoEditPrompt,
-                           bool mediaActionConfirmationPrompt,
-                           const ChapterOverviewRegion *chapterOverview) {
+                           bool mediaActionConfirmationPrompt) {
   InteractionMap map;
   map.modal = mediaActionConfirmationPrompt ||
               videoEditPrompt != playback_video_edit::Prompt::None;
@@ -37,13 +36,26 @@ buildOverlayInteractionMap(const OverlayCellLayout &layout,
          item.id});
   }
 
-  if (!map.modal && chapterOverview && chapterOverview->bounds.valid()) {
-    map.chapterOverview = *chapterOverview;
-    if (chapterOverview->closeButton &&
-        chapterOverview->closeButton->valid()) {
-      map.controls.push_back(
-          {*chapterOverview->closeButton,
-           OverlayControlId::ChapterOverviewClose});
+  if (!map.modal && videoEdit) {
+    const auto panel = playback_video_edit::layoutSuggestionPanel(
+        *videoEdit, layout.width, layout.height, layout.topY);
+    if (panel.drawable()) {
+      map.editSuggestions = InteractionMap::SuggestionPanel{
+          {double(panel.x), double(panel.y), double(panel.x + panel.width),
+           double(panel.y + panel.height)},
+          panel.scrollOffset, panel.maximumScrollOffset, {}};
+      map.controls.push_back({
+          {double(panel.x + panel.closeColumn), double(panel.y + 1),
+           double(panel.x + panel.closeColumn + 7), double(panel.y + 2)},
+          OverlayControlId::EditSuggestionsClose});
+      for (size_t index = 0; index < panel.lines.size(); ++index) {
+        const auto& line = panel.lines[index];
+        if (!line.suggestionId) continue;
+        map.editSuggestions->items.push_back({
+            {double(panel.x + 1), double(panel.y + 1 + index),
+             double(panel.x + panel.width - 1), double(panel.y + 2 + index)},
+            *line.suggestionId});
+      }
     }
   }
 
@@ -98,7 +110,7 @@ bool InteractionRect::contains(double x, double y) const {
 bool InteractionMap::contains(double x, double y) const {
   if (modal)
     return true;
-  if (chapterOverview && chapterOverview->bounds.contains(x, y))
+  if (editSuggestions && editSuggestions->bounds.contains(x, y))
     return true;
   if (progressBar && progressBar->bounds.contains(x, y))
     return true;
@@ -181,12 +193,11 @@ InteractionHit interactionHitAt(const InteractionMap &map, double x, double y,
   hit.control = overlayControlAt(map, x, y);
   hit.contextMenuItem = contextMenuItemAt(map, x, y);
   hit.editBoundary = editBoundaryAt(map, x, y);
-  if (map.chapterOverview && map.chapterOverview->bounds.contains(x, y)) {
-    hit.chapterOverview = map.chapterOverview;
-    for (const ChapterOverviewRegion::Item &item :
-         map.chapterOverview->items) {
+  if (map.editSuggestions && map.editSuggestions->bounds.contains(x, y)) {
+    hit.editSuggestions = map.editSuggestions;
+    for (const auto& item : map.editSuggestions->items) {
       if (item.bounds.contains(x, y)) {
-        hit.chapterStartUs = item.startUs;
+        hit.suggestionId = item.id;
         break;
       }
     }
@@ -208,20 +219,7 @@ InteractionHit interactionHitAtTransformed(const InteractionMap &map,
 
   const double localX = (x - offsetX) / scaleX;
   const double localY = (y - offsetY) / scaleY;
-  hit.control = overlayControlAt(map, localX, localY);
-  hit.contextMenuItem = contextMenuItemAt(map, localX, localY);
-  hit.editBoundary = editBoundaryAt(map, localX, localY);
-  if (map.chapterOverview &&
-      map.chapterOverview->bounds.contains(localX, localY)) {
-    hit.chapterOverview = map.chapterOverview;
-    for (const ChapterOverviewRegion::Item &item :
-         map.chapterOverview->items) {
-      if (item.bounds.contains(localX, localY)) {
-        hit.chapterStartUs = item.startUs;
-        break;
-      }
-    }
-  }
+  hit = interactionHitAt(map, localX, localY);
   if (map.progressBar) {
     ProgressBarRegion transformed = *map.progressBar;
     transformed.bounds = transformRect(map.progressBar->bounds, offsetX,
@@ -240,18 +238,12 @@ InteractionMap transformInteractionMap(const InteractionMap &map,
     return out;
   }
   out.modal = map.modal;
-  if (map.chapterOverview) {
-    out.chapterOverview = *map.chapterOverview;
-    out.chapterOverview->bounds = transformRect(
-        map.chapterOverview->bounds, offsetX, offsetY, scaleX, scaleY);
-    for (ChapterOverviewRegion::Item &item : out.chapterOverview->items) {
-      item.bounds = transformRect(item.bounds, offsetX, offsetY, scaleX,
-                                  scaleY);
-    }
-    if (out.chapterOverview->closeButton) {
-      out.chapterOverview->closeButton = transformRect(
-          *out.chapterOverview->closeButton, offsetX, offsetY, scaleX, scaleY);
-    }
+  if (map.editSuggestions) {
+    out.editSuggestions = *map.editSuggestions;
+    out.editSuggestions->bounds = transformRect(
+        map.editSuggestions->bounds, offsetX, offsetY, scaleX, scaleY);
+    for (auto& item : out.editSuggestions->items)
+      item.bounds = transformRect(item.bounds, offsetX, offsetY, scaleX, scaleY);
   }
   if (map.progressBar) {
     out.progressBar = *map.progressBar;
@@ -279,35 +271,5 @@ InteractionMap transformInteractionMap(const InteractionMap &map,
   return out;
 }
 
-std::optional<ChapterOverviewRegion> chapterOverviewRegionForLayout(
-    const playback_video_chapters::OverviewPanelLayout &layout) {
-  if (!layout.drawable())
-    return std::nullopt;
-  ChapterOverviewRegion region{
-      {static_cast<double>(layout.x), static_cast<double>(layout.y),
-       static_cast<double>(layout.x + layout.width),
-       static_cast<double>(layout.y + layout.height)},
-      std::nullopt, layout.scrollOffset, layout.maximumScrollOffset, {}};
-  if (layout.closeButtonColumn >= 0 && layout.closeButtonWidth > 0) {
-    region.closeButton = InteractionRect{
-        static_cast<double>(layout.x + 2 + layout.closeButtonColumn),
-        static_cast<double>(layout.y + 1),
-        static_cast<double>(layout.x + 2 + layout.closeButtonColumn +
-                            layout.closeButtonWidth),
-        static_cast<double>(layout.y + 2)};
-  }
-  for (std::size_t line = 0; line < layout.lines.size(); ++line) {
-    const auto &row = layout.lines[line];
-    if (!row.chapterStartUs)
-      continue;
-    region.items.push_back(
-        {{static_cast<double>(layout.x + 1),
-          static_cast<double>(layout.y + 1 + line),
-          static_cast<double>(layout.x + layout.width - 1),
-          static_cast<double>(layout.y + 2 + line)},
-         *row.chapterStartUs});
-  }
-  return region;
-}
 
 } // namespace playback_overlay

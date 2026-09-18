@@ -6,28 +6,21 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "ffmpegaudio.h"
 #include "core/file_output.h"
-#include "core/file_instance.h"
-#include "core/path_identity.h"
 #include "playback/video/transcript/artifact.h"
 #include "playback/video/transcript/document.h"
-#include "playback/video/transcript/provenance.h"
+#include "playback/video/transcript/source_identity.h"
 #include "playback/video/transcript/subtitle_cues.h"
 #include "playback/video/transcript/whisper_engine.h"
 #include "runtime_helpers.h"
 
 namespace playback_video_transcript {
 namespace {
-
-#ifndef RADIOIFY_WHISPER_MODEL_SHA256
-#define RADIOIFY_WHISPER_MODEL_SHA256 ""
-#endif
 
 constexpr uint32_t kSampleRate = WhisperEngine::kSampleRate;
 constexpr uint32_t kDecodeBlockFrames = 16 * 1024;
@@ -168,60 +161,7 @@ bool resolveWhisperModel(WhisperModelSelection *selection, std::string *error) {
   return true;
 }
 
-std::string producerIdentity(const WhisperModelSelection &selection,
-                             TranscriptLanguageMode languageMode) {
-  std::error_code error;
-  const std::uintmax_t size =
-      std::filesystem::file_size(selection.path, error);
-  if (error)
-    return {};
-  const auto modified = std::filesystem::last_write_time(selection.path, error);
-  if (error)
-    return {};
-  const auto instance = fileInstanceIdentity(selection.path);
-  std::ostringstream identity;
-  identity << "radioify-indexed-transcript-v2\n"
-           << (languageMode == TranscriptLanguageMode::TranslateToEnglish
-                   ? "translate-to-english\n"
-                   : "source-language\n")
-           << kSampleRate << '\n'
-           << kChunkFrames << '\n'
-           << kOverlapFrames << '\n'
-           << static_cast<int>(selection.alignmentPreset) << '\n'
-           << (selection.sourceLanguage.empty() ? "auto"
-                                                : selection.sourceLanguage)
-           << '\n';
-  if (selection.packagedDefault) {
-    identity << "sha256:" << RADIOIFY_WHISPER_MODEL_SHA256;
-  } else {
-    identity << "custom:"
-             << toUtf8String(pathIdentityKey(makePathIdentity(selection.path)))
-             << '\n'
-             << size << '\n'
-             << static_cast<std::int64_t>(
-                    modified.time_since_epoch().count())
-             << '\n'
-             << (instance ? instance->device : 0) << '\n'
-             << (instance ? instance->file : 0);
-  }
-  return identity.str();
-}
-
 } // namespace
-
-std::optional<std::string> automaticEnglishTranscriptProducerIdentity(
-    std::string *error) {
-  WhisperModelSelection selection;
-  if (!resolveWhisperModel(&selection, error))
-    return std::nullopt;
-  std::string identity = producerIdentity(
-      selection, TranscriptLanguageMode::TranslateToEnglish);
-  if (identity.empty()) {
-    setError(error, "Could not establish the Whisper producer identity.");
-    return std::nullopt;
-  }
-  return identity;
-}
 
 struct IndexedTranscriptOperation::Impl {
   std::filesystem::path videoPath;
@@ -248,7 +188,6 @@ struct IndexedTranscriptOperation::Impl {
   bool complete = false;
   std::filesystem::path publishedPath;
   std::optional<TranscriptSourceIdentity> sourceIdentity;
-  std::string producerIdentity;
 
   bool matches(const std::filesystem::path &video,
                const std::filesystem::path &output,
@@ -343,10 +282,6 @@ TranscriptOperationResult IndexedTranscriptOperation::resume(
     if (!resolveWhisperModel(&model, &modelError))
       return failedResult(std::move(modelError));
     impl_->model = std::move(model);
-    impl_->producerIdentity =
-        producerIdentity(*impl_->model, impl_->languageMode);
-    if (impl_->producerIdentity.empty())
-      return failedResult("Could not establish the Whisper producer identity.");
   }
 
   if (!control.runSpeechChunk && !impl_->whisper) {
@@ -358,7 +293,11 @@ TranscriptOperationResult IndexedTranscriptOperation::resume(
                                      ? impl_->sourceLanguage
                                      : impl_->model->sourceLanguage;
     if (!impl_->whisper->initialize(impl_->model->path,
-                                    impl_->model->alignmentPreset, language,
+                                    impl_->model->alignmentPreset,
+                                    languageMode == TranscriptLanguageMode::TranslateToEnglish
+                                        ? WhisperTask::TranslateToEnglish
+                                        : WhisperTask::Transcribe,
+                                    language,
                                     &vulkanDevice,
                                     &modelError)) {
       impl_->whisper.reset();
@@ -514,10 +453,7 @@ TranscriptOperationResult IndexedTranscriptOperation::resume(
     } else {
       recognized = impl_->whisper->transcribe(
           impl_->chunk.data(), impl_->chunk.size(), chunkProgress, interrupted,
-          &recognizedSegments, &inferenceError,
-          languageMode == TranscriptLanguageMode::TranslateToEnglish
-              ? WhisperTask::TranslateToEnglish
-              : WhisperTask::Transcribe);
+          &recognizedSegments, &inferenceError);
     }
     if (!recognized) {
       if (cancellationObserved || gpuRevocationObserved || interrupted()) {
@@ -627,27 +563,16 @@ TranscriptOperationResult IndexedTranscriptOperation::resume(
           "Background transcript replacement requires a Radioify-owned "
           "destination.");
     }
-    // The private filename is the ownership boundary. A stale pair or a
-    // transcript left behind before its provenance commit must be repairable
-    // after source replacement or process termination.
+    // Only the generated-English destination belongs to this background task.
     outputMode = file_output::PublishMode::ReplaceExisting;
   }
 
-  const std::filesystem::path provenancePath =
-      transcriptProvenancePath(publishedPath);
-  std::vector<file_output::TransactionDestination> destinations = {
-      {publishedPath, outputMode}, {provenancePath, outputMode}};
   auto transaction =
-      file_output::TransactionGroup::begin(std::move(destinations),
-                                           &publishError);
+      file_output::Transaction::begin(publishedPath, outputMode, &publishError);
   if (!transaction)
     return failedResult(std::move(publishError));
-  if (!writeIndexedTranscriptStaging(transaction->temporaryPath(0),
-                                     impl_->segments, &publishError) ||
-      !writeTranscriptProvenanceStaging(
-          *impl_->sourceIdentity, impl_->producerIdentity, publishedPath,
-          transaction->temporaryPath(0), transaction->temporaryPath(1),
-          &publishError)) {
+  if (!writeIndexedTranscriptStaging(transaction->temporaryPath(),
+                                     impl_->segments, &publishError)) {
     return failedResult(std::move(publishError));
   }
   if (outputCommitStarted && !outputCommitStarted())

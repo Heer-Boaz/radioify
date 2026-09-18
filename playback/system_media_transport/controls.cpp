@@ -32,6 +32,7 @@
 #include <winrt/Windows.Storage.Streams.h>
 
 #include "playback/control/session_command_mailbox.h"
+#include "playback/input/media_keys.h"
 #include "playback/media/metadata_catalog.h"
 
 namespace {
@@ -198,6 +199,11 @@ struct PlaybackSystemControls::Impl {
                    SystemMediaTransportControlsButtonPressedEventArgs& args) {
           const auto command = mapButton(args.Button());
           if (!command.has_value()) {
+            return;
+          }
+          // A focused Radioify surface may have already reported this same
+          // physical press through WM_APPCOMMAND or a console key record.
+          if (!admitSystemSessionMediaCommand(*command)) {
             return;
           }
           commandMailbox.publish(*command);

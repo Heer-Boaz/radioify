@@ -106,8 +106,7 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     if (window_input_events::isKeyDownMessage(uMsg, wParam)) {
         const WORD key = static_cast<WORD>(wParam);
         window_input_events::KeyDownTranslation translation =
-            window_input_events::translateKeyDown(
-                key, lParam, pThis->m_systemMediaCommandOwner);
+            window_input_events::translateKeyDown(key, lParam);
         if (translation.event) {
             pThis->m_input.push(std::move(*translation.event));
             return 0;
@@ -139,10 +138,16 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
 
     if (uMsg == WM_APPCOMMAND) {
         window_input_events::AppCommandTranslation translation =
-            window_input_events::translateAppCommand(
-                lParam, pThis->m_systemMediaCommandOwner);
+            window_input_events::translateAppCommand(lParam);
         if (translation.event) {
-            pThis->m_input.push(std::move(*translation.event));
+            // The same press may also reach the process-wide SMTC session.
+            // Whichever transport reports it first owns it.
+            const bool mediaEcho =
+                translation.event->type == InputEvent::Type::Key &&
+                !admitLocalMediaVirtualKey(translation.event->key.vk);
+            if (!mediaEcho) {
+                pThis->m_input.push(std::move(*translation.event));
+            }
         }
         if (translation.handled) return TRUE;
     }

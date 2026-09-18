@@ -360,18 +360,18 @@ function Publish-BuildArtifacts {
     Fail-Build "Build completed without producing a radioify executable in $($Context.Paths.BuildDir). Check the build output above."
   }
 
-  $chapterWorkerSource = Join-Path (Split-Path -Parent $builtExe) "radioify_chapter_worker.exe"
-  if (-not (Test-Path -LiteralPath $chapterWorkerSource -PathType Leaf)) {
-    Fail-Build "Build completed without the required isolated chapter worker at $chapterWorkerSource."
+  $analysisWorkerSource = Join-Path (Split-Path -Parent $builtExe) "radioify_analysis_worker.exe"
+  if (-not (Test-Path -LiteralPath $analysisWorkerSource -PathType Leaf)) {
+    Fail-Build "Build completed without the required isolated analysis worker at $analysisWorkerSource."
   }
-  $chapterWorkerDestination = Join-Path $Context.Paths.DistDir "radioify_chapter_worker.exe"
-  $chapterWorkerPublish = Try-Copy-BuildArtifact `
-    -SourcePath $chapterWorkerSource `
-    -DestinationPath $chapterWorkerDestination
-  if (-not $chapterWorkerPublish.Success) {
-    Fail-Build "Could not publish the isolated chapter worker: $($chapterWorkerPublish.ErrorMessage)"
+  $analysisWorkerDestination = Join-Path $Context.Paths.DistDir "radioify_analysis_worker.exe"
+  $analysisWorkerPublish = Try-Copy-BuildArtifact `
+    -SourcePath $analysisWorkerSource `
+    -DestinationPath $analysisWorkerDestination
+  if (-not $analysisWorkerPublish.Success) {
+    Fail-Build "Could not publish the isolated analysis worker: $($analysisWorkerPublish.ErrorMessage)"
   }
-  Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $chapterWorkerDestination
+  Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $analysisWorkerDestination
 
   # Copy radioify.ico to dist/ so it ends up in the Win11 Explorer external location.
   $icoSource = Join-Path $Context.Paths.Root "radioify.ico"
@@ -387,10 +387,6 @@ function Publish-BuildArtifacts {
     Write-Host " - $publishedExe"
   }
 
-  $obsoleteChapterEngine = Join-Path $Context.Paths.DistDir "radioify-chapter-engine.exe"
-  if (Test-Path -LiteralPath $obsoleteChapterEngine) {
-    Remove-Item -LiteralPath $obsoleteChapterEngine -Force
-  }
   $llamaLicenseSource = Join-Path (Split-Path -Parent $builtExe) "llama-cpp-LICENSE.txt"
   if (-not (Test-Path -LiteralPath $llamaLicenseSource)) {
     Fail-Build "Build completed without the required llama.cpp license at $llamaLicenseSource."
@@ -398,30 +394,6 @@ function Publish-BuildArtifacts {
   $llamaLicenseDestination = Join-Path $Context.Paths.DistDir "llama-cpp-LICENSE.txt"
   Copy-Item -LiteralPath $llamaLicenseSource -Destination $llamaLicenseDestination -Force
   Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $llamaLicenseDestination
-
-  $chapterPlannerBuildDir = Join-Path (Split-Path -Parent $builtExe) "models\chapter_analysis"
-  $chapterPlannerDistDir = Join-Path $Context.Paths.DistDir "models\chapter_analysis"
-  if (-not (Test-Path -LiteralPath $chapterPlannerBuildDir -PathType Container)) {
-    Fail-Build "Build completed without the required Chapter-Llama planner assets at $chapterPlannerBuildDir."
-  }
-  if (-not (Test-Path -LiteralPath $chapterPlannerDistDir)) {
-    New-Item -ItemType Directory -Force -Path $chapterPlannerDistDir | Out-Null
-  }
-  foreach ($chapterPlannerAsset in @(
-      "chapter-llama-asr-10k-f16.gguf",
-      "chapter-llama-captions-asr-10k-f16.gguf",
-      "CHAPTER-LLAMA-NOTICE.md",
-      "LLAMA-3.1-LICENSE",
-      "NOTICE")) {
-    $chapterPlannerSource = Join-Path $chapterPlannerBuildDir $chapterPlannerAsset
-    if (-not (Test-Path -LiteralPath $chapterPlannerSource -PathType Leaf)) {
-      Fail-Build "Build completed without the required Chapter-Llama asset at $chapterPlannerSource."
-    }
-    $chapterPlannerDestination = Join-Path $chapterPlannerDistDir $chapterPlannerAsset
-    Copy-Item -LiteralPath $chapterPlannerSource `
-      -Destination $chapterPlannerDestination -Force
-    Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $chapterPlannerDestination
-  }
 
   $whisperModelSource = Join-Path $Context.Paths.Root "models\ggml-base-q5_1.bin"
   if (-not (Test-Path -LiteralPath $whisperModelSource)) {

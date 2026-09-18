@@ -4,13 +4,16 @@
 #include "playback/video/composition/render_plan.h"
 #include "playback/video/edit/command.h"
 #include "playback/video/edit/overlay_model.h"
+#include "playback/video/edit/suggestion_panel.h"
 #include "playback/video/edit/timeline.h"
 #include "playback/video/frame_step_prefetch.h"
+#include "core/unicode_display_width.h"
 
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -62,6 +65,186 @@ overlayActionForControl(playback_overlay::OverlayControlId control) {
   return std::nullopt;
 }
 
+bool suggestionPresentationTests() {
+  namespace edit = playback_video_edit;
+  namespace overlay = playback_overlay;
+  bool ok = true;
+  overlay::PlaybackOverlayState state;
+  state.videoEdit.active = true;
+  state.videoEdit.sourceDurationUs = 100'000'000;
+  state.videoEdit.timelineDurationUs = 100'000'000;
+  struct PhaseCase {
+    edit::SceneAnalysisStatus status;
+    edit::Command command;
+    const char* label;
+    bool enabled;
+  };
+  for (const auto& phase : {
+           PhaseCase{edit::SceneAnalysisStatus::Idle, edit::Command::StartSceneAnalysis, "Start analysis", true},
+           PhaseCase{edit::SceneAnalysisStatus::Running, edit::Command::CancelSceneAnalysis, "Pause analysis", true},
+           PhaseCase{edit::SceneAnalysisStatus::Pausing, edit::Command::CancelSceneAnalysis, "Pause analysis", false},
+           PhaseCase{edit::SceneAnalysisStatus::Cancelled, edit::Command::StartSceneAnalysis, "Resume analysis", true},
+           PhaseCase{edit::SceneAnalysisStatus::Failed, edit::Command::StartSceneAnalysis, "Retry analysis", true}}) {
+    state.videoEdit.sceneAnalysisStatus = phase.status;
+    state.videoEdit.suggestionReview.visible = false;
+    const auto closed = edit::buildSuggestionPresentation(state.videoEdit);
+    ok &= expect(closed.actions.size() == 1 && closed.actions.front().label == "Edit suggestions" &&
+                     closed.actions.front().command == edit::Command::ToggleSceneSuggestions,
+                 "the closed entry must only open review, independent of job lifecycle");
+    state.videoEdit.suggestionReview.visible = true;
+    const auto presentation = edit::buildSuggestionPresentation(state.videoEdit);
+    ok &= expect(presentation.actions.size() == 2 && presentation.actions[1].command == phase.command &&
+                     presentation.actions[1].label == phase.label && presentation.actions[1].enabled == phase.enabled,
+                 "the presenter must distinguish a pause request from a completed pause");
+    const auto controls = overlay::buildOverlayControlSpecs(state, -1);
+    playback_session::ContextMenuController menu;
+    menu.refresh(state.videoEdit, {}, {});
+    menu.open(playback_session::ContextMenuSurface::Terminal, 0.5, 0.5);
+    const auto items = menu.snapshotFor(playback_session::ContextMenuSurface::Terminal).items;
+    for (const auto& action : presentation.actions) {
+      const auto control = std::find_if(controls.begin(), controls.end(), [&](const auto& item) {
+        return editCommandForControl(item.id) == action.command;
+      });
+      ok &= expect(control != controls.end() && control->normalText == " [" + action.label + "] " &&
+                       control->enabled == action.enabled && control->active == action.active,
+                   "toolbar actions must project the shared action contract exactly");
+      const auto item = std::find_if(items.begin(), items.end(), [&](const auto& entry) {
+        return entry.label == action.label;
+      });
+      ok &= expect((item != items.end()) == action.enabled,
+                   "menus must expose only enabled actions from the same contract");
+      if (item != items.end()) {
+        const auto command = menu.activate(item->token);
+        const auto* request = command ? std::get_if<edit::Command>(&*command) : nullptr;
+        ok &= expect(request && *request == action.command, "menu labels must invoke the advertised action");
+        menu.open(playback_session::ContextMenuSurface::Terminal, 0.5, 0.5);
+      }
+    }
+  }
+
+  state.videoEdit.sceneAnalysisStatus = edit::SceneAnalysisStatus::Idle;
+  std::string introduction;
+  for (const auto& paragraph : edit::buildSuggestionPresentation(state.videoEdit).introduction)
+    introduction += paragraph.text;
+  ok &= expect(introduction.find("downloads a model") != std::string::npos &&
+                   introduction.find("Visual-only") != std::string::npos &&
+                   introduction.find("Experimental AI suggestions") != std::string::npos &&
+                   introduction.find("edits stay unchanged") != std::string::npos,
+               "preflight must disclose experimental quality, downloads, observation limits, and edit safety before starting");
+
+  state.videoEdit.sceneAnalysisStatus = edit::SceneAnalysisStatus::Ready;
+  for (uint64_t id = 1; id <= 12; ++id) {
+    edit::SceneSuggestionSnapshot item;
+    item.id = id;
+    item.kind = edit::SceneSuggestionKind::Keep;
+    item.source = {int64_t(id - 1) * 5'000'000, int64_t(id) * 5'000'000};
+    item.spans.push_back({item.source.startUs, item.source.endUs});
+    item.reason = "A memorable encounter with a long explanation that remains readable across multiple rows. Last detail.";
+    item.selected = id == 12;
+    state.videoEdit.suggestionReview.suggestions.push_back(std::move(item));
+  }
+  state.videoEdit.suggestionReview.totalCount = 12;
+  state.videoEdit.suggestionReview.selectedId = 12;
+  for (const int columns : {40, 80, 140}) {
+    overlay::OverlayCellLayoutInput input;
+    input.width = columns;
+    input.height = 30;
+    input.controls = overlay::buildOverlayCellControlInputs(overlay::buildOverlayControlSpecs(state, -1), -1);
+    const auto layout = overlay::layoutOverlayCells(input);
+    const auto panel = edit::layoutSuggestionPanel(state.videoEdit, columns, 30, layout.topY);
+    ok &= expect(panel.drawable() && panel.y + panel.height < layout.topY && panel.x >= 0 &&
+                     panel.x + panel.width <= columns && panel.scrollOffset > 0,
+                 "responsive review must reveal selection without covering its editor controls");
+    ok &= expect(std::any_of(panel.lines.begin(), panel.lines.end(), [](const auto& line) {
+                       return line.selected && line.suggestionId == 12;
+                     }), "off-screen selection must be brought into view");
+    for (const auto& line : panel.lines)
+      ok &= expect(utf8DisplayWidth(line.text) <= panel.width - 4,
+                   "suggestion content must wrap to the actual content width");
+    const auto map = overlay::buildOverlayInteractionMap(layout, &state.videoEdit);
+    ok &= expect(map.editSuggestions && !map.editSuggestions->items.empty(),
+                 "the rendered review layout must publish its own interactive rows");
+    if (map.editSuggestions && !map.editSuggestions->items.empty()) {
+      const auto& row = map.editSuggestions->items.front();
+      const double x = row.bounds.left + 0.5, y = row.bounds.top + 0.5;
+      const auto hit = overlay::interactionHitAt(map, x, y);
+      const auto transformed = overlay::interactionHitAtTransformed(map, 5, 7, 2, 3, 5 + 2 * x, 7 + 3 * y);
+      const auto pixelMap = overlay::transformInteractionMap(map, 5, 7, 2, 3);
+      ok &= expect(hit.suggestionId == row.id && transformed.suggestionId == row.id &&
+                       overlay::interactionHitAt(pixelMap, 5 + 2 * x, 7 + 3 * y).suggestionId == row.id,
+                   "console, scaled terminal and native window must agree on suggestion hit identity");
+    }
+    ok &= expect(!overlay::buildOverlayInteractionMap(layout, &state.videoEdit,
+                                                      edit::Prompt::RestartAnalysis).editSuggestions,
+                 "modal confirmation must remove background review hit regions");
+    state.videoEdit.suggestionReview.scrollOffset = 10000;
+    const auto last = edit::layoutSuggestionPanel(state.videoEdit, columns, 30, layout.topY);
+    ok &= expect(last.scrollOffset == last.maximumScrollOffset &&
+                     std::any_of(last.lines.begin(), last.lines.end(), [](const auto& line) {
+                       return line.text.find("detail.") != std::string::npos;
+                     }), "scrolling must reach the complete final reason and clamp overshoot");
+    state.videoEdit.suggestionReview.scrollOffset = -1;
+  }
+  return ok;
+}
+
+bool transientMessageLayoutTest() {
+  using playback_overlay::layoutTransientMessageCells;
+  bool ok = true;
+  const std::string message =
+      "Chapter analysis failed: The chapter planner returned an invalid plan: "
+      "Chapter-Llama returned more chapters than the product limit permits.";
+  for (const int width : {40, 80, 132}) {
+    const auto lines = layoutTransientMessageCells(message, width, 30);
+    std::string reconstructed;
+    for (const auto &line : lines) {
+      std::istringstream words(line.text);
+      std::string word;
+      while (words >> word) {
+        if (!reconstructed.empty()) reconstructed += ' ';
+        reconstructed += word;
+      }
+      ok &= expect(line.x == lines.front().x &&
+                       utf8DisplayWidth(line.text) ==
+                           utf8DisplayWidth(lines.front().text) &&
+                       line.x + utf8DisplayWidth(line.text) <= width &&
+                       line.y >= 1 && line.y < 30,
+                   "wrapped notifications must share one padded rectangle");
+    }
+    ok &= expect(lines.size() > 1 && reconstructed == message,
+                 "the complete chapter error must survive word wrapping");
+  }
+  const auto shortMessage = layoutTransientMessageCells("Paused", 80, 24);
+  ok &= expect(shortMessage.size() == 1 && shortMessage[0].text == " Paused " &&
+                   shortMessage[0].x == 71 && shortMessage[0].y == 1,
+               "short notifications retain their top-right placement");
+  const auto explicitLines =
+      layoutTransientMessageCells("First\r\n\nLast", 80, 24);
+  ok &= expect(explicitLines.size() == 3 &&
+                   explicitLines.back().text.find("Last") != std::string::npos,
+               "notification layout must preserve explicit and blank lines");
+  const auto unicode = layoutTransientMessageCells(
+      u8"Caf\u00e9 \u4e16\u754c\u4e16\u754c\u4e16\u754c ending", 12, 24);
+  ok &= expect(unicode.size() > 1 &&
+                   unicode.back().text.find("ending") != std::string::npos,
+               "wrapping must measure UTF-8 display cells, not bytes");
+  for (int width = 0; width <= 6; ++width)
+    for (int height = 0; height <= 3; ++height) {
+      const auto lines = layoutTransientMessageCells(message, width, height);
+      for (const auto &line : lines)
+        ok &= expect(line.x >= 0 && line.y >= 0 && line.y < height &&
+                         line.x + utf8DisplayWidth(line.text) <= width,
+                     "notifications must stay inside tiny viewports");
+    }
+  const auto clipped = layoutTransientMessageCells(message, 40, 2);
+  ok &= expect(clipped.size() == 1 &&
+                   clipped[0].text.find('~') != std::string::npos &&
+                   layoutTransientMessageCells({}, 80, 24).empty(),
+               "insufficient height must indicate clipping; empty messages "
+               "must not draw a box");
+  return ok;
+}
+
 } // namespace
 
 int main() {
@@ -75,7 +258,7 @@ int main() {
   using playback_video_edit::Timeline;
   using SequenceTimeline = playback_video_sequence::Timeline;
 
-  bool ok = true;
+  bool ok = transientMessageLayoutTest();
   ok &= expect(
       playback_video_edit::CutTransition::motionSmooth(1).durationFrames() ==
               playback_video_edit::kMinimumSmoothCutFrames &&
@@ -768,8 +951,8 @@ int main() {
   playback_video_edit::SceneSuggestionSnapshot suggestedScene;
   suggestedScene.id = 7;
   suggestedScene.source = {4'000'000, 6'000'000};
-  suggestedScene.kind = playback_video_edit::SceneSuggestionKind::Cutscene;
-  suggestedScene.confidence = 0.87f;
+  suggestedScene.kind = playback_video_edit::SceneSuggestionKind::Keep;
+  suggestedScene.reason = "Memorable encounter";
   suggestedScene.selected = true;
   suggestedScene.spans.push_back({2'000'000, 4'000'000});
   suggestedOverlay.sceneAnalysisStatus =
@@ -790,7 +973,9 @@ int main() {
                        playback_video_edit::SceneSuggestionCellKind::Selected &&
                    suggestedOverlayModel.sceneSuggestionBoundaryCells ==
                        std::vector<int>{2} &&
-                   wideSuggestedOverlayModel.status.find("Strong") !=
+                   wideSuggestedOverlayModel.status.find("KEEP") !=
+                       std::string::npos &&
+                   wideSuggestedOverlayModel.status.find("Memorable encounter") ==
                        std::string::npos &&
                    wideSuggestedOverlayModel.status.find("87%") ==
                        std::string::npos,
@@ -801,11 +986,14 @@ int main() {
   analysingOverlay.sceneAnalysisStatus =
       playback_video_edit::SceneAnalysisStatus::Running;
   analysingOverlay.sceneAnalysisProgress = 0.42;
+  analysingOverlay.sceneAnalysisPhase = "Waiting for GPU memory (11 GiB before loading)";
   const playback_video_edit::OverlayModel analysingOverlayModel =
       playback_video_edit::buildOverlayModel(analysingOverlay, nullptr,
                                              Prompt::None, 40, 0.5);
-  ok &= expect(analysingOverlayModel.status.find("SEGMENTS 42%") !=
-                   std::string::npos,
+  ok &= expect(analysingOverlayModel.status.find("REVIEW 42%") !=
+                   std::string::npos &&
+                   analysingOverlayModel.status.find("Waiting for GPU") !=
+                   std::string::npos && analysingOverlayModel.status.size() <= 40,
                "background segment-detection progress must remain visible in "
                "the shared overlay model");
   const playback_video_edit::OverlayModel narrowAnalysingOverlayModel =
@@ -1020,129 +1208,6 @@ int main() {
     return std::find_if(specs.begin(), specs.end(),
                         [&](const auto &spec) { return spec.id == id; });
   };
-  playback_overlay::PlaybackOverlayState chapterControlState;
-  chapterControlState.chapterControlVisible = true;
-  chapterControlState.chapterActivityPhase = 0.25;
-  chapterControlState.chapters.state =
-      playback_video_chapters::AnalysisState::Analyzing;
-  chapterControlState.chapters.progress = 0.37;
-  const auto analyzingChapterControls =
-      playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
-  const std::vector<float> earlyChapterSweep =
-      playback_overlay::indeterminateCharacterSweep(12, 0.25);
-  const std::vector<float> lateChapterSweep =
-      playback_overlay::indeterminateCharacterSweep(12, 0.65);
-  const std::vector<float> reducedMotionChapterState =
-      playback_overlay::chapterControlCharacterHighlights(
-          chapterControlState.chapters, false, 12, 0.25);
-  const auto litCellCount = [](const std::vector<float> &sweep) {
-    return std::count_if(sweep.begin(), sweep.end(),
-                         [](float intensity) { return intensity > 0.0f; });
-  };
-  ok &= expect(
-      controlFor(analyzingChapterControls,
-                 playback_overlay::OverlayControlId::Chapters) !=
-              analyzingChapterControls.end() &&
-          earlyChapterSweep != lateChapterSweep &&
-          litCellCount(earlyChapterSweep) <= 4 &&
-          litCellCount(lateChapterSweep) <= 4 &&
-          reducedMotionChapterState == std::vector<float>(12, 0.75f) &&
-          *std::max_element(earlyChapterSweep.begin(),
-                            earlyChapterSweep.end()) == 1.0f,
-      "analysis must retain its stable entry point and animate a bounded "
-      "indeterminate character sweep");
-  chapterControlState.chapters.state =
-      playback_video_chapters::AnalysisState::CheckingSupport;
-  ok &= expect(
-      !playback_overlay::chapterControlCharacterHighlights(
-           chapterControlState.chapters, true, 12, 0.25)
-           .empty(),
-      "chapter prerequisite checks must remain visibly active");
-  chapterControlState.chapters.state =
-      playback_video_chapters::AnalysisState::WaitingForPlayback;
-  ok &= expect(
-      !playback_overlay::chapterControlCharacterHighlights(
-           chapterControlState.chapters, true, 12, 0.25)
-           .empty(),
-      "a chapter request waiting for GPU playback admission must remain visibly active");
-  chapterControlState.chapters.state =
-      playback_video_chapters::AnalysisState::Unsupported;
-  const auto unsupportedChapterControls =
-      playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
-  ok &= expect(controlFor(unsupportedChapterControls,
-                          playback_overlay::OverlayControlId::Chapters) !=
-                       unsupportedChapterControls.end() &&
-                   controlFor(unsupportedChapterControls,
-                              playback_overlay::OverlayControlId::Chapters)
-                           ->tone ==
-                       playback_overlay::OverlayControlTone::Warning &&
-                   playback_overlay::chapterControlCharacterHighlights(
-                       chapterControlState.chapters, true, 12, 0.25)
-                       .empty(),
-               "unsupported analysis must retain its stable details entry point");
-  chapterControlState.chapters.state =
-      playback_video_chapters::AnalysisState::Disabled;
-  const auto disabledChapterControls =
-      playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
-  ok &= expect(
-      controlFor(disabledChapterControls,
-                 playback_overlay::OverlayControlId::Chapters) !=
-              disabledChapterControls.end(),
-      "an automatic-analysis opt-out must retain a manual chapter entry point");
-  chapterControlState.chapters.state =
-      playback_video_chapters::AnalysisState::SetupRequired;
-  const auto chapterSetupControls =
-      playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
-  ok &= expect(chapterSetupControls.size() ==
-                       disabledChapterControls.size() &&
-                   controlFor(chapterSetupControls,
-                              playback_overlay::OverlayControlId::Chapters) !=
-                       chapterSetupControls.end(),
-               "model setup must not add a transient transport control");
-  ok &= expect(
-      overlayActionForControl(
-          playback_overlay::OverlayControlId::ChapterOverviewClose) ==
-          playback_overlay::OverlayAction::CloseChapterOverview,
-      "the drawer close affordance must map to an explicit close action");
-  chapterControlState.chapters.state =
-      playback_video_chapters::AnalysisState::Installing;
-  const auto chapterInstallingControls =
-      playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
-  ok &= expect(chapterInstallingControls.size() ==
-                       disabledChapterControls.size() &&
-                   controlFor(chapterInstallingControls,
-                              playback_overlay::OverlayControlId::Chapters) !=
-                       chapterInstallingControls.end(),
-               "model installation must retain one stable chapter entry point");
-  chapterControlState.chapters.state =
-      playback_video_chapters::AnalysisState::Failed;
-  const auto chapterFailedControls =
-      playback_overlay::buildOverlayControlSpecs(chapterControlState, -1);
-  const auto failedChapterEntry = controlFor(
-      chapterFailedControls, playback_overlay::OverlayControlId::Chapters);
-  const auto failedChapterInputs =
-      playback_overlay::buildOverlayCellControlInputs(chapterFailedControls,
-                                                       -1);
-  const auto failedChapterWindowLayout =
-      playback_overlay::layoutOverlayControlCells(failedChapterInputs, 120);
-  const auto failedWindowEntry =
-      std::find_if(failedChapterWindowLayout.controls.begin(),
-                   failedChapterWindowLayout.controls.end(),
-                   [](const auto &control) {
-                     return control.id ==
-                            playback_overlay::OverlayControlId::Chapters;
-                   });
-  ok &= expect(failedChapterEntry != chapterFailedControls.end() &&
-                   chapterFailedControls.size() ==
-                       unsupportedChapterControls.size() &&
-                   failedWindowEntry !=
-                       failedChapterWindowLayout.controls.end() &&
-                   failedChapterEntry->tone ==
-                       playback_overlay::OverlayControlTone::Error &&
-                   failedWindowEntry->tone ==
-                       playback_overlay::OverlayControlTone::Error,
-               "a failed background analysis must keep one visibly erroneous "
-               "chapter entry without adding a retry transport control");
   const auto mediaCancellationControls =
       playback_overlay::buildOverlayControlSpecs(playbackSuffixState, -1);
   ok &= expect(
@@ -1368,7 +1433,7 @@ int main() {
       playback_video_edit::SceneAnalysisStatus::Ready;
   suggestionControlState.videoEdit.suggestionReview.visible = true;
   suggestionControlState.videoEdit.suggestionReview.filter =
-      playback_video_edit::SceneSuggestionFilter::Cutscenes;
+      playback_video_edit::SceneSuggestionFilter::Keep;
   suggestionControlState.videoEdit.suggestionReview.totalCount = 8;
   suggestionControlState.videoEdit.suggestionReview.filteredCount = 3;
   suggestionControlState.videoEdit.suggestionReview.selectedId = 42;
@@ -1383,9 +1448,11 @@ int main() {
           playback_overlay::OverlayControlId::EditSuggestionFilter,
           playback_overlay::OverlayControlId::EditPreviousSuggestion,
           playback_overlay::OverlayControlId::EditNextSuggestion,
+          playback_overlay::OverlayControlId::EditPreviewSuggestion,
           playback_overlay::OverlayControlId::EditSelectSuggestion,
           playback_overlay::OverlayControlId::EditHideSuggestion,
           playback_overlay::OverlayControlId::EditUndoHideSuggestion,
+          playback_overlay::OverlayControlId::EditRestartAnalysis,
           playback_overlay::OverlayControlId::PlayPause,
           playback_overlay::OverlayControlId::EditDone,
       };
@@ -1397,10 +1464,10 @@ int main() {
   ok &=
       expect(controlIds(suggestionControls) == expectedSuggestionControls &&
                  suggestionsControl != suggestionControls.end() &&
-                 suggestionsControl->normalText == " [Suggestions 8] " &&
+                 suggestionsControl->normalText == " [Edit suggestions] " &&
                  suggestionsControl->active &&
                  suggestionFilterControl != suggestionControls.end() &&
-                 suggestionFilterControl->normalText == " [Filter: Cutscenes] ",
+                 suggestionFilterControl->normalText == " [Filter: Keep] ",
              "the shared editor toolbar must expose a persistent, filterable "
              "suggestion review workflow");
   for (const auto [control, command] : {
@@ -1742,16 +1809,6 @@ int main() {
        playback_overlay::OverlayControlId::EditStartExport});
   interactions.editBoundaries.push_back(
       {{95.0, 200.0, 115.0, 210.0}, playback_video_edit::EditBoundary::In});
-  interactions.chapterOverview = playback_overlay::ChapterOverviewRegion{
-      {300.0, 20.0, 500.0, 180.0},
-      playback_overlay::InteractionRect{460.0, 30.0, 490.0, 40.0},
-      0,
-      4,
-      {{{310.0, 60.0, 490.0, 70.0}, 120'000'000}}};
-  const playback_overlay::InteractionMap chapterOverviewInteractions =
-      playback_overlay::buildOverlayInteractionMap(
-          promptLayout, nullptr, Prompt::None, false,
-          &*interactions.chapterOverview);
   auto progressHit =
       playback_overlay::progressBarHitAt(interactions, 149.5, 205.0);
   ok &= expect(progressHit && progressHit->ratio == 0.5 &&
@@ -1770,19 +1827,9 @@ int main() {
   ok &= expect(playback_overlay::overlayControlAt(interactions, 25.0, 35.0) ==
                    playback_overlay::OverlayControlId::EditStartExport,
                "rendered controls must retain their semantic identity");
-  ok &= expect(
-      playback_overlay::overlayControlAt(chapterOverviewInteractions, 470.0,
-                                         35.0) ==
-          playback_overlay::OverlayControlId::ChapterOverviewClose,
-      "the visible chapter-drawer close action must own its hit target");
   ok &= expect(playback_overlay::editBoundaryAt(interactions, 100.0, 205.0) ==
                    playback_video_edit::EditBoundary::In,
                "rendered edit handles must retain their boundary identity");
-  const playback_overlay::InteractionHit chapterRowHit =
-      playback_overlay::interactionHitAt(interactions, 320.0, 65.0);
-  ok &= expect(chapterRowHit.chapterOverview &&
-                   chapterRowHit.chapterStartUs == 120'000'000,
-               "overview chapter rows must retain a direct seek target");
   const playback_overlay::InteractionMap transformed =
       playback_overlay::transformInteractionMap(interactions, 5.0, 7.0, 2.0,
                                                 3.0);
@@ -1795,19 +1842,6 @@ int main() {
   ok &= expect(transformedHit.progressBar &&
                    transformedHit.progressBar->ratio == 0.5,
                "pixel mouse input must preserve sub-cell progress precision");
-  const playback_overlay::InteractionHit transformedChapterRowHit =
-      playback_overlay::interactionHitAtTransformed(interactions, 5.0, 7.0, 2.0,
-                                                    3.0, 645.0, 202.0);
-  ok &= expect(transformedChapterRowHit.chapterStartUs == 120'000'000,
-               "chapter-row targets must survive framebuffer transforms");
-  ok &= expect(
-      playback_overlay::overlayControlAt(
-          playback_overlay::transformInteractionMap(
-              chapterOverviewInteractions, 5.0, 7.0, 2.0, 3.0),
-          945.0, 112.0) ==
-          playback_overlay::OverlayControlId::ChapterOverviewClose,
-      "the drawer close target must survive framebuffer transforms");
-
   playback_overlay::ContextMenuSnapshot contextMenu;
   contextMenu.visible = true;
   contextMenu.anchorXRatio = 1.0;
@@ -1867,11 +1901,7 @@ int main() {
   playbackSourceContext.canGenerateSubtitles = true;
   playback_video_edit::EditSnapshot cleanEdit;
   playback_video_edit::ExportProgress idleExport;
-  playback_video_chapters::Snapshot chapterSnapshot;
-  chapterSnapshot.state = playback_video_chapters::AnalysisState::Disabled;
-  playback_video_chapters::ActionContext chapterContext{chapterSnapshot};
-  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext,
-                       chapterContext);
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
   ok &= expect(playbackMenu.open(playback_session::ContextMenuSurface::Terminal,
                                  0.25, 0.75),
                "ordinary playback must expose an explicit edit command");
@@ -1879,110 +1909,24 @@ int main() {
       playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
   const auto windowMenu = playbackMenu.snapshotFor(
       playback_session::ContextMenuSurface::VideoWindow);
-  ok &= expect(terminalMenu.visible && terminalMenu.items.size() == 3 &&
+  ok &= expect(terminalMenu.visible && terminalMenu.items.size() == 2 &&
                    terminalMenu.items[0].label == "Edit video" &&
                    terminalMenu.items[1].label == "Generate transcript..." &&
-                   terminalMenu.items[2].label == "Analyze video chapters" &&
                    terminalMenu.items[0].token != 0 &&
                    terminalMenu.items[1].token != 0 &&
-                   terminalMenu.items[2].token != 0 &&
                    terminalMenu.items[0].token != terminalMenu.items[1].token &&
                    !windowMenu.visible,
                "a playback context menu must expose unique opaque source "
                "action identities on exactly one presentation surface");
-  const auto startChapterToken = terminalMenu.items[2].token;
-  const auto startChapterCommand = playbackMenu.activate(startChapterToken);
-  const auto *startChapterAction =
-      startChapterCommand
-          ? std::get_if<playback_video_chapters::Action>(&*startChapterCommand)
-          : nullptr;
-  ok &= expect(startChapterAction &&
-                   *startChapterAction ==
-                       playback_video_chapters::Action::StartAnalysis,
-               "the chapter menu item must dispatch a typed chapter action");
-  playbackMenu.open(playback_session::ContextMenuSurface::Terminal, 0.25, 0.75);
-  chapterContext.requestActive = true;
-  chapterSnapshot.state = playback_video_chapters::AnalysisState::Analyzing;
-  chapterSnapshot.progress = 0.37;
-  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext,
-                       chapterContext);
-  const auto runningChapterMenu =
-      playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
-  const auto cancelChapterItem =
-      std::find_if(runningChapterMenu.items.begin(),
-                   runningChapterMenu.items.end(), [](const auto &item) {
-                     return item.label == "Cancel chapter analysis (37%)";
-                   });
-  const auto cancelChapterCommand =
-      cancelChapterItem != runningChapterMenu.items.end()
-          ? playbackMenu.activate(cancelChapterItem->token)
-          : std::nullopt;
-  const auto *cancelChapterAction =
-      cancelChapterCommand
-          ? std::get_if<playback_video_chapters::Action>(&*cancelChapterCommand)
-          : nullptr;
-  ok &= expect(cancelChapterAction &&
-                   *cancelChapterAction ==
-                       playback_video_chapters::Action::CancelAnalysis,
-               "a running chapter job must be visible and cancellable from "
-               "the active-video context menu without taking toolbar space");
-  playbackMenu.open(playback_session::ContextMenuSurface::Terminal, 0.25, 0.75);
-  chapterSnapshot.state = playback_video_chapters::AnalysisState::Unsupported;
-  chapterSnapshot.progress.reset();
-  chapterSnapshot.detail = "Required runtime is unavailable.";
-  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext,
-                       chapterContext);
-  const auto unsupportedChapterMenu =
-      playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
-  ok &= expect(
-      std::any_of(unsupportedChapterMenu.items.begin(),
-                  unsupportedChapterMenu.items.end(),
-                  [](const auto &item) {
-                    return item.label == "Chapter analysis unavailable";
-                  }) &&
-          unsupportedChapterMenu.items.size() == 3,
-      "an unsupported request must remain diagnosable without presenting a "
-      "retry that cannot change its prerequisites");
-  playbackMenu.open(playback_session::ContextMenuSurface::Terminal, 0.25, 0.75);
-  chapterSnapshot.state = playback_video_chapters::AnalysisState::Failed;
-  chapterSnapshot.detail = "Inference returned invalid output.";
-  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext,
-                       chapterContext);
-  const auto failedChapterMenu =
-      playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
-  ok &= expect(
-      failedChapterMenu.items.size() == 3 &&
-          std::count_if(failedChapterMenu.items.begin(),
-                        failedChapterMenu.items.end(), [](const auto &item) {
-                          return item.label == "Chapter analysis details";
-                        }) == 1 &&
-          std::none_of(failedChapterMenu.items.begin(),
-                       failedChapterMenu.items.end(), [](const auto &item) {
-                         return item.label.find("Retry") != std::string::npos;
-                       }),
-      "a terminal analysis failure must expose diagnostics without suggesting "
-      "that repeating identical inputs is a recovery strategy");
-  chapterContext.requestActive = false;
-  chapterSnapshot = {};
-  chapterSnapshot.state = playback_video_chapters::AnalysisState::Disabled;
-  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext,
-                       chapterContext);
-  const auto restoredChapterMenu =
-      playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
-  ok &= expect(restoredChapterMenu.items[2].token == startChapterToken,
-               "chapter command identity must remain stable when the action "
-               "returns after cancellation");
   cleanEdit.hasEdits = true;
-  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext,
-                       chapterContext);
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
   const auto retainedMenu =
       playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
-  ok &= expect(retainedMenu.items.size() == 5 &&
+  ok &= expect(retainedMenu.items.size() == 4 &&
                    retainedMenu.items[0].label == "Resume editing" &&
                    retainedMenu.items[1].label == "Generate transcript..." &&
-                   retainedMenu.items[2].label == "Analyze video chapters" &&
-                   retainedMenu.items[3].label == "Export edited copy" &&
-                   retainedMenu.items[4].label == "Discard changes" &&
+                   retainedMenu.items[2].label == "Export edited copy" &&
+                   retainedMenu.items[3].label == "Discard changes" &&
                    retainedMenu.items[0].token == terminalMenu.items[0].token &&
                    retainedMenu.items[1].token == terminalMenu.items[1].token,
                "an exported edit revision must remain resumable, exportable, "
@@ -1998,8 +1942,7 @@ int main() {
   cleanEdit.canRedo = true;
   cleanEdit.canToggleSmoothCut = true;
   cleanEdit.selectedCutTransition = playback_video_edit::CutTransition::hard();
-  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext,
-                       chapterContext);
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
   const auto dirtyMenu =
       playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
   const auto clearAllItem = std::find_if(
@@ -2035,7 +1978,7 @@ int main() {
                    [](const auto &item) { return item.label == "Smooth cut"; });
   const auto detectSegmentsItem = std::find_if(
       dirtyMenu.items.begin(), dirtyMenu.items.end(),
-      [](const auto &item) { return item.label == "Detect segments..."; });
+      [](const auto &item) { return item.label == "Edit suggestions"; });
   ok &= expect(clearAllItem != dirtyMenu.items.end() &&
                    removeItem != dirtyMenu.items.end() &&
                    keepOnlyItem != dirtyMenu.items.end() &&
@@ -2058,14 +2001,13 @@ int main() {
   menuSuggestion.spans.push_back({0, 1'000'000});
   cleanEdit.suggestionReview.suggestions = {menuSuggestion};
   cleanEdit.suggestionReview.selectedId = menuSuggestion.id;
-  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext,
-                       chapterContext);
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
   const auto analysedMenu =
       playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
   ok &= expect(
       std::any_of(analysedMenu.items.begin(), analysedMenu.items.end(),
                   [](const auto &item) {
-                    return item.label == "Select suggested segment";
+                    return item.label == "Select range";
                   }) &&
           std::any_of(analysedMenu.items.begin(), analysedMenu.items.end(),
                       [](const auto &item) {
@@ -2073,14 +2015,13 @@ int main() {
                       }) &&
           std::any_of(analysedMenu.items.begin(), analysedMenu.items.end(),
                       [](const auto &item) {
-                        return item.label == "Undo hidden suggestion";
+                        return item.label == "Undo hide";
                       }),
       "detected ranges must expose deliberate selection, reversible "
       "hiding, and no destructive edit");
   cleanEdit.selectedCutTransition =
       playback_video_edit::CutTransition::motionSmooth();
-  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext,
-                       chapterContext);
+  playbackMenu.refresh(cleanEdit, idleExport, playbackSourceContext);
   const auto smoothEnabledMenu =
       playbackMenu.snapshotFor(playback_session::ContextMenuSurface::Terminal);
   ok &=
@@ -2125,8 +2066,7 @@ int main() {
 
   playback_video_edit::ExportProgress runningExport;
   runningExport.status = playback_video_edit::ExportStatus::Running;
-  playbackMenu.refresh(cleanEdit, runningExport, playbackSourceContext,
-                       chapterContext);
+  playbackMenu.refresh(cleanEdit, runningExport, playbackSourceContext);
   ok &= expect(playbackMenu.open(playback_session::ContextMenuSurface::Terminal,
                                  0.25, 0.75),
                "a running export must retain a secondary command surface");
@@ -2153,8 +2093,7 @@ int main() {
   }
 
   playbackMenu.dismiss();
-  playbackMenu.refresh(cleanEdit, failedExport, playbackSourceContext,
-                       chapterContext);
+  playbackMenu.refresh(cleanEdit, failedExport, playbackSourceContext);
   ok &= expect(playbackMenu.open(playback_session::ContextMenuSurface::Terminal,
                                  0.25, 0.75),
                "a failed current-revision export must remain actionable");
@@ -2170,5 +2109,6 @@ int main() {
       "a terminal export failure must offer retry rather than "
       "pretending that a worker is still active");
 
+  ok &= suggestionPresentationTests();
   return ok ? 0 : 1;
 }

@@ -61,7 +61,7 @@ bool validVisualTimelineScanCheckpoint(
 
 // Sequentially decodes the complete source timeline and extracts a bounded
 // luma signature every kVisualSampleIntervalUs. This is the shared temporal
-// evidence owner for edit suggestions and semantic chaptering: callers may
+// evidence owner for visual scene detection: callers may
 // interpret the samples differently, but neither may replace the scan with a
 // few random-access thumbnails.
 VisualTimelineScanResult

@@ -22,8 +22,7 @@ class PlaybackOutputController final : public PlaybackPresentationBackend {
   PlaybackOutputController(
       Player& player, GpuRuntime& gpu, std::string mediaTitle,
       std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
-          presentationSource,
-      SystemMediaCommandOwner systemMediaCommandOwner);
+          presentationSource);
   ~PlaybackOutputController();
 
   PlaybackOutputController(PlaybackOutputController&&) noexcept;

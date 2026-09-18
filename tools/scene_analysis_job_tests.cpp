@@ -36,7 +36,7 @@ class ControlledAnalysis {
       const playback_video_analysis::SceneAnalysisJob::ProgressReporter&
           reportProgress,
       const std::atomic<bool>* cancelled,
-      playback_video_analysis::AnalysisResult* result, std::string* error) {
+      playback_video_analysis::ReviewJobResult* result, std::string* error) {
     int invocation = 0;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -56,13 +56,10 @@ class ControlledAnalysis {
 
     if (invocation == 1) {
       if (result) {
-        result->durationUs = request.durationUs;
         result->visualSampleCount = 42;
-        result->transcriptPath = request.sourcePath;
-        result->transcriptPath.replace_extension(".transcript.srt");
         result->suggestions.push_back(
             {7, 10'000'000, 20'000'000,
-             playback_video_analysis::SceneKind::Cutscene, 0.84f, {}});
+             playback_video_analysis::EditDisposition::Keep, "Observed encounter"});
       }
       return true;
     }
@@ -133,7 +130,7 @@ int main() {
       [&](const analysis::JobRequest& request,
           const analysis::SceneAnalysisJob::ProgressReporter& reportProgress,
           const std::atomic<bool>* cancelled,
-          analysis::AnalysisResult* result, std::string* error) {
+          analysis::ReviewJobResult* result, std::string* error) {
         return controlled.run(request, reportProgress, cancelled, result,
                               error);
       },
@@ -164,7 +161,7 @@ int main() {
                    waitNow(changeHandle) == WAIT_TIMEOUT,
                "analysis changes must wake both the job and its owner once");
   const analysis::JobSnapshot running = job.snapshot();
-  ok &= expect(running.running() && running.progress == 0.4 &&
+  ok &= expect(running.busy() && running.progress == 0.4 &&
                    running.phase == "Sampling video",
                "running snapshots must retain coherent progress");
   const analysis::JobRequest received = controlled.lastRequest();
@@ -186,7 +183,6 @@ int main() {
   ok &= expect(succeeded &&
                    succeeded->state == analysis::JobState::Succeeded &&
                    succeeded->visualSampleCount == 42 &&
-                   succeeded->usedIndexedTranscript &&
                    succeeded->suggestions.size() == 1 &&
                    succeeded->suggestions.front().id == 7,
                "successful completion must publish the full analysis once");
@@ -202,6 +198,11 @@ int main() {
                "a subsequent analysis start must publish a change");
   ok &= expect(job.cancel() && !job.cancel(),
                "analysis cancellation must be accepted exactly once");
+  const auto pausing = job.snapshot();
+  ok &= expect(pausing.state == analysis::JobState::Pausing && pausing.busy() &&
+                   !pausing.finished() && !job.stopReady() && !job.start(request) &&
+                   !job.takeCompletion(),
+               "a pause request must retain worker ownership until acknowledged, not enable resume early");
   ok &= expect(waitNow(changeHandle) == WAIT_OBJECT_0 && job.consumeChanged(),
                "analysis cancellation must wake the session loop");
   controlled.release(2);
@@ -209,7 +210,7 @@ int main() {
                "cancelled analysis must reach a terminal state");
   const auto cancelled = job.takeCompletion();
   ok &= expect(cancelled && cancelled->state == analysis::JobState::Cancelled &&
-                   cancelled->error.empty(),
+                   !cancelled->busy() && cancelled->finished() && cancelled->error.empty(),
                "cancelled analysis must not expose a backend failure");
 
   ok &= expect(job.start(request) && controlled.waitUntilReported(3),

@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "core/windows_app_resources.h"
+#include "playback/input/media_keys.h"
 #include "core/windows_console_window.h"
 
 namespace {
@@ -153,11 +154,6 @@ void ConsoleInput::enableTerminalMouseInput() {
   }
 }
 
-void ConsoleInput::setSystemMediaCommandOwner(
-    SystemMediaCommandOwner owner) {
-  systemMediaCommandOwner_ = owner;
-}
-
 void ConsoleInput::disableTerminalMouseInput() {
   if (!terminalMouseInput_) return;
   writeTerminalSequence(output_, kDisableTerminalMouseInput);
@@ -252,8 +248,11 @@ bool ConsoleInput::poll(InputEvent& out) {
       }
       const KeyEvent translatedKey = keyPressState_.keyDown(kev);
       const bool repeated = isAutoRepeat(translatedKey);
-      if (!shouldDispatchLocalVirtualKey(kev.wVirtualKeyCode,
-                                         systemMediaCommandOwner_)) {
+      // A media key reaches this record only while the console window holds
+      // keyboard focus. The process-wide SMTC session may report the same
+      // press; whichever transport arrives first owns it. Auto-repeat is not a
+      // new press, and the shortcut table already ignores it.
+      if (!repeated && !admitLocalMediaVirtualKey(kev.wVirtualKeyCode)) {
         count--;
         continue;
       }

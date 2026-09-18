@@ -26,14 +26,18 @@ std::optional<ActionStripItem> actionForControl(
       return ActionStripItem::PictureInPicture;
     case playback_overlay::OverlayControlId::AudioTrack:
     case playback_overlay::OverlayControlId::Subtitles:
-    case playback_overlay::OverlayControlId::Chapters:
-    case playback_overlay::OverlayControlId::ChapterOverviewClose:
     case playback_overlay::OverlayControlId::EditMarkIn:
     case playback_overlay::OverlayControlId::EditMarkOut:
     case playback_overlay::OverlayControlId::EditClearSelection:
     case playback_overlay::OverlayControlId::EditRippleDelete:
     case playback_overlay::OverlayControlId::EditTrim:
     case playback_overlay::OverlayControlId::EditSuggestions:
+    case playback_overlay::OverlayControlId::EditSuggestionsClose:
+    case playback_overlay::OverlayControlId::EditStartAnalysis:
+    case playback_overlay::OverlayControlId::EditPauseAnalysis:
+    case playback_overlay::OverlayControlId::EditRestartAnalysis:
+    case playback_overlay::OverlayControlId::EditPreviewSuggestion:
+    case playback_overlay::OverlayControlId::EditStopPreview:
     case playback_overlay::OverlayControlId::EditSuggestionFilter:
     case playback_overlay::OverlayControlId::EditPreviousSuggestion:
     case playback_overlay::OverlayControlId::EditNextSuggestion:

@@ -6,18 +6,16 @@
 
 namespace playback_video_edit {
 SceneSuggestionKind projectSceneSuggestionKind(
-    playback_video_analysis::SceneKind kind) {
+    playback_video_analysis::EditDisposition kind) {
   switch (kind) {
-    case playback_video_analysis::SceneKind::Gameplay:
-      return SceneSuggestionKind::Gameplay;
-    case playback_video_analysis::SceneKind::Dialogue:
-      return SceneSuggestionKind::Dialogue;
-    case playback_video_analysis::SceneKind::Cutscene:
-      return SceneSuggestionKind::Cutscene;
-    case playback_video_analysis::SceneKind::MenuOrLoading:
-      return SceneSuggestionKind::MenuOrLoading;
+    case playback_video_analysis::EditDisposition::Keep:
+      return SceneSuggestionKind::Keep;
+    case playback_video_analysis::EditDisposition::Shorten:
+      return SceneSuggestionKind::Shorten;
+    case playback_video_analysis::EditDisposition::Review:
+      return SceneSuggestionKind::Review;
   }
-  return SceneSuggestionKind::Gameplay;
+  return SceneSuggestionKind::Review;
 }
 
 bool sceneSuggestionMatchesFilter(SceneSuggestionKind kind,
@@ -25,14 +23,12 @@ bool sceneSuggestionMatchesFilter(SceneSuggestionKind kind,
   switch (filter) {
     case SceneSuggestionFilter::All:
       return true;
-    case SceneSuggestionFilter::Cutscenes:
-      return kind == SceneSuggestionKind::Cutscene;
-    case SceneSuggestionFilter::Dialogue:
-      return kind == SceneSuggestionKind::Dialogue;
-    case SceneSuggestionFilter::Gameplay:
-      return kind == SceneSuggestionKind::Gameplay;
-    case SceneSuggestionFilter::MenuOrLoading:
-      return kind == SceneSuggestionKind::MenuOrLoading;
+    case SceneSuggestionFilter::Keep:
+      return kind == SceneSuggestionKind::Keep;
+    case SceneSuggestionFilter::Shorten:
+      return kind == SceneSuggestionKind::Shorten;
+    case SceneSuggestionFilter::Review:
+      return kind == SceneSuggestionKind::Review;
   }
   return true;
 }
@@ -41,14 +37,12 @@ SceneSuggestionFilter nextSceneSuggestionFilter(
     SceneSuggestionFilter filter) {
   switch (filter) {
     case SceneSuggestionFilter::All:
-      return SceneSuggestionFilter::Cutscenes;
-    case SceneSuggestionFilter::Cutscenes:
-      return SceneSuggestionFilter::Dialogue;
-    case SceneSuggestionFilter::Dialogue:
-      return SceneSuggestionFilter::Gameplay;
-    case SceneSuggestionFilter::Gameplay:
-      return SceneSuggestionFilter::MenuOrLoading;
-    case SceneSuggestionFilter::MenuOrLoading:
+      return SceneSuggestionFilter::Keep;
+    case SceneSuggestionFilter::Keep:
+      return SceneSuggestionFilter::Shorten;
+    case SceneSuggestionFilter::Shorten:
+      return SceneSuggestionFilter::Review;
+    case SceneSuggestionFilter::Review:
       return SceneSuggestionFilter::All;
   }
   return SceneSuggestionFilter::All;
@@ -58,38 +52,30 @@ const char* sceneSuggestionFilterLabel(SceneSuggestionFilter filter) {
   switch (filter) {
     case SceneSuggestionFilter::All:
       return "All";
-    case SceneSuggestionFilter::Cutscenes:
-      return "Cutscenes";
-    case SceneSuggestionFilter::Dialogue:
-      return "Dialogue";
-    case SceneSuggestionFilter::Gameplay:
-      return "Gameplay";
-    case SceneSuggestionFilter::MenuOrLoading:
-      return "Menu/loading";
+    case SceneSuggestionFilter::Keep:
+      return "Keep";
+    case SceneSuggestionFilter::Shorten:
+      return "Shorten";
+    case SceneSuggestionFilter::Review:
+      return "Review";
   }
   return "All";
 }
 
 const char* sceneSuggestionKindLabel(SceneSuggestionKind kind) {
   switch (kind) {
-    case SceneSuggestionKind::Gameplay:
-      return "Gameplay segment";
-    case SceneSuggestionKind::Dialogue:
-      return "Dialogue segment";
-    case SceneSuggestionKind::Cutscene:
-      return "Cutscene candidate";
-    case SceneSuggestionKind::MenuOrLoading:
-      return "Menu/loading segment";
+    case SceneSuggestionKind::Keep:
+      return "Keep";
+    case SceneSuggestionKind::Shorten:
+      return "Shorten";
+    case SceneSuggestionKind::Review:
+      return "Review";
   }
-  return "Detected segment";
-}
-
-const char* sceneSuggestionStrengthLabel(float confidence) {
-  return confidence >= 0.72f ? "Strong" : "Possible";
+  return "Review";
 }
 
 bool sceneSuggestionVisibleOnTimeline(
-    const playback_video_analysis::SceneSuggestion& suggestion,
+    const playback_video_analysis::EditProposal& suggestion,
     const Timeline& timeline) {
   return std::any_of(
       timeline.keptRanges().begin(), timeline.keptRanges().end(),
@@ -100,13 +86,13 @@ bool sceneSuggestionVisibleOnTimeline(
 }
 
 SceneSuggestionSnapshot projectSceneSuggestion(
-    const playback_video_analysis::SceneSuggestion& suggestion,
+    const playback_video_analysis::EditProposal& suggestion,
     const Timeline& timeline, bool selected) {
   SceneSuggestionSnapshot out;
   out.id = suggestion.id;
   out.source = {suggestion.startUs, suggestion.endUs};
-  out.kind = projectSceneSuggestionKind(suggestion.kind);
-  out.confidence = suggestion.confidence;
+  out.kind = projectSceneSuggestionKind(suggestion.disposition);
+  out.reason = suggestion.reason;
   out.selected = selected;
 
   int64_t timelineCursorUs = 0;

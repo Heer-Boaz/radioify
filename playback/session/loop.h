@@ -24,9 +24,6 @@ class AudioPlaybackRuntime;
 class GpuRuntime;
 class Player;
 class SubtitleManager;
-namespace playback_video_chapters {
-class Service;
-}
 struct Color;
 struct InputEvent;
 struct Style;
@@ -40,7 +37,6 @@ class PlaybackLoopRunner {
     VideoPlaybackConfig config;
     Player& player;
     SubtitleManager& subtitleManager;
-    playback_video_chapters::Service& chapterAnalysis;
     PerfLog& perfLog;
     const Style& baseStyle;
     const Style& accentStyle;

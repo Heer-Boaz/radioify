@@ -7,8 +7,8 @@
 
 #include "core/utf8.h"
 #include "playback/media_processing_presentation.h"
-#include "playback/video/chapter/presentation.h"
 #include "playback/video/edit/overlay_model.h"
+#include "playback/video/edit/suggestion_panel.h"
 #include "playback/video/image.h"
 #include "subtitle_effects.h"
 #include "ui_helpers.h"
@@ -129,17 +129,10 @@ buildPlaybackOverlayState(const PlaybackOverlayInputs &inputs) {
   state.videoEditPrompt = inputs.videoEditPrompt;
   state.mediaActionConfirmationPrompt = inputs.mediaActionConfirmationPrompt;
   state.mediaTaskActivity = inputs.mediaTaskActivity;
-  state.chapters = inputs.chapters;
-  state.chapterControlVisible = inputs.chapterControlVisible;
-  state.chapterActivityPhase =
-      std::clamp(inputs.chapterActivityPhase, 0.0, 1.0);
-  state.chapterActivityMotionEnabled = inputs.chapterActivityMotionEnabled;
-  state.chapterOverviewOpen = inputs.chapterOverviewOpen;
-  state.chapterOverviewScrollOffset = inputs.chapterOverviewScrollOffset;
   state.chromeVisible =
       state.overlayVisible || !state.debugLines.empty() ||
       state.mediaActionConfirmationPrompt.has_value() ||
-      state.mediaTaskActivity.has_value() || state.chapterOverviewOpen ||
+      state.mediaTaskActivity.has_value() ||
       playback_video_edit::needsOverlayPresentation(
           state.videoEdit, state.videoEditExport, state.videoEditPrompt);
 
@@ -433,11 +426,6 @@ WindowUiState buildWindowUiState(const PlaybackOverlayState &state,
   ui.videoEditExport = state.videoEditExport;
   ui.videoEditPrompt = state.videoEditPrompt;
   ui.mediaActionConfirmationPrompt = state.mediaActionConfirmationPrompt;
-  ui.chapters = state.chapters;
-  ui.chapterActivityPhase = state.chapterActivityPhase;
-  ui.chapterActivityMotionEnabled = state.chapterActivityMotionEnabled;
-  ui.chapterOverviewOpen = state.chapterOverviewOpen;
-  ui.chapterOverviewScrollOffset = state.chapterOverviewScrollOffset;
   return ui;
 }
 
@@ -601,43 +589,6 @@ private:
   GpuTextGridCell transparentSpace_;
 };
 
-OverlayCellTextLine layoutTransientMessageLine(const std::string &message,
-                                               int width, int height) {
-  OverlayCellTextLine line;
-  const int safeWidth = std::max(1, width);
-  const int horizontalInset = safeWidth > 2 ? 1 : 0;
-  const int availableWidth = std::max(1, safeWidth - horizontalInset * 2);
-  line.text = " " + message + " ";
-  if (utf8DisplayWidth(line.text) > availableWidth) {
-    line.text = utf8TakeDisplayWidth(line.text, availableWidth);
-  }
-  line.x = std::max(horizontalInset,
-                    safeWidth - horizontalInset - utf8DisplayWidth(line.text));
-  line.y = std::min(1, std::max(0, height - 1));
-  return line;
-}
-
-template <typename Target>
-void renderChapterMarkersToTarget(
-    Target &target, const OverlayCellLayout &layout,
-    const OverlayRenderStyles &styles,
-    const playback_video_chapters::Snapshot *chapters) {
-  if (!chapters || !chapters->ready() || layout.progressBarY < 0 ||
-      layout.progressBarWidth <= 0 || !target.rowVisible(layout.progressBarY)) {
-    return;
-  }
-  const playback_video_chapters::MarkerProjection projection =
-      playback_video_chapters::projectMarkers(*chapters,
-                                               layout.progressBarWidth);
-  const Style markerStyle{{177, 143, 255}, styles.progressEmptyStyle.bg};
-  for (const int cell : projection.boundaryCells) {
-    const bool collision =
-        std::binary_search(projection.collisionCells.begin(),
-                           projection.collisionCells.end(), cell);
-    target.writeChar(layout.progressBarX + cell, layout.progressBarY,
-                     collision ? L'╫' : L'┊', markerStyle);
-  }
-}
 
 template <typename Target>
 void renderVideoEditTimelineToTarget(
@@ -647,11 +598,7 @@ void renderVideoEditTimelineToTarget(
     const playback_video_edit::ExportProgress *editExport,
     playback_video_edit::Prompt editPrompt,
     const std::optional<MediaActionConfirmationDialog>
-        &mediaActionConfirmationPrompt,
-    const playback_video_chapters::Snapshot *chapters) {
-  // This function composes timeline layers, not an editor-only surface.  The
-  // edit model may legitimately be empty during ordinary playback while the
-  // chapter layer still has content.
+        &mediaActionConfirmationPrompt) {
   if (layout.progressBarY < 0 || layout.progressBarWidth <= 0 ||
       !target.rowVisible(layout.progressBarY)) {
     return;
@@ -666,7 +613,7 @@ void renderVideoEditTimelineToTarget(
                                  styles.progressEmptyStyle.bg};
   const Style selectedStyle{styles.accentStyle.bg, styles.accentStyle.fg};
   const Style cutStyle{{255, 145, 96}, styles.progressEmptyStyle.bg};
-  const Style chapterStyle{{136, 118, 170}, styles.progressEmptyStyle.bg};
+  const Style suggestionBoundaryStyle{{136, 118, 170}, styles.progressEmptyStyle.bg};
   const Style dialogueStyle{{93, 205, 226}, styles.progressEmptyStyle.bg};
   const Style cutsceneStyle{{205, 132, 255}, styles.progressEmptyStyle.bg};
   const Style menuStyle{{165, 173, 190}, styles.progressEmptyStyle.bg};
@@ -695,15 +642,15 @@ void renderVideoEditTimelineToTarget(
     wchar_t glyph = L' ';
     const Style *style = nullptr;
     switch (kind) {
-    case playback_video_edit::SceneSuggestionCellKind::Dialogue:
+    case playback_video_edit::SceneSuggestionCellKind::Review:
       glyph = L'┄';
       style = &dialogueStyle;
       break;
-    case playback_video_edit::SceneSuggestionCellKind::Cutscene:
+    case playback_video_edit::SceneSuggestionCellKind::Keep:
       glyph = L'━';
       style = &cutsceneStyle;
       break;
-    case playback_video_edit::SceneSuggestionCellKind::MenuOrLoading:
+    case playback_video_edit::SceneSuggestionCellKind::Shorten:
       glyph = L'░';
       style = &menuStyle;
       break;
@@ -722,12 +669,9 @@ void renderVideoEditTimelineToTarget(
 
   for (const int boundaryCell : model.sceneSuggestionBoundaryCells) {
     target.writeChar(layout.progressBarX + boundaryCell, layout.progressBarY,
-                     L'┊', chapterStyle);
+                     L'┊', suggestionBoundaryStyle);
   }
 
-  // Automatic chapter markers share the transport bar with the edit model,
-  // but transport-critical edit handles retain visual precedence below.
-  renderChapterMarkersToTarget(target, layout, styles, chapters);
 
   for (const int cutCell : model.cutCells) {
     target.writeChar(layout.progressBarX + cutCell, layout.progressBarY, L'|',
@@ -767,9 +711,9 @@ void renderTransientMessageToTarget(Target &target, const std::string &message,
                                     const Style &style) {
   if (!target.isDrawable())
     return;
-  const OverlayCellTextLine line =
-      layoutTransientMessageLine(message, target.width(), target.height());
-  target.writeText(line.x, line.y, line.text, style);
+  for (const auto &line :
+       layoutTransientMessageCells(message, target.width(), target.height()))
+    target.writeText(line.x, line.y, line.text, style);
 }
 
 template <typename Target>
@@ -837,63 +781,45 @@ void renderDialogToTarget(Target &target, const OverlayCellDialogLayout &dialog,
   }
 }
 
-template <typename Target>
-void renderChapterOverviewToTarget(
-    Target &target, const OverlayCellLayout &overlayLayout,
-    const OverlayRenderStyles &styles,
-    const playback_video_chapters::Snapshot *chapters, bool chapterOverviewOpen,
-    int chapterOverviewScrollOffset) {
-  if (!chapters || !chapterOverviewOpen || !target.isDrawable())
-    return;
-  const playback_video_chapters::OverviewPanelLayout panel =
-      playback_video_chapters::layoutOverviewPanel(
-          *chapters, target.width(), target.height(),
-          overlayLayout.topY, chapterOverviewScrollOffset);
-  if (!panel.drawable())
-    return;
 
-  target.clearRect(panel.x, panel.y, panel.width, panel.height,
-                   styles.baseStyle);
-  const int left = panel.x;
+template <typename Target>
+void renderEditSuggestionsToTarget(Target& target, const OverlayCellLayout& layout,
+                                   const OverlayRenderStyles& styles,
+                                   const playback_video_edit::EditSnapshot& edit) {
+  const auto panel = playback_video_edit::layoutSuggestionPanel(
+      edit, target.width(), target.height(), layout.topY);
+  if (!panel.drawable()) return;
+  target.clearRect(panel.x, panel.y, panel.width, panel.height, styles.baseStyle);
   const int right = panel.x + panel.width - 1;
-  const int top = panel.y;
   const int bottom = panel.y + panel.height - 1;
-  for (int x = left + 1; x < right; ++x) {
-    target.writeChar(x, top, L'─', styles.accentStyle);
+  for (int x = panel.x + 1; x < right; ++x) {
+    target.writeChar(x, panel.y, L'─', styles.accentStyle);
     target.writeChar(x, bottom, L'─', styles.accentStyle);
   }
-  for (int y = top + 1; y < bottom; ++y) {
-    target.writeChar(left, y, L'│', styles.accentStyle);
+  for (int y = panel.y + 1; y < bottom; ++y) {
+    target.writeChar(panel.x, y, L'│', styles.accentStyle);
     target.writeChar(right, y, L'│', styles.accentStyle);
   }
-  target.writeChar(left, top, L'┌', styles.accentStyle);
-  target.writeChar(right, top, L'┐', styles.accentStyle);
-  target.writeChar(left, bottom, L'└', styles.accentStyle);
+  target.writeChar(panel.x, panel.y, L'┌', styles.accentStyle);
+  target.writeChar(right, panel.y, L'┐', styles.accentStyle);
+  target.writeChar(panel.x, bottom, L'└', styles.accentStyle);
   target.writeChar(right, bottom, L'┘', styles.accentStyle);
-  if (panel.scrollOffset > 0 && top + 1 < bottom) {
-    target.writeChar(right, top + 1, L'↑', styles.accentStyle);
-  }
-  if (panel.scrollOffset < panel.maximumScrollOffset && bottom - 1 > top) {
+  if (panel.scrollOffset > 0)
+    target.writeChar(right, panel.y + 1, L'↑', styles.accentStyle);
+  if (panel.scrollOffset < panel.maximumScrollOffset)
     target.writeChar(right, bottom - 1, L'↓', styles.accentStyle);
-  }
-
-  const int contentWidth = std::max(1, panel.width - 4);
-  const int lineCount =
-      std::min<int>(panel.height - 2, static_cast<int>(panel.lines.size()));
-  for (int index = 0; index < lineCount; ++index) {
-    const auto &line = panel.lines[static_cast<std::size_t>(index)];
-    for (const auto &run : line.runs) {
-      if (run.column < 0 || run.column >= contentWidth)
-        continue;
-      target.writeText(
-          panel.x + 2 + run.column, panel.y + 1 + index,
-          utf8TakeDisplayWidth(run.text, contentWidth - run.column),
-          run.role == playback_video_chapters::OverviewPanelLayout::TextRole::
-                          Accent
-              ? styles.accentStyle
-              : styles.baseStyle);
+  for (size_t index = 0; index < panel.lines.size(); ++index) {
+    const auto& line = panel.lines[index];
+    const int y = panel.y + 1 + static_cast<int>(index);
+    Style style = line.accent ? styles.accentStyle : styles.baseStyle;
+    if (line.selected) {
+      style = {styles.baseStyle.bg, styles.accentStyle.fg};
+      target.clearRect(panel.x + 1, y, panel.width - 2, 1, style);
     }
+    const int width = index == 0 ? panel.closeColumn - 3 : panel.width - 4;
+    target.writeText(panel.x + 2, y, utf8TakeDisplayWidth(line.text, width), style);
   }
+  target.writeText(panel.x + panel.closeColumn, panel.y + 1, "[Close]", styles.accentStyle);
 }
 
 template <typename Target>
@@ -904,11 +830,7 @@ void renderOverlayToTarget(
     const playback_video_edit::ExportProgress *videoEditExport,
     playback_video_edit::Prompt videoEditPrompt,
     const std::optional<MediaActionConfirmationDialog>
-        &mediaActionConfirmationPrompt,
-    const playback_video_chapters::Snapshot *chapters,
-    double chapterActivityPhase, bool chapterActivityMotionEnabled,
-    bool chapterOverviewOpen,
-    int chapterOverviewScrollOffset) {
+        &mediaActionConfirmationPrompt) {
   if (!target.isDrawable())
     return;
 
@@ -933,33 +855,6 @@ void renderOverlayToTarget(
       style = {style.bg, style.fg};
     }
     target.writeControlText(item.text, item.y, item.x, item.width, style);
-    if (item.id == OverlayControlId::Chapters && !item.hovered && chapters) {
-      // An indeterminate highlight travels through the existing affordance.
-      // The violet tail reuses the chapter-marker color family; the warm head
-      // uses the player's accent. Spaces remain untouched so the effect reads
-      // as character illumination rather than a second progress bar.
-      const std::vector<float> sweep = chapterControlCharacterHighlights(
-          *chapters, chapterActivityMotionEnabled, item.width,
-          chapterActivityPhase);
-      const std::wstring glyphs = overlayUtf8ToWide(item.text);
-      for (int column = 0;
-           column < item.width && column < static_cast<int>(glyphs.size()) &&
-           column < static_cast<int>(sweep.size());
-           ++column) {
-        const float intensity = sweep[static_cast<std::size_t>(column)];
-        if (intensity <= 0.0f ||
-            glyphs[static_cast<std::size_t>(column)] == L' ') {
-          continue;
-        }
-        Style sweepStyle = style;
-        sweepStyle.fg = intensity >= 1.0f
-                            ? styles.accentStyle.fg
-                            : lerpColor(style.fg, Color{177, 143, 255},
-                                        intensity);
-        target.writeChar(item.x + column, item.y,
-                         glyphs[static_cast<std::size_t>(column)], sweepStyle);
-      }
-    }
   }
 
   if (modalDialog)
@@ -991,17 +886,16 @@ void renderOverlayToTarget(
   if (videoEdit) {
     renderVideoEditTimelineToTarget(
         target, layout, styles, progress, *videoEdit, videoEditExport,
-        videoEditPrompt, mediaActionConfirmationPrompt, chapters);
-  } else {
-    renderChapterMarkersToTarget(target, layout, styles, chapters);
+        videoEditPrompt, mediaActionConfirmationPrompt);
   }
 
   target.writeText(layout.suffixX, layout.suffixY, layout.suffixText,
                    styles.baseStyle);
 
-  renderChapterOverviewToTarget(target, layout, styles, chapters,
-                                chapterOverviewOpen,
-                                chapterOverviewScrollOffset);
+  if (videoEdit && videoEdit->active && videoEdit->suggestionReview.visible) {
+    if (videoEditPrompt == playback_video_edit::Prompt::None && !mediaActionConfirmationPrompt)
+      renderEditSuggestionsToTarget(target, layout, styles, *videoEdit);
+  }
 }
 
 template <typename Target>
@@ -1031,11 +925,13 @@ void renderTimelinePreviewMetadataToTarget(
   const int lineCount = std::min<int>(
       layout.metadataHeight, static_cast<int>(layout.metadataLines.size()));
   for (int index = 0; index < lineCount; ++index) {
+    const auto& line = layout.metadataLines[static_cast<size_t>(index)];
     const std::string text = utf8TakeDisplayWidth(
-        layout.metadataLines[static_cast<std::size_t>(index)],
+        line.text,
         layout.metadataWidth);
     target.writeText(layout.metadataX, layout.metadataY + index, text,
-                     index == 0 ? styles.accentStyle : styles.baseStyle);
+                     line.role == playback_video_timeline_preview::MetadataRole::Title
+                         ? styles.accentStyle : styles.baseStyle);
   }
 }
 
@@ -1076,18 +972,11 @@ void renderOverlayToScreen(
     const playback_video_edit::ExportProgress *videoEditExport,
     playback_video_edit::Prompt videoEditPrompt,
     const std::optional<MediaActionConfirmationDialog>
-        &mediaActionConfirmationPrompt,
-    const playback_video_chapters::Snapshot *chapters,
-    double chapterActivityPhase, bool chapterActivityMotionEnabled,
-    bool chapterOverviewOpen,
-    int chapterOverviewScrollOffset, int minY, int maxY) {
+        &mediaActionConfirmationPrompt, int minY, int maxY) {
   ScreenOverlayTarget target(screen, minY, maxY);
   renderOverlayToTarget(target, layout, styles, progress, videoEdit,
                         videoEditExport, videoEditPrompt,
-                        mediaActionConfirmationPrompt, chapters,
-                        chapterActivityPhase, chapterActivityMotionEnabled,
-                        chapterOverviewOpen,
-                        chapterOverviewScrollOffset);
+                        mediaActionConfirmationPrompt);
 }
 
 void renderTransientMessageToScreen(ConsoleScreen &screen,
@@ -1131,11 +1020,7 @@ bool renderWindowUiToGpuTextGrid(
   if (ui.chromeVisible) {
     renderOverlayToTarget(target, overlayLayout, styles, ui.progress,
                           &ui.videoEdit, &ui.videoEditExport,
-                          ui.videoEditPrompt, ui.mediaActionConfirmationPrompt,
-                          &ui.chapters, ui.chapterActivityPhase,
-                          ui.chapterActivityMotionEnabled,
-                          ui.chapterOverviewOpen,
-                          ui.chapterOverviewScrollOffset);
+                          ui.videoEditPrompt, ui.mediaActionConfirmationPrompt);
     rendered = true;
   }
   if (ui.timelinePreview.hoverActive) {

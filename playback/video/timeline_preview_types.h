@@ -60,6 +60,13 @@ enum class PresentationSurface : uint8_t {
   VideoWindow,
 };
 
+enum class MetadataRole : uint8_t { Title, Detail };
+
+struct MetadataLine {
+  std::string text;
+  MetadataRole role = MetadataRole::Detail;
+};
+
 struct Snapshot {
   // Hover intent and image readiness are deliberately independent. Renderers
   // may present the timestamp while the provider is working, but must never
@@ -78,9 +85,9 @@ struct Snapshot {
   uint64_t revision = 0;
   std::shared_ptr<const Image> image;
   // Session-owned semantic context for the hovered timeline position. The
-  // preview provider owns only images; chapter/status text is projected by
+  // preview provider owns only images; text is projected by
   // the session so image decoding never depends on analysis lifecycle.
-  std::vector<std::string> metadataLines;
+  std::vector<MetadataLine> metadataLines;
 
   bool hasImage() const {
     return image && playback_video_image::validate(image->surface);
@@ -110,7 +117,7 @@ struct CellLayout {
   int metadataY = 0;
   int metadataWidth = 0;
   int metadataHeight = 0;
-  std::vector<std::string> metadataLines;
+  std::vector<MetadataLine> metadataLines;
 
   bool drawable() const {
     return outerWidth >= 4 && outerHeight >= 3 && imageWidth > 0 &&
@@ -133,6 +140,6 @@ CellLayout layoutCells(int columns, int rows, int progressBarY,
                        double anchorRatio, int sourceWidth, int sourceHeight,
                        double cellPixelWidth, double cellPixelHeight,
                        const std::string& label,
-                       const std::vector<std::string>& metadataLines = {});
+                       const std::vector<MetadataLine>& metadataLines = {});
 
 }  // namespace playback_video_timeline_preview

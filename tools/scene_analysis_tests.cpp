@@ -50,29 +50,24 @@ int main() {
   using playback_video_edit::SceneSuggestionKind;
   ok &= expect(
       playback_video_edit::sceneSuggestionMatchesFilter(
-          SceneSuggestionKind::Cutscene, SceneSuggestionFilter::All) &&
+          SceneSuggestionKind::Keep, SceneSuggestionFilter::All) &&
           playback_video_edit::sceneSuggestionMatchesFilter(
-              SceneSuggestionKind::Cutscene,
-              SceneSuggestionFilter::Cutscenes) &&
+              SceneSuggestionKind::Keep,
+              SceneSuggestionFilter::Keep) &&
           !playback_video_edit::sceneSuggestionMatchesFilter(
-              SceneSuggestionKind::Dialogue,
-              SceneSuggestionFilter::Cutscenes),
+              SceneSuggestionKind::Review,
+              SceneSuggestionFilter::Keep),
       "suggestion filters must retain only their named segment kind");
   SceneSuggestionFilter cycledFilter = SceneSuggestionFilter::All;
-  for (int step = 0; step < 5; ++step) {
+  for (int step = 0; step < 4; ++step) {
     cycledFilter =
         playback_video_edit::nextSceneSuggestionFilter(cycledFilter);
   }
   ok &= expect(
       cycledFilter == SceneSuggestionFilter::All &&
           std::string(playback_video_edit::sceneSuggestionKindLabel(
-              SceneSuggestionKind::Gameplay)) == "Gameplay segment" &&
-          std::string(playback_video_edit::sceneSuggestionStrengthLabel(
-              0.71f)) == "Possible" &&
-          std::string(playback_video_edit::sceneSuggestionStrengthLabel(
-              0.72f)) == "Strong",
-      "suggestion filters, kind names, and confidence bands must remain "
-      "stable presentation policy");
+              SceneSuggestionKind::Review)) == "Review",
+      "editing proposals have dispositions, not uncalibrated confidence bands");
 
   const std::vector<playback_video_transcript::Segment> transcript = {
       {0, 10'000'000, "[music]"},
@@ -152,11 +147,13 @@ int main() {
                "dark static windows must form a loading/menu candidate");
 
   if (cutscene != suggestions.end()) {
+    const analysis::EditProposal proposal{cutscene->id, cutscene->startUs,
+        cutscene->endUs, analysis::EditDisposition::Keep, "Story development"};
     playback_video_edit::Timeline timeline(durationUs);
     ok &= expect(timeline.rippleDelete({30'000'000, 36'000'000}),
                  "projection fixture must create an edited source gap");
     const playback_video_edit::SceneSuggestionSnapshot projected =
-        playback_video_edit::projectSceneSuggestion(*cutscene, timeline, true);
+        playback_video_edit::projectSceneSuggestion(proposal, timeline, true);
     ok &= expect(projected.selected && projected.spans.size() == 2,
                  "one source suggestion must project across retained EDL clips");
     ok &= expect(
@@ -183,9 +180,9 @@ int main() {
     ok &= expect(removedTimeline.rippleDelete(
                      {cutscene->startUs, cutscene->endUs}) &&
                      !playback_video_edit::sceneSuggestionVisibleOnTimeline(
-                         *cutscene, removedTimeline) &&
+                         proposal, removedTimeline) &&
                      playback_video_edit::projectSceneSuggestion(
-                         *cutscene, removedTimeline, true)
+                         proposal, removedTimeline, true)
                          .spans.empty(),
                  "fully removed suggestions must leave navigation and the "
                  "timeline projection together");

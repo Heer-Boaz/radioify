@@ -242,12 +242,12 @@ function Initialize-RadioifyMsixPackageLayout {
     Copy-Item -LiteralPath (Join-Path $distRoot "radioify.exe") `
         -Destination (Join-Path $layoutDir "radioify.exe") `
         -Force
-    $chapterWorkerSource = Join-Path $distRoot "radioify_chapter_worker.exe"
-    if (-not (Test-Path -LiteralPath $chapterWorkerSource -PathType Leaf)) {
-        throw "Isolated chapter worker not found at '$chapterWorkerSource'."
+    $analysisWorkerSource = Join-Path $distRoot "radioify_analysis_worker.exe"
+    if (-not (Test-Path -LiteralPath $analysisWorkerSource -PathType Leaf)) {
+        throw "Isolated analysis worker not found at '$analysisWorkerSource'."
     }
-    Copy-Item -LiteralPath $chapterWorkerSource `
-        -Destination (Join-Path $layoutDir "radioify_chapter_worker.exe") `
+    Copy-Item -LiteralPath $analysisWorkerSource `
+        -Destination (Join-Path $layoutDir "radioify_analysis_worker.exe") `
         -Force
 
     $llamaLicenseSource = Join-Path $distRoot "llama-cpp-LICENSE.txt"
@@ -267,25 +267,6 @@ function Initialize-RadioifyMsixPackageLayout {
     Copy-Item -LiteralPath $whisperModelSource `
         -Destination (Join-Path $modelLayoutDir "ggml-base-q5_1.bin") `
         -Force
-
-    $chapterPlannerSourceDir = Join-Path $distRoot "models\chapter_analysis"
-    $chapterPlannerLayoutDir = Join-Path $modelLayoutDir "chapter_analysis"
-    New-Item -ItemType Directory -Force -Path $chapterPlannerLayoutDir | Out-Null
-    foreach ($chapterPlannerFile in @(
-        "chapter-llama-asr-10k-f16.gguf",
-        "chapter-llama-captions-asr-10k-f16.gguf",
-        "CHAPTER-LLAMA-NOTICE.md",
-        "LLAMA-3.1-LICENSE",
-        "NOTICE"
-    )) {
-        $sourcePath = Join-Path $chapterPlannerSourceDir $chapterPlannerFile
-        if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
-            throw "Chapter-Llama planner asset not found at '$sourcePath'."
-        }
-        Copy-Item -LiteralPath $sourcePath `
-            -Destination (Join-Path $chapterPlannerLayoutDir $chapterPlannerFile) `
-            -Force
-    }
 
     $windowsMlRuntimeContract = Get-RadioifyWindowsMlRuntimeContract
     foreach ($runtimeName in $windowsMlRuntimeContract.ProductionRuntimeFiles) {

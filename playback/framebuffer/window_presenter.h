@@ -26,8 +26,7 @@ class WindowPresenter {
   WindowPresenter(
       Player& player, GpuRuntime& gpu, std::string mediaTitle,
       std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
-          presentationSource,
-      SystemMediaCommandOwner systemMediaCommandOwner);
+          presentationSource);
   ~WindowPresenter();
 
   WindowPresenter(const WindowPresenter&) = delete;

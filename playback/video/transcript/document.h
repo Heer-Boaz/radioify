@@ -12,8 +12,8 @@ namespace playback_video_transcript {
 enum class TranscriptPublishMode {
   CreateNew,
   ReplaceExisting,
-  // Background producers may replace only an existing transcript/provenance
-  // pair that proves it was created for this exact source video.
+  // Background producers may replace only the Radioify-generated English
+  // transcript destination, never arbitrary user subtitle files.
   ReplaceOwned,
 };
 
@@ -38,8 +38,7 @@ bool writeIndexedTranscript(const std::filesystem::path& outputPath,
                                 outputCommitStarted = {});
 
 // Serializes a complete indexed transcript to a caller-owned staging path.
-// This is used when the transcript and its provenance record must be
-// published by one TransactionGroup. It never renames or replaces files.
+// The caller owns atomic publication. This never renames or replaces files.
 bool writeIndexedTranscriptStaging(const std::filesystem::path& stagingPath,
                                    const std::vector<Segment>& segments,
                                    std::string* error);

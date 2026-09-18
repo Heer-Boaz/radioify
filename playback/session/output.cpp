@@ -11,11 +11,9 @@
 struct PlaybackOutputController::Impl {
   Impl(Player& player, GpuRuntime& gpu, std::string mediaTitle,
        std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
-           presentationSource,
-       SystemMediaCommandOwner systemMediaCommandOwner)
+           presentationSource)
       : windowPresenter(player, gpu, std::move(mediaTitle),
-                        std::move(presentationSource),
-                        systemMediaCommandOwner) {}
+                        std::move(presentationSource)) {}
 
   WindowPresenter windowPresenter;
   GpuVideoFrameCache terminalFrameCache;
@@ -24,11 +22,9 @@ struct PlaybackOutputController::Impl {
 PlaybackOutputController::PlaybackOutputController(
     Player& player, GpuRuntime& gpu, std::string mediaTitle,
     std::shared_ptr<playback_framebuffer_presenter::PresentationSource>
-        presentationSource,
-    SystemMediaCommandOwner systemMediaCommandOwner)
-    : impl_(std::make_unique<Impl>(
-          player, gpu, std::move(mediaTitle),
-          std::move(presentationSource), systemMediaCommandOwner)) {}
+        presentationSource)
+    : impl_(std::make_unique<Impl>(player, gpu, std::move(mediaTitle),
+                                   std::move(presentationSource))) {}
 
 PlaybackOutputController::~PlaybackOutputController() = default;
 

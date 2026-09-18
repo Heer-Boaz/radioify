@@ -117,6 +117,8 @@ models/**/*.verified
 !README.md
 !BUILD_WINDOWS.md
 !docs/radio1938-realism-audit.md
+!docs/chapter-analysis-validation.md
+!docs/video-editing-review.md
 !models/chapter_analysis/CHAPTER-LLAMA-NOTICE.md
 
 # Output files

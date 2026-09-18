@@ -37,16 +37,11 @@
 #include "playback/debug/lines.h"
 #include "playback/framebuffer/presenter.h"
 #include "playback/overlay/overlay.h"
-#include "playback/session/background_gpu_admission.h"
 #include "playback/session/context_menu_controller.h"
 #include "playback/session/media_action_confirmation.h"
 #include "playback/session/osd_timeline.h"
 #include "playback/session/shutdown_sequence.h"
 #include "playback/session/video_edit_workspace.h"
-#include "playback/video/chapter/action_catalog.h"
-#include "playback/video/chapter/presentation.h"
-#include "playback/video/chapter/service.h"
-#include "playback/video/chapter/text_evidence.h"
 #include "playback/video/edit/overlay_model.h"
 #include "playback/video/gpu/gpu_runtime.h"
 #include "playback/video/player.h"
@@ -92,30 +87,16 @@ PlaybackPresentationState initialPlaybackPresentation(
 } // namespace
 
 struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
-  enum class ChapterAnalysisTrigger : uint8_t {
-    Automatic,
-    Manual,
-  };
 
   static constexpr auto kSeekThrottleInterval = std::chrono::milliseconds(50);
   static constexpr auto kFrameCopyMessageDuration =
       std::chrono::milliseconds(1500);
   static constexpr auto kEditMessageDuration = std::chrono::milliseconds(2200);
-  static constexpr auto kAnalysisMessageDuration =
-      std::chrono::milliseconds(6000);
-  static constexpr auto kChapterActivityFrameInterval =
-      std::chrono::milliseconds(60);
-  static constexpr auto kChapterActivityPeriod =
-      std::chrono::milliseconds(1500);
-  static constexpr auto kAnimationPreferenceRefreshInterval =
-      std::chrono::seconds(1);
-
   ConsoleScreen &screen;
   AudioPlaybackRuntime &audioPlayback;
   GpuRuntime &gpu;
   const VideoPlaybackConfig config;
   SubtitleManager &subtitleManager;
-  playback_video_chapters::Service &chapterAnalysis;
   PerfLog &perfLog;
   const Style &baseStyle;
   const Style &accentStyle;
@@ -136,19 +117,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   bool quitApplicationRequested = false;
   const bool enableAudio;
   bool hasSubtitles;
-  bool chapterOverviewOpen = false;
-  int chapterOverviewScrollOffset = 0;
-  bool chapterAutoStartSuppressed = false;
-  std::optional<playback_video_chapters::Service::RequestId> chapterRequestId;
-  playback_video_chapters::Snapshot chapterSnapshot;
-  playback_session::BackgroundGpuAdmissionPolicy chapterGpuAdmission;
-  std::chrono::steady_clock::time_point lastChapterGpuHeartbeat =
-      std::chrono::steady_clock::time_point::min();
-  std::chrono::steady_clock::time_point lastChapterActivityFrame =
-      std::chrono::steady_clock::time_point::min();
-  std::chrono::steady_clock::time_point lastAnimationPreferenceRefresh =
-      std::chrono::steady_clock::time_point::min();
-  bool clientAreaAnimationsEnabled = true;
   int overlayControlHover = -1;
 
   PlaybackPresentationController presentationController;
@@ -197,7 +165,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   explicit Impl(PlaybackLoopRunner::Args args)
       : screen(args.screen), audioPlayback(args.audioPlayback), gpu(args.gpu),
         config(std::move(args.config)), subtitleManager(args.subtitleManager),
-        chapterAnalysis(args.chapterAnalysis), perfLog(args.perfLog),
+        perfLog(args.perfLog),
         baseStyle(args.baseStyle), accentStyle(args.accentStyle),
         dimStyle(args.dimStyle), progressEmptyStyle(args.progressEmptyStyle),
         progressFrameStyle(args.progressFrameStyle),
@@ -223,10 +191,9 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         presentationModel(std::make_shared<playback_session::PresentationModel>(
             playback_session::PresentationModel::Dependencies{
                 screenResources})),
-        videoEditWorkspace(file, core.player(), timelinePreviewModel,
+        videoEditWorkspace(file, core.player(), subtitleManager, timelinePreviewModel,
                            timelinePreviewProvider),
-        output(args.player, gpu, windowTitle, presentationModel,
-               config.systemMediaCommandOwner),
+        output(args.player, gpu, windowTitle, presentationModel),
         shutdownSequence(
             std::vector<playback_session::ShutdownSequence::Participant>{
                 {[this]() { timelinePreviewProvider.requestStop(); },
@@ -272,67 +239,11 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     timelinePreviewStarted = timelinePreviewProvider.start(previewSource);
     if (!timelinePreviewStarted)
       timelinePreviewModel.stop();
-    if (args.subtitleDiscoveryComplete)
-      startChapterAnalysis();
     syncOverlayPresentation(false);
     if (sessionIntent == PlaybackSessionIntent::EditVideo) {
       executeVideoEditCommand(playback_video_edit::Command::Open, false);
     }
     applyPresenterSync(syncPresentation());
-  }
-
-  ~Impl() {
-    if (chapterRequestId)
-      chapterAnalysis.cancel(*chapterRequestId);
-  }
-
-  void startChapterAnalysis(
-      ChapterAnalysisTrigger trigger = ChapterAnalysisTrigger::Automatic) {
-    if (trigger == ChapterAnalysisTrigger::Automatic &&
-        (!config.enableAutomaticChapterAnalysis ||
-         chapterAutoStartSuppressed)) {
-      if (!chapterRequestId) {
-        chapterSnapshot = {};
-        chapterSnapshot.state =
-            playback_video_chapters::AnalysisState::Disabled;
-        chapterSnapshot.detail =
-            !config.enableAutomaticChapterAnalysis
-                ? "Automatic chapter analysis is disabled for this launch."
-                : "Automatic chapter analysis was cancelled for this video.";
-      }
-      return;
-    }
-    if (trigger == ChapterAnalysisTrigger::Manual)
-      chapterAutoStartSuppressed = false;
-    if (chapterRequestId)
-      chapterAnalysis.cancel(*chapterRequestId);
-    playback_video_chapters::AnalysisRequest request;
-    request.file = file;
-    request.videoStreamIndex = core.player().videoStreamIndex();
-    request.durationUs = core.player().durationUs();
-    request.sourceWidth = core.player().sourceWidth();
-    request.sourceHeight = core.player().sourceHeight();
-    request.englishText = playback_video_chapters::selectEnglishTextEvidence(
-        subtitleManager, file);
-    chapterRequestId = chapterAnalysis.start(std::move(request));
-    chapterSnapshot = chapterAnalysis.snapshot(*chapterRequestId);
-    chapterGpuAdmission.reset();
-    lastChapterGpuHeartbeat = std::chrono::steady_clock::time_point::min();
-    if (trigger == ChapterAnalysisTrigger::Manual) {
-      osd.showMessage("Chapter analysis started in background",
-                      playback_session::PlaybackOsdTimeline::Clock::now(),
-                      kEditMessageDuration);
-    }
-    redraw = true;
-  }
-
-  void cancelChapterAnalysis() {
-    if (!chapterRequestId)
-      return;
-    chapterAnalysis.cancel(*chapterRequestId);
-    chapterRequestId.reset();
-    chapterGpuAdmission.reset();
-    lastChapterGpuHeartbeat = std::chrono::steady_clock::time_point::min();
   }
 
   void showEditMessage(const std::string &message) {
@@ -531,6 +442,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       requestPlaybackExit(false);
       return;
     }
+    if (result.playbackPaused)
+      playback_session_input::setPlaybackPaused(*this, seekState, *result.playbackPaused);
     overlayControlHover = -1;
     syncOverlayPresentation();
     if (!result.message.empty())
@@ -547,8 +460,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     sourceContext.currentPlayback = true;
     contextMenuController.refresh(
         videoEditWorkspace.edit(), videoEditWorkspace.exportProgress(),
-        std::move(sourceContext),
-        {chapterSnapshot, chapterRequestId.has_value(), chapterOverviewOpen});
+        std::move(sourceContext));
     if (videoEditPrompt() != playback_video_edit::Prompt::None ||
         mediaActionConfirmation.snapshot()) {
       contextMenuController.dismiss();
@@ -655,6 +567,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         videoEditWorkspace.poll();
     if (!result.changed)
       return;
+    if (result.playbackPaused)
+      playback_session_input::setPlaybackPaused(*this, seekState, *result.playbackPaused);
     overlayControlHover = -1;
     syncOverlayPresentation();
     if (!result.message.empty())
@@ -707,6 +621,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
 
   bool executeVideoEditCommand(playback_video_edit::Command command,
                                bool announce = true) {
+    // Finish older seek input before the editor posts a newer transport intent.
+    playback_session_input::commitQueuedSeek(*this, seekState);
     seekState.pendingVideoEditBoundaryCommit.reset();
     const bool startForPendingExit =
         exitCoordinator.confirmationVisible() &&
@@ -716,8 +632,8 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
             playback_video_edit::ExitExportAction::ExportCurrent;
     const playback_session::VideoEditActionResult result =
         videoEditWorkspace.execute(command);
-    if (result.pausePlayback) {
-      playback_session_input::setPlaybackPaused(*this, seekState, true);
+    if (result.playbackPaused) {
+      playback_session_input::setPlaybackPaused(*this, seekState, *result.playbackPaused);
     }
     overlayControlHover = -1;
     std::string message = result.message;
@@ -775,68 +691,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     return false;
   }
 
-  bool executeChapterAction(playback_video_chapters::Action action) {
-    using Action = playback_video_chapters::Action;
-    switch (action) {
-    case Action::StartAnalysis:
-      startChapterAnalysis(ChapterAnalysisTrigger::Manual);
-      chapterOverviewOpen = false;
-      chapterOverviewScrollOffset = 0;
-      syncOverlayPresentation();
-      return true;
-    case Action::CancelAnalysis:
-      if (!chapterRequestId)
-        return false;
-      cancelChapterAnalysis();
-      chapterAutoStartSuppressed = true;
-      chapterSnapshot = {};
-      chapterSnapshot.state = playback_video_chapters::AnalysisState::Disabled;
-      chapterSnapshot.detail = "Chapter analysis was cancelled for this video.";
-      chapterOverviewOpen = false;
-      chapterOverviewScrollOffset = 0;
-      syncOverlayPresentation();
-      showEditMessage("Chapter analysis cancelled");
-      return true;
-    case Action::InstallModels:
-      if (!chapterRequestId ||
-          !chapterAnalysis.requestInstallation(*chapterRequestId)) {
-        return false;
-      }
-      showEditMessage("Installing chapter models in background");
-      return true;
-    case Action::CancelInstallation:
-      if (!chapterRequestId ||
-          !chapterAnalysis.cancelInstallation(*chapterRequestId)) {
-        return false;
-      }
-      showEditMessage("Cancelling chapter model installation");
-      return true;
-    case Action::TogglePanel:
-      if (!chapterSnapshot.ready())
-        return false;
-      chapterOverviewOpen = !chapterOverviewOpen;
-      chapterOverviewScrollOffset = 0;
-      syncOverlayPresentation();
-      return true;
-    case Action::ShowStatus: {
-      std::string message =
-          playback_video_chapters::analysisStateLabel(chapterSnapshot.state);
-      if (!chapterSnapshot.detail.empty()) {
-        message += ": " + chapterSnapshot.detail;
-      } else if (!chapterSnapshot.phase.empty()) {
-        message += ": " + chapterSnapshot.phase;
-      }
-      osd.showMessage(std::move(message),
-                      playback_session::PlaybackOsdTimeline::Clock::now(),
-                      kAnalysisMessageDuration);
-      redraw = true;
-      publishWindowUiState();
-      output.requestWindowPresent();
-      return true;
-    }
-    }
-    return false;
-  }
 
   bool executeContextMenuCommand(
       const playback_session::ContextMenuCommand &command) {
@@ -848,8 +702,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
             std::get_if<playback_video_edit::Command>(&command)) {
       return executeVideoEditCommand(*edit);
     }
-    return executeChapterAction(
-        std::get<playback_video_chapters::Action>(command));
+    return false;
   }
 
   bool waitForVideoEditExportAndExit() {
@@ -968,11 +821,11 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     state.audioSupports50HzToggle = audio.supports50HzToggle;
     state.pictureInPicture = output.window().IsPictureInPicture();
     state.videoEditorActive = videoEditWorkspace.active();
+    state.editSuggestionsOpen = videoEditWorkspace.edit().suggestionReview.visible;
     state.videoEditPrompt = videoEditPrompt();
     state.mediaActionConfirmationPrompt =
         mediaActionConfirmation.snapshot().has_value();
     state.contextMenuVisible = contextMenuController.visible();
-    state.chapterOverviewOpen = chapterOverviewOpen;
     state.playbackControlsVisible = osd.controlsVisible();
     state.stopRequested = loopStopRequested;
     return state;
@@ -1042,21 +895,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       return core.cycleAudioTrack();
     case Action::ToggleSubtitles:
       return toggleSubtitles();
-    case Action::ToggleChapterOverview:
-      return executeChapterAction(
-          chapterSnapshot.ready()
-              ? playback_video_chapters::Action::TogglePanel
-              : (chapterSnapshot.state ==
-                         playback_video_chapters::AnalysisState::Disabled
-                     ? playback_video_chapters::Action::StartAnalysis
-                     : playback_video_chapters::Action::ShowStatus));
-    case Action::CloseChapterOverview:
-      if (!chapterOverviewOpen)
-        return false;
-      chapterOverviewOpen = false;
-      chapterOverviewScrollOffset = 0;
-      syncOverlayPresentation();
-      return true;
     case Action::ToggleWindowPresentation: {
       const bool changed = presentationController.toggleWindow();
       redraw = redraw || changed;
@@ -1123,60 +961,26 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     return requestTransportExit(request.command);
   }
 
-  bool executeInputCommand(
-      playback_session_input::ChapterNavigationRequest request) {
-    const playback_session_input::TransportSnapshot transport = core.snapshot();
-    const playback_video_chapters::Snapshot chapters =
-        chapterPresentationSnapshot(videoEditWorkspace.edit());
-    const playback_video_chapters::Chapter *current =
-        playback_video_chapters::chapterAt(chapters, transport.positionUs);
-    if (!current)
-      return false;
-    auto chapter =
-        std::find_if(chapters.chapters.begin(), chapters.chapters.end(),
-                     [&](const playback_video_chapters::Chapter &candidate) {
-                       return candidate.id == current->id;
-                     });
-    if (chapter == chapters.chapters.end())
-      return false;
-    const std::optional<std::int64_t> target =
-        playback_video_chapters::navigationTarget(
-            chapters, transport.positionUs, request.direction);
-    return target &&
-           executeInputCommand(playback_session_input::SeekTo{*target});
-  }
 
-  bool executeInputCommand(playback_session_input::SeekToChapter request) {
-    const playback_video_chapters::Snapshot chapters =
-        chapterPresentationSnapshot(videoEditWorkspace.edit());
-    const auto chapter =
-        std::find_if(chapters.chapters.begin(), chapters.chapters.end(),
-                     [&](const playback_video_chapters::Chapter &candidate) {
-                       return candidate.startUs == request.timelineStartUs;
-                     });
-    if (chapter == chapters.chapters.end())
-      return false;
-    return executeInputCommand(
-        playback_session_input::SeekTo{chapter->startUs});
-  }
 
-  bool executeInputCommand(
-      playback_session_input::SetChapterOverviewScroll request) {
-    if (!chapterOverviewOpen || !chapterSnapshot.ready())
-      return false;
-    const int next = std::max(0, request.offset);
-    if (next == chapterOverviewScrollOffset)
-      return true;
-    chapterOverviewScrollOffset = next;
-    redraw = true;
-    forceRefreshArt = true;
-    publishWindowUiState();
-    output.requestWindowPresent();
-    return true;
-  }
 
   bool executeInputCommand(playback_session_input::VideoEditRequest request) {
     return executeVideoEditCommand(request.command);
+  }
+
+  bool executeInputCommand(playback_session_input::FocusEditSuggestion request) {
+    const auto result = videoEditWorkspace.focusSceneSuggestion(request.id);
+    if (!result.handled) return false;
+    if (result.playbackPaused)
+      playback_session_input::setPlaybackPaused(*this, seekState, *result.playbackPaused);
+    syncOverlayPresentation();
+    return true;
+  }
+
+  bool executeInputCommand(playback_session_input::SetEditSuggestionsScroll request) {
+    if (!videoEditWorkspace.scrollSuggestions(request.offset)) return false;
+    syncOverlayPresentation();
+    return true;
   }
 
   bool executeInputCommand(playback_session_input::ContextMenuRequest request) {
@@ -1302,66 +1106,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
            contextMenuController.visible();
   }
 
-  bool chapterActivityControlVisible() const {
-    return chapterSnapshot.running() && overlayVisible() &&
-           !contextMenuController.visible() &&
-           !mediaActionConfirmation.snapshot() &&
-           videoEditPrompt() == playback_video_edit::Prompt::None &&
-           !videoEditWorkspace.edit().active;
-  }
-
-  bool chapterActivityMotionVisible() const {
-    return chapterActivityControlVisible() && clientAreaAnimationsEnabled;
-  }
-
-  void refreshAnimationPreference() {
-    if (!chapterSnapshot.running())
-      return;
-    const auto now = std::chrono::steady_clock::now();
-    if (lastAnimationPreferenceRefresh !=
-            std::chrono::steady_clock::time_point::min() &&
-        now - lastAnimationPreferenceRefresh <
-            kAnimationPreferenceRefreshInterval) {
-      return;
-    }
-    BOOL enabled = TRUE;
-    if (SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &enabled, 0)) {
-      const bool nextEnabled = enabled != FALSE;
-      if (nextEnabled != clientAreaAnimationsEnabled) {
-        clientAreaAnimationsEnabled = nextEnabled;
-        redraw = true;
-      }
-    }
-    lastAnimationPreferenceRefresh = now;
-  }
-
-  double chapterActivityPhase() const {
-    if (!chapterActivityMotionVisible())
-      return 0.0;
-    const auto elapsed = std::chrono::steady_clock::now().time_since_epoch();
-    const auto period =
-        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-            kChapterActivityPeriod);
-    const auto withinPeriod = elapsed % period;
-    return std::chrono::duration<double>(withinPeriod).count() /
-           std::chrono::duration<double>(period).count();
-  }
-
-  void updateChapterActivityAnimation() {
-    if (!chapterActivityMotionVisible()) {
-      lastChapterActivityFrame = std::chrono::steady_clock::time_point::min();
-      return;
-    }
-    const auto now = std::chrono::steady_clock::now();
-    if (lastChapterActivityFrame !=
-            std::chrono::steady_clock::time_point::min() &&
-        now - lastChapterActivityFrame < kChapterActivityFrameInterval) {
-      return;
-    }
-    lastChapterActivityFrame = now;
-    redraw = true;
-  }
-
   playback_overlay::PlaybackOsdSnapshot osdSnapshot() const {
     playback_overlay::PlaybackOsdSnapshot snapshot = osd.snapshot();
     snapshot.controlsVisible = snapshot.controlsVisible || config.debugOverlay;
@@ -1424,7 +1168,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     perfLogFlush(&perfLog);
     timelinePreviewModel.stop();
     timelinePreviewStarted = false;
-    cancelChapterAnalysis();
     (void)shutdownSequence.requestStop();
   }
 
@@ -1477,157 +1220,10 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     }
   }
 
-  void refreshChapterSnapshot() {
-    if (!chapterRequestId)
-      return;
-    const playback_video_chapters::Snapshot next =
-        chapterAnalysis.snapshot(*chapterRequestId);
-    if (next.revision == chapterSnapshot.revision)
-      return;
-    const bool logMilestone = next.state != chapterSnapshot.state ||
-                              next.phase != chapterSnapshot.phase ||
-                              next.detail != chapterSnapshot.detail ||
-                              next.warning != chapterSnapshot.warning;
-    const bool replacedReadyDocument =
-        next.state == playback_video_chapters::AnalysisState::Ready &&
-        (chapterSnapshot.state !=
-             playback_video_chapters::AnalysisState::Ready ||
-         next.revision != chapterSnapshot.revision);
-    chapterSnapshot = next;
-    if (perfLog.enabled && logMilestone) {
-      perfLogAppendf(
-          &perfLog,
-          "chapter_analysis_state revision=%llu state=%s progress=%.3f "
-          "phase=%s detail=%s warning=%s",
-          static_cast<unsigned long long>(chapterSnapshot.revision),
-          playback_video_chapters::analysisStateLabel(chapterSnapshot.state),
-          chapterSnapshot.progress.value_or(-1.0),
-          chapterSnapshot.phase.c_str(), chapterSnapshot.detail.c_str(),
-          chapterSnapshot.warning.c_str());
-    }
-    if (!chapterSnapshot.ready()) {
-      chapterOverviewOpen = false;
-      chapterOverviewScrollOffset = 0;
-    } else if (replacedReadyDocument) {
-      chapterOverviewScrollOffset = 0;
-    }
-    if (chapterSnapshot.state ==
-            playback_video_chapters::AnalysisState::Unsupported ||
-        chapterSnapshot.state ==
-            playback_video_chapters::AnalysisState::Failed) {
-      std::string message =
-          playback_video_chapters::analysisStateLabel(chapterSnapshot.state);
-      if (!chapterSnapshot.detail.empty()) {
-        message += ": " + chapterSnapshot.detail;
-      }
-      osd.showMessage(std::move(message),
-                      playback_session::PlaybackOsdTimeline::Clock::now(),
-                      kAnalysisMessageDuration);
-    } else if (replacedReadyDocument && !chapterSnapshot.warning.empty()) {
-      osd.showMessage(chapterSnapshot.warning,
-                      playback_session::PlaybackOsdTimeline::Clock::now(),
-                      kAnalysisMessageDuration);
-    }
-    redraw = true;
-    forceRefreshArt = true;
-    syncOverlayPresentation();
-  }
-
-  void updateChapterGpuPriority() {
-    if (!chapterRequestId)
-      return;
-    if (!chapterSnapshot.running() &&
-        chapterSnapshot.state !=
-            playback_video_chapters::AnalysisState::CheckingSupport) {
-      const bool wasAllowed = chapterGpuAdmission.allowed();
-      chapterGpuAdmission.reset();
-      if (wasAllowed) {
-        chapterAnalysis.setBackgroundGpuAllowed(*chapterRequestId, false);
-      }
-      return;
-    }
-
-    const auto now = std::chrono::steady_clock::now();
-    const PlaybackSessionState playbackState = core.playbackState();
-    playback_session::BackgroundGpuSignals signals;
-    if (playbackState == PlaybackSessionState::Paused ||
-        playbackState == PlaybackSessionState::Ended) {
-      signals.foreground =
-          playback_session::ForegroundPlaybackActivity::Inactive;
-    } else if (playbackState == PlaybackSessionState::Active) {
-      signals.foreground = playback_session::ForegroundPlaybackActivity::Active;
-    }
-
-    PlayerDebugInfo debug;
-    if (playbackState == PlaybackSessionState::Active) {
-      debug = core.player().debugInfo();
-      signals.seekPending = core.player().seekPending();
-      signals.buffering = core.player().isBuffering();
-      signals.audioStarved = debug.audioStarved;
-      signals.hasVideoFrame = debug.hasVideoFrame;
-      signals.videoQueueDepth = debug.videoQueueDepth;
-      signals.lastPresentedDurationUs = debug.lastPresentedDurationUs;
-    }
-    const playback_session::BackgroundGpuDecision decision =
-        chapterGpuAdmission.update(signals, now);
-
-    if (playbackState == PlaybackSessionState::Active) {
-      if (perfLog.enabled &&
-          (lastChapterGpuHeartbeat ==
-               std::chrono::steady_clock::time_point::min() ||
-           now - lastChapterGpuHeartbeat >= kTimingLogHeartbeatInterval)) {
-        const auto healthyMs =
-            decision.healthyFor.value_or(std::chrono::milliseconds{-1});
-        perfLogAppendf(
-            &perfLog,
-            "chapter_gpu_scheduler allowed=%d changed=%d stable=%d seek=%d "
-            "buffering=%d audio_starved=%d headroom=%d qv=%zu frame_us=%lld "
-            "healthy_ms=%lld",
-            decision.allowed ? 1 : 0, decision.changed ? 1 : 0,
-            decision.foregroundStable ? 1 : 0, signals.seekPending ? 1 : 0,
-            signals.buffering ? 1 : 0, signals.audioStarved ? 1 : 0,
-            decision.queueHasHeadroom ? 1 : 0, debug.videoQueueDepth,
-            static_cast<long long>(debug.lastPresentedDurationUs),
-            static_cast<long long>(healthyMs.count()));
-        lastChapterGpuHeartbeat = now;
-      }
-    }
-    if (decision.changed) {
-      chapterAnalysis.setBackgroundGpuAllowed(*chapterRequestId,
-                                              decision.allowed);
-    }
-  }
-
-  playback_video_chapters::Snapshot chapterPresentationSnapshot(
-      const playback_video_edit::EditSnapshot &edit) const {
-    if (!chapterSnapshot.ready() || !edit.hasEdits)
-      return chapterSnapshot;
-    if (edit.sourceDurationUs != chapterSnapshot.durationUs ||
-        edit.timelineDurationUs <= 0 || edit.clips.empty()) {
-      return {};
-    }
-    std::vector<playback_video_chapters::MarkerTimelineSegment> segments;
-    segments.reserve(edit.clips.size());
-    for (const playback_video_edit::EditClipSnapshot &clip : edit.clips) {
-      segments.push_back(
-          {clip.source.startUs, clip.source.endUs, clip.timelineStartUs});
-    }
-    const std::optional<playback_video_chapters::Snapshot> projected =
-        playback_video_chapters::projectToPresentationTimeline(
-            chapterSnapshot, edit.timelineDurationUs, segments);
-    return projected.value_or(playback_video_chapters::Snapshot{});
-  }
-
   playback_video_timeline_preview::Snapshot timelinePreviewSnapshot(
       playback_video_timeline_preview::PresentationSurface surface) const {
     playback_video_timeline_preview::Snapshot snapshot =
         timelinePreviewModel.snapshotFor(surface);
-    if (snapshot.hoverActive) {
-      const playback_video_chapters::Snapshot chapters =
-          chapterPresentationSnapshot(videoEditWorkspace.edit());
-      snapshot.metadataLines =
-          playback_video_chapters::previewMetadata(chapters, snapshot.targetUs);
-    }
     return snapshot;
   }
 
@@ -1670,12 +1266,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     projection.mediaActionConfirmationPrompt =
         mediaActionConfirmation.snapshot();
     projection.mediaTaskActivity = mediaTaskActivity;
-    projection.chapters = chapterPresentationSnapshot(projection.videoEdit);
-    projection.chapterControlVisible = true;
-    projection.chapterActivityPhase = chapterActivityPhase();
-    projection.chapterActivityMotionEnabled = clientAreaAnimationsEnabled;
-    projection.chapterOverviewOpen = chapterOverviewOpen;
-    projection.chapterOverviewScrollOffset = chapterOverviewScrollOffset;
     if (config.debugOverlay &&
         surface ==
             playback_video_timeline_preview::PresentationSurface::VideoWindow) {
@@ -1749,8 +1339,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     if (presentationController.terminalRole() ==
         PlaybackShellTerminalRole::Browser) {
       publishPresentation(buildScreenModel(false, presented));
-      if (chapterActivityControlVisible() && output.windowOpen())
-        output.requestWindowPresent();
       redraw = false;
       forceRefreshArt = false;
       copiedFrameNeedsRender = false;
@@ -1762,8 +1350,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         buildScreenModel(forceRefreshArt || renderCopiedFrame,
                          presented || renderCopiedFrame);
     publishPresentation(model);
-    if (chapterActivityControlVisible() && output.windowOpen())
-      output.requestWindowPresent();
     renderTerminal(model);
     auto t1 = std::chrono::steady_clock::now();
     lastDebugRefresh = t1;
@@ -1954,21 +1540,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
         core.playbackState() == PlaybackSessionState::Active) {
       wake_schedule::include(deadline, now + kTerminalPlaybackRefreshInterval);
     }
-    if (chapterActivityMotionVisible()) {
-      wake_schedule::include(
-          deadline,
-          lastChapterActivityFrame == wake_schedule::TimePoint::min()
-              ? now
-              : lastChapterActivityFrame + kChapterActivityFrameInterval);
-    }
-    if (chapterActivityControlVisible()) {
-      wake_schedule::include(
-          deadline,
-          lastAnimationPreferenceRefresh == wake_schedule::TimePoint::min()
-              ? now
-              : lastAnimationPreferenceRefresh +
-                    kAnimationPreferenceRefreshInterval);
-    }
     if (perfLog.enabled) {
       wake_schedule::include(deadline,
                              lastUiHeartbeat + kTimingLogHeartbeatInterval);
@@ -2013,12 +1584,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     }
 
     PlaybackLoopState loopState = PlaybackLoopState::Running;
-    if (chapterRequestId && chapterAnalysis.consumeChanged()) {
-      refreshChapterSnapshot();
-    }
-    refreshAnimationPreference();
-    updateChapterActivityAnimation();
-    updateChapterGpuPriority();
     pollVideoEditExport();
     pollVideoEditBoundaryCommit();
     if (std::optional<playback_video_timeline_preview::Result> result =
@@ -2052,8 +1617,7 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
       handlePendingResize();
 
       const RefreshState refresh = refreshState();
-      updateChapterGpuPriority();
-      if (shouldRenderPlaybackFrame(redraw, refresh.presented,
+        if (shouldRenderPlaybackFrame(redraw, refresh.presented,
                                     refresh.debugRefreshDue,
                                     core.playbackState())) {
         renderPlaybackFrame(refresh.presented, loopState);
@@ -2093,9 +1657,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     if (timelinePreviewStarted) {
       append(timelinePreviewProvider.changedWaitHandle());
     }
-    if (chapterRequestId) {
-      append(chapterAnalysis.changedWaitHandle());
-    }
     for (const NativeWaitHandle handle :
          videoEditWorkspace.activityWaitHandles()) {
       append(handle);
@@ -2109,12 +1670,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     RefreshState state;
     state.nativeWindowActive = output.windowOpen();
     wake_schedule::Deadline deadline = computeWakeDeadline(state);
-    if (chapterRequestId) {
-      if (const auto admissionDeadline =
-              chapterGpuAdmission.nextEvaluationDeadline()) {
-        wake_schedule::include(deadline, *admissionDeadline);
-      }
-    }
     return deadline;
   }
 
@@ -2236,7 +1791,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     redraw = true;
     forceRefreshArt = true;
     copiedFrameNeedsRender = true;
-    startChapterAnalysis();
     if (initialized)
       syncOverlayPresentation();
     if (reload) {

@@ -2,6 +2,7 @@
 
 #include "playback/video/edit/command.h"
 #include "playback/video/edit/scene_suggestions.h"
+#include "core/unicode_display_width.h"
 
 #include <algorithm>
 #include <cmath>
@@ -111,9 +112,8 @@ std::string shortestFittingStatus(
 
 bool appendStatusPart(std::string* status, const std::string& part, int width) {
   if (!status || part.empty() || width <= 0) return false;
-  const size_t separatorWidth = status->empty() ? 0 : 2;
-  if (status->size() + separatorWidth + part.size() >
-      static_cast<size_t>(width)) {
+  const int separatorWidth = status->empty() ? 0 : 2;
+  if (utf8DisplayWidth(*status) + separatorWidth + utf8DisplayWidth(part) > width) {
     return false;
   }
   if (separatorWidth != 0) *status += "  ";
@@ -121,18 +121,25 @@ bool appendStatusPart(std::string* status, const std::string& part, int width) {
   return true;
 }
 
+void appendStatusDetail(std::string* status, const std::string& detail, int width) {
+  const int available = width - utf8DisplayWidth(*status) - (status->empty() ? 0 : 2);
+  if (available <= 3 || detail.empty()) return;
+  const auto part = utf8DisplayWidth(detail) <= available
+                        ? detail
+                        : utf8TakeDisplayWidth(detail, available - 3) + "...";
+  appendStatusPart(status, part, width);
+}
+
 SceneSuggestionCellKind suggestionCellKind(
     const SceneSuggestionSnapshot& suggestion) {
   if (suggestion.selected) return SceneSuggestionCellKind::Selected;
   switch (suggestion.kind) {
-    case SceneSuggestionKind::Dialogue:
-      return SceneSuggestionCellKind::Dialogue;
-    case SceneSuggestionKind::Cutscene:
-      return SceneSuggestionCellKind::Cutscene;
-    case SceneSuggestionKind::MenuOrLoading:
-      return SceneSuggestionCellKind::MenuOrLoading;
-    case SceneSuggestionKind::Gameplay:
-      return SceneSuggestionCellKind::None;
+    case SceneSuggestionKind::Review:
+      return SceneSuggestionCellKind::Review;
+    case SceneSuggestionKind::Keep:
+      return SceneSuggestionCellKind::Keep;
+    case SceneSuggestionKind::Shorten:
+      return SceneSuggestionCellKind::Shorten;
   }
   return SceneSuggestionCellKind::None;
 }
@@ -141,11 +148,11 @@ int suggestionPriority(SceneSuggestionCellKind kind) {
   switch (kind) {
     case SceneSuggestionCellKind::Selected:
       return 4;
-    case SceneSuggestionCellKind::Cutscene:
+    case SceneSuggestionCellKind::Keep:
       return 3;
-    case SceneSuggestionCellKind::Dialogue:
+    case SceneSuggestionCellKind::Review:
       return 2;
-    case SceneSuggestionCellKind::MenuOrLoading:
+    case SceneSuggestionCellKind::Shorten:
       return 1;
     case SceneSuggestionCellKind::None:
       return 0;
@@ -155,14 +162,12 @@ int suggestionPriority(SceneSuggestionCellKind kind) {
 
 const char* shortSuggestionLabel(SceneSuggestionKind kind) {
   switch (kind) {
-    case SceneSuggestionKind::Gameplay:
-      return "GAMEPLAY";
-    case SceneSuggestionKind::Dialogue:
-      return "DIALOGUE";
-    case SceneSuggestionKind::Cutscene:
-      return "CUTSCENE";
-    case SceneSuggestionKind::MenuOrLoading:
-      return "MENU/LOAD";
+    case SceneSuggestionKind::Keep:
+      return "KEEP";
+    case SceneSuggestionKind::Shorten:
+      return "SHORTEN";
+    case SceneSuggestionKind::Review:
+      return "REVIEW";
   }
   return "SEGMENT";
 }
@@ -179,6 +184,7 @@ bool needsOverlayPresentation(const EditSnapshot& edit,
                               Prompt prompt) {
   return edit.active || prompt != Prompt::None || editExport.visible() ||
          edit.sceneAnalysisStatus == SceneAnalysisStatus::Running ||
+         edit.sceneAnalysisStatus == SceneAnalysisStatus::Pausing ||
          edit.sceneAnalysisStatus == SceneAnalysisStatus::Failed;
 }
 
@@ -193,7 +199,8 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
   const bool exportRunning = exportProgress.running();
   const bool exportFailed = exportProgress.failed();
   const bool analysisRunning =
-      edit.sceneAnalysisStatus == SceneAnalysisStatus::Running;
+      edit.sceneAnalysisStatus == SceneAnalysisStatus::Running ||
+      edit.sceneAnalysisStatus == SceneAnalysisStatus::Pausing;
   const bool analysisFailed =
       edit.sceneAnalysisStatus == SceneAnalysisStatus::Failed;
   if (width <= 0 ||
@@ -300,6 +307,11 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
         {"LEAVE EDIT MODE?", "LEAVE EDIT?", "LEAVE?"}, width);
     return model;
   }
+  if (prompt == Prompt::RestartAnalysis) {
+    model.status = shortestFittingStatus(
+        {"REPLACE SUGGESTIONS? YOUR EDITS STAY UNCHANGED", "REPLACE SUGGESTIONS?", "REPLACE?"}, width);
+    return model;
+  }
   if (prompt == Prompt::DiscardEdits) {
     model.status = shortestFittingStatus(
         {"DISCARD ALL EDITS?", "DISCARD EDITS?", "DISCARD?"}, width);
@@ -344,20 +356,22 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
     appendStatusPart(
         &model.status,
         shortestFittingStatus(
-            {"SEGMENT DETECTION FAILED", "DETECTION FAILED", "FAILED"},
+            {"EDITING ANALYSIS FAILED", "REVIEW FAILED", "FAILED"},
             width),
         width);
   } else if (analysisRunning) {
     const int percentage = static_cast<int>(std::lround(
         std::clamp(edit.sceneAnalysisProgress, 0.0, 1.0) * 100.0));
     if (!appendStatusPart(&model.status,
-                          "SEGMENTS " + std::to_string(percentage) + "%",
+                          "REVIEW " + std::to_string(percentage) + "%",
                           width)) {
       appendStatusPart(&model.status,
                        shortestFittingStatus(
-                           {"DETECTING", "SCANNING"}, width),
+                           {"REVIEWING", "REVIEW"}, width),
                        width);
     }
+    if (!edit.sceneAnalysisPhase.empty())
+      appendStatusDetail(&model.status, edit.sceneAnalysisPhase, width);
   } else if (edit.active && edit.suggestionReview.visible &&
              !edit.suggestionReview.suggestions.empty()) {
     const auto selected = std::find_if(
@@ -374,10 +388,8 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
                     std::to_string(edit.suggestionReview.filteredCount) + " "
               : std::string{};
       const std::string kind = shortSuggestionLabel(selected->kind);
-      const std::string strength =
-          sceneSuggestionStrengthLabel(selected->confidence);
       const std::string full =
-          ordinal + kind + " " + strength + " " +
+          ordinal + kind + " " +
           formatTimecode(selected->source.startUs,
                          edit.timecodeFrameDurationUs, true) +
           "-" +
@@ -385,9 +397,11 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
                          edit.timecodeFrameDurationUs, true);
       if (!appendStatusPart(&model.status, full, width) &&
           !appendStatusPart(&model.status,
-                            ordinal + kind + " " + strength, width)) {
+                            ordinal + kind, width)) {
         appendStatusPart(&model.status, ordinal + kind, width);
       }
+      if (edit.suggestionReview.previewing)
+        appendStatusPart(&model.status, "PREVIEW", width);
     } else {
       appendStatusPart(&model.status,
                        std::to_string(
@@ -408,9 +422,7 @@ OverlayModel buildOverlayModel(const EditSnapshot& edit,
   if (edit.active && edit.suggestionReview.visible &&
       edit.sceneAnalysisStatus == SceneAnalysisStatus::Ready) {
     appendStatusPart(&model.status,
-                     edit.sceneAnalysisUsedTranscript
-                         ? "VIDEO + TRANSCRIPT"
-                         : "VIDEO ONLY",
+                     "VISUAL 2 FPS",
                      width);
   }
 

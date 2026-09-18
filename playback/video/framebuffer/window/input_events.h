@@ -35,16 +35,14 @@ bool isKeyDownMessage(UINT message, WPARAM key);
 bool isSuppressedSystemCharacter(UINT message, WPARAM key);
 bool isRepeatedKeyDown(LPARAM lParam);
 std::uint32_t keyDownRepeatCount(LPARAM lParam);
-KeyDownTranslation translateKeyDown(WORD key, LPARAM lParam,
-                                    SystemMediaCommandOwner owner);
+KeyDownTranslation translateKeyDown(WORD key, LPARAM lParam);
 
 InputEvent keyFromVirtualKey(
     WORD key, KeyPressKind pressKind = KeyPressKind::Initial,
     std::uint32_t repeatCount = 1);
 
 std::optional<InputEvent> inputEventFromXButton(WPARAM wParam);
-AppCommandTranslation translateAppCommand(
-    LPARAM lParam, SystemMediaCommandOwner owner);
+AppCommandTranslation translateAppCommand(LPARAM lParam);
 
 MouseButtons mouseButtonsFromWParam(WPARAM wParam);
 InputEvent mouseEvent(int x, int y, MouseEventKind kind, MouseButtons buttons,

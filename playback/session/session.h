@@ -11,9 +11,6 @@ struct InputEvent;
 namespace playback_session {
 class SubtitleLoadService;
 }
-namespace playback_video_chapters {
-class Service;
-}
 
 class PlaybackSession final : public playback_session::VideoSession {
  public:
@@ -35,7 +32,6 @@ class PlaybackSession final : public playback_session::VideoSession {
     GpuRuntime& gpu;
     ConsoleScreen& screen;
     playback_session::SubtitleLoadService& subtitleLoader;
-    playback_video_chapters::Service& chapterAnalysis;
     Appearance appearance;
   };
 

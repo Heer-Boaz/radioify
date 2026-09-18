@@ -19,8 +19,7 @@
 
 class AudioPictureInPictureWindow {
  public:
-  AudioPictureInPictureWindow(
-      GpuRuntime& gpu, SystemMediaCommandOwner systemMediaCommandOwner);
+  explicit AudioPictureInPictureWindow(GpuRuntime& gpu);
 
   struct Styles {
     Style normal;

@@ -12,9 +12,6 @@
 namespace playback_session {
 class SubtitleLoadService;
 }
-namespace playback_video_chapters {
-class Service;
-}
 
 // Process-wide application services. The UI borrows these services; it does
 // not decide their lifetime or shutdown order.
@@ -34,9 +31,6 @@ class ApplicationRuntime {
   playback_session::SubtitleLoadService& subtitleLoader() {
     return *subtitleLoader_;
   }
-  playback_video_chapters::Service& chapterAnalysis() {
-    return *chapterAnalysis_;
-  }
 
  private:
   // GPU and audio must outlive every surface/session and media worker that
@@ -47,7 +41,6 @@ class ApplicationRuntime {
   media_processing::Coordinator mediaProcessing_;
   media_processing::Actions mediaActions_;
   std::unique_ptr<playback_session::SubtitleLoadService> subtitleLoader_;
-  std::unique_ptr<playback_video_chapters::Service> chapterAnalysis_;
 };
 
 AudioPlaybackConfig audioPlaybackConfigFor(const Options& options);

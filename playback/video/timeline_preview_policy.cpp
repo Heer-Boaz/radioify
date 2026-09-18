@@ -21,20 +21,18 @@ int makeEvenAtLeastTwo(int value) {
   return value & 1 ? value + 1 : value;
 }
 
-std::vector<std::string> wrapMetadata(const std::vector<std::string> &source,
+std::vector<MetadataLine> wrapMetadata(const std::vector<MetadataLine> &source,
                                       int width) {
-  std::vector<std::string> wrapped;
+  std::vector<MetadataLine> wrapped;
   if (width <= 0)
     return wrapped;
-  for (const std::string &sourceLine : source) {
-    if (sourceLine.empty()) {
-      wrapped.push_back({});
+  for (const auto &sourceLine : source) {
+    if (sourceLine.text.empty()) {
+      wrapped.push_back(sourceLine);
       continue;
     }
-    std::vector<std::string> sourceLines =
-        utf8WrapDisplayWidth(sourceLine, width);
-    wrapped.insert(wrapped.end(), std::make_move_iterator(sourceLines.begin()),
-                   std::make_move_iterator(sourceLines.end()));
+    for (auto& line : utf8WrapDisplayWidth(sourceLine.text, width))
+      wrapped.push_back({std::move(line), sourceLine.role});
   }
   return wrapped;
 }
@@ -151,7 +149,7 @@ CellLayout layoutCells(int columns, int rows, int progressBarY,
                        double anchorRatio, int sourceWidth, int sourceHeight,
                        double cellPixelWidth, double cellPixelHeight,
                        const std::string &label,
-                       const std::vector<std::string> &metadataLines) {
+                       const std::vector<MetadataLine> &metadataLines) {
   CellLayout out;
   if (columns < 10 || rows < 6)
     return out;
@@ -178,7 +176,7 @@ CellLayout layoutCells(int columns, int rows, int progressBarY,
                             std::max(12, columns / 3)}));
   const int metadataWidth = placeMetadataBeside ? reservedMetadataColumns - 1
                                                 : provisionalImageColumns;
-  std::vector<std::string> wrappedMetadata =
+  std::vector<MetadataLine> wrappedMetadata =
       wrapMetadata(metadataLines, metadataWidth);
   const int metadataRowLimit =
       placeMetadataBeside ? std::min(10, std::max(0, availableRows - 2))
@@ -211,9 +209,11 @@ CellLayout layoutCells(int columns, int rows, int progressBarY,
     out.outerHeight = std::max(imageRows, out.metadataHeight) + 2;
   } else if (!metadataLines.empty()) {
     out.metadataPlacement = CellLayout::MetadataPlacement::BelowImage;
-    out.metadataWidth = imageColumns;
+    // A height-constrained thumbnail may become narrower. Keep the text at
+    // the width used for wrapping so that shrinking the image cannot clip it.
+    out.metadataWidth = metadataWidth;
     out.metadataHeight = requestedMetadataRows;
-    out.outerWidth = imageColumns + 2;
+    out.outerWidth = std::max(imageColumns, out.metadataWidth) + 2;
     out.outerHeight = imageRows + out.metadataHeight + 2;
   } else {
     out.outerWidth = imageColumns + 2;
@@ -244,7 +244,8 @@ CellLayout layoutCells(int columns, int rows, int progressBarY,
     out.metadataY = out.imageY;
   } else if (out.metadataPlacement ==
              CellLayout::MetadataPlacement::BelowImage) {
-    out.metadataX = out.imageX;
+    out.metadataX = out.outerX + 1;
+    out.imageX += (out.metadataWidth - out.imageWidth) / 2;
     out.metadataY = out.imageY + out.imageHeight;
   }
   out.metadataLines.assign(
@@ -254,8 +255,8 @@ CellLayout layoutCells(int columns, int rows, int progressBarY,
                                 static_cast<std::size_t>(out.metadataHeight)));
   if (out.metadataLines.size() < wrappedMetadata.size() &&
       !out.metadataLines.empty() && out.metadataWidth > 1) {
-    out.metadataLines.back() =
-        utf8TakeDisplayWidth(out.metadataLines.back(), out.metadataWidth - 1) +
+    out.metadataLines.back().text =
+        utf8TakeDisplayWidth(out.metadataLines.back().text, out.metadataWidth - 1) +
         "…";
   }
   out.label = label;

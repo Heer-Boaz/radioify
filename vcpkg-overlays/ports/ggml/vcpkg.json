@@ -1,7 +1,6 @@
 {
   "name": "ggml",
-  "version-date": "2025-11-17",
-  "port-version": 2,
+  "version-date": "2026-09-04",
   "description": "Tensor library for machine learning",
   "homepage": "https://github.com/ggml-org/ggml",
   "license": "MIT",
@@ -49,6 +48,7 @@
     "vulkan": {
       "description": "Enable Vulkan support",
       "dependencies": [
+        "spirv-headers",
         {
           "name": "ggml",
           "host": true,

@@ -111,7 +111,7 @@ inline constexpr DWORD kPlaybackShortcutFrameStepForbiddenMask =
 
 // One shared shortcut table. Context masks let modes layer additional keys on
 // top of the shared map without owning separate per-mode tables.
-inline constexpr std::array<PlaybackShortcutBinding, 63>
+inline constexpr std::array<PlaybackShortcutBinding, 64>
     kPlaybackShortcutBindings = {{
         {PlaybackAction::Quit, 'Q', 'q', 'Q', kPlaybackShortcutCtrlMask,
          kPlaybackShortcutChordForbiddenMask, kPlaybackShortcutContextGlobal,
@@ -126,12 +126,14 @@ inline constexpr std::array<PlaybackShortcutBinding, 63>
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoEditExitConfirmation |
              kPlaybackShortcutContextVideoEditLeaveConfirmation |
-             kPlaybackShortcutContextVideoEditDiscardConfirmation},
+             kPlaybackShortcutContextVideoEditDiscardConfirmation |
+             kPlaybackShortcutContextVideoEditRestartConfirmation},
         {PlaybackAction::CancelVideoEditPrompt, VK_BACK, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoEditExitConfirmation |
              kPlaybackShortcutContextVideoEditLeaveConfirmation |
-             kPlaybackShortcutContextVideoEditDiscardConfirmation},
+             kPlaybackShortcutContextVideoEditDiscardConfirmation |
+             kPlaybackShortcutContextVideoEditRestartConfirmation},
         {PlaybackAction::DismissMediaActionConfirmation, VK_ESCAPE, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
           kPlaybackShortcutContextMediaActionConfirmation},
@@ -166,7 +168,11 @@ inline constexpr std::array<PlaybackShortcutBinding, 63>
         {PlaybackAction::CancelVideoEditPrompt, VK_RETURN, 0, 0, 0,
          kPlaybackShortcutTextForbiddenMask,
          kPlaybackShortcutContextVideoEditExitConfirmation |
-             kPlaybackShortcutContextVideoEditDiscardConfirmation},
+             kPlaybackShortcutContextVideoEditDiscardConfirmation |
+             kPlaybackShortcutContextVideoEditRestartConfirmation},
+        {PlaybackAction::ConfirmVideoEditPrompt, 'R', 'r', 'R', 0,
+         kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
+         kPlaybackShortcutContextVideoEditRestartConfirmation},
         {PlaybackAction::ConfirmVideoEditPrompt, 'D', 'd', 'D', 0,
          kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask,
          kPlaybackShortcutContextVideoEditDiscardConfirmation},
@@ -271,14 +277,6 @@ inline constexpr std::array<PlaybackShortcutBinding, 63>
          kPlaybackShortcutContextShared, {},
          ShortcutRepeatPolicy::InitialPressOnly,
          PlaybackShortcutScope::SystemMedia},
-        // YouTube-compatible video chapter navigation. Playlist transport is
-        // still available through the dedicated media Previous/Next keys.
-        {PlaybackAction::PreviousChapter, VK_LEFT, 0, 0,
-         kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
-         kPlaybackShortcutContextVideoPlayback},
-        {PlaybackAction::NextChapter, VK_RIGHT, 0, 0,
-         kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
-         kPlaybackShortcutContextVideoPlayback},
         {PlaybackAction::ToggleWindow, 'W', 'w', 'W',
          kPlaybackShortcutCtrlMask, kPlaybackShortcutChordForbiddenMask,
          kPlaybackShortcutContextShared, "Ctrl+W"},
@@ -400,7 +398,9 @@ inline std::optional<PlaybackAction> resolvePlaybackAction(
       if ((shortcutContexts &
            kPlaybackShortcutContextVideoEditLeaveConfirmation) != 0 ||
           (shortcutContexts &
-           kPlaybackShortcutContextVideoEditDiscardConfirmation) != 0) {
+           kPlaybackShortcutContextVideoEditDiscardConfirmation) != 0 ||
+          (shortcutContexts &
+           kPlaybackShortcutContextVideoEditRestartConfirmation) != 0) {
         return PlaybackAction::CancelVideoEditPrompt;
       }
       if ((shortcutContexts &
@@ -518,8 +518,6 @@ resolveLiveBrowserVideoShortcut(const InputEvent& event) {
     case PlaybackAction::Stop:
     case PlaybackAction::Previous:
     case PlaybackAction::Next:
-    case PlaybackAction::PreviousChapter:
-    case PlaybackAction::NextChapter:
     case PlaybackAction::ToggleWindow:
     case PlaybackAction::ToggleFullscreen:
     case PlaybackAction::ToggleRadio:

@@ -23,6 +23,9 @@ void setError(std::string *error, std::string value) {
 
 struct AlgorithmHandle {
   BCRYPT_ALG_HANDLE value = nullptr;
+  AlgorithmHandle() = default;
+  AlgorithmHandle(const AlgorithmHandle &) = delete;
+  AlgorithmHandle &operator=(const AlgorithmHandle &) = delete;
   ~AlgorithmHandle() {
     if (value)
       BCryptCloseAlgorithmProvider(value, 0);
@@ -31,6 +34,9 @@ struct AlgorithmHandle {
 
 struct HashHandle {
   BCRYPT_HASH_HANDLE value = nullptr;
+  HashHandle() = default;
+  HashHandle(const HashHandle &) = delete;
+  HashHandle &operator=(const HashHandle &) = delete;
   ~HashHandle() {
     if (value)
       BCryptDestroyHash(value);
@@ -38,33 +44,26 @@ struct HashHandle {
 };
 
 bool createHash(AlgorithmHandle *algorithm, HashHandle *hash,
-                std::vector<unsigned char> *object, DWORD *digestLength,
-                std::string *error) {
-  if (!algorithm || !hash || !object || !digestLength)
+                DWORD *digestLength, std::string *error) {
+  if (!algorithm || !hash || !digestLength)
     return false;
   NTSTATUS status = BCryptOpenAlgorithmProvider(
       &algorithm->value, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
-  DWORD objectLength = 0;
   DWORD bytesRead = 0;
-  if (BCRYPT_SUCCESS(status)) {
-    status = BCryptGetProperty(
-        algorithm->value, BCRYPT_OBJECT_LENGTH,
-        reinterpret_cast<PUCHAR>(&objectLength), sizeof(objectLength),
-        &bytesRead, 0);
-  }
   if (BCRYPT_SUCCESS(status)) {
     status = BCryptGetProperty(
         algorithm->value, BCRYPT_HASH_LENGTH,
         reinterpret_cast<PUCHAR>(digestLength), sizeof(*digestLength),
         &bytesRead, 0);
   }
-  if (!BCRYPT_SUCCESS(status) || objectLength == 0 || *digestLength == 0) {
+  if (!BCRYPT_SUCCESS(status) || *digestLength == 0) {
     setError(error, "Could not initialize SHA-256.");
     return false;
   }
-  object->resize(objectLength);
-  status = BCryptCreateHash(algorithm->value, &hash->value, object->data(),
-                            objectLength, nullptr, 0, 0);
+  // CNG owns the backing allocation until BCryptDestroyHash. A separately
+  // owned buffer could be released before the native handle that still uses it.
+  status = BCryptCreateHash(algorithm->value, &hash->value, nullptr, 0,
+                            nullptr, 0, 0);
   if (!BCRYPT_SUCCESS(status)) {
     setError(error, "Could not create a SHA-256 hash.");
     return false;
@@ -116,9 +115,8 @@ bool file(const std::filesystem::path &path,
 
   AlgorithmHandle algorithm;
   HashHandle hash;
-  std::vector<unsigned char> object;
   DWORD digestLength = 0;
-  if (!createHash(&algorithm, &hash, &object, &digestLength, error))
+  if (!createHash(&algorithm, &hash, &digestLength, error))
     return false;
   std::ifstream input(path, std::ios::binary);
   if (!input) {
@@ -153,9 +151,8 @@ bool file(const std::filesystem::path &path,
 std::string text(const std::string &value) {
   AlgorithmHandle algorithm;
   HashHandle hash;
-  std::vector<unsigned char> object;
   DWORD digestLength = 0;
-  if (!createHash(&algorithm, &hash, &object, &digestLength, nullptr))
+  if (!createHash(&algorithm, &hash, &digestLength, nullptr))
     return {};
   if (!value.empty() &&
       !BCRYPT_SUCCESS(BCryptHashData(

@@ -13,6 +13,8 @@ void SceneSuggestionReview::beginAnalysis() {
   selectedId_.reset();
   hiddenIds_.clear();
   hiddenHistory_.clear();
+  filter_ = SceneSuggestionFilter::All;
+  scrollOffset_ = -1;
 }
 
 void SceneSuggestionReview::leaveEditor() {
@@ -25,20 +27,24 @@ bool SceneSuggestionReview::togglePanel(
   panelVisible_ = !panelVisible_;
   if (panelVisible_) {
     ensureSelection(suggestions, timeline);
-  } else {
-    selectedId_.reset();
   }
   return panelVisible_;
 }
 
 void SceneSuggestionReview::closePanel() {
   panelVisible_ = false;
-  selectedId_.reset();
+}
+
+bool SceneSuggestionReview::scrollTo(int offset) {
+  if (!panelVisible_) return false;
+  scrollOffset_ = std::max(0, offset);
+  return true;
 }
 
 SceneSuggestionFilter SceneSuggestionReview::cycleFilter(
     const std::vector<Suggestion>& suggestions, const Timeline& timeline) {
   filter_ = nextSceneSuggestionFilter(filter_);
+  scrollOffset_ = -1;
   ensureSelection(suggestions, timeline);
   return filter_;
 }
@@ -73,6 +79,7 @@ bool SceneSuggestionReview::select(
       [id](const Suggestion* suggestion) { return suggestion->id == id; });
   if (selected == visible.end()) return false;
   selectedId_ = id;
+  scrollOffset_ = -1;
   return true;
 }
 
@@ -123,6 +130,7 @@ const SceneSuggestionReview::Suggestion* SceneSuggestionReview::navigate(
     }
   }
   selectedId_ = visible[target]->id;
+  scrollOffset_ = -1;
   return visible[target];
 }
 
@@ -130,6 +138,7 @@ void SceneSuggestionReview::showCurrentOrFirst(
     const std::vector<Suggestion>& suggestions, const Timeline& timeline,
     int64_t sourcePositionUs) {
   panelVisible_ = true;
+  scrollOffset_ = -1;
   const auto visible = visibleSuggestions(suggestions, timeline, filter_);
   if (visible.empty()) {
     selectedId_.reset();
@@ -146,7 +155,7 @@ void SceneSuggestionReview::showCurrentOrFirst(
 bool SceneSuggestionReview::hideSelected(
     const std::vector<Suggestion>& suggestions, const Timeline& timeline) {
   const auto visible = visibleSuggestions(suggestions, timeline, filter_);
-  if (!selectedId_) return false;
+  if (!panelVisible_ || !selectedId_) return false;
   const auto selected = std::find_if(
       visible.begin(), visible.end(),
       [&](const Suggestion* suggestion) {
@@ -164,6 +173,7 @@ bool SceneSuggestionReview::hideSelected(
     hiddenHistory_.push_back(hiddenId);
   }
   const auto remaining = visibleSuggestions(suggestions, timeline, filter_);
+  scrollOffset_ = -1;
   selectedId_ =
       remaining.empty()
           ? std::optional<uint64_t>{}
@@ -186,12 +196,13 @@ std::optional<uint64_t> SceneSuggestionReview::undoHide(
       continue;
     }
     const SceneSuggestionKind kind =
-        projectSceneSuggestionKind(restored->kind);
+        projectSceneSuggestionKind(restored->disposition);
     if (!sceneSuggestionMatchesFilter(kind, filter_)) {
       filter_ = SceneSuggestionFilter::All;
     }
     panelVisible_ = true;
     selectedId_ = id;
+    scrollOffset_ = -1;
     return id;
   }
   return std::nullopt;
@@ -208,6 +219,7 @@ SceneSuggestionReviewSnapshot SceneSuggestionReview::snapshot(
   SceneSuggestionReviewSnapshot out;
   out.visible = editorActive && panelVisible_;
   out.filter = filter_;
+  out.scrollOffset = scrollOffset_;
   out.canUndoHide = std::any_of(
       hiddenHistory_.begin(), hiddenHistory_.end(), [&](uint64_t id) {
         if (hiddenIds_.count(id) == 0) return false;
@@ -221,6 +233,12 @@ SceneSuggestionReviewSnapshot SceneSuggestionReview::snapshot(
       visibleSuggestions(suggestions, timeline, SceneSuggestionFilter::All);
   const auto filtered = visibleSuggestions(suggestions, timeline, filter_);
   out.totalCount = all.size();
+  for (const auto* suggestion : all) {
+    const auto projected = projectSceneSuggestion(*suggestion, timeline, false);
+    for (const auto& span : projected.spans)
+      out.durationByKindUs[static_cast<size_t>(projected.kind)] +=
+          span.timelineEndUs - span.timelineStartUs;
+  }
   out.filteredCount = filtered.size();
   if (!out.visible) return out;
 
@@ -253,7 +271,7 @@ SceneSuggestionReview::visibleSuggestions(
   for (const Suggestion& suggestion : suggestions) {
     if (hiddenIds_.count(suggestion.id) == 0 &&
         sceneSuggestionMatchesFilter(
-            projectSceneSuggestionKind(suggestion.kind), filter) &&
+            projectSceneSuggestionKind(suggestion.disposition), filter) &&
         sceneSuggestionVisibleOnTimeline(suggestion, timeline)) {
       visible.push_back(&suggestion);
     }
@@ -263,10 +281,6 @@ SceneSuggestionReview::visibleSuggestions(
 
 void SceneSuggestionReview::ensureSelection(
     const std::vector<Suggestion>& suggestions, const Timeline& timeline) {
-  if (!panelVisible_) {
-    selectedId_.reset();
-    return;
-  }
   const auto visible = visibleSuggestions(suggestions, timeline, filter_);
   if (visible.empty()) {
     selectedId_.reset();
@@ -280,6 +294,7 @@ void SceneSuggestionReview::ensureSelection(
     return;
   }
   selectedId_ = visible.front()->id;
+  scrollOffset_ = -1;
 }
 
 }  // namespace playback_video_edit

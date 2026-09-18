@@ -130,14 +130,6 @@ void refreshFrameStepRequestDisplay(SessionPort &session) {
   requestWindowRefresh(session);
 }
 
-void commitQueuedSeek(SessionPort &session,
-                      PlaybackSeekGestureState &seekState) {
-  double queuedTargetSec = 0.0;
-  if (readQueuedSeekTargetSec(seekState, &queuedTargetSec)) {
-    sendSeekRequest(session, seekState, queuedTargetSec);
-  }
-}
-
 void finishVideoEditBoundaryDrag(
     SessionPort &session, PlaybackSeekGestureState &seekState,
     playback_video_timeline_preview::PresentationSurface surface) {
@@ -168,25 +160,7 @@ void sendRelativeSeekRequest(SessionPort &session,
   markSeekSent(session, seekState);
 }
 
-bool requestChapterNavigation(
-    SessionPort &session, PlaybackSeekGestureState &seekState,
-    playback_video_chapters::NavigationDirection direction) {
-  commitQueuedSeek(session, seekState);
-  if (!session.dispatch(ChapterNavigationRequest{direction}))
-    return false;
-  markSeekSent(session, seekState);
-  return true;
-}
 
-bool requestChapterSeek(SessionPort &session,
-                        PlaybackSeekGestureState &seekState,
-                        int64_t timelineStartUs) {
-  commitQueuedSeek(session, seekState);
-  if (!session.dispatch(SeekToChapter{timelineStartUs}))
-    return false;
-  markSeekSent(session, seekState);
-  return true;
-}
 
 bool toggleRequestedLayout(SessionPort &session) {
   return session.dispatch(CommandAction::ToggleWindowPresentation);
@@ -249,10 +223,6 @@ bool executeOverlayControl(SessionPort &session,
     return toggleAudioTrack(session);
   case Action::ToggleSubtitles:
     return toggleSubtitles(session);
-  case Action::ToggleChapterOverview:
-    return session.dispatch(CommandAction::ToggleChapterOverview);
-  case Action::CloseChapterOverview:
-    return session.dispatch(CommandAction::CloseChapterOverview);
   case Action::TogglePictureInPicture:
     return togglePictureInPicture(session);
   case Action::WaitForVideoEditExport:
@@ -306,6 +276,13 @@ void setPlaybackPaused(SessionPort &session,
                        PlaybackSeekGestureState &seekState, bool paused) {
   commitQueuedSeek(session, seekState);
   session.dispatch(SetPaused{paused});
+}
+
+void commitQueuedSeek(SessionPort &session,
+                      PlaybackSeekGestureState &seekState) {
+  double queuedTargetSec = 0.0;
+  if (readQueuedSeekTargetSec(seekState, &queuedTargetSec))
+    sendSeekRequest(session, seekState, queuedTargetSec);
 }
 
 namespace {
@@ -362,15 +339,6 @@ dispatchPlaybackInputCommand(SessionPort &session,
     return InputPresentationFeedback::RefreshOverlay;
   case PlaybackAction::Next:
     requestTransport(session, PlaybackTransportCommand::Next);
-    return InputPresentationFeedback::RefreshOverlay;
-  case PlaybackAction::PreviousChapter:
-    requestChapterNavigation(
-        session, seekState,
-        playback_video_chapters::NavigationDirection::Previous);
-    return InputPresentationFeedback::RefreshOverlay;
-  case PlaybackAction::NextChapter:
-    requestChapterNavigation(
-        session, seekState, playback_video_chapters::NavigationDirection::Next);
     return InputPresentationFeedback::RefreshOverlay;
   case PlaybackAction::ToggleWindow:
     toggleRequestedLayout(session);
@@ -490,19 +458,18 @@ void handlePlaybackInputEvent(SessionPort &session,
     }
   }
   const SessionSnapshot initialState = session.snapshot();
-  if (initialState.chapterOverviewOpen &&
-      ((ev.type == InputEvent::Type::Action &&
-        ev.action == InputAction::Back) ||
-       (ev.type == InputEvent::Type::Key &&
-        (ev.key.vk == VK_ESCAPE || ev.key.vk == VK_BACK)))) {
-    if (ev.type != InputEvent::Type::Key || !isAutoRepeat(ev.key)) {
-      session.dispatch(CommandAction::CloseChapterOverview);
-      triggerOverlay(session);
-      session.dispatch(CommandAction::RequestRedraw);
-    }
+  const playback_video_edit::Prompt editPrompt = initialState.videoEditPrompt;
+  if (initialState.editSuggestionsOpen && editPrompt == playback_video_edit::Prompt::None &&
+      !initialState.mediaActionConfirmationPrompt && ev.type == InputEvent::Type::Key &&
+      (ev.key.control & (kPlaybackShortcutTextForbiddenMask | kPlaybackShortcutShiftMask)) == 0 &&
+      (ev.key.vk == VK_UP || ev.key.vk == VK_DOWN)) {
+    session.dispatch(VideoEditRequest{
+        ev.key.vk == VK_UP ? playback_video_edit::Command::PreviousSceneSuggestion
+                          : playback_video_edit::Command::NextSceneSuggestion});
+    triggerOverlay(session);
+    session.dispatch(CommandAction::RequestRedraw);
     return;
   }
-  const playback_video_edit::Prompt editPrompt = initialState.videoEditPrompt;
   uint32_t shortcutContexts = 0;
   if (initialState.mediaActionConfirmationPrompt) {
     shortcutContexts = kPlaybackShortcutContextMediaActionConfirmation;
@@ -510,6 +477,8 @@ void handlePlaybackInputEvent(SessionPort &session,
     shortcutContexts = kPlaybackShortcutContextVideoEditLeaveConfirmation;
   } else if (editPrompt == playback_video_edit::Prompt::DiscardEdits) {
     shortcutContexts = kPlaybackShortcutContextVideoEditDiscardConfirmation;
+  } else if (editPrompt == playback_video_edit::Prompt::RestartAnalysis) {
+    shortcutContexts = kPlaybackShortcutContextVideoEditRestartConfirmation;
   } else if (editPrompt == playback_video_edit::Prompt::LeavePlayback) {
     shortcutContexts = kPlaybackShortcutContextVideoEditExitConfirmation;
   } else {
@@ -627,11 +596,14 @@ void handlePlaybackMouseEvent(SessionPort &session,
   const auto &boundaryHit = interactionHit.editBoundary;
   const auto &controlHit = interactionHit.control;
   const auto &contextMenuItemHit = interactionHit.contextMenuItem;
-  const auto &chapterOverviewHit = interactionHit.chapterOverview;
-  const auto &chapterStartHit = interactionHit.chapterStartUs;
+  const auto suggestionsHit = capturedProgressDrag ? std::nullopt : interactionHit.editSuggestions;
+  if (suggestionsHit)
+    session.dispatch(ClearTimelinePreview{previewSurface});
   if (rightPressed && mouse.kind == MouseEventKind::Press &&
       !interactionState.mediaActionConfirmationPrompt &&
       editPrompt == playback_video_edit::Prompt::None) {
+    if (suggestionsHit && interactionHit.suggestionId)
+      session.dispatch(FocusEditSuggestion{*interactionHit.suggestionId});
     playback_session::ContextMenuInput request;
     request.kind = playback_session::ContextMenuInputKind::Open;
     request.surface = windowEvent
@@ -685,15 +657,16 @@ void handlePlaybackMouseEvent(SessionPort &session,
     }
     return;
   }
-  if (mouse.kind == MouseEventKind::VerticalWheel && chapterOverviewHit) {
-    const int delta = mouse.wheelDelta > 0 ? -3 : 3;
-    const int target = std::clamp(chapterOverviewHit->scrollOffset + delta, 0,
-                                  chapterOverviewHit->maximumScrollOffset);
-    session.dispatch(SetChapterOverviewScroll{target});
+  if (mouse.kind == MouseEventKind::VerticalWheel && suggestionsHit) {
+    if (mouse.wheelDelta != 0) {
+      const int delta = mouse.wheelDelta > 0 ? -3 : 3;
+      session.dispatch(SetEditSuggestionsScroll{
+          std::clamp(suggestionsHit->scrollOffset + delta, 0, suggestionsHit->maximumScrollOffset)});
+    }
     return;
   }
-  if (leftPressed && mouse.kind == MouseEventKind::Press && chapterStartHit) {
-    requestChapterSeek(session, seekState, *chapterStartHit);
+  if (leftPressed && mouse.kind == MouseEventKind::Press && suggestionsHit && interactionHit.suggestionId) {
+    session.dispatch(FocusEditSuggestion{*interactionHit.suggestionId});
     triggerOverlay(session);
     session.dispatch(CommandAction::RequestRedraw);
     return;
@@ -718,7 +691,12 @@ void handlePlaybackMouseEvent(SessionPort &session,
     return;
   }
   const bool interactiveHit = progressHit || boundaryHit || controlHit ||
-                              contextMenuItemHit || chapterOverviewHit;
+                              contextMenuItemHit || suggestionsHit;
+  if (suggestionsHit) {
+    updateOverlayControlHover(session,
+        controlHit ? playback_overlay::overlayControlToken(*controlHit) : -1);
+    return;
+  }
   if (isPlaybackFullscreenGesture(mouse) && !interactiveHit &&
       editPrompt == playback_video_edit::Prompt::None) {
     session.dispatch(CommandAction::ToggleFullscreen);

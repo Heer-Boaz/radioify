@@ -17,9 +17,9 @@ enum class TimelineCellKind : uint8_t {
 
 enum class SceneSuggestionCellKind : uint8_t {
   None,
-  Dialogue,
-  Cutscene,
-  MenuOrLoading,
+  Review,
+  Keep,
+  Shorten,
   Selected,
 };
 

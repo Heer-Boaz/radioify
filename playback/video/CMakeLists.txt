@@ -56,7 +56,7 @@ radioify_add_module_object_library(radioify_transcript_artifact
 
 radioify_add_module_object_library(radioify_transcript_document
   ${CMAKE_CURRENT_SOURCE_DIR}/transcript/document.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/transcript/provenance.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/transcript/source_identity.cpp
 )
 
 radioify_add_module_object_library(radioify_transcript_text_export
@@ -84,6 +84,9 @@ radioify_add_module_object_library(radioify_transcript_engine
 )
 
 radioify_add_module_object_library(radioify_scene_analysis
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/edit_review.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/edit_review_store.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/edit_review_backend.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_analysis.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_analysis_cache.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_analyzer.cpp
@@ -94,25 +97,16 @@ radioify_add_module_object_library(radioify_scene_analysis
   ${CMAKE_CURRENT_SOURCE_DIR}/analysis/visual_timeline_scan.cpp
 )
 
-radioify_add_module_object_library(radioify_video_chapters
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/action_catalog.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/backend.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/cache.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/chapter.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/evidence_plan.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/evidence_preparation.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/generated_document.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/inference_worker_client.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/inference_worker_protocol.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/sampled_evidence.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/inference.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/integrity.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/model.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/presentation.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/prompt_contract.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/service.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/storage.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter/text_evidence.cpp
+radioify_add_module_object_library(radioify_analysis_inference
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/memory_budget.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/evidence_preparation.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/inference_worker_client.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/inference_worker_protocol.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/inference.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/integrity.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/model.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/storage.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/text_evidence.cpp
 )
 
 radioify_add_module_object_library(radioify_video

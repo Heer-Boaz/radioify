@@ -242,7 +242,6 @@ struct PlaybackSession::Impl {
         std::move(request.config),
         player,
         subtitleManager,
-        dependencies.chapterAnalysis,
         host.perfLog(),
         dependencies.appearance.baseStyle,
         dependencies.appearance.accentStyle,

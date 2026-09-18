@@ -12,16 +12,20 @@
 
 #include "core/native_wait_handle.h"
 #include "core/wake_event.h"
-#include "playback/video/analysis/scene_analysis.h"
+#include "playback/video/analysis/edit_review.h"
 
 namespace playback_video_analysis {
 
 struct AnalysisProgress;
-struct AnalysisResult;
+struct ReviewJobResult {
+  size_t visualSampleCount = 0;
+  std::vector<EditProposal> suggestions;
+};
 
 enum class JobState : uint8_t {
   Idle,
   Running,
+  Pausing,
   Succeeded,
   Failed,
   Cancelled,
@@ -32,6 +36,7 @@ struct JobRequest {
   int videoStreamIndex = -1;
   int64_t durationUs = 0;
   bool forceReanalysis = false;
+  std::optional<TextEvidence> englishText;
 };
 
 struct JobSnapshot {
@@ -40,10 +45,13 @@ struct JobSnapshot {
   std::string phase;
   std::string error;
   size_t visualSampleCount = 0;
-  bool usedIndexedTranscript = false;
-  std::vector<SceneSuggestion> suggestions;
+  std::vector<EditProposal> suggestions;
 
-  bool running() const { return state == JobState::Running; }
+  // A pause request is asynchronous: the operation still owns its resources
+  // until it acknowledges the request with a terminal result.
+  bool busy() const {
+    return state == JobState::Running || state == JobState::Pausing;
+  }
   bool finished() const {
     return state == JobState::Succeeded || state == JobState::Failed ||
            state == JobState::Cancelled;
@@ -58,7 +66,7 @@ class SceneAnalysisJob {
   using ProgressReporter = std::function<void(const AnalysisProgress&)>;
   using Operation = std::function<bool(
       const JobRequest&, const ProgressReporter&, const std::atomic<bool>*,
-      AnalysisResult*, std::string*)>;
+      ReviewJobResult*, std::string*)>;
 
   SceneAnalysisJob();
   explicit SceneAnalysisJob(WakeNotifier ownerWake);

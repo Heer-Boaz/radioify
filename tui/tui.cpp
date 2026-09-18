@@ -406,15 +406,12 @@ int runTui(Options o, ApplicationRuntime &runtime) {
   input.enableTerminalMouseInput();
 
   PlaybackSystemControls systemControls;
-  const bool systemMediaTransportControlsAvailable =
-      systemControls.initialize();
-  const SystemMediaCommandOwner systemMediaCommandOwner =
-      systemMediaTransportControlsAvailable
-          ? SystemMediaCommandOwner::SystemMediaTransportControls
-          : SystemMediaCommandOwner::LocalInputFallback;
-  input.setSystemMediaCommandOwner(systemMediaCommandOwner);
+  // A session that cannot be created costs no media keys: the shell decides
+  // per press whether Radioify is the current media session, so every surface
+  // keeps handling the media keys it receives while it holds keyboard focus.
+  systemControls.initialize();
 
-  VideoWindow tuiWindow(gpu, systemMediaCommandOwner);
+  VideoWindow tuiWindow(gpu);
   bool windowTuiEnabled = o.enableWindow;
   if (windowTuiEnabled) {
     const WindowClientSize clientSize = initialWindowTuiClientSize(screen);
@@ -438,9 +435,7 @@ int runTui(Options o, ApplicationRuntime &runtime) {
   VideoPlaybackConfig videoConfig;
   videoConfig.enableAscii = o.enableAscii;
   videoConfig.enableAudio = o.enableAudio;
-  videoConfig.enableAutomaticChapterAnalysis = o.enableAutomaticChapterAnalysis;
   videoConfig.debugOverlay = o.asciiDebugOverlay;
-  videoConfig.systemMediaCommandOwner = systemMediaCommandOwner;
 
   std::optional<OpenFilesRequest> initialOpenRequest;
 
@@ -539,8 +534,7 @@ int runTui(Options o, ApplicationRuntime &runtime) {
       tuiWindow.PresentTextGrid(windowCells, gridWidth, gridHeight);
     }
   };
-  AudioPictureInPictureWindow audioPictureInPicture(gpu,
-                                                    systemMediaCommandOwner);
+  AudioPictureInPictureWindow audioPictureInPicture(gpu);
   ApplicationInputPump applicationInputPump;
   pointer_input::MouseDoubleClickTracker browserDoubleClickTracker;
   BrowserViewport viewport;
@@ -574,7 +568,6 @@ int runTui(Options o, ApplicationRuntime &runtime) {
       gpu,
       screen,
       runtime.subtitleLoader(),
-      runtime.chapterAnalysis(),
       theme.playbackSessionAppearance()};
   playback_session::VideoSessionFactory createVideoSession =
       [mediaSessionDependencies](
@@ -1036,8 +1029,6 @@ int runTui(Options o, ApplicationRuntime &runtime) {
       break;
     case PlaybackAction::ToggleSubtitles:
     case PlaybackAction::ToggleAudioTrack:
-    case PlaybackAction::PreviousChapter:
-    case PlaybackAction::NextChapter:
     case PlaybackAction::PreviousFrame:
     case PlaybackAction::NextFrame:
     case PlaybackAction::CopyVideoFrame:

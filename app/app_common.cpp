@@ -49,11 +49,6 @@ static void showUsage(const char *exe) {
   logLine("  --radio      Start with the selected radio model enabled");
   logLine("  --no-radio   Start with radio filter disabled (default)");
   logLine("  --window     Open a window for video playback");
-  logLine("  --verify-chapter-models Verify installed chapter-model artifacts");
-  logLine("  --verify-chapter-runtime Verify the staged chapter runtime");
-  logLine("  analyze-chapters <file> Analyze and cache chapters without a UI");
-  logLine(
-      "  --no-automatic-chapters Disable background semantic video analysis");
   logLine("  --ascii-debug-overlay Show ASCII playback debug overlay");
   logLine("  --shell-open-mode <same-instance|new-instance>");
   logLine("               Choose how Windows shell opens are handled");
@@ -113,7 +108,7 @@ Options parseArgs(int argc, char **argv) {
       if (value.empty()) {
         die("extract-sheet requires a non-empty file path.");
       }
-      if (o.splitLoop || o.renderRadio || o.analyzeChapters) {
+      if (o.splitLoop || o.renderRadio) {
         die("Only one analysis command can be used at once.");
       }
       if (!o.input.empty() && o.input != value) {
@@ -128,7 +123,7 @@ Options parseArgs(int argc, char **argv) {
       if (value.empty()) {
         die("split-loop requires a non-empty file path.");
       }
-      if (o.extractSheet || o.renderRadio || o.analyzeChapters) {
+      if (o.extractSheet || o.renderRadio) {
         die("Only one analysis command can be used at once.");
       }
       if (!o.input.empty() && o.input != value) {
@@ -143,28 +138,13 @@ Options parseArgs(int argc, char **argv) {
       if (value.empty()) {
         die("render-radio requires a non-empty file path.");
       }
-      if (o.extractSheet || o.splitLoop || o.analyzeChapters) {
+      if (o.extractSheet || o.splitLoop) {
         die("Only one analysis command can be used at once.");
       }
       if (!o.input.empty() && o.input != value) {
         die("Input path was provided multiple times.");
       }
       o.renderRadio = true;
-      o.input = value;
-      continue;
-    }
-    if (arg == "analyze-chapters" || arg == "--analyze-chapters") {
-      std::string value = requireValue(arg, &i);
-      if (value.empty()) {
-        die("analyze-chapters requires a non-empty file path.");
-      }
-      if (o.extractSheet || o.splitLoop || o.renderRadio) {
-        die("Only one analysis command can be used at once.");
-      }
-      if (!o.input.empty() && o.input != value) {
-        die("Input path was provided multiple times.");
-      }
-      o.analyzeChapters = true;
       o.input = value;
       continue;
     }
@@ -296,18 +276,6 @@ Options parseArgs(int argc, char **argv) {
       o.enableWindow = true;
       continue;
     }
-    if (arg == "--verify-chapter-models") {
-      o.verifyChapterModels = true;
-      continue;
-    }
-    if (arg == "--verify-chapter-runtime") {
-      o.verifyChapterRuntime = true;
-      continue;
-    }
-    if (arg == "--no-automatic-chapters") {
-      o.enableAutomaticChapterAnalysis = false;
-      continue;
-    }
     if (arg == "--ascii-debug-overlay") {
       o.asciiDebugOverlay = true;
       continue;
@@ -335,27 +303,14 @@ Options parseArgs(int argc, char **argv) {
     if (!arg.empty() && arg[0] == '-') {
       die("Unknown option: " + arg);
     }
-    if (o.extractSheet || o.splitLoop || o.renderRadio ||
-        o.analyzeChapters) {
+    if (o.extractSheet || o.splitLoop || o.renderRadio) {
       die("Do not pass a positional input when using "
-          "extract-sheet/split-loop/render-radio/analyze-chapters.");
+          "extract-sheet/split-loop/render-radio.");
     }
     if (!o.input.empty()) {
       die("Provide a single file or folder path only.");
     }
     o.input = arg;
-  }
-  const int chapterVerificationCommands =
-      static_cast<int>(o.verifyChapterModels) +
-      static_cast<int>(o.verifyChapterRuntime);
-  if (chapterVerificationCommands > 1) {
-    die("Select only one chapter runtime verification command.");
-  }
-  if (chapterVerificationCommands != 0 &&
-      (o.extractSheet || o.splitLoop || o.renderRadio || o.analyzeChapters ||
-       !o.input.empty() || !o.output.empty())) {
-    die("Chapter runtime verification cannot be combined with media input "
-        "or another command.");
   }
   return o;
 }

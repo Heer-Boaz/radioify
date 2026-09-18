@@ -1,31 +1,32 @@
+set(RADIOIFY_LLAMA_REVISION 427291b5b34cd914a31b3fd3b61a68f6184f4b9f)
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO ggml-org/llama.cpp
-    REF b${VERSION}
-    SHA512 879490cdeeef9397b9843730399bd55c7ef57de7e421cfcbaa15bd95416e028e4a0864f237218895a8a1244b7a4dbef9eacda49aa9697628e29774d0fc90d04b
+    REF ${RADIOIFY_LLAMA_REVISION}
+    SHA512 eebe813a7d25926b499bd669c72fe45a1d4c6ad214b5fb7477f6348c33f49edebb65fc764ef9cf9e35685d29afdee2b242fb857a422d68e93475adc797b93c85
     HEAD_REF master
     PATCHES
-        cmake-package.diff
-        mtmd-vision-backend-query.diff
-        pkgconfig.diff
+        native-package.diff
 )
 file(REMOVE_RECURSE "${SOURCE_PATH}/ggml/include" "${SOURCE_PATH}/ggml/src")
-
-vcpkg_check_features(OUT_FEATURE_OPTIONS options
-    FEATURES
-        download    LLAMA_CURL
-        tools       LLAMA_BUILD_TOOLS
-)
 
 vcpkg_cmake_configure(
     SOURCE_PATH "${SOURCE_PATH}"
     OPTIONS
-        ${options}
+        -DLLAMA_BUILD_COMMIT=${RADIOIFY_LLAMA_REVISION}
+        -DLLAMA_BUILD_TOOLS=OFF
+        -DLLAMA_OPENSSL=OFF
         -DGGML_CCACHE=OFF
         -DLLAMA_ALL_WARNINGS=OFF
         -DLLAMA_BUILD_TESTS=OFF
         -DLLAMA_BUILD_EXAMPLES=OFF
         -DLLAMA_BUILD_SERVER=OFF
+        -DLLAMA_BUILD_APP=OFF
+        -DLLAMA_BUILD_MTMD=ON
+        -DLLAMA_BUILD_COMMON=OFF
+        -DLLAMA_BUILD_IS_DEV=OFF
+        # Radioify owns FFmpeg decoding, including stream selection and PTS.
+        -DMTMD_VIDEO=OFF
         -DLLAMA_USE_SYSTEM_GGML=ON
         -DVCPKG_LOCK_FIND_PACKAGE_Git=OFF
 )
@@ -36,28 +37,7 @@ vcpkg_copy_pdbs()
 vcpkg_fixup_pkgconfig()
 
 file(INSTALL "${SOURCE_PATH}/gguf-py/gguf" DESTINATION "${CURRENT_PACKAGES_DIR}/tools/${PORT}/gguf-py")
-file(RENAME "${CURRENT_PACKAGES_DIR}/bin/convert_hf_to_gguf.py" "${CURRENT_PACKAGES_DIR}/tools/${PORT}/convert-hf-to-gguf.py")
-file(REMOVE "${CURRENT_PACKAGES_DIR}/debug/bin/convert_hf_to_gguf.py")
-
-if("tools" IN_LIST FEATURES)
-    vcpkg_copy_tools(
-        TOOL_NAMES
-            llama-batched-bench
-            llama-bench
-            llama-cli
-            llama-cvector-generator
-            llama-export-lora
-            llama-gguf-split
-            llama-imatrix
-            llama-mtmd-cli
-            llama-perplexity
-            llama-quantize
-            llama-run
-            llama-tokenize
-            llama-tts
-        AUTO_CLEAN
-    )
-endif()
+file(INSTALL "${SOURCE_PATH}/convert_hf_to_gguf.py" DESTINATION "${CURRENT_PACKAGES_DIR}/tools/${PORT}" RENAME "convert-hf-to-gguf.py")
 
 file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/include")
 file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/share")

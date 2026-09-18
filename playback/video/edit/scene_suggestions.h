@@ -4,28 +4,27 @@
 #include <optional>
 #include <vector>
 
-#include "playback/video/analysis/scene_analysis.h"
+#include "playback/video/analysis/edit_review.h"
 #include "playback/video/edit/timeline.h"
 #include "playback/video/edit/view.h"
 
 namespace playback_video_edit {
 
 SceneSuggestionKind projectSceneSuggestionKind(
-    playback_video_analysis::SceneKind kind);
+    playback_video_analysis::EditDisposition kind);
 bool sceneSuggestionMatchesFilter(SceneSuggestionKind kind,
                                   SceneSuggestionFilter filter);
 SceneSuggestionFilter nextSceneSuggestionFilter(
     SceneSuggestionFilter filter);
 const char* sceneSuggestionFilterLabel(SceneSuggestionFilter filter);
 const char* sceneSuggestionKindLabel(SceneSuggestionKind kind);
-const char* sceneSuggestionStrengthLabel(float confidence);
 
 SceneSuggestionSnapshot projectSceneSuggestion(
-    const playback_video_analysis::SceneSuggestion& suggestion,
+    const playback_video_analysis::EditProposal& suggestion,
     const Timeline& timeline, bool selected);
 
 bool sceneSuggestionVisibleOnTimeline(
-    const playback_video_analysis::SceneSuggestion& suggestion,
+    const playback_video_analysis::EditProposal& suggestion,
     const Timeline& timeline);
 
 std::optional<uint64_t> sceneSuggestionAtTimeline(

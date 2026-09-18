@@ -1,3 +1,7 @@
+radioify_add_module_object_library(radioify_tool_sha256_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/sha256_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_radio_measurements
   ${CMAKE_CURRENT_SOURCE_DIR}/radio_measurements.cpp
 )
@@ -67,10 +71,6 @@ radioify_add_module_object_library(radioify_tool_osd_timeline_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/osd_timeline_tests.cpp
 )
 
-radioify_add_module_object_library(radioify_tool_background_gpu_admission_tests
-  ${CMAKE_CURRENT_SOURCE_DIR}/background_gpu_admission_tests.cpp
-)
-
 radioify_add_module_object_library(radioify_tool_presentation_policy_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/presentation_policy_tests.cpp
 )
@@ -99,20 +99,16 @@ radioify_add_module_object_library(radioify_tool_timeline_preview_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/timeline_preview_tests.cpp
 )
 
-radioify_add_module_object_library(radioify_tool_chapter_analysis_tests
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter_analysis_tests.cpp
+radioify_add_module_object_library(radioify_tool_speech_evidence_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/speech_evidence_tests.cpp
 )
 
-radioify_add_module_object_library(radioify_tool_chapter_inference_tests
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter_inference_tests.cpp
+radioify_add_module_object_library(radioify_tool_analysis_inference_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis_inference_tests.cpp
 )
 
-radioify_add_module_object_library(radioify_tool_chapter_inference_probe
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter_inference_probe.cpp
-)
-
-radioify_add_module_object_library(radioify_tool_chapter_service_tests
-  ${CMAKE_CURRENT_SOURCE_DIR}/chapter_service_tests.cpp
+radioify_add_module_object_library(radioify_tool_analysis_inference_probe
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis_inference_probe.cpp
 )
 
 radioify_add_module_object_library(radioify_tool_video_edit_timeline_tests

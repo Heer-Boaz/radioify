@@ -38,8 +38,8 @@ struct TranscriptOperationControl {
   std::function<bool()> cancelled;
   std::function<bool()> backgroundGpuAllowed;
   ProgressCallback progress;
-  // Optional process-isolated recognizer. Automatic chapter analysis provides
-  // this so foreground playback can terminate native GPU work immediately;
+  // Optional process-isolated recognizer. Editing analysis provides this
+  // so cancellation and GPU pressure can terminate native work immediately;
   // standalone/manual transcript jobs retain the in-process engine.
   std::function<SpeechWorkerResult(
       const SpeechWorkerRequest &, const std::function<void(int)> &)>
@@ -51,12 +51,6 @@ struct TranscriptOperationResult {
   std::string detail;
   std::filesystem::path publishedPath;
 };
-
-// Stable action identity for Radioify's automatic TranslateToEnglish
-// prerequisite. Includes model/configuration and transcript algorithm inputs
-// so a persisted derivative is reused only by an equivalent producer.
-std::optional<std::string> automaticEnglishTranscriptProducerIdentity(
-    std::string *error = nullptr);
 
 // Owns a resumable transcript transaction. GPU revocation may abort the
 // current Whisper chunk, but decoded audio and every completed chunk remain

@@ -5,7 +5,6 @@
 #include "core/windows_message_pump.h"
 #include "input_events.h"
 #include "internal.h"
-#include "playback/video/chapter/presentation.h"
 #include "playback/video/gpu/gpu_runtime.h"
 #include "playback/video/image.h"
 #include "present.h"
@@ -31,7 +30,6 @@
 #include <sstream>
 #include <thread>
 
-#include "playback/input/media_keys.h"
 #include "playback/overlay/overlay.h"
 #include "playback/video/framebuffer/subtitle_pixel_compositor.h"
 #include "playback/video/subtitle/caption_style.h"
@@ -907,9 +905,7 @@ float4 PS_UI(PS_INPUT input) : SV_Target {
 #endif
 } // namespace
 
-VideoWindow::VideoWindow(GpuRuntime &gpu,
-                         SystemMediaCommandOwner systemMediaCommandOwner)
-    : m_gpu(gpu), m_systemMediaCommandOwner(systemMediaCommandOwner) {}
+VideoWindow::VideoWindow(GpuRuntime &gpu) : m_gpu(gpu) {}
 
 VideoWindow::~VideoWindow() { Close(); }
 
@@ -2776,23 +2772,13 @@ void VideoWindow::DrawOverlay(
       const bool controlsRendered = showPlaybackChrome;
       if (drawOverlayTextGrid &&
           (controlsRendered || contextMenuLayout.drawable())) {
-        std::optional<playback_overlay::ChapterOverviewRegion> overviewRegion;
-        if (!contextMenuLayout.drawable() && ui.chapterOverviewOpen) {
-          const auto panel = playback_video_chapters::layoutOverviewPanel(
-              ui.chapters, windowOverlayLayout.width,
-              windowOverlayLayout.height, windowOverlayLayout.topY,
-              ui.chapterOverviewScrollOffset);
-          overviewRegion =
-              playback_overlay::chapterOverviewRegionForLayout(panel);
-        }
         playback_overlay::InteractionMap cellInteractions =
             contextMenuLayout.drawable()
                 ? playback_overlay::buildContextMenuInteractionMap(
                       contextMenuLayout)
                 : playback_overlay::buildOverlayInteractionMap(
                       windowOverlayLayout, &ui.videoEdit, ui.videoEditPrompt,
-                      ui.mediaActionConfirmationPrompt.has_value(),
-                      overviewRegion ? &*overviewRegion : nullptr);
+                      ui.mediaActionConfirmationPrompt.has_value());
         if (outInteractions) {
           *outInteractions = playback_overlay::transformInteractionMap(
               cellInteractions, 0.0, 0.0,

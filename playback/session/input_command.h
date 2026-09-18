@@ -8,7 +8,6 @@
 #include "playback/overlay/interaction.h"
 #include "playback/session/context_menu_controller.h"
 #include "playback/session/input_transport.h"
-#include "playback/video/chapter/chapter.h"
 #include "playback/video/edit/view.h"
 #include "playback/video/timeline_preview_types.h"
 
@@ -22,8 +21,6 @@ enum class CommandAction : std::uint8_t {
   Toggle50Hz,
   CycleAudioTrack,
   ToggleSubtitles,
-  ToggleChapterOverview,
-  CloseChapterOverview,
   ToggleWindowPresentation,
   TogglePictureInPicture,
   ToggleFullscreen,
@@ -73,18 +70,11 @@ struct TransportRequest {
   PlaybackTransportCommand command = PlaybackTransportCommand::Next;
 };
 
-struct ChapterNavigationRequest {
-  playback_video_chapters::NavigationDirection direction =
-      playback_video_chapters::NavigationDirection::Next;
+struct FocusEditSuggestion {
+  uint64_t id = 0;
 };
 
-// The chapter presentation view uses the same possibly edited timeline as
-// playback. Overview hits therefore carry a real transport seek target.
-struct SeekToChapter {
-  int64_t timelineStartUs = 0;
-};
-
-struct SetChapterOverviewScroll {
+struct SetEditSuggestionsScroll {
   int offset = 0;
 };
 
@@ -119,8 +109,8 @@ struct ClearTimelinePreview {
 };
 
 using Command =
-    std::variant<CommandAction, TransportRequest, ChapterNavigationRequest,
-                 SeekToChapter, SetChapterOverviewScroll, VideoEditRequest,
+    std::variant<CommandAction, TransportRequest, VideoEditRequest,
+                 FocusEditSuggestion, SetEditSuggestionsScroll,
                  ContextMenuRequest, MoveVideoEditBoundary, PlaybackExitRequest,
                  TimelinePreviewRequest, ClearTimelinePreview,
                  ShowPlaybackControls, SetOverlayControlHover, SetPaused,
@@ -132,11 +122,11 @@ struct SessionSnapshot {
   bool audioSupports50HzToggle = false;
   bool pictureInPicture = false;
   bool videoEditorActive = false;
+  bool editSuggestionsOpen = false;
   playback_video_edit::Prompt videoEditPrompt =
       playback_video_edit::Prompt::None;
   bool mediaActionConfirmationPrompt = false;
   bool contextMenuVisible = false;
-  bool chapterOverviewOpen = false;
   bool playbackControlsVisible = false;
   bool stopRequested = false;
 };
