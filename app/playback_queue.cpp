@@ -1,6 +1,10 @@
 #include "app/playback_queue.h"
 
+#include <algorithm>
+#include <system_error>
 #include <utility>
+
+#include "audio/media_formats.h"
 
 namespace playback_queue {
 
@@ -17,6 +21,50 @@ Source sourceFromFiles(const std::vector<std::filesystem::path>& files) {
     }
   }
   return sourceFromTargets(std::move(targets));
+}
+
+Source sourceFromFileNeighbourhood(const std::filesystem::path& file) {
+  if (file.empty()) {
+    return sourceFromTargets({});
+  }
+
+  const std::filesystem::path directory = file.parent_path();
+  std::vector<std::filesystem::path> siblings;
+  if (!directory.empty()) {
+    std::error_code scanError;
+    std::filesystem::directory_iterator entry(
+        directory, std::filesystem::directory_options::skip_permission_denied,
+        scanError);
+    const std::filesystem::directory_iterator end;
+    while (!scanError && entry != end) {
+      const std::filesystem::path& candidate = entry->path();
+      std::error_code kindError;
+      if (entry->is_regular_file(kindError) && !kindError &&
+          (isSupportedAudioExt(candidate) || isSupportedVideoExt(candidate))) {
+        siblings.push_back(candidate);
+      }
+      entry.increment(scanError);
+    }
+  }
+
+  // A folder that cannot be read, or that does not list the opened file back,
+  // must still yield a playable queue: the file itself is the fallback.
+  const bool containsOpenedFile =
+      std::any_of(siblings.begin(), siblings.end(),
+                  [&file](const std::filesystem::path& sibling) {
+                    return samePath(sibling, file);
+                  });
+  if (!containsOpenedFile) {
+    return sourceFromFiles({file});
+  }
+
+  std::sort(siblings.begin(), siblings.end(),
+            [](const std::filesystem::path& left,
+               const std::filesystem::path& right) {
+              return pathIdentityKey(makePathIdentity(left)) <
+                     pathIdentityKey(makePathIdentity(right));
+            });
+  return sourceFromFiles(siblings);
 }
 
 Source singleSource(const PlaybackTarget& target) {

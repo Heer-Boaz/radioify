@@ -1,5 +1,7 @@
+#include <fstream>
 #include <iostream>
 #include <optional>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -196,6 +198,80 @@ int main() {
                    isTrackTarget(windowsNext->route().target, songB, 0),
                "Windows transport must preserve path-identity matching");
 #endif
+
+  // A file opened from the shell must carry its folder as transport
+  // neighbourhood. Without it previous/next stay inert for the whole session
+  // while play/pause keeps working, because only transport consults the queue.
+  std::error_code fixtureError;
+  const std::filesystem::path fixtureRoot =
+      std::filesystem::temp_directory_path(fixtureError) /
+      "radioify_queue_neighbourhood_tests";
+  std::filesystem::remove_all(fixtureRoot, fixtureError);
+  std::filesystem::create_directories(fixtureRoot, fixtureError);
+  ok &= expect(!fixtureError,
+               "the neighbourhood fixture directory must be creatable");
+  if (!fixtureError) {
+    const std::filesystem::path first = fixtureRoot / "01 first.flac";
+    const std::filesystem::path opened = fixtureRoot / "02 opened.flac";
+    const std::filesystem::path third = fixtureRoot / "03 third.mp3";
+    const std::filesystem::path artwork = fixtureRoot / "cover.jpg";
+    for (const std::filesystem::path& file : {first, opened, third, artwork}) {
+      std::ofstream(file) << "x";
+    }
+
+    const playback_queue::Queue::Services fileServices{
+        [](const std::filesystem::path& file)
+            -> std::optional<PlaybackTarget> {
+          return playbackFileTarget(file);
+        },
+        [](const PlaybackTarget& target) { return routeFor(target); }};
+
+    playback_queue::Queue shellQueue(fileServices);
+    std::optional<playback_queue::Queue::PreparedActivation> shellOpen =
+        shellQueue.prepareStart(
+            routeFor(playbackFileTarget(opened)),
+            playback_queue::sourceFromFileNeighbourhood(opened));
+    ok &= expect(shellOpen.has_value(),
+                 "opening one file must still prepare a playable queue");
+    if (shellOpen) {
+      shellQueue.commit(std::move(*shellOpen));
+      const std::optional<playback_queue::Queue::PreparedActivation> shellNext =
+          shellQueue.prepareTransport(playback_queue::Direction::Next);
+      const std::optional<playback_queue::Queue::PreparedActivation>
+          shellPrevious =
+              shellQueue.prepareTransport(playback_queue::Direction::Previous);
+      ok &= expect(shellNext && isFileTarget(shellNext->route().target, third),
+                   "an opened file must reach the next track in its folder");
+      ok &= expect(
+          shellPrevious && isFileTarget(shellPrevious->route().target, first),
+          "an opened file must reach the previous track in its folder");
+    }
+
+    // Cover art sitting beside the music is not a transport destination.
+    playback_queue::Queue artworkQueue(fileServices);
+    std::optional<playback_queue::Queue::PreparedActivation> lastTrack =
+        artworkQueue.prepareStart(
+            routeFor(playbackFileTarget(third)),
+            playback_queue::sourceFromFileNeighbourhood(third));
+    ok &= expect(lastTrack.has_value(),
+                 "the last track in a folder must still prepare a queue");
+    if (lastTrack) {
+      artworkQueue.commit(std::move(*lastTrack));
+      ok &= expect(
+          !artworkQueue.prepareTransport(playback_queue::Direction::Next),
+          "non-playable siblings must not become transport targets");
+    }
+
+    std::filesystem::remove_all(fixtureRoot, fixtureError);
+  }
+
+  // A folder that cannot be listed must still leave the opened file playable.
+  ok &= expect(
+      queue
+          .prepareStart(routeFor(trackTarget(songA, 0)),
+                        playback_queue::sourceFromFileNeighbourhood(songA))
+          .has_value(),
+      "an unscannable folder must fall back to the opened file itself");
 
   return ok ? 0 : 1;
 }

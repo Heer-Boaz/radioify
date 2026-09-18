@@ -38,6 +38,12 @@ class Source {
 
 Source sourceFromTargets(std::vector<PlaybackTarget> targets);
 Source sourceFromFiles(const std::vector<std::filesystem::path>& files);
+// Opening a single file still means "play what surrounds it". The containing
+// folder supplies the transport neighbourhood, so previous/next behave the same
+// whether a track was opened from the shell or picked in the browser. The
+// opened file is always part of the result, even when the folder cannot be
+// scanned.
+Source sourceFromFileNeighbourhood(const std::filesystem::path& file);
 Source singleSource(const PlaybackTarget& target);
 
 class Queue {

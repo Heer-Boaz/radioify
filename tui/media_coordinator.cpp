@@ -340,10 +340,17 @@ struct TuiMediaCoordinator::Impl {
 
   CommandBuildResult commandFromPlan(
       tui_media_activation::QueueFiles queuedFiles) const {
+    // One opened file is still a request to play what surrounds it, so the
+    // folder supplies the transport neighbourhood. A multi-file request is an
+    // explicit selection and stays exactly as given.
+    playback_queue::Source source =
+        queuedFiles.files.size() == 1
+            ? playback_queue::sourceFromFileNeighbourhood(
+                  queuedFiles.files.front())
+            : playback_queue::sourceFromFiles(queuedFiles.files);
     std::optional<playback_queue::Queue::PreparedActivation> activation =
-        services_.queue.prepareStart(
-            std::move(queuedFiles.route),
-            playback_queue::sourceFromFiles(queuedFiles.files));
+        services_.queue.prepareStart(std::move(queuedFiles.route),
+                                     std::move(source));
     if (!activation) {
       return MediaCommandFailure{
           MediaCommandFailureKind::QueueUnavailable,
