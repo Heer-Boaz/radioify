@@ -351,6 +351,7 @@ add_subdirectory(tui)
 
 find_package(nlohmann_json CONFIG REQUIRED)
 target_link_libraries(radioify_scene_analysis PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(radioify_edit_review PRIVATE nlohmann_json::nlohmann_json)
 find_package(miniaudio CONFIG REQUIRED)
 target_link_libraries(radioify_transcript_document PRIVATE
   nlohmann_json::nlohmann_json)
@@ -503,6 +504,7 @@ target_sources(radioify PRIVATE
   $<TARGET_OBJECTS:radioify_transcript_job>
   $<TARGET_OBJECTS:radioify_transcript_engine>
   $<TARGET_OBJECTS:radioify_scene_analysis>
+  $<TARGET_OBJECTS:radioify_edit_review>
   $<TARGET_OBJECTS:radioify_analysis_inference>
   $<TARGET_OBJECTS:radioify_image_codec>
   $<TARGET_OBJECTS:radioify_video>

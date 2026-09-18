@@ -84,17 +84,26 @@ radioify_add_module_object_library(radioify_transcript_engine
 )
 
 radioify_add_module_object_library(radioify_scene_analysis
-  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/edit_review.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/edit_review_store.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/edit_review_backend.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_analysis.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_analysis_cache.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_analyzer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_analysis_job.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_analysis_job_default.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_transcript_evidence.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/analysis/visual_timeline_checkpoint.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/analysis/visual_timeline_scan.cpp
+)
+
+# The editing review runs a language model, so it reaches the inference module,
+# the transcript engine and the model download. SceneAnalysisJob takes its
+# backend as a constructor argument and scene_analysis_job_default.cpp is the
+# only file that binds the default one, so it belongs to this side of the seam:
+# a target that only analyses scenes links radioify_scene_analysis alone and
+# stays free of that stack.
+radioify_add_module_object_library(radioify_edit_review
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/edit_review.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/edit_review_store.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/edit_review_backend.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/analysis/scene_analysis_job_default.cpp
 )
 
 radioify_add_module_object_library(radioify_analysis_inference
