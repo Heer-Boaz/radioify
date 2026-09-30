@@ -303,7 +303,8 @@ struct WindowPresenter::Impl {
         return;
       }
       result = window.CaptureCurrentFrame(
-          frameCache, presentationSource->windowUiState());
+          frameCache,
+          presentationSource->windowUiState(player.timelineSnapshot()));
     });
     if (!executed) {
       unavailable.error = "The video presenter stopped before frame capture.";

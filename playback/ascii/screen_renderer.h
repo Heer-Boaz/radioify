@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -62,14 +63,15 @@ struct PlaybackAudioPresentation {
   std::string radioFilterLabel = "Radio: Off";
 };
 
-// Complete, owned projection of mutable playback services for one rendered
-// revision. Render threads never reach back into Player, audio, or subtitles.
+// Owned session metadata and immutable subtitle content. Presenters supply
+// the current timeline when projecting each frame; renderers never reach
+// back into mutable playback services.
 struct PlaybackMediaPresentation {
   std::string windowTitle;
   PlayerTimelineSnapshot timeline;
   PlayerDebugInfo debug;
   PlaybackAudioPresentation audio;
-  playback_overlay::SubtitlePresentation subtitle;
+  std::shared_ptr<const SubtitleTrack> subtitleTrack;
   int64_t durationUs = 0;
   int sourceWidth = 0;
   int sourceHeight = 0;

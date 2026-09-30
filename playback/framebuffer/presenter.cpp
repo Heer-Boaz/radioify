@@ -167,10 +167,11 @@ void runFramebufferPresenterLoop(
     bool frameChanged = videoFrameResult.framebufferFrameChanged;
     bool textFrameChanged = videoFrameResult.textGridFrameChanged;
 
-    const bool seekingNow = player.timelineSnapshot().seekPending();
+    const PlayerTimelineSnapshot timeline = player.timelineSnapshot();
+    const bool seekingNow = timeline.seekPending();
     WindowUiState ui;
     if (!textGridPresentationActive) {
-      ui = presentationSource.windowUiState();
+      ui = presentationSource.windowUiState(timeline);
     }
     if (textGridPresentationActive) {
       const int windowWidth = videoWindow.GetWidth();
@@ -199,7 +200,7 @@ void runFramebufferPresenterLoop(
             videoFrameResult.frameAvailable ? presentationFrame : nullptr;
         TextGridPresentationRequest request{
             videoWindow, windowWidth, windowHeight, cellWidth, cellHeight,
-            textFrame, textFrameChanged, videoFrameResult.debugLine};
+            textFrame, textFrameChanged, videoFrameResult.debugLine, timeline};
         TextGridPresentationTarget target{
             textGridPresentationCells, textCols, textRows, textInteractions};
         if (presentationSource.renderTextGrid(request, target)) {

@@ -1231,14 +1231,31 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   captureMediaPresentation() const {
     const Player &player = core.player();
     const AudioPlaybackSnapshot audio = audioPlayback.snapshot();
-    PlayerTimelineSnapshot timeline = player.timelineSnapshot();
-    playback_overlay::SubtitlePresentation subtitle =
-        playback_overlay::projectSubtitlePresentation(
-            subtitleManager, subtitlesEnabled, timeline.seekPending(),
-            timeline.sourcePositionUs, hasSubtitles);
-    return playback_session::capturePlaybackMedia(
-        player, audio, std::move(timeline), windowTitle, core.audioOk(),
-        hasSubtitles, subtitlesEnabled, std::move(subtitle));
+    playback_screen_renderer::PlaybackMediaPresentation media;
+    media.windowTitle = windowTitle;
+    media.timeline = player.timelineSnapshot();
+    media.debug = player.debugInfo();
+    media.durationUs = player.durationUs();
+    media.sourceWidth = player.sourceWidth();
+    media.sourceHeight = player.sourceHeight();
+    media.audioTrackCount = player.audioTrackCount();
+    media.ended = player.isEnded();
+    media.canCycleAudioTracks = player.canCycleAudioTracks();
+    media.activeAudioTrackLabel =
+        core.audioOk() ? player.activeAudioTrackLabel() : "N/A";
+    media.audio.streamClockReady = audio.streamClockReady;
+    media.audio.streamStarved = audio.streamStarved;
+    media.audio.finished = audio.finished;
+    media.audio.supports50HzToggle = audio.supports50HzToggle;
+    media.audio.radioEnabled = audio.radioEnabled;
+    media.audio.hz50Enabled = audio.hz50Enabled;
+    media.audio.durationSec = audio.durationSec;
+    media.audio.volume = audio.volume;
+    media.audio.radioFilterLabel = std::string(audio.radioFilterLabel);
+    media.hasSubtitles = hasSubtitles;
+    media.subtitlesEnabled = subtitlesEnabled;
+    media.subtitleTrack = subtitleManager.activeTrackSnapshot();
+    return media;
   }
 
   playback_overlay::PlaybackOverlayState buildOverlayState(
@@ -1318,7 +1335,6 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
     revision.textGrid.overlay = buildOverlayState(
         model.media, model.playbackState,
         playback_video_timeline_preview::PresentationSurface::VideoWindow);
-    revision.window = playback_session::projectWindowUiState(revision.textGrid);
     presentationModel->publish(std::move(revision));
   }
 

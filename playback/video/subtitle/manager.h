@@ -129,11 +129,8 @@ struct SubtitleTrack {
   std::vector<SubtitleCue> cues;
   std::shared_ptr<const std::string> assScript;
   std::shared_ptr<const SubtitleFontAttachmentList> assFonts;
-  mutable size_t lastCueIndex = 0;
-
   void cuesAt(int64_t clockUs, std::vector<const SubtitleCue*>* out) const;
   const SubtitleCue* cueAt(int64_t clockUs) const;
-  void resetLookup() const;
 };
 
 class SubtitleManager {
@@ -149,6 +146,9 @@ class SubtitleManager {
   bool selectTrackForFile(const std::filesystem::path& sourcePath);
   size_t activeTrackIndex() const;
   const SubtitleTrack* activeTrack() const;
+  // Shared, immutable track data for renderers. Reused until loading or
+  // selection changes; published tracks survive reloads of the manager.
+  std::shared_ptr<const SubtitleTrack> activeTrackSnapshot() const;
   const std::vector<SubtitleTrack>& tracks() const { return tracks_; }
   std::string activeTrackLabel() const;
   bool isActiveLastCueTrack() const;
@@ -159,4 +159,5 @@ class SubtitleManager {
 
   std::vector<SubtitleTrack> tracks_;
   size_t activeTrack_ = 0;
+  mutable std::shared_ptr<const SubtitleTrack> activeTrackSnapshot_;
 };

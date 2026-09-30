@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "playback/ascii/screen_renderer.h"
+#include "presentation_projector.h"
 
 namespace playback_session {
 namespace {
@@ -14,14 +15,6 @@ struct PublishedState {
 };
 
 }  // namespace
-
-WindowUiState projectWindowUiState(
-    const playback_screen_renderer::PlaybackScreenModel& playback) {
-  WindowUiState ui = playback_overlay::buildWindowUiState(
-      playback.overlay, playback.controlHoverToken);
-  ui.timelinePreview = playback.timelinePreview;
-  return ui;
-}
 
 struct PresentationModel::Impl {
   explicit Impl(Dependencies dependencies) : dependencies(dependencies) {}
@@ -54,10 +47,11 @@ void PresentationModel::publish(Revision revision) {
   impl_->published.available = true;
 }
 
-WindowUiState PresentationModel::windowUiState() {
+WindowUiState
+PresentationModel::windowUiState(const PlayerTimelineSnapshot &timeline) {
   const PublishedState state = impl_->snapshot();
   if (!state.available) return {};
-  return state.revision.window;
+  return projectWindowUiState(state.revision.textGrid, timeline);
 }
 
 bool PresentationModel::renderTextGrid(
@@ -86,6 +80,8 @@ bool PresentationModel::renderTextGrid(
 
   playback_screen_renderer::PlaybackScreenModel model =
       state.revision.textGrid;
+  model.media.timeline = request.timeline;
+  projectPlaybackTimeline(model.overlay, model.media, request.timeline);
   model.visualMode = PlaybackVisualMode::AsciiGrid;
   model.nativeWindowActive = false;
   const bool audioOnlyPlayback = model.media.sourceWidth <= 0 ||

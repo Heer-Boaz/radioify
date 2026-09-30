@@ -1554,6 +1554,44 @@ radioify_link_repo_target(subtitle_loader_tests)
 add_test(NAME subtitle_loader_tests
          COMMAND $<TARGET_FILE:subtitle_loader_tests>)
 
+add_executable(subtitle_presentation_tests
+  tools/subtitle_presentation_tests.cpp
+  playback/session/presentation_projector.cpp
+  playback/overlay/presentation.cpp
+  playback/overlay/subtitle_effects.cpp
+  playback/overlay/cell_layout.cpp
+  playback/overlay/controls.cpp
+  playback/session/media_action_confirmation.cpp
+  playback/media_action_confirmation_content.cpp
+  playback/media_action_catalog.cpp
+  playback/media_action_context.cpp
+  playback/media_processing_presentation.cpp
+  playback/media_processing_actions.cpp
+  playback/media_processing_cancellation.cpp
+  playback/video/edit/overlay_model.cpp
+  playback/video/edit/suggestion_panel.cpp
+  playback/video/edit/scene_suggestions.cpp
+  playback/video/edit/timeline.cpp
+  playback/video/state/machine.cpp
+  playback/video/sequence.cpp
+  playback/video/subtitle/manager.cpp
+  playback/video/subtitle/ass/parser.cpp
+  playback/video/subtitle/ass/script.cpp
+  playback/video/subtitle/ass/bitmap_renderer.cpp
+  playback/video/subtitle/font_attachments.cpp
+  playback/video/subtitle/sidecar_discovery.cpp
+  playback/video/sidecar_identity.cpp
+  playback/video/transcript/artifact.cpp
+  core/path_identity.cpp
+  core/runtime_helpers.cpp
+  audio/media_formats.cpp
+  core/unicode_display_width.cpp
+  core/utf8.cpp
+  $<TARGET_OBJECTS:radioify_text_grid_ui>
+)
+radioify_configure_repo_target(subtitle_presentation_tests)
+add_test(NAME subtitle_presentation_tests COMMAND subtitle_presentation_tests)
+
 add_executable(ui_input_pump_tests)
 target_sources(ui_input_pump_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_ui_input_pump_tests>
@@ -2658,6 +2696,7 @@ if (RADIOIFY_LIBASS_LIBRARY_DIRS)
 endif()
 target_link_libraries(radioify PRIVATE ${_radioify_libass_libraries})
 target_link_libraries(video_frame_step_smoke PRIVATE ${_radioify_libass_libraries})
+target_link_libraries(subtitle_presentation_tests PRIVATE ${_radioify_libass_libraries} ${FFMPEG_LIBRARIES})
 message(STATUS "libass found: ASS advanced renderer enabled")
 
 find_package(whisper CONFIG REQUIRED)

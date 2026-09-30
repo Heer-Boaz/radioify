@@ -3,19 +3,21 @@
 #include <string>
 #include <vector>
 
-#include "audio/playback_snapshot.h"
 #include "playback/ascii/screen_renderer.h"
 #include "playback/session/media_action_confirmation.h"
 
-class Player;
-
 namespace playback_session {
 
-playback_screen_renderer::PlaybackMediaPresentation
-capturePlaybackMedia(const Player &player, const AudioPlaybackSnapshot &audio,
-                     PlayerTimelineSnapshot timeline, std::string windowTitle,
-                     bool audioOk, bool hasSubtitles, bool subtitlesEnabled,
-                     playback_overlay::SubtitlePresentation subtitle);
+// Re-project time-dependent presentation from an immutable session revision
+// and the presenter's current timeline, including subtitle cue boundaries.
+void projectPlaybackTimeline(
+    playback_overlay::PlaybackOverlayState &overlay,
+    const playback_screen_renderer::PlaybackMediaPresentation &media,
+    const PlayerTimelineSnapshot &timeline);
+
+WindowUiState projectWindowUiState(
+    const playback_screen_renderer::PlaybackScreenModel &playback,
+    const PlayerTimelineSnapshot &timeline);
 
 struct OverlayProjection {
   explicit OverlayProjection(

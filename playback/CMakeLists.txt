@@ -53,6 +53,7 @@ radioify_add_module_object_library(radioify_playback
   ${CMAKE_CURRENT_SOURCE_DIR}/overlay/context_menu.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/overlay/interaction.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/overlay/overlay.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/overlay/presentation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/overlay/subtitle_effects.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/subtitles.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii/frame_output_ascii.cpp

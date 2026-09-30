@@ -1398,7 +1398,9 @@ bool parseAssCues(const std::string& raw, std::vector<SubtitleCue>* outCues) {
     std::vector<SubtitleTextRun> textRuns;
     parseAssStyledTextRuns(rawText, textRunBaseStyle, &styles, &text,
                            &textRuns);
-    if (text.empty()) continue;
+    // Drawings, outlines and animated text can render without any plain text.
+    // Preserve the event and let libass evaluate its raw ASS payload.
+    if (rawText.empty()) continue;
 
     const int scriptW = std::max(1, playResX > 0 ? playResX : 384);
     const int scriptH = std::max(1, playResY > 0 ? playResY : 288);
@@ -1587,7 +1589,6 @@ bool loadSubtitleTrackFile(
               if (a.startUs != b.startUs) return a.startUs < b.startUs;
               return a.endUs < b.endUs;
             });
-  outTrack->resetLookup();
   return true;
 }
 
@@ -1981,7 +1982,9 @@ bool packetSubtitleCue(AVCodecID codecId, const AVPacket& pkt, SubtitleCue* outC
     cue.text = stripSubtitleMarkup(payload);
   }
 
-  if (cue.text.empty()) return false;
+  // ASS packets may contain graphics or initially transparent animation.
+  // Plain-text extraction must not decide whether libass receives the event.
+  if (cue.text.empty() && !cue.assStyled) return false;
   *outCue = std::move(cue);
   return true;
 }
@@ -2080,7 +2083,6 @@ bool loadEmbeddedSubtitleTracks(
   AVPacket* pkt = av_packet_alloc();
   if (!pkt) {
     for (auto& ref : refs) {
-      ref.track.resetLookup();
       outTracks->push_back(std::move(ref.track));
     }
     return !outTracks->empty();
@@ -2135,7 +2137,6 @@ bool loadEmbeddedSubtitleTracks(
       ref.track.assScript = std::make_shared<const std::string>(ref.assScript);
       ref.track.assFonts = fontAttachments;
     }
-    ref.track.resetLookup();
     outTracks->push_back(std::move(ref.track));
   }
   return !outTracks->empty();
@@ -2160,9 +2161,6 @@ void SubtitleTrack::cuesAt(int64_t clockUs,
     }
   }
   std::reverse(out->begin(), out->end());
-  if (!out->empty()) {
-    lastCueIndex = static_cast<size_t>(out->back() - cues.data());
-  }
 }
 
 const SubtitleCue* SubtitleTrack::cueAt(int64_t clockUs) const {
@@ -2172,13 +2170,12 @@ const SubtitleCue* SubtitleTrack::cueAt(int64_t clockUs) const {
   return active.front();
 }
 
-void SubtitleTrack::resetLookup() const { lastCueIndex = 0; }
-
 void SubtitleManager::loadForVideo(
     const std::filesystem::path& videoPath,
     const CancellationCheck& cancellation) {
   tracks_.clear();
   activeTrack_ = 0;
+  activeTrackSnapshot_.reset();
   if (subtitleLoadCancelled(cancellation)) return;
 
   const std::string baseStem = toUtf8String(videoPath.stem());
@@ -2229,7 +2226,7 @@ bool SubtitleManager::selectFirstTrackWithCues() {
   for (size_t i = 0; i < tracks_.size(); ++i) {
     if (tracks_[i].cues.empty()) continue;
     activeTrack_ = i;
-    tracks_[activeTrack_].resetLookup();
+    activeTrackSnapshot_.reset();
     return true;
   }
   return false;
@@ -2244,7 +2241,7 @@ bool SubtitleManager::selectTrackForFile(
       continue;
     }
     activeTrack_ = index;
-    tracks_[activeTrack_].resetLookup();
+    activeTrackSnapshot_.reset();
     return true;
   }
   return false;
@@ -2264,6 +2261,15 @@ const SubtitleTrack* SubtitleManager::activeTrack() const {
     return nullptr;
   }
   return &tracks_[activeTrack_];
+}
+
+std::shared_ptr<const SubtitleTrack> SubtitleManager::activeTrackSnapshot() const {
+  const SubtitleTrack* track = activeTrack();
+  if (!track) return {};
+  if (!activeTrackSnapshot_) {
+    activeTrackSnapshot_ = std::make_shared<const SubtitleTrack>(*track);
+  }
+  return activeTrackSnapshot_;
 }
 
 std::string SubtitleManager::activeTrackLabel() const {
@@ -2297,7 +2303,7 @@ bool SubtitleManager::cycleLanguage() {
   for (size_t i = activeTrack_ + 1; i < tracks_.size(); ++i) {
     if (tracks_[i].cues.empty()) continue;
     activeTrack_ = i;
-    tracks_[activeTrack_].resetLookup();
+    activeTrackSnapshot_.reset();
     return true;
   }
   return false;

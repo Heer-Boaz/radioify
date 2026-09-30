@@ -241,16 +241,16 @@ PlaybackOverlayState
 buildPlaybackOverlayState(const PlaybackOverlayInputs &inputs);
 
 SubtitlePresentation
-projectSubtitlePresentation(const SubtitleManager &subtitleManager,
+projectSubtitlePresentation(const SubtitleTrack *activeTrack,
                             bool subtitlesEnabled, bool seekingOverlay,
                             int64_t clockUs, bool hasSubtitles);
 
 std::vector<WindowUiState::SubtitleCue>
-collectSubtitleCues(const SubtitleManager &subtitleManager,
+collectSubtitleCues(const SubtitleTrack *activeTrack,
                     bool subtitlesEnabled, bool seekingOverlay, int64_t clockUs,
                     bool hasSubtitles);
 
-std::string buildSubtitleText(const SubtitleManager &subtitleManager,
+std::string buildSubtitleText(const SubtitleTrack *activeTrack,
                               bool subtitlesEnabled, bool seekingOverlay,
                               int64_t clockUs, bool hasSubtitles);
 

@@ -32,6 +32,7 @@ struct TextGridPresentationRequest {
   const VideoFrame* frame = nullptr;
   bool frameChanged = false;
   const std::string& enhancementDebugLine;
+  PlayerTimelineSnapshot timeline;
 };
 
 struct TextGridPresentationTarget {
@@ -49,7 +50,7 @@ class PresentationSource {
  public:
   virtual ~PresentationSource() = default;
 
-  virtual WindowUiState windowUiState() = 0;
+  virtual WindowUiState windowUiState(const PlayerTimelineSnapshot &timeline) = 0;
   virtual bool renderTextGrid(const TextGridPresentationRequest& request,
                               TextGridPresentationTarget target) = 0;
 };

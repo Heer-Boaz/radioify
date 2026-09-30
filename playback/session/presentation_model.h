@@ -7,9 +7,6 @@
 
 namespace playback_session {
 
-WindowUiState projectWindowUiState(
-    const playback_screen_renderer::PlaybackScreenModel& playback);
-
 class PresentationModel final
     : public playback_framebuffer_presenter::PresentationSource {
  public:
@@ -18,7 +15,6 @@ class PresentationModel final
   };
 
   struct Revision {
-    WindowUiState window;
     playback_screen_renderer::PlaybackScreenModel textGrid;
   };
 
@@ -30,7 +26,7 @@ class PresentationModel final
 
   void publish(Revision revision);
 
-  WindowUiState windowUiState() override;
+  WindowUiState windowUiState(const PlayerTimelineSnapshot &timeline) override;
   bool renderTextGrid(
       const playback_framebuffer_presenter::TextGridPresentationRequest&
           request,
