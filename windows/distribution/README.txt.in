@@ -19,20 +19,15 @@ Notes:
 - The extracted bundle contains the signed .msix and its certificate at the
   bundle root. Manifest inputs stay under win11-explorer-integration.
 - PSF2 playback still needs hebios.bin supplied separately
-- Automatic video chapters require compatible D3D11VA and Vulkan hardware.
-  Built with Llama.
-  Runtime analysis currently supports videos from 30 seconds through 60
-  minutes as a Radioify single-pass admission contract. Longer sources are
-  rejected instead of being routed through a different sampling strategy.
-  Vulkan inference runs in an isolated helper process so foreground playback
-  can reclaim GPU resources without waiting for a model dispatch to cooperate.
-  Choose Install chapter models from the active video's context menu to
-  explicitly install the pinned MiniCPM-V 2.6 observer and Chapter-Llama
-  planner base; the bundle does not contain or silently download either model.
-  Radioify ships only the verified
-  Chapter-Llama ASR and captions-plus-ASR adapters and their provenance notice.
-  Model sources and licenses:
-  https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf
-  https://huggingface.co/lucas-ventura/chapter-llama
-  Llama 3.1 license: models\chapter_analysis\LLAMA-3.1-LICENSE
-  Acceptable Use Policy: https://llama.meta.com/llama3_1/use-policy
+- Model weights and the optional Python/CUDA speech runtime are downloaded
+  when their feature is first requested. They remain in the per-user Radioify
+  cache across application updates. Ordinary playback starts no AI downloads.
+- Generate transcript uses Qwen3-ASR-1.7B with Whisper large-v3 word timing
+  on a supported NVIDIA GPU. Obscured or overlapping speech needs listening review.
+- Audio separation uses the BandIt v2 model with the native NVIDIA Windows ML
+  provider. Attribution is in models\audio_separation\BandIt-v2-MODEL-CARD.
+- AI video review is an explicit video-editor action. It does not create
+  automatic playback chapters or alter media without the user's editing actions.
+- Native analysis uses an isolated child process of radioify.exe so playback
+  can reclaim GPU resources and cancel work. Third-party notices accompany
+  the application and optional runtime.

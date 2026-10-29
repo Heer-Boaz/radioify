@@ -174,6 +174,9 @@ function Set-RadioifyMsixManifestIdentityVersion {
 
     $resolvedVersion = Resolve-RadioifyMsixPackageIdentityVersion -Version $Version
     [xml]$manifestXml = Get-Content -LiteralPath $ManifestPath
+    if ([string]$manifestXml.Package.Identity.Version -eq $resolvedVersion) {
+        return
+    }
     $manifestXml.Package.Identity.Version = $resolvedVersion
 
     $settings = New-Object System.Xml.XmlWriterSettings

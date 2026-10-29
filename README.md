@@ -38,17 +38,22 @@ The two models run sequentially to release GPU memory between stages. This
 improves the difficult-game-audio workflow, but obscured speech and overlapping
 voices still need listening review.
 
-The build provisions a pinned, isolated Python/CUDA runtime and both models in
-`dist/transcript-runtime`; the MSIX and portable package include it. Runtime
-inference is offline and does not use a system Python or the experimental
-virtual environments. Initial provisioning requires Python 3.13 with pip and the
-Hugging Face `hf` CLI, downloads several GB, and is cached under
-`models/transcript-runtime`. Run `scripts/transcript/test_worker.py` for the
-window/repetition/overlap regression tests. Set `RADIOIFY_TRANSCRIPT_LANGUAGE`
+The first transcription downloads a pinned, isolated Python/CUDA runtime and
+both models into `%LOCALAPPDATA%\Radioify\transcript-runtime`. The installer
+contains only the small speech bootstrap; builds do not download or package
+Python/CUDA dependencies or speech model weights. Setup displays progress,
+verifies checksums and resumes partial model downloads after cancellation.
+Subsequent inference works offline, and updates reuse the cache. No system
+Python or Hugging Face CLI is required on the target PC. An existing development
+cache can be adopted using `RADIOIFY_TRANSCRIPT_RUNTIME`; its verified location
+is remembered for later launches. Editing review downloads its native Whisper
+model separately when needed. Run `scripts/transcript/test_worker.py` and
+`scripts/transcript/test_setup_runtime.py` for regression tests.
+Set `RADIOIFY_TRANSCRIPT_LANGUAGE`
 to `auto`, a supported language code such as `en` or `nl`, or its English name
 to override automatic recognition language. A legacy `RADIOIFY_WHISPER_LANGUAGE`
-value is also accepted when the new variable is unset. Missing runtime assets
-or unsupported CUDA hardware produce an error; there is no automatic downgrade
+value is also accepted when the new variable is unset. Failed setup or
+unsupported CUDA hardware produces an error; there is no automatic downgrade
 to a smaller model.
 
 English translation for editing analysis still uses whisper.cpp's Vulkan
@@ -172,9 +177,30 @@ From the repo root on your own machine:
 .\uninstall_radioify.ps1
 ```
 
-`.\install_radioify.ps1` refreshes the default bundle in
-`dist\packages\Radioify-Windows-x64` before installing. Use `-SkipPackage` to
-reuse the current bundle as-is.
+`.\install_radioify.ps1` builds and installs the MSIX directly from `dist`.
+It does not create a portable distribution or ZIP. The compressed, signed MSIX
+is rebuilt only when its inputs change. `package_windows.ps1` creates a distribution
+ZIP when explicitly requested. Packaging progress appears in the console, with
+tool output in `dist\win11-explorer-integration\makeappx.log` and `signtool.log`.
+Use `-SkipPackage` to install the existing bundle in
+`dist\packages\Radioify-Windows-x64`, or `-PackageDir` to select another bundle.
+
+Package reuse and staging compare SHA-256 content digests, including the signed
+MSIX. Timestamp-only changes and switching between Windows PowerShell and
+PowerShell 7 do not force repackaging. Packaging runs sharing
+an output directory wait for one another. Failed builds retain the previous
+signed package and version record; failed distribution exports retain the
+previous ZIP and extracted bundle. ZIP export streams files to disk and verifies
+every entry before publication, including files larger than 2 GB. Temporary
+outputs are cleaned up, and interrupted directory swaps are recovered on retry.
+
+Audio separation downloads the 76 MB BandIt v2 model on first use into
+`%LOCALAPPDATA%\Radioify\models\audio_separation`. Downloads are resumable,
+cancellable, and verified against a pinned SHA-256; cached models work offline
+and survive application updates. The model and its inference quality are unchanged.
+The installer contains the model attribution, not the model weights.
+Native analysis still runs in an isolated, cancellable child process, using
+`radioify.exe --analysis-worker` to share the executable's native libraries.
 
 The packaged install:
 - installs the full Radioify MSIX package

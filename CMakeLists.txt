@@ -123,7 +123,7 @@ option(RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_PROCESSOR "Enable NVIDIA D3D11 video pro
 option(RADIOIFY_ENABLE_NVIDIA_RTX_VIDEO_SDK "Enable NVIDIA RTX Video SDK/NGX integration" OFF)
 option(RADIOIFY_BUILD_WIN11_EXPLORER_INTEGRATION "Build the Windows 11 Explorer integration scaffold" OFF)
 option(RADIOIFY_DOWNLOAD_NEURAL_PITCH_MODEL "Download neural pitch model automatically when missing" ON)
-option(RADIOIFY_DOWNLOAD_WHISPER_MODEL "Download the indexed-transcript Whisper model automatically when missing" ON)
+option(RADIOIFY_DOWNLOAD_WHISPER_MODEL "Enable the explicit radioify_whisper_model download target" OFF)
 set(_radioify_audio_separation_default OFF)
 if (WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
   set(_radioify_audio_separation_default ON)
@@ -216,9 +216,6 @@ set(RADIOIFY_WHISPER_MODEL_URL
 set(RADIOIFY_WHISPER_MODEL_SHA256
     "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2"
     CACHE STRING "Expected SHA256 hash for the indexed-transcript Whisper model")
-set(RADIOIFY_AUDIO_SEPARATION_MODEL_PATH
-    "${CMAKE_SOURCE_DIR}/models/audio_separation/bandit-v2-multi-mask-core-fp16.onnx"
-    CACHE FILEPATH "Path to Radioify's BandIt v2 mask model")
 set(RADIOIFY_AUDIO_SEPARATION_MODEL_SHA256
     "4694632688ae0b9a3e4c46918c0f9bb4f2af18c393d8e7d55f3e1e276d6fa6c7")
 set(RADIOIFY_PROJECT_INCLUDE_DIRS
@@ -405,37 +402,6 @@ find_file(RADIOIFY_LLAMA_CPP_LICENSE
 if (NOT RADIOIFY_LLAMA_CPP_LICENSE)
   message(FATAL_ERROR "The llama.cpp third-party license file was not found.")
 endif()
-add_executable(radioify_analysis_worker
-  ${CMAKE_SOURCE_DIR}/tools/analysis_inference_worker.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/analysis/inference_worker_protocol.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/analysis/inference.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/transcript/device_selection.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/transcript/whisper_engine.cpp
-  ${CMAKE_SOURCE_DIR}/core/utf8.cpp
-  $<TARGET_OBJECTS:radioify_image_codec>
-  ${CMAKE_SOURCE_DIR}/playback/video/frame_conversion.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/decoder.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/sequence.cpp
-  ${CMAKE_SOURCE_DIR}/playback/video/timing/timeline.cpp
-  ${CMAKE_SOURCE_DIR}/core/runtime_helpers.cpp
-  ${CMAKE_SOURCE_DIR}/audio/media_formats.cpp
-)
-radioify_link_repo_target(radioify_analysis_worker)
-target_link_libraries(radioify_analysis_worker PRIVATE
-  nlohmann_json::nlohmann_json
-  llama::mtmd
-  whisper)
-set_target_properties(radioify_analysis_worker PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
-  string(TOUPPER "${config}" config_upper)
-  set_target_properties(radioify_analysis_worker PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY_${config_upper}
-      "${CMAKE_BINARY_DIR}/bin/${config}"
-  )
-endforeach()
-
 if (RADIOIFY_HAS_AUDIO_SEPARATION)
   find_package(radioify-windows-ml CONFIG REQUIRED)
   target_link_libraries(radioify_audio_separation PRIVATE
@@ -444,28 +410,6 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
     WindowsML::Runtime)
   target_compile_definitions(radioify_audio_separation PRIVATE
     RADIOIFY_AUDIO_SEPARATION_MODEL_SHA256="${RADIOIFY_AUDIO_SEPARATION_MODEL_SHA256}")
-
-  if (NOT EXISTS "${RADIOIFY_AUDIO_SEPARATION_MODEL_PATH}")
-    message(FATAL_ERROR
-      "BandIt v2 model not found at ${RADIOIFY_AUDIO_SEPARATION_MODEL_PATH}. "
-      "Ensure Git LFS objects were fetched.")
-  endif()
-  file(SIZE "${RADIOIFY_AUDIO_SEPARATION_MODEL_PATH}"
-       _radioify_audio_separation_model_size)
-  if (_radioify_audio_separation_model_size LESS 1000000)
-    message(FATAL_ERROR
-      "BandIt v2 model is too small and is probably a Git LFS pointer: "
-      "${RADIOIFY_AUDIO_SEPARATION_MODEL_PATH}")
-  endif()
-  file(SHA256 "${RADIOIFY_AUDIO_SEPARATION_MODEL_PATH}"
-       _radioify_audio_separation_model_hash)
-  if (NOT _radioify_audio_separation_model_hash STREQUAL
-      RADIOIFY_AUDIO_SEPARATION_MODEL_SHA256)
-    message(FATAL_ERROR
-      "BandIt v2 model hash mismatch. Expected "
-      "${RADIOIFY_AUDIO_SEPARATION_MODEL_SHA256}, got "
-      "${_radioify_audio_separation_model_hash}.")
-  endif()
 
   function(radioify_deploy_windows_ml target_name)
     set(options WITH_DIRECTML)
@@ -493,7 +437,6 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
 endif()
 
 add_executable(radioify)
-add_dependencies(radioify radioify_analysis_worker)
 if (WIN32)
   set_source_files_properties("${CMAKE_SOURCE_DIR}/app/radioify.rc"
     PROPERTIES
@@ -539,6 +482,7 @@ endif()
 radioify_link_repo_target(radioify)
 target_link_libraries(radioify PRIVATE
   radioify_core_sha256
+  radioify_core_model_download
   llama::mtmd
   miniaudio::miniaudio)
 add_custom_command(TARGET radioify POST_BUILD
@@ -561,6 +505,14 @@ if (WIN32)
       -ApplicationPath "$<TARGET_FILE:radioify>"
       -WindowsMlRuntime "${RADIOIFY_HAS_AUDIO_SEPARATION}")
   set_tests_properties(analysis_runtime_layout_tests PROPERTIES LABELS "analysis;runtime-layout")
+  add_test(NAME windows_packaging_tests
+    COMMAND "${RADIOIFY_POWERSHELL_EXECUTABLE}" -NoProfile -ExecutionPolicy Bypass
+      -File "${CMAKE_SOURCE_DIR}/scripts/test/Verify-RadioifyWindowsPackaging.ps1")
+  set_tests_properties(windows_packaging_tests PROPERTIES LABELS "windows;packaging" TIMEOUT 120)
+  add_test(NAME windows_distribution_tests
+    COMMAND "${RADIOIFY_POWERSHELL_EXECUTABLE}" -NoProfile -ExecutionPolicy Bypass
+      -File "${CMAKE_SOURCE_DIR}/scripts/test/Verify-RadioifyWindowsDistribution.ps1")
+  set_tests_properties(windows_distribution_tests PROPERTIES LABELS "windows;packaging" TIMEOUT 120)
 endif()
 
 add_executable(sha256_tests)
@@ -569,6 +521,18 @@ target_sources(sha256_tests PRIVATE
 )
 radioify_link_repo_target(sha256_tests)
 target_link_libraries(sha256_tests PRIVATE radioify_core_sha256)
+add_executable(model_download_tests ${CMAKE_SOURCE_DIR}/tools/model_download_tests.cpp)
+radioify_configure_repo_target(model_download_tests)
+target_link_libraries(model_download_tests PRIVATE radioify_core_model_download)
+add_test(NAME model_download_tests COMMAND $<TARGET_FILE:model_download_tests>)
+add_executable(published_json_tests ${CMAKE_SOURCE_DIR}/tools/published_json_tests.cpp)
+radioify_configure_repo_target(published_json_tests)
+target_link_libraries(published_json_tests PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME published_json_tests COMMAND $<TARGET_FILE:published_json_tests>)
+add_test(NAME analysis_worker_process
+  COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+    -File "${CMAKE_SOURCE_DIR}/scripts/test/Verify-RadioifyAnalysisWorker.ps1"
+    -Executable "$<TARGET_FILE:radioify>")
 add_test(NAME sha256_tests COMMAND $<TARGET_FILE:sha256_tests>)
 
 add_executable(radio_measurements)
@@ -999,8 +963,10 @@ target_sources(analysis_inference_probe PRIVATE
 )
 radioify_link_repo_target(analysis_inference_probe)
 target_link_libraries(analysis_inference_probe PRIVATE radioify_core_sha256 llama::mtmd whisper)
-add_dependencies(analysis_inference_probe radioify_analysis_worker)
-foreach(_review_runtime_target IN ITEMS radioify_analysis_worker analysis_inference_tests analysis_inference_probe)
+add_dependencies(analysis_inference_probe radioify)
+target_compile_definitions(analysis_inference_probe PRIVATE
+  RADIOIFY_ANALYSIS_PROBE_EXECUTABLE="$<TARGET_FILE:radioify>")
+foreach(_review_runtime_target IN ITEMS analysis_inference_tests analysis_inference_probe)
   target_sources(${_review_runtime_target} PRIVATE
     ${CMAKE_SOURCE_DIR}/playback/video/gpu/memory_budget.cpp
     ${CMAKE_SOURCE_DIR}/playback/video/analysis/edit_review.cpp
@@ -1008,10 +974,6 @@ foreach(_review_runtime_target IN ITEMS radioify_analysis_worker analysis_infere
   )
   target_link_libraries(${_review_runtime_target} PRIVATE radioify_core_sha256)
 endforeach()
-target_sources(radioify_analysis_worker PRIVATE
-  ${CMAKE_SOURCE_DIR}/core/file_output.cpp
-  ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
-)
 target_sources(analysis_inference_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/core/file_output.cpp
   ${CMAKE_SOURCE_DIR}/core/path_identity.cpp
@@ -1028,7 +990,7 @@ target_sources(analysis_inference_probe PRIVATE
   ${CMAKE_SOURCE_DIR}/playback/video/analysis/model.cpp
   ${CMAKE_SOURCE_DIR}/playback/video/analysis/integrity.cpp
 )
-target_link_libraries(analysis_inference_probe PRIVATE winhttp)
+target_link_libraries(analysis_inference_probe PRIVATE radioify_core_model_download)
 
 add_executable(edit_review_tests
   ${CMAKE_SOURCE_DIR}/tools/edit_review_tests.cpp
@@ -1037,13 +999,6 @@ add_executable(edit_review_tests
 radioify_configure_repo_target(edit_review_tests)
 target_link_libraries(edit_review_tests PRIVATE nlohmann_json::nlohmann_json)
 add_test(NAME edit_review_tests COMMAND $<TARGET_FILE:edit_review_tests>)
-add_custom_command(TARGET analysis_inference_probe POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-          "$<TARGET_FILE:radioify_analysis_worker>"
-          "$<TARGET_FILE_DIR:analysis_inference_probe>/radioify_analysis_worker.exe"
-  COMMENT "Publishing the isolated inference worker for the hardware probe"
-  VERBATIM)
-
 add_executable(video_edit_timeline_tests)
 target_sources(video_edit_timeline_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_video_edit_timeline_tests>
@@ -1766,6 +1721,7 @@ radioify_link_repo_target(whisper_gpu_contract_tests)
 add_test(NAME whisper_gpu_contract_tests
          COMMAND $<TARGET_FILE:whisper_gpu_contract_tests>
                  "${RADIOIFY_WHISPER_MODEL_PATH}")
+set_tests_properties(whisper_gpu_contract_tests PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(indexed_transcript_smoke)
 target_sources(indexed_transcript_smoke PRIVATE
@@ -1867,7 +1823,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   )
   radioify_link_repo_target(audio_separation_tests)
   target_link_libraries(audio_separation_tests PRIVATE
-    WindowsML::Runtime bcrypt)
+    WindowsML::Runtime bcrypt radioify_core_model_download)
   radioify_deploy_windows_ml(audio_separation_tests WITH_DIRECTML)
   add_test(NAME audio_separation_tests
            COMMAND $<TARGET_FILE:audio_separation_tests>)
@@ -1886,7 +1842,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   )
   radioify_link_repo_target(audio_separation_smoke)
   target_link_libraries(audio_separation_smoke PRIVATE
-    WindowsML::Runtime bcrypt)
+    WindowsML::Runtime bcrypt radioify_core_model_download)
   radioify_deploy_windows_ml(audio_separation_smoke WITH_DIRECTML)
 
   add_executable(audio_separation_scheduler_smoke)
@@ -1903,7 +1859,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
   )
   radioify_link_repo_target(audio_separation_scheduler_smoke)
   target_link_libraries(audio_separation_scheduler_smoke PRIVATE
-    WindowsML::Runtime bcrypt)
+    WindowsML::Runtime bcrypt radioify_core_model_download)
   radioify_deploy_windows_ml(audio_separation_scheduler_smoke WITH_DIRECTML)
 
   add_executable(audio_separation_model_stress)
@@ -1959,7 +1915,7 @@ if (RADIOIFY_ENABLE_MELODY_ANALYSIS_EFFECTIVE AND RADIOIFY_DOWNLOAD_NEURAL_PITCH
 endif()
 
 if (RADIOIFY_DOWNLOAD_WHISPER_MODEL)
-  add_custom_target(radioify_whisper_model ALL
+  add_custom_target(radioify_whisper_model
     COMMAND ${CMAKE_COMMAND}
             -DOUTPUT_PATH=${RADIOIFY_WHISPER_MODEL_PATH}
             -DURL=${RADIOIFY_WHISPER_MODEL_URL}
@@ -1969,43 +1925,29 @@ if (RADIOIFY_DOWNLOAD_WHISPER_MODEL)
     COMMENT "Ensuring Whisper transcript model exists at ${RADIOIFY_WHISPER_MODEL_PATH}"
     VERBATIM
   )
-  add_dependencies(radioify radioify_whisper_model)
 endif()
 
-add_custom_target(radioify_whisper_runtime_model ALL
-  COMMAND ${CMAKE_COMMAND} -E make_directory
-          "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/models"
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-          "${RADIOIFY_WHISPER_MODEL_PATH}"
-          "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/models/ggml-large-v3.bin"
-  COMMENT "Publishing Whisper transcript model beside the Radioify build"
+add_custom_target(radioify_transcript_bootstrap ALL
+  COMMAND "${RADIOIFY_POWERSHELL_EXECUTABLE}" -NoProfile -ExecutionPolicy Bypass
+          -File "${CMAKE_SOURCE_DIR}/scripts/transcript/publish_bootstrap.ps1"
+          -Destination "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/transcript"
+  COMMENT "Publishing the small speech bootstrap (models download on first use)"
   VERBATIM
 )
-if (TARGET radioify_whisper_model)
-  add_dependencies(radioify_whisper_runtime_model radioify_whisper_model)
-endif()
-add_dependencies(radioify radioify_whisper_runtime_model)
-add_dependencies(whisper_gpu_contract_tests radioify_whisper_runtime_model)
-add_dependencies(indexed_transcript_smoke radioify_whisper_runtime_model)
+add_dependencies(radioify radioify_transcript_bootstrap)
+add_dependencies(indexed_transcript_smoke radioify_transcript_bootstrap)
 
 if (RADIOIFY_HAS_AUDIO_SEPARATION)
-  add_custom_target(radioify_audio_separation_runtime_model ALL
+  add_custom_target(radioify_audio_separation_attribution ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory
             "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/models/audio_separation"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${RADIOIFY_AUDIO_SEPARATION_MODEL_PATH}"
-            "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/models/audio_separation/bandit-v2-multi-mask-core-fp16.onnx"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_SOURCE_DIR}/models/audio_separation/BandIt-v2-MODEL-CARD"
             "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/models/audio_separation/BandIt-v2-MODEL-CARD"
-    COMMENT "Publishing BandIt v2 model beside the Radioify build"
+    COMMENT "Publishing BandIt attribution (model downloads on first use)"
     VERBATIM
   )
-  add_dependencies(radioify radioify_audio_separation_runtime_model)
-  add_dependencies(audio_separation_smoke
-                   radioify_audio_separation_runtime_model)
-  add_dependencies(audio_separation_scheduler_smoke
-                   radioify_audio_separation_runtime_model)
+  add_dependencies(radioify radioify_audio_separation_attribution)
 endif()
 
 set(RADIOIFY_SHADER_DIR "${CMAKE_SOURCE_DIR}/playback/render/shaders")
@@ -2607,7 +2549,6 @@ target_link_libraries(audio_device_recovery_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(analysis_inference_probe PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(analysis_inference_tests PRIVATE ${FFMPEG_LIBRARIES})
-target_link_libraries(radioify_analysis_worker PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_edit_export_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_edit_timeline_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(indexed_transcript_smoke PRIVATE ${FFMPEG_LIBRARIES})
@@ -3095,7 +3036,6 @@ if (WIN32)
   target_link_libraries(timeline_preview_tests PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
   target_link_libraries(analysis_inference_probe PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
   target_link_libraries(analysis_inference_tests PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
-  target_link_libraries(radioify_analysis_worker PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
   target_link_libraries(scene_analysis_smoke PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32)
   target_link_libraries(video_edit_export_smoke PRIVATE mfplat mfreadwrite mfuuid ole32 bcrypt ws2_32)
 endif()

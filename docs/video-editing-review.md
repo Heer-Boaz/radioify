@@ -20,8 +20,8 @@ Playback no longer creates an AI service, schedules GPU inference, downloads
 chapter models or exposes chapter controls/commands. The exclusive Chapter-Llama
 pipeline and its smaller VLM are removed from the source and packaging paths.
 Shared inference, model installation, speech evidence and worker ownership now
-live under `playback/video/analysis`. The private executable is
-`radioify_analysis_worker.exe`. Existing media, transcripts, downloaded models
+live under `playback/video/analysis`. The private worker process runs
+`radioify.exe --analysis-worker`. Existing media, transcripts, downloaded models
 and historical chapter caches are not deleted or migrated.
 
 Editing review first snapshots a complete English subtitle track or reads the

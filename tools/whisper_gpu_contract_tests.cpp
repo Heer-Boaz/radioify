@@ -36,9 +36,9 @@ int main(int argc, char** argv) {
 
   const std::filesystem::path modelPath(argv[1]);
   if (!std::filesystem::is_regular_file(modelPath)) {
-    std::cerr << "whisper_gpu_contract_tests: model does not exist: "
+    std::cerr << "whisper_gpu_contract_tests: optional model is not cached; skipping: "
               << modelPath.string() << '\n';
-    return EXIT_FAILURE;
+    return 77;
   }
 
   WhisperContextPtr cpuAllowed(loadModel(modelPath, false));

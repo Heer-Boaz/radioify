@@ -187,7 +187,7 @@ function Add-PublishedArtifactsFromDirectory {
     return
   }
 
-  Get-ChildItem -LiteralPath $DirectoryPath -Recurse -File |
+  Get-ChildItem -LiteralPath $DirectoryPath |
     Sort-Object FullName |
     ForEach-Object {
       Add-PublishedArtifactPath -Artifacts $Artifacts -Path $_.FullName
@@ -360,18 +360,11 @@ function Publish-BuildArtifacts {
     Fail-Build "Build completed without producing a radioify executable in $($Context.Paths.BuildDir). Check the build output above."
   }
 
-  $analysisWorkerSource = Join-Path (Split-Path -Parent $builtExe) "radioify_analysis_worker.exe"
-  if (-not (Test-Path -LiteralPath $analysisWorkerSource -PathType Leaf)) {
-    Fail-Build "Build completed without the required isolated analysis worker at $analysisWorkerSource."
+  # Worker processes now use radioify.exe. Retire only these named, generated
+  # payloads; source models and downloaded user caches are outside these roots.
+  foreach ($outputRoot in @($Context.Paths.DistDir, (Split-Path -Parent $builtExe), $Context.Paths.BuildDir)) {
+    Remove-RadioifyRetiredPayloadFiles -OutputRoot $outputRoot
   }
-  $analysisWorkerDestination = Join-Path $Context.Paths.DistDir "radioify_analysis_worker.exe"
-  $analysisWorkerPublish = Try-Copy-BuildArtifact `
-    -SourcePath $analysisWorkerSource `
-    -DestinationPath $analysisWorkerDestination
-  if (-not $analysisWorkerPublish.Success) {
-    Fail-Build "Could not publish the isolated analysis worker: $($analysisWorkerPublish.ErrorMessage)"
-  }
-  Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $analysisWorkerDestination
 
   # Copy radioify.ico to dist/ so it ends up in the Win11 Explorer external location.
   $icoSource = Join-Path $Context.Paths.Root "radioify.ico"
@@ -395,30 +388,16 @@ function Publish-BuildArtifacts {
   Copy-Item -LiteralPath $llamaLicenseSource -Destination $llamaLicenseDestination -Force
   Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $llamaLicenseDestination
 
-  $whisperModelSource = Get-CMakeCacheValue `
-    -CachePath (Join-Path $Context.Paths.BuildDir "CMakeCache.txt") `
-    -Variable "RADIOIFY_WHISPER_MODEL_PATH"
-  if (-not (Test-Path -LiteralPath $whisperModelSource)) {
-    Fail-Build "Build completed without the indexed-transcript model at $whisperModelSource."
-  }
-  $whisperModelDistDir = Join-Path $Context.Paths.DistDir "models"
-  if (-not (Test-Path -LiteralPath $whisperModelDistDir)) {
-    New-Item -ItemType Directory -Force -Path $whisperModelDistDir | Out-Null
-  }
-  $whisperModelDestination = Join-Path $whisperModelDistDir "ggml-large-v3.bin"
-  Copy-Item -LiteralPath $whisperModelSource -Destination $whisperModelDestination -Force
-  Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $whisperModelDestination
-
-  # The normal transcript command must work from both dist and the installed
-  # package without a developer virtual environment or model downloads at run time.
-  & (Join-Path $Context.Paths.Root "scripts\transcript\prepare_runtime.ps1") `
-    -Destination (Join-Path $Context.Paths.DistDir "transcript-runtime")
+  # Ship only our bootstrap, not the optional multi-GB Python/CUDA/model cache.
+  Copy-RadioifyTranscriptBootstrap -Source (Join-Path (Split-Path -Parent $builtExe) "transcript") `
+    -Destination (Join-Path $Context.Paths.DistDir "transcript")
   Add-PublishedArtifactPath -Artifacts $publishedArtifacts `
-    -Path (Join-Path $Context.Paths.DistDir "transcript-runtime")
+    -Path (Join-Path $Context.Paths.DistDir "transcript")
   if ($Context.Options.Tests) {
-    & (Join-Path $Context.Paths.DistDir "transcript-runtime\python.exe") -B `
-      (Join-Path $Context.Paths.Root "scripts\transcript\test_worker.py")
+    & python -B (Join-Path $Context.Paths.Root "scripts\transcript\test_worker.py")
     if ($LASTEXITCODE -ne 0) { Fail-Build "Transcript worker regression tests failed." }
+    & python -B (Join-Path $Context.Paths.Root "scripts\transcript\test_setup_runtime.py")
+    if ($LASTEXITCODE -ne 0) { Fail-Build "Transcript setup regression tests failed." }
   }
 
   $cmakeCachePath = Join-Path $Context.Paths.BuildDir "CMakeCache.txt"
@@ -450,22 +429,10 @@ function Publish-BuildArtifacts {
       }
     }
 
-    $separationModelSource = Get-CMakeCacheValue `
-      -CachePath $cmakeCachePath `
-      -Variable "RADIOIFY_AUDIO_SEPARATION_MODEL_PATH"
-    if (-not $separationModelSource -or
-        -not (Test-Path -LiteralPath $separationModelSource)) {
-      Fail-Build "Build completed without the configured BandIt v2 model at $separationModelSource."
-    }
     $separationModelDistDir = Join-Path $Context.Paths.DistDir "models\audio_separation"
     if (-not (Test-Path -LiteralPath $separationModelDistDir)) {
       New-Item -ItemType Directory -Force -Path $separationModelDistDir | Out-Null
     }
-    $separationModelDestination = Join-Path $separationModelDistDir "bandit-v2-multi-mask-core-fp16.onnx"
-    Copy-Item -LiteralPath $separationModelSource `
-      -Destination $separationModelDestination -Force
-    Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $separationModelDestination
-
     $separationModelCardSource = Join-Path $Context.Paths.Root "models\audio_separation\BandIt-v2-MODEL-CARD"
     if (-not (Test-Path -LiteralPath $separationModelCardSource)) {
       Fail-Build "BandIt v2 attribution file was not found at $separationModelCardSource."

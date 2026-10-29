@@ -18,6 +18,7 @@
 #include "audio/flac_writer.h"
 #include "audio/separation/compiled_model_cache.h"
 #include "audio/separation/mask_model.h"
+#include "audio/separation/model.h"
 #include "audio/separation/spectral_transform.h"
 #include "core/file_output.h"
 #include "runtime_helpers.h"
@@ -32,8 +33,6 @@ constexpr std::uint64_t kChunkFrames =
 constexpr std::uint64_t kChunkHopFrames = kSampleRate;
 constexpr std::uint64_t kFrontPadFrames = 14ull * kSampleRate;
 constexpr std::uint32_t kDecodeBlockFrames = 64 * 1024;
-constexpr const char* kDefaultModelName =
-    "bandit-v2-multi-mask-core-fp16.onnx";
 
 void setError(std::string* error, std::string message) {
   if (error) *error = std::move(message);
@@ -85,33 +84,6 @@ class ScopedTemporaryFile {
  private:
   std::filesystem::path path_;
 };
-
-bool resolveBundledModelPath(std::filesystem::path* modelPath,
-                             std::string* error) {
-  if (!modelPath) {
-    setError(error, "No audio-separation model destination was provided.");
-    return false;
-  }
-  modelPath->clear();
-  for (const std::filesystem::path& root : radioifyResourceSearchRoots()) {
-    const std::array<std::filesystem::path, 3> candidates = {
-        root / "models" / "audio_separation" / kDefaultModelName,
-        root / "models" / kDefaultModelName,
-        root / kDefaultModelName};
-    for (const std::filesystem::path& candidate : candidates) {
-      std::error_code ec;
-      if (std::filesystem::is_regular_file(candidate, ec) && !ec) {
-        *modelPath = candidate;
-        return true;
-      }
-    }
-  }
-  setError(error,
-           "Bundled audio-separation model not found. Reinstall Radioify or "
-           "rebuild it so models/audio_separation/"
-           "bandit-v2-multi-mask-core-fp16.onnx is installed.");
-  return false;
-}
 
 bool validateRequest(const std::filesystem::path& mediaPath,
                      const ExecutionControl& control,
@@ -523,15 +495,15 @@ bool separateMediaAudioUsingModel(
     const ExecutionControl& control,
     std::string* error,
     const OutputCommitStarted& outputCommitStarted,
-    bool prepareBundledModelCache) {
+    bool prepareProductionModelCache) {
   if (!checkpoint(control, error)) return false;
   report(onProgress, 0.01f, "Preparing audio separation");
   reportDiagnostic(diagnostics, DiagnosticLevel::Info, "model",
                    "Loading model: " + toUtf8String(modelPath));
 
   PreparedModel prepared;
-  if (prepareBundledModelCache) {
-    if (!prepareBundledModel(
+  if (prepareProductionModelCache) {
+    if (!prepareProductionModel(
             modelPath, backend, diagnostics, control,
             ModelPreparationMode::ReuseOrCreate,
             [&](std::string phase) {
@@ -555,7 +527,7 @@ bool separateMediaAudioUsingModel(
     if (control.cancellationRequested()) {
       return false;
     }
-    if (!prepareBundledModelCache || !prepared.compiled ||
+    if (!prepareProductionModelCache || !prepared.compiled ||
         !prepared.cacheHit) {
       return false;
     }
@@ -566,7 +538,7 @@ bool separateMediaAudioUsingModel(
                               ? *error
                               : std::string("no diagnostic detail")));
     PreparedModel rebuilt;
-    if (!prepareBundledModel(
+    if (!prepareProductionModel(
             modelPath, backend, diagnostics, control,
             ModelPreparationMode::Rebuild,
             [&](std::string phase) {
@@ -770,9 +742,17 @@ bool separateMediaAudio(const std::filesystem::path& mediaPath,
   }
 
   std::filesystem::path modelPath;
-  if (!resolveBundledModelPath(&modelPath, error)) return false;
+  if (!ensureSeparationModel(
+          &modelPath,
+          [&](const Progress& progress) {
+            report(onProgress, 0.05f * progress.fraction, progress.phase);
+          },
+          control, error)) return false;
   return separateMediaAudioUsingModel(mediaPath, modelPath, backend, outputPaths,
-                                      onProgress, diagnostics,
+                                      [&](const Progress& progress) {
+                                        report(onProgress, 0.05f + 0.95f * progress.fraction,
+                                               progress.phase);
+                                      }, diagnostics,
                                       control, error, outputCommitStarted,
                                       true);
 }

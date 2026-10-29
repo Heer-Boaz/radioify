@@ -64,35 +64,54 @@ function Join-RadioifyNativeCommandLineArguments {
 function Invoke-RadioifyNativeTool {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
-        [Parameter(Mandatory = $true)][string[]]$Arguments
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [string]$Activity = "Running native tool",
+        [string]$LogPath,
+        [ValidateRange(1, 60)][int]$ProgressIntervalSeconds = 10
     )
 
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
     $startInfo.FileName = $FilePath
     $startInfo.Arguments = Join-RadioifyNativeCommandLineArguments -Arguments $Arguments
     $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
 
+    Write-Host "$Activity..."
+    $elapsed = [System.Diagnostics.Stopwatch]::StartNew()
     $process = [System.Diagnostics.Process]::Start($startInfo)
     try {
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
-        $process.WaitForExit()
+        $nextProgress = $ProgressIntervalSeconds
+        while (-not $process.WaitForExit(250)) {
+            if ($elapsed.Elapsed.TotalSeconds -ge $nextProgress) {
+                Write-Host ("{0}: {1:N0}s elapsed" -f $Activity, $elapsed.Elapsed.TotalSeconds)
+                $nextProgress += $ProgressIntervalSeconds
+            }
+        }
 
         $stdoutText = $stdout.Result
         $stderrText = $stderr.Result
-        if (-not [string]::IsNullOrWhiteSpace($stdoutText)) {
-            Write-Host $stdoutText.TrimEnd()
-        }
-        if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
-            Write-Host $stderrText.TrimEnd()
+        if ($LogPath) {
+            [System.IO.Directory]::CreateDirectory((Split-Path -Parent $LogPath)) | Out-Null
+            [System.IO.File]::WriteAllText($LogPath, $stdoutText + [Environment]::NewLine + $stderrText)
+            Write-Host "Tool output: $LogPath"
+        } else {
+            if (-not [string]::IsNullOrWhiteSpace($stdoutText)) { Write-Host $stdoutText.TrimEnd() }
+            if (-not [string]::IsNullOrWhiteSpace($stderrText)) { Write-Host $stderrText.TrimEnd() }
         }
 
         if ($process.ExitCode -ne 0) {
+            if ($LogPath) {
+                Get-Content -LiteralPath $LogPath -Tail 30 | ForEach-Object { Write-Host $_ }
+            }
             throw "Command failed with exit code $($process.ExitCode): $FilePath $($startInfo.Arguments)"
         }
+        Write-Host ("{0} completed in {1:N1}s." -f $Activity, $elapsed.Elapsed.TotalSeconds)
     } finally {
+        if (-not $process.HasExited) { $process.Kill() }
         $process.Dispose()
     }
 }
@@ -142,15 +161,6 @@ function Ensure-RadioifyMsixDirectory {
     }
 
     New-Item -ItemType Directory -Force -Path $Path | Out-Null
-}
-
-function Reset-RadioifyMsixStagingDirectory {
-    param([Parameter(Mandatory = $true)][string]$Path)
-
-    Ensure-RadioifyMsixDirectory -Path $Path
-
-    Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue |
-        Remove-Item -Recurse -Force
 }
 
 function New-RadioifyMsixPngAsset {
@@ -219,90 +229,127 @@ function Export-RadioifyMsixPngAssetFromIcon {
     }
 }
 
+function Get-RadioifyMsixPayloadFiles {
+    param([Parameter(Mandatory = $true)][string]$IntegrationDir)
+
+    $distRoot = Split-Path -Parent $IntegrationDir
+    $files = [System.Collections.Generic.Dictionary[string, System.IO.FileInfo]]::new([StringComparer]::OrdinalIgnoreCase)
+    $files.Add("radioify_explorer.dll", (Get-Item -LiteralPath (Join-Path $IntegrationDir "radioify_explorer.dll")))
+    $required = @(
+        "radioify.exe", "llama-cpp-LICENSE.txt",
+        "models\audio_separation\BandIt-v2-MODEL-CARD"
+    ) + (Get-RadioifyWindowsMlRuntimeContract).ProductionRuntimeFiles
+    foreach ($relative in $required) {
+        $files.Add($relative, (Get-Item -LiteralPath (Join-Path $distRoot $relative) -ErrorAction Stop))
+    }
+    $icon = Get-Item -LiteralPath (Join-Path $distRoot "radioify.ico") -ErrorAction SilentlyContinue
+    if ($icon) { $files.Add("radioify.ico", $icon) }
+
+    $bootstrap = Join-Path $distRoot "transcript"
+    foreach ($name in Get-RadioifyTranscriptBootstrapFiles) {
+        $files.Add("transcript\$name", (Get-Item -LiteralPath (Join-Path $bootstrap $name) -ErrorAction Stop))
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $bootstrap "native\msvcp140.dll"))) {
+        throw "The speech bootstrap C++ runtime is missing."
+    }
+    foreach ($file in Get-ChildItem -LiteralPath (Join-Path $bootstrap "native") -Filter '*.dll') {
+        $files.Add("transcript\native\$($file.Name)", $file)
+    }
+    return $files
+}
+
+function Get-RadioifyMsixInputFingerprint {
+    param(
+        [Parameter(Mandatory = $true)]$Files,
+        [Parameter(Mandatory = $true)]$Digests,
+        [Parameter(Mandatory = $true)][string]$ManifestPath,
+        [Parameter(Mandatory = $true)][string]$Thumbprint,
+        [switch]$NoCompression
+    )
+
+    # Optional models live outside the package. Hash the actual payload so
+    # preserved timestamps cannot hide a changed or damaged file.
+    [xml]$manifest = Get-Content -LiteralPath $ManifestPath -Raw
+    $manifest.Package.Identity.Version = "0.0.0.0"
+    $text = [System.Text.StringBuilder]::new()
+    [void]$text.AppendLine($manifest.DocumentElement.OuterXml)
+    [void]$text.AppendLine("$Thumbprint|$NoCompression")
+    foreach ($scriptName in @("RadioifyWindowsMsixBuild.ps1", "RadioifyWindowsMsixCommon.ps1",
+            "RadioifyWindowsRuntimeContract.ps1", "RadioifyWindowsPackageFiles.ps1")) {
+        [void]$text.AppendLine((Get-RadioifyFileDigest -Path (Join-Path $PSScriptRoot $scriptName)))
+    }
+    # Culture-sensitive sorting differs between Windows PowerShell and pwsh.
+    # The same payload must have one fingerprint on either host.
+    $relativePaths = [string[]]@($Files.Keys)
+    [Array]::Sort($relativePaths, [StringComparer]::OrdinalIgnoreCase)
+    foreach ($relative in $relativePaths) {
+        $file = $Files[$relative]
+        [void]$text.AppendLine("$relative|$($file.Length)|$($Digests[$relative])")
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text.ToString()))).Replace("-", "")
+    } finally { $sha.Dispose() }
+}
+
+function Sync-RadioifyMsixPayloadFiles {
+    param(
+        [Parameter(Mandatory = $true)][string]$LayoutDir,
+        [Parameter(Mandatory = $true)]$Files,
+        [Parameter(Mandatory = $true)]$Digests
+    )
+
+    Ensure-RadioifyMsixDirectory -Path $LayoutDir
+    $root = (Get-Item -LiteralPath $LayoutDir -Force).FullName.TrimEnd('\')
+    $prefix = $root + '\'
+    $existing = @(Get-Item -LiteralPath $root -Force) + @(Get-ChildItem -LiteralPath $root -Recurse -Force)
+    # Never follow a link when reconciling this owned staging tree.
+    foreach ($item in $existing) {
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "MSIX staging contains a reparse point: '$($item.FullName)'."
+        }
+    }
+    $copied = 0
+    foreach ($relative in $Files.Keys) {
+        $destination = [IO.Path]::GetFullPath((Join-Path $root $relative))
+        if (-not $destination.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "MSIX payload path escapes the staging directory: '$relative'."
+        }
+        if (Copy-RadioifyFileIfChanged -Source $Files[$relative].FullName -Destination $destination `
+                -SourceDigest $Digests[$relative]) { ++$copied }
+    }
+    $generated = @("AppxManifest.xml", "Assets\StoreLogo.png", "Assets\SmallLogo.png")
+    foreach ($item in $existing) {
+        if ($item.PSIsContainer) { continue }
+        if (-not $item.FullName.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "MSIX staging file is outside its expected directory: '$($item.FullName)'."
+        }
+        $relative = $item.FullName.Substring($prefix.Length)
+        if (-not $Files.ContainsKey($relative) -and $relative -notin $generated) {
+            Remove-Item -LiteralPath $item.FullName -Force
+        }
+    }
+    Write-Host "MSIX staging: $copied files copied, $($Files.Count - $copied) unchanged."
+}
+
 function Initialize-RadioifyMsixPackageLayout {
     param(
         [Parameter(Mandatory = $true)][string]$IntegrationDir,
-        [string]$PackageVersion
+        [string]$PackageVersion,
+        [Parameter(Mandatory = $true)]$Files,
+        [Parameter(Mandatory = $true)]$Digests
     )
 
     $layoutDir = Join-Path $IntegrationDir "package-layout"
-    $distRoot = Split-Path -Parent $IntegrationDir
     $resolvedPackageVersion = Resolve-RadioifyMsixPackageIdentityVersion -Version $PackageVersion
-    Set-RadioifyMsixManifestIdentityVersion `
-        -ManifestPath (Join-Path $IntegrationDir "Package.appxmanifest") `
-        -Version $resolvedPackageVersion
-    Reset-RadioifyMsixStagingDirectory -Path $layoutDir
+    Sync-RadioifyMsixPayloadFiles -LayoutDir $layoutDir -Files $Files -Digests $Digests
 
     Copy-Item -LiteralPath (Join-Path $IntegrationDir "Package.appxmanifest") `
         -Destination (Join-Path $layoutDir "AppxManifest.xml") `
         -Force
-    Copy-Item -LiteralPath (Join-Path $IntegrationDir "radioify_explorer.dll") `
-        -Destination (Join-Path $layoutDir "radioify_explorer.dll") `
-        -Force
-    Copy-Item -LiteralPath (Join-Path $distRoot "radioify.exe") `
-        -Destination (Join-Path $layoutDir "radioify.exe") `
-        -Force
-    $analysisWorkerSource = Join-Path $distRoot "radioify_analysis_worker.exe"
-    if (-not (Test-Path -LiteralPath $analysisWorkerSource -PathType Leaf)) {
-        throw "Isolated analysis worker not found at '$analysisWorkerSource'."
-    }
-    Copy-Item -LiteralPath $analysisWorkerSource `
-        -Destination (Join-Path $layoutDir "radioify_analysis_worker.exe") `
-        -Force
-
-    $llamaLicenseSource = Join-Path $distRoot "llama-cpp-LICENSE.txt"
-    if (-not (Test-Path -LiteralPath $llamaLicenseSource)) {
-        throw "llama.cpp license not found at '$llamaLicenseSource'."
-    }
-    Copy-Item -LiteralPath $llamaLicenseSource `
-        -Destination (Join-Path $layoutDir "llama-cpp-LICENSE.txt") `
-        -Force
-
-    $whisperModelSource = Join-Path $distRoot "models\ggml-large-v3.bin"
-    if (-not (Test-Path -LiteralPath $whisperModelSource)) {
-        throw "Indexed-transcript model not found at '$whisperModelSource'."
-    }
-    $modelLayoutDir = Join-Path $layoutDir "models"
-    New-Item -ItemType Directory -Force -Path $modelLayoutDir | Out-Null
-    Copy-Item -LiteralPath $whisperModelSource `
-        -Destination (Join-Path $modelLayoutDir "ggml-large-v3.bin") `
-        -Force
-
-    $windowsMlRuntimeContract = Get-RadioifyWindowsMlRuntimeContract
-    Copy-RadioifyTranscriptRuntime -Source (Join-Path $distRoot "transcript-runtime") `
-        -Destination (Join-Path $layoutDir "transcript-runtime")
-    foreach ($runtimeName in $windowsMlRuntimeContract.ProductionRuntimeFiles) {
-        $runtimeSource = Join-Path $distRoot $runtimeName
-        if (-not (Test-Path -LiteralPath $runtimeSource)) {
-            throw "Audio-separation runtime not found at '$runtimeSource'."
-        }
-        Copy-Item -LiteralPath $runtimeSource `
-            -Destination (Join-Path $layoutDir $runtimeName) `
-            -Force
-    }
-
-    $separationSourceDir = Join-Path $distRoot "models\audio_separation"
-    $separationLayoutDir = Join-Path $modelLayoutDir "audio_separation"
-    New-Item -ItemType Directory -Force -Path $separationLayoutDir | Out-Null
-    foreach ($separationFile in @(
-        "bandit-v2-multi-mask-core-fp16.onnx",
-        "BandIt-v2-MODEL-CARD"
-    )) {
-        $sourcePath = Join-Path $separationSourceDir $separationFile
-        if (-not (Test-Path -LiteralPath $sourcePath)) {
-            throw "Audio-separation artifact not found at '$sourcePath'."
-        }
-        Copy-Item -LiteralPath $sourcePath `
-            -Destination (Join-Path $separationLayoutDir $separationFile) `
-            -Force
-    }
-
-    $icoSource = Join-Path $distRoot "radioify.ico"
-    if (Test-Path -LiteralPath $icoSource) {
-        Copy-Item -LiteralPath $icoSource `
-            -Destination (Join-Path $layoutDir "radioify.ico") `
-            -Force
-    }
+    Set-RadioifyMsixManifestIdentityVersion `
+        -ManifestPath (Join-Path $layoutDir "AppxManifest.xml") `
+        -Version $resolvedPackageVersion
 
     $assetsDir = Join-Path $layoutDir "Assets"
     New-Item -ItemType Directory -Force -Path $assetsDir | Out-Null
@@ -339,6 +386,9 @@ function Ensure-RadioifyMsixSigningCertificate {
     Clear-RadioifyMsixObsoleteArtifacts `
         -IntegrationDir $IntegrationDir `
         -PackageName $manifestInfo.PackageName
+    # Windows PowerShell needs the certificate provider loaded before binding
+    # its dynamic -CodeSigningCert parameter in a fresh packaging process.
+    Import-Module (Join-Path $PSHOME "Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1") -ErrorAction Stop
     $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert -ErrorAction SilentlyContinue |
         Where-Object { $_.Subject -eq $Subject -and $_.HasPrivateKey } |
         Sort-Object NotAfter -Descending |
@@ -376,22 +426,26 @@ function New-RadioifySignedMsixPackage {
         [switch]$NoCompression
     )
 
+    $IntegrationDir = (Resolve-Path -LiteralPath $IntegrationDir).Path
+    $lock = Enter-RadioifyPackageLock -Directory $IntegrationDir -Name ".msix-build.lock"
+    try {
+        return Invoke-RadioifySignedMsixPackageBuild -IntegrationDir $IntegrationDir `
+            -PackageVersion $PackageVersion -NoCompression:$NoCompression
+    } finally { $lock.Dispose() }
+}
+
+function Invoke-RadioifySignedMsixPackageBuild {
+    param(
+        [Parameter(Mandatory = $true)][string]$IntegrationDir,
+        [string]$PackageVersion,
+        [switch]$NoCompression
+    )
+
     Assert-RadioifyMsixArtifactsExist -IntegrationDir $IntegrationDir
-
-    $resolvedPackageVersion = Resolve-RadioifyMsixPackageIdentityVersion -Version $PackageVersion
-    Set-RadioifyMsixManifestIdentityVersion `
-        -ManifestPath (Join-Path $IntegrationDir "Package.appxmanifest") `
-        -Version $resolvedPackageVersion
-
     $manifestInfo = Get-RadioifyMsixManifestInfo -IntegrationDir $IntegrationDir
     Clear-RadioifyMsixObsoleteArtifacts `
         -IntegrationDir $IntegrationDir `
         -PackageName $manifestInfo.PackageName
-    $makeAppxExe = Resolve-RadioifyWindowsSdkExecutable -ToolName "makeappx.exe"
-    $signToolExe = Resolve-RadioifyWindowsSdkExecutable -ToolName "signtool.exe"
-    $packageLayout = Initialize-RadioifyMsixPackageLayout `
-        -IntegrationDir $IntegrationDir `
-        -PackageVersion $resolvedPackageVersion
     $packagePath = Get-RadioifyMsixPackagePath `
         -IntegrationDir $IntegrationDir `
         -PackageName $manifestInfo.PackageName
@@ -399,36 +453,104 @@ function New-RadioifySignedMsixPackage {
         -Subject $manifestInfo.Publisher `
         -IntegrationDir $IntegrationDir
 
-    if (Test-Path -LiteralPath $packagePath) {
-        Remove-Item -LiteralPath $packagePath -Force
+    Write-Host "Checking MSIX package inputs..."
+    $files = Get-RadioifyMsixPayloadFiles -IntegrationDir $IntegrationDir
+    $digests = [System.Collections.Generic.Dictionary[string, string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($relative in $files.Keys) {
+        $digests.Add($relative, (Get-RadioifyFileDigest -Path $files[$relative].FullName))
     }
-    $packArguments = @(
-        "pack",
-        "/d", $packageLayout,
-        "/p", $packagePath,
-        "/o"
-    )
-    # Useful for local validation of multi-GB model packages; release builds
-    # retain compression by default.
-    if ($NoCompression) { $packArguments += "/nc" }
-    Invoke-RadioifyNativeTool -FilePath $makeAppxExe -Arguments $packArguments | Out-Host
-    Wait-RadioifyMsixPackageFile -Path $packagePath
-    Invoke-RadioifyNativeTool -FilePath $signToolExe -Arguments @(
-        "sign",
-        "/fd", "SHA256",
-        "/sha1", $certInfo.Certificate.Thumbprint,
-        "/s", "My",
-        $packagePath
-    ) | Out-Host
-    Assert-RadioifyMsixPackageSigned `
-        -Path $packagePath `
-        -ExpectedThumbprint $certInfo.Certificate.Thumbprint
+    $fingerprint = Get-RadioifyMsixInputFingerprint -Files $files -Digests $digests `
+        -ManifestPath $manifestInfo.ManifestPath -Thumbprint $certInfo.Certificate.Thumbprint `
+        -NoCompression:$NoCompression
+    $statePath = Join-Path $IntegrationDir "package-state.json"
+    $state = $null
+    try {
+        if (Test-Path -LiteralPath $statePath) { $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json }
+        if ($state) {
+            if ($state.Format -ne 2) { $state = $null }
+            else { Resolve-RadioifyMsixPackageIdentityVersion -Version $state.PackageVersion | Out-Null }
+        }
+        $packageFile = Get-Item -LiteralPath $packagePath -ErrorAction SilentlyContinue
+        if ($state -and $state.Format -eq 2 -and $state.InputFingerprint -eq $fingerprint -and
+            (-not $PackageVersion -or $state.PackageVersion -eq $PackageVersion) -and
+            $packageFile -and $packageFile.Length -eq $state.PackageLength -and
+            (Get-RadioifyFileDigest -Path $packagePath) -eq $state.PackageSha256) {
+            # State is only saved after successful signing and validation; a
+            # changed/missing package, input, version, signer or mode invalidates it.
+            Set-RadioifyMsixManifestIdentityVersion -ManifestPath $manifestInfo.ManifestPath -Version $state.PackageVersion
+            Write-Host "MSIX unchanged; reusing signed package $($state.PackageVersion)."
+            return [pscustomobject]@{
+                PackagePath = $packagePath
+                CertificatePath = $certInfo.CertificatePath
+                LayoutPath = Get-RadioifyMsixPackageLayoutPath -IntegrationDir $IntegrationDir
+                ManifestInfo = Get-RadioifyMsixManifestInfo -IntegrationDir $IntegrationDir
+                PackageVersion = $state.PackageVersion
+                Reused = $true
+            }
+        }
+    } catch {
+        # An incomplete/older state file is a cache miss, never a build failure.
+        Write-Verbose "MSIX cache record is unusable: $($_.Exception.Message)"
+        $state = $null
+    }
+
+    $resolvedPackageVersion = Resolve-RadioifyMsixPackageIdentityVersion -Version $PackageVersion
+    if (-not $PackageVersion -and $state -and [version]$resolvedPackageVersion -le [version]$state.PackageVersion) {
+        $previous = [version]$state.PackageVersion
+        if ($previous.Revision -lt 65535) {
+            $resolvedPackageVersion = "{0}.{1}.{2}.{3}" -f $previous.Major, $previous.Minor, $previous.Build, ($previous.Revision + 1)
+        }
+    }
+    $makeAppxExe = Resolve-RadioifyWindowsSdkExecutable -ToolName "makeappx.exe"
+    $signToolExe = Resolve-RadioifyWindowsSdkExecutable -ToolName "signtool.exe"
+    Write-Host "Updating MSIX staging files..."
+    $packageLayout = Initialize-RadioifyMsixPackageLayout `
+        -IntegrationDir $IntegrationDir -PackageVersion $resolvedPackageVersion -Files $files -Digests $digests
+    # Keep the last signed package intact until its replacement has passed validation.
+    $pendingPath = "$packagePath.building.msix"
+    try {
+        $packArguments = @(
+            "pack",
+            "/d", $packageLayout,
+            "/p", $pendingPath,
+            "/o"
+        )
+        if ($NoCompression) { $packArguments += "/nc" }
+        $mode = if ($NoCompression) { "without compression" } else { "with compression" }
+        Invoke-RadioifyNativeTool -FilePath $makeAppxExe -Arguments $packArguments `
+            -Activity "Creating MSIX $mode" -LogPath (Join-Path $IntegrationDir "makeappx.log")
+        Wait-RadioifyMsixPackageFile -Path $pendingPath
+        Invoke-RadioifyNativeTool -FilePath $signToolExe -Arguments @(
+            "sign",
+            "/fd", "SHA256",
+            "/sha1", $certInfo.Certificate.Thumbprint,
+            "/s", "My",
+            $pendingPath
+        ) -Activity "Signing MSIX" -LogPath (Join-Path $IntegrationDir "signtool.log")
+        Write-Host "Verifying signed MSIX..."
+        Assert-RadioifyMsixPackageSigned `
+            -Path $pendingPath `
+            -ExpectedThumbprint $certInfo.Certificate.Thumbprint
+        Publish-RadioifyPackageFile -PendingPath $pendingPath -Destination $packagePath
+        Set-RadioifyMsixManifestIdentityVersion -ManifestPath $manifestInfo.ManifestPath -Version $resolvedPackageVersion
+        $packageFile = Get-Item -LiteralPath $packagePath
+        Write-RadioifyPackageState -Path $statePath -State @{
+            Format = 2
+            InputFingerprint = $fingerprint
+            PackageVersion = $resolvedPackageVersion
+            PackageLength = $packageFile.Length
+            PackageSha256 = Get-RadioifyFileDigest -Path $packagePath
+        }
+    } finally {
+        if ([IO.File]::Exists($pendingPath)) { [IO.File]::Delete($pendingPath) }
+    }
 
     return [pscustomobject]@{
         PackagePath = $packagePath
         CertificatePath = $certInfo.CertificatePath
         LayoutPath = $packageLayout
-        ManifestInfo = $manifestInfo
+        ManifestInfo = Get-RadioifyMsixManifestInfo -IntegrationDir $IntegrationDir
         PackageVersion = $resolvedPackageVersion
+        Reused = $false
     }
 }

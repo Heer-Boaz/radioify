@@ -301,7 +301,8 @@ if __name__ == "__main__":
     with (workspace / "worker.log").open("w", encoding="utf-8", buffering=1) as log:
         sys.stdout = sys.stderr = log
         try:
-            run(workspace, Path(__file__).resolve().parent)
+            runtime = Path(sys.argv[2]).resolve(strict=True) if len(sys.argv) > 2 else Path(__file__).resolve().parent
+            run(workspace, runtime)
         except Exception as error:
             traceback.print_exc()
             write_json(workspace / "result.json", {"version": 1, "status": "error", "error": str(error)})

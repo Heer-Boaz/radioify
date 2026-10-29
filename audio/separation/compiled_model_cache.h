@@ -26,9 +26,9 @@ using ModelPreparationReporter = std::function<void(std::string)>;
 
 // Produces the effective model/backend pair for one inference session. The
 // NVIDIA EP-context model is published atomically and keyed by the verified
-// bundled model plus provider version. NVIDIA's runtime cache remains a
+// production model plus provider version. NVIDIA's runtime cache remains a
 // separate, provider-validated per-user artifact.
-bool prepareBundledModel(
+bool prepareProductionModel(
     const std::filesystem::path& sourceModelPath, InferenceBackend backend,
     const DiagnosticReporter& diagnostics, const ExecutionControl& control,
     ModelPreparationMode mode,

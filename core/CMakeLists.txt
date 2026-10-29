@@ -9,6 +9,12 @@ radioify_add_module_object_library(radioify_core_sha256
 )
 target_link_libraries(radioify_core_sha256 PUBLIC bcrypt)
 
+add_library(radioify_core_model_download STATIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/model_download.cpp
+)
+radioify_configure_repo_target(radioify_core_model_download)
+target_link_libraries(radioify_core_model_download PUBLIC radioify_core_sha256 winhttp)
+
 radioify_add_module_object_library(radioify_core
   ${CMAKE_CURRENT_SOURCE_DIR}/file_output.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/media_artwork_sidecar.cpp

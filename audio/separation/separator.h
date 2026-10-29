@@ -29,7 +29,7 @@ bool separateMediaAudio(const std::filesystem::path& mediaPath,
                         const OutputCommitStarted& outputCommitStarted = {});
 
 // Explicit model selection is reserved for diagnostic tools and tests.
-// Production playback uses the bundled, build-verified model above.
+// Production playback uses the pinned, download-verified model above.
 bool separateMediaAudioWithModel(
     const std::filesystem::path& mediaPath,
     const std::filesystem::path& modelPath,

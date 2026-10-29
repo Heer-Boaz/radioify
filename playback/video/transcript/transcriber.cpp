@@ -16,6 +16,7 @@
 #include "playback/video/transcript/document.h"
 #include "playback/video/transcript/source_identity.h"
 #include "playback/video/transcript/quality_engine.h"
+#include "playback/video/transcript/runtime.h"
 #include "playback/video/transcript/subtitle_cues.h"
 #include "playback/video/transcript/whisper_engine.h"
 #include "runtime_helpers.h"
@@ -92,7 +93,7 @@ int64_t framesToUs(uint64_t frames) {
   return static_cast<int64_t>(timestampUs);
 }
 
-bool resolveWhisperModel(WhisperModelSelection *selection, std::string *error) {
+bool resolveWhisperModel(WhisperModelSelection *selection, const TranscriptOperationControl &control, std::string *error) {
   if (!selection) {
     setError(error, "No destination was provided for Whisper model selection.");
     return false;
@@ -125,10 +126,11 @@ bool resolveWhisperModel(WhisperModelSelection *selection, std::string *error) {
         break;
     }
     if (selection->path.empty()) {
-      setError(error, "Whisper model not found. Rebuild Radioify so "
-                      "models/ggml-large-v3.bin is installed, or set "
-                      "RADIOIFY_WHISPER_MODEL.");
-      return false;
+      TranscriptRuntime runtime;
+      if (!ensureTranscriptRuntime(RuntimeComponent::NativeWhisper, control.progress, control.cancelled, &runtime, error))
+        return false;
+      selection->path = runtime.directory / "models" / kDefaultModelName;
+      selection->alignmentPreset = WhisperAlignmentPreset::LargeV3;
     }
   }
 
@@ -276,7 +278,7 @@ TranscriptOperationResult IndexedTranscriptOperation::resume(
   if (!impl_->model) {
     WhisperModelSelection model;
     std::string modelError;
-    if (!resolveWhisperModel(&model, &modelError))
+    if (!resolveWhisperModel(&model, control, &modelError))
       return failedResult(std::move(modelError));
     impl_->model = std::move(model);
   }

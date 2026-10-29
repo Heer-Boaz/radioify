@@ -409,8 +409,17 @@ WorkerProcessOutcome runWorkerProcess(const OperationControl &control,
     return {result.status, result.detail};
   }
 
-  const std::filesystem::path worker =
-      radioifyExecutableDir() / "radioify_analysis_worker.exe";
+  std::filesystem::path worker = radioifyInstalledPackageDir();
+  if (!worker.empty()) {
+    worker /= "radioify.exe";
+  } else {
+#ifdef RADIOIFY_ANALYSIS_PROBE_EXECUTABLE
+    // Development probes use the current build artifact without a second copy.
+    worker = std::filesystem::u8path(RADIOIFY_ANALYSIS_PROBE_EXECUTABLE);
+#else
+    worker = radioifyExecutableDir() / "radioify.exe";
+#endif
+  }
   if (!std::filesystem::is_regular_file(worker, ignored) || ignored) {
     return {OperationStatus::Failed, "The private analysis worker is missing."};
   }
@@ -427,7 +436,7 @@ WorkerProcessOutcome runWorkerProcess(const OperationControl &control,
             "Could not configure the analysis job object."};
   }
 
-  std::wstring command = quoteArgument(worker.wstring()) + L" " +
+  std::wstring command = quoteArgument(worker.wstring()) + L" --analysis-worker " +
                          quoteArgument(workspace.wstring());
   std::vector<wchar_t> mutableCommand(command.begin(), command.end());
   mutableCommand.push_back(L'\0');

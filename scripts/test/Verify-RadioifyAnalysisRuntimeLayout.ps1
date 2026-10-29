@@ -61,7 +61,7 @@ try {
     }
     $applicationName = Split-Path -Leaf $resolvedApplication
     Copy-RequiredFile -Source $resolvedApplication -Destination (Join-Path $resolvedStage $applicationName)
-    foreach ($fileName in @("radioify_analysis_worker.exe", "llama-cpp-LICENSE.txt")) {
+    foreach ($fileName in @("llama-cpp-LICENSE.txt")) {
         Copy-RequiredFile -Source (Join-Path $sourceDirectory $fileName) -Destination (Join-Path $resolvedStage $fileName)
     }
     $runtimeContract = Get-RadioifyWindowsMlRuntimeContract
@@ -84,7 +84,7 @@ try {
     if (($help.Stdout + $help.Stderr) -match "analyze-chapters|verify-chapter|automatic-chapters") {
         throw "The application still advertises the retired playback-analysis commands."
     }
-    $worker = Invoke-StagedProgram -Executable (Join-Path $resolvedStage "radioify_analysis_worker.exe")
+    $worker = Invoke-StagedProgram -Executable (Join-Path $resolvedStage $applicationName) -Arguments "--analysis-worker"
     if ($worker.ExitCode -ne 1) {
         throw "The staged analysis worker failed its no-arguments check: $($worker.ExitCode) $($worker.Stderr)"
     }

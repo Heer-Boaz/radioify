@@ -1,4 +1,4 @@
-Radioify offline transcript runtime
+Radioify optional transcript runtime (downloaded on first use)
 
 Recognition: Qwen/Qwen3-ASR-1.7B-hf, revision
 bcd2b5b7f32b480ab5790554cfa8347f246a14f3 (Apache-2.0).
@@ -12,6 +12,6 @@ https://github.com/jianfch/stable-ts
 
 The embedded Python distribution includes LICENSE.txt. The pinned Python
 packages include their upstream licenses in their package and dist-info
-directories. requirements.lock and runtime.json identify the bundled versions.
+directories. requirements.lock and runtime-manifest.json identify the pinned versions.
 The application-local Microsoft C++ runtime DLLs are redistributed from the
 Visual Studio x64 redistributable directory under the Visual Studio terms.

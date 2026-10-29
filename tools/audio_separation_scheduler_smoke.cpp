@@ -213,7 +213,7 @@ int main(int argc, char** argv) {
     std::cerr << "Usage: audio_separation_scheduler_smoke <media-file> "
                  "[model-file] [--suspend-during-load|"
                  "--suspend-during-compile]\n"
-                 "The compile mode always uses the bundled production "
+                 "The compile mode always uses the cached production "
                  "model and an isolated cold cache.\n";
     return 2;
   }

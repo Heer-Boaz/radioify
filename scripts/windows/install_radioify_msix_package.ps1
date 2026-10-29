@@ -12,9 +12,6 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "RadioifyWindowsMsixInstall.ps1")
 
 Assert-RadioifyWindowsHost
-if (-not $WhatIfPreference -and -not (Test-RadioifyAdministrator)) {
-    throw "Run this install script from an elevated PowerShell window. The MSIX signing certificate must be trusted in Cert:\LocalMachine\TrustedPeople."
-}
 
 if (-not $LogPath) {
     $LogPath = Resolve-RadioifyWindowsExplorerIntegrationLogPath -LeafName "win11-explorer-install.log"
@@ -71,6 +68,14 @@ try {
 
     if ($PSCmdlet.ShouldProcess($packagePath, "Trust packaged Radioify MSIX certificate")) {
         Require-RadioifyMsixInstallPackage
+    }
+
+    if ($installedPackage -and [string]$installedPackage.Version -eq $manifestInfo.Version -and
+        [string]$installedPackage.Publisher -eq $manifestInfo.Publisher -and
+        [string]$installedPackage.Status -eq "Ok") {
+        Write-Host "Radioify MSIX $($manifestInfo.Version) is already installed and ready."
+        Clear-RadioifyLegacyOpenWithEntries -IntegrationDir $resolvedIntegrationDir | Out-Null
+        return
     }
 
     if ($PSCmdlet.ShouldProcess($packagePath, "Install Radioify MSIX package")) {

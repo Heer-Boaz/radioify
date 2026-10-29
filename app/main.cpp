@@ -3,7 +3,9 @@
 #include "core/utf8.h"
 #include "core/windows_app_identity.h"
 #include "crash_handler.h"
+#include "playback/video/analysis/inference_worker.h"
 
+#include <cstring>
 #include <utility>
 
 #ifdef _WIN32
@@ -45,6 +47,21 @@ Options parseWindowsCommandLineUtf8(int fallbackArgc, char** fallbackArgv) {
 #endif
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+  // The isolated inference process shares our executable, but must never start
+  // the player, register shell activation, or initialize playback devices.
+  if (argc > 1 && std::strcmp(argv[1], "--analysis-worker") == 0) {
+    int workerArgc = 0;
+    LPWSTR* workerArgv = CommandLineToArgvW(GetCommandLineW(), &workerArgc);
+    if (!workerArgv) return 1;
+    const std::filesystem::path workspace =
+        workerArgc == 3 ? std::filesystem::path(workerArgv[2])
+                        : std::filesystem::path{};
+    LocalFree(workerArgv);
+    if (workspace.empty()) return 1;
+    return playback_video_analysis::inferenceWorkerMain(workspace);
+  }
+#endif
   initializeWindowsAppIdentity();
   installCrashHandler();
 #ifdef _WIN32

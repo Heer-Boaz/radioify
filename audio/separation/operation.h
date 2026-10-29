@@ -13,9 +13,9 @@ namespace audio_separation {
 OperationBinding resolveProductionOperation();
 
 // Explicit backend injection keeps tests and diagnostic experiments
-// independent from machine discovery. The separator itself never probes or
-// installs software.
-Job::Operation makeBundledModelOperation(InferenceBackend backend);
+// independent from machine discovery. The default model is cached on first use;
+// the separator itself never probes or installs an inference provider.
+Job::Operation makeDefaultModelOperation(InferenceBackend backend);
 
 // Alternate models are an explicit diagnostic dependency and never ambient
 // process configuration inherited by the application.

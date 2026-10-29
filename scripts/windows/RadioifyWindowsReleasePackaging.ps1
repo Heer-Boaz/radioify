@@ -11,6 +11,7 @@ $script:RadioifyWindowsBundleFiles = @(
     @{ Source = "scripts/windows/RadioifyWindowsMsixCommon.ps1"; Destination = "scripts/windows/RadioifyWindowsMsixCommon.ps1" },
     @{ Source = "scripts/windows/RadioifyWindowsMsixBuild.ps1"; Destination = "scripts/windows/RadioifyWindowsMsixBuild.ps1" },
     @{ Source = "scripts/windows/RadioifyWindowsRuntimeContract.ps1"; Destination = "scripts/windows/RadioifyWindowsRuntimeContract.ps1" },
+    @{ Source = "scripts/windows/RadioifyWindowsPackageFiles.ps1"; Destination = "scripts/windows/RadioifyWindowsPackageFiles.ps1" },
     @{ Source = "scripts/windows/RadioifyWindowsMsixInstall.ps1"; Destination = "scripts/windows/RadioifyWindowsMsixInstall.ps1" },
     @{ Source = "scripts/windows/install_radioify_windows_bundle.ps1"; Destination = "scripts/windows/install_radioify_windows_bundle.ps1" },
     @{ Source = "scripts/windows/uninstall_radioify_windows_bundle.ps1"; Destination = "scripts/windows/uninstall_radioify_windows_bundle.ps1" },
@@ -73,7 +74,7 @@ function Copy-RadioifyWindowsPackageFile {
         New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
     }
 
-    Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Force
+    [void](Copy-RadioifyFileIfChanged -Source $sourcePath -Destination $destinationPath)
 }
 
 function Copy-RadioifyWindowsExplorerIntegrationBundle {
@@ -87,31 +88,36 @@ function Copy-RadioifyWindowsExplorerIntegrationBundle {
         throw "Win11 Explorer integration artifacts were not found at '$integrationDir'. Run .\build.ps1 -Static -Win11ExplorerIntegration or rerun .\package_windows.ps1 without -SkipBuild."
     }
 
-    $packageResult = New-RadioifySignedMsixPackage -IntegrationDir $integrationDir
+    # Keep the signed package, certificate and manifest in one snapshot while
+    # another export or build may be waiting to replace them.
+    $lock = Enter-RadioifyPackageLock -Directory $integrationDir -Name ".msix-build.lock"
+    try {
+        $packageResult = Invoke-RadioifySignedMsixPackageBuild -IntegrationDir $integrationDir
 
-    foreach ($file in $script:RadioifyWindowsExplorerIntegrationBundleFiles) {
-        $sourcePath = Join-Path $integrationDir $file.Source
-        if (-not (Test-Path -LiteralPath $sourcePath)) {
-            throw "Win11 Explorer integration bundle source file not found: '$sourcePath'."
+        foreach ($file in $script:RadioifyWindowsExplorerIntegrationBundleFiles) {
+            $sourcePath = Join-Path $integrationDir $file.Source
+            if (-not (Test-Path -LiteralPath $sourcePath)) {
+                throw "Win11 Explorer integration bundle source file not found: '$sourcePath'."
+            }
+
+            $destinationPath = Join-Path $StageDir $file.Destination
+            $destinationDir = Split-Path -Parent $destinationPath
+            if ($destinationDir -and -not (Test-Path -LiteralPath $destinationDir)) {
+                New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
+            }
+
+            [void](Copy-RadioifyFileIfChanged -Source $sourcePath -Destination $destinationPath)
         }
 
-        $destinationPath = Join-Path $StageDir $file.Destination
-        $destinationDir = Split-Path -Parent $destinationPath
-        if ($destinationDir -and -not (Test-Path -LiteralPath $destinationDir)) {
-            New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
+        foreach ($sourcePath in @($packageResult.PackagePath, $packageResult.CertificatePath)) {
+            if (-not (Test-Path -LiteralPath $sourcePath)) {
+                throw "Win11 Explorer integration package artifact was not created: '$sourcePath'."
+            }
+
+            $destinationPath = Join-Path $StageDir ([System.IO.Path]::GetFileName($sourcePath))
+            [void](Copy-RadioifyFileIfChanged -Source $sourcePath -Destination $destinationPath)
         }
-
-        Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Force
-    }
-
-    foreach ($sourcePath in @($packageResult.PackagePath, $packageResult.CertificatePath)) {
-        if (-not (Test-Path -LiteralPath $sourcePath)) {
-            throw "Win11 Explorer integration package artifact was not created: '$sourcePath'."
-        }
-
-        $destinationPath = Join-Path $StageDir ([System.IO.Path]::GetFileName($sourcePath))
-        Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Force
-    }
+    } finally { $lock.Dispose() }
 }
 
 function New-RadioifyWindowsPackageManifest {
@@ -149,102 +155,113 @@ function New-RadioifyWindowsDistributionBundle {
         New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
     }
 
-    $stageDir = Join-Path $OutputRoot $script:RadioifyWindowsBundleName
-    $zipPath = Join-Path $OutputRoot "$script:RadioifyWindowsBundleName.zip"
+    $OutputRoot = (Get-Item -LiteralPath $OutputRoot).FullName
+    $lock = Enter-RadioifyPackageLock -Directory $OutputRoot -Name ".distribution-build.lock"
+    try {
+        $publishedStage = Join-Path $OutputRoot $script:RadioifyWindowsBundleName
+        $stageDir = Join-Path $OutputRoot ".$($script:RadioifyWindowsBundleName).building"
+        $backupStage = Join-Path $OutputRoot ".$($script:RadioifyWindowsBundleName).previous"
+        $zipPath = Join-Path $OutputRoot "$script:RadioifyWindowsBundleName.zip"
+        $pendingZip = "$zipPath.building.zip"
 
-    if (Test-Path -LiteralPath $stageDir) {
-        Remove-Item -LiteralPath $stageDir -Recurse -Force
-    }
-    if (Test-Path -LiteralPath $zipPath) {
-        Remove-Item -LiteralPath $zipPath -Force
-    }
-
-    New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
-
-    Copy-Item -LiteralPath $resolvedExecutablePath -Destination (Join-Path $stageDir "radioify.exe") -Force
-    $analysisWorkerPath = Join-Path $resolvedRepoRoot "dist\radioify_analysis_worker.exe"
-    if (-not (Test-Path -LiteralPath $analysisWorkerPath -PathType Leaf)) {
-        throw "Isolated analysis worker not found at '$analysisWorkerPath'. Run .\build.ps1 -Static first."
-    }
-    Copy-Item -LiteralPath $analysisWorkerPath `
-        -Destination (Join-Path $stageDir "radioify_analysis_worker.exe") `
-        -Force
-
-    $llamaLicensePath = Join-Path $resolvedRepoRoot "dist\llama-cpp-LICENSE.txt"
-    if (-not (Test-Path -LiteralPath $llamaLicensePath)) {
-        throw "llama.cpp license not found at '$llamaLicensePath'. Run .\build.ps1 -Static first."
-    }
-    Copy-Item -LiteralPath $llamaLicensePath `
-        -Destination (Join-Path $stageDir "llama-cpp-LICENSE.txt") `
-        -Force
-
-    $iconPath = Join-Path $resolvedRepoRoot "radioify.ico"
-    if (Test-Path -LiteralPath $iconPath) {
-        Copy-Item -LiteralPath $iconPath -Destination (Join-Path $stageDir "radioify.ico") -Force
-    }
-
-    $whisperModelPath = Join-Path $resolvedRepoRoot "dist\models\ggml-large-v3.bin"
-    if (-not (Test-Path -LiteralPath $whisperModelPath)) {
-        throw "Indexed-transcript model not found at '$whisperModelPath'. Run .\build.ps1 -Static first."
-    }
-    $modelStageDir = Join-Path $stageDir "models"
-    New-Item -ItemType Directory -Force -Path $modelStageDir | Out-Null
-    Copy-Item -LiteralPath $whisperModelPath `
-        -Destination (Join-Path $modelStageDir "ggml-large-v3.bin") `
-        -Force
-
-    $windowsMlRuntimeContract = Get-RadioifyWindowsMlRuntimeContract
-    Copy-RadioifyTranscriptRuntime -Source (Join-Path $resolvedRepoRoot "dist\transcript-runtime") `
-        -Destination (Join-Path $stageDir "transcript-runtime")
-    foreach ($runtimeName in $windowsMlRuntimeContract.ProductionRuntimeFiles) {
-        $runtimeSource = Join-Path $resolvedRepoRoot "dist\$runtimeName"
-        if (-not (Test-Path -LiteralPath $runtimeSource)) {
-            throw "Audio-separation runtime not found at '$runtimeSource'. Run .\build.ps1 -Static first."
+        # Recover an interrupted directory swap before preparing a new export.
+        if (Test-Path -LiteralPath $backupStage) {
+            Get-RadioifyOwnedBundleItems -Path $backupStage -ExpectedParent $OutputRoot | Out-Null
+            if (-not (Test-Path -LiteralPath $publishedStage)) {
+                [IO.Directory]::Move($backupStage, $publishedStage)
+            } else {
+                Get-RadioifyOwnedBundleItems -Path $publishedStage -ExpectedParent $OutputRoot | Out-Null
+                Remove-RadioifyOwnedBundleDirectory -Path $backupStage -ExpectedParent $OutputRoot
+            }
         }
-        Copy-Item -LiteralPath $runtimeSource `
-            -Destination (Join-Path $stageDir $runtimeName) `
-            -Force
-    }
+        Remove-RadioifyOwnedBundleDirectory -Path $stageDir -ExpectedParent $OutputRoot
+        if ([IO.File]::Exists($pendingZip)) { [IO.File]::Delete($pendingZip) }
 
-    $separationSourceDir = Join-Path $resolvedRepoRoot "dist\models\audio_separation"
-    foreach ($separationFile in @(
-        "bandit-v2-multi-mask-core-fp16.onnx",
-        "BandIt-v2-MODEL-CARD"
-    )) {
-        $sourcePath = Join-Path $separationSourceDir $separationFile
-        if (-not (Test-Path -LiteralPath $sourcePath)) {
-            throw "Audio-separation artifact not found at '$sourcePath'. Run .\build.ps1 -Static first."
+        New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+        $manifest = New-RadioifyWindowsPackageManifest -Version $Version -ExecutableName "radioify.exe"
+        Write-RadioifyPackageState -Path (Join-Path $stageDir "RadioifyPackage.json") -State $manifest
+        try {
+
+            [void](Copy-RadioifyFileIfChanged -Source $resolvedExecutablePath -Destination (Join-Path $stageDir "radioify.exe"))
+            $llamaLicensePath = Join-Path $resolvedRepoRoot "dist\llama-cpp-LICENSE.txt"
+            if (-not (Test-Path -LiteralPath $llamaLicensePath)) {
+                throw "llama.cpp license not found at '$llamaLicensePath'. Run .\build.ps1 -Static first."
+            }
+            [void](Copy-RadioifyFileIfChanged -Source $llamaLicensePath -Destination (Join-Path $stageDir "llama-cpp-LICENSE.txt"))
+
+            $iconPath = Join-Path $resolvedRepoRoot "radioify.ico"
+            if (Test-Path -LiteralPath $iconPath) {
+                [void](Copy-RadioifyFileIfChanged -Source $iconPath -Destination (Join-Path $stageDir "radioify.ico"))
+            }
+
+            $modelStageDir = Join-Path $stageDir "models"
+            New-Item -ItemType Directory -Force -Path $modelStageDir | Out-Null
+
+            $windowsMlRuntimeContract = Get-RadioifyWindowsMlRuntimeContract
+            Copy-RadioifyTranscriptBootstrap -Source (Join-Path $resolvedRepoRoot "dist\transcript") `
+                -Destination (Join-Path $stageDir "transcript")
+            foreach ($runtimeName in $windowsMlRuntimeContract.ProductionRuntimeFiles) {
+                $runtimeSource = Join-Path $resolvedRepoRoot "dist\$runtimeName"
+                if (-not (Test-Path -LiteralPath $runtimeSource)) {
+                    throw "Audio-separation runtime not found at '$runtimeSource'. Run .\build.ps1 -Static first."
+                }
+                [void](Copy-RadioifyFileIfChanged -Source $runtimeSource -Destination (Join-Path $stageDir $runtimeName))
+            }
+
+            $separationSourceDir = Join-Path $resolvedRepoRoot "dist\models\audio_separation"
+            foreach ($separationFile in @(
+                "BandIt-v2-MODEL-CARD"
+            )) {
+                $sourcePath = Join-Path $separationSourceDir $separationFile
+                if (-not (Test-Path -LiteralPath $sourcePath)) {
+                    throw "Audio-separation artifact not found at '$sourcePath'. Run .\build.ps1 -Static first."
+                }
+                $destinationDir = Join-Path $modelStageDir "audio_separation"
+                if (-not (Test-Path -LiteralPath $destinationDir)) {
+                    New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
+                }
+                [void](Copy-RadioifyFileIfChanged -Source $sourcePath -Destination (Join-Path $destinationDir $separationFile))
+            }
+
+            foreach ($file in $script:RadioifyWindowsBundleFiles) {
+                Copy-RadioifyWindowsPackageFile `
+                    -RepoRoot $resolvedRepoRoot `
+                    -StageDir $stageDir `
+                    -SourceRelativePath $file.Source `
+                    -DestinationRelativePath $file.Destination
+            }
+
+            Copy-RadioifyWindowsExplorerIntegrationBundle `
+                -RepoRoot $resolvedRepoRoot `
+                -StageDir $stageDir
+
+            Write-Host "Creating distribution ZIP..."
+            New-RadioifyDistributionZip -StageDir $stageDir -ArchivePath $pendingZip -RootName $script:RadioifyWindowsBundleName
+            if (Test-Path -LiteralPath $publishedStage) {
+                Get-RadioifyOwnedBundleItems -Path $publishedStage -ExpectedParent $OutputRoot | Out-Null
+                [IO.Directory]::Move($publishedStage, $backupStage)
+            }
+            try {
+                [IO.Directory]::Move($stageDir, $publishedStage)
+                Publish-RadioifyPackageFile -PendingPath $pendingZip -Destination $zipPath
+            } catch {
+                if (Test-Path -LiteralPath $publishedStage) {
+                    Remove-RadioifyOwnedBundleDirectory -Path $publishedStage -ExpectedParent $OutputRoot
+                }
+                if (Test-Path -LiteralPath $backupStage) { [IO.Directory]::Move($backupStage, $publishedStage) }
+                throw
+            }
+            Remove-RadioifyOwnedBundleDirectory -Path $backupStage -ExpectedParent $OutputRoot
+
+            return [pscustomobject]@{
+                StageDir = $publishedStage
+                ZipPath = $zipPath
+                Version = $Version
+                ExecutablePath = Join-Path $publishedStage "radioify.exe"
+            }
+        } finally {
+            Remove-RadioifyOwnedBundleDirectory -Path $stageDir -ExpectedParent $OutputRoot
+            if ([IO.File]::Exists($pendingZip)) { [IO.File]::Delete($pendingZip) }
         }
-        $destinationDir = Join-Path $modelStageDir "audio_separation"
-        if (-not (Test-Path -LiteralPath $destinationDir)) {
-            New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
-        }
-        Copy-Item -LiteralPath $sourcePath `
-            -Destination (Join-Path $destinationDir $separationFile) `
-            -Force
-    }
-
-    foreach ($file in $script:RadioifyWindowsBundleFiles) {
-        Copy-RadioifyWindowsPackageFile `
-            -RepoRoot $resolvedRepoRoot `
-            -StageDir $stageDir `
-            -SourceRelativePath $file.Source `
-            -DestinationRelativePath $file.Destination
-    }
-
-    Copy-RadioifyWindowsExplorerIntegrationBundle `
-        -RepoRoot $resolvedRepoRoot `
-        -StageDir $stageDir
-
-    $manifest = New-RadioifyWindowsPackageManifest -Version $Version -ExecutableName "radioify.exe"
-    $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $stageDir "RadioifyPackage.json") -Encoding UTF8
-
-    Compress-Archive -LiteralPath $stageDir -DestinationPath $zipPath -CompressionLevel Optimal
-
-    return [pscustomobject]@{
-        StageDir = $stageDir
-        ZipPath = $zipPath
-        Version = $Version
-        ExecutablePath = Join-Path $stageDir "radioify.exe"
-    }
+    } finally { $lock.Dispose() }
 }

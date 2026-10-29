@@ -109,7 +109,7 @@ std::wstring mutexName(std::string_view providerVersion) {
 
 }  // namespace
 
-bool prepareBundledModel(
+bool prepareProductionModel(
     const std::filesystem::path& sourceModelPath, InferenceBackend backend,
     const DiagnosticReporter& diagnostics, const ExecutionControl& control,
     ModelPreparationMode mode,

@@ -128,7 +128,17 @@ function Invoke-RadioifyWindowsExplorerIntegrationScript {
     }
     $invocationParams.LogPath = $LogPath
 
-    if (Test-RadioifyWindowsAdministrator) {
+    $certificateAlreadyTrusted = $false
+    if ($Operation -eq "install" -and $Parameters -and $Parameters.ContainsKey("IntegrationDir")) {
+        . (Join-Path $PSScriptRoot "RadioifyWindowsMsixInstall.ps1")
+        $manifest = Get-RadioifyMsixManifestInfo -IntegrationDir $Parameters.IntegrationDir
+        $certificate = Get-RadioifyMsixCertificatePath -IntegrationDir $Parameters.IntegrationDir -PackageName $manifest.PackageName
+        if (Test-Path -LiteralPath $certificate) {
+            $certificateAlreadyTrusted = Test-RadioifyMsixCertificateTrusted -CertificatePath $certificate
+        }
+    }
+    # Per-user MSIX updates need elevation only for a new development certificate.
+    if ((Test-RadioifyWindowsAdministrator) -or $certificateAlreadyTrusted) {
         & $resolvedScriptPath @invocationParams
         return $LogPath
     }
@@ -153,7 +163,7 @@ function Invoke-RadioifyWindowsExplorerIntegrationScript {
     }
 
     try {
-        $process = Start-Process -FilePath $hostPath -ArgumentList $argumentList.ToArray() -Verb RunAs -Wait -PassThru
+        $process = Start-Process -FilePath $hostPath -ArgumentList $argumentList.ToArray() -Verb RunAs -WindowStyle Hidden -Wait -PassThru
     } catch {
         throw "Elevation was cancelled or failed. Re-run $UserCommandHint and accept the UAC prompt."
     }

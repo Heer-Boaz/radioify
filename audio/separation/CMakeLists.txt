@@ -10,6 +10,7 @@ if (RADIOIFY_HAS_AUDIO_SEPARATION)
     ${CMAKE_CURRENT_SOURCE_DIR}/compiled_model_integrity.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/inference_session.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mask_model.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/model.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/provider_setup.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/separator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/spectral_transform.cpp

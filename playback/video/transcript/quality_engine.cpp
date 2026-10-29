@@ -11,8 +11,10 @@
 #include <windows.h>
 
 #include "ffmpegaudio.h"
+#include "core/published_json.h"
 #include "playback/video/transcript/artifact.h"
 #include "playback/video/transcript/source_identity.h"
+#include "playback/video/transcript/runtime.h"
 #include "runtime_helpers.h"
 
 namespace playback_video_transcript {
@@ -53,13 +55,6 @@ std::wstring quote(const std::filesystem::path &path) {
   return result + L'"';
 }
 
-Json readJson(const std::filesystem::path &path, uintmax_t maxBytes) {
-  std::error_code ec;
-  const auto size = std::filesystem::file_size(path, ec);
-  if (ec || size > maxBytes) return Json();
-  std::ifstream input(path, std::ios::binary);
-  return Json::parse(input, nullptr, false);
-}
 } // namespace
 
 bool createQualityTranscript(
@@ -87,21 +82,12 @@ bool createQualityTranscript(
   if (publishMode == TranscriptPublishMode::ReplaceOwned)
     return fail("Manual transcription cannot replace background evidence.");
 
-  std::filesystem::path runtime;
-  for (const auto &root : radioifyResourceSearchRoots()) {
-    const auto candidate = root / "transcript-runtime";
-    if (std::filesystem::is_regular_file(candidate / "runtime.json") &&
-        std::filesystem::is_regular_file(candidate / "python.exe") &&
-        std::filesystem::is_regular_file(candidate / "worker.py")) {
-      runtime = candidate;
-      break;
-    }
-  }
-  if (runtime.empty())
-    return fail("Qwen3-ASR 1.7B + Whisper large-v3 runtime is missing. "
-                "Install the complete Radioify package.");
   auto identity = captureTranscriptSourceIdentity(videoPath, error);
   if (!identity) return false;
+  TranscriptRuntime speechRuntime;
+  if (!ensureTranscriptRuntime(RuntimeComponent::Quality, onProgress, cancelled, &speechRuntime, error))
+    return false;
+  const auto &runtime = speechRuntime.directory;
 
   // Each invocation owns its scratch directory; no media sidecars are used for
   // IPC, and cancelling never leaves a partly published transcript behind.
@@ -174,8 +160,8 @@ bool createQualityTranscript(
                                             &limits, sizeof(limits)))
     return fail("Could not isolate transcript worker.");
   const auto executable = runtime / "python.exe";
-  auto command = quote(executable) + L" -I -B " + quote(runtime / "worker.py") +
-                 L" " + quote(workspace.path);
+  auto command = quote(executable) + L" -I -B " + quote(speechRuntime.worker) +
+                 L" " + quote(workspace.path) + L" " + quote(runtime);
   STARTUPINFOW startup{};
   startup.cb = sizeof(startup);
   PROCESS_INFORMATION process{};
@@ -194,7 +180,7 @@ bool createQualityTranscript(
   bool deviceReported = false;
   for (;;) {
     DWORD wait = WaitForSingleObject(processHandle.value, 100);
-    auto progress = readJson(workspace.path / "progress.json", 65536);
+    auto progress = readPublishedJson(workspace.path / "progress.json", 65536);
     if (progress.is_object() && progress.value("sequence", uint64_t{0}) > sequence) {
       sequence = progress.value("sequence", uint64_t{0});
       const auto device = progress.value("device", std::string());
@@ -214,7 +200,7 @@ bool createQualityTranscript(
   }
   DWORD exitCode = 1;
   GetExitCodeProcess(processHandle.value, &exitCode);
-  auto result = readJson(workspace.path / "result.json", 64 * 1024 * 1024);
+  auto result = readPublishedJson(workspace.path / "result.json", 64 * 1024 * 1024);
   if (!result.is_object() || result.value("version", 0) != 1)
     return fail("Qwen3-ASR worker exited without a valid result (code " +
                 std::to_string(exitCode) + ").");

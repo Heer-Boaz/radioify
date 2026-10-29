@@ -49,7 +49,7 @@ Job::Operation makeNativeNvidiaOperation() {
       return false;
     }
     const Job::Operation operation =
-        makeBundledModelOperation(std::move(resolution.backend));
+        makeDefaultModelOperation(std::move(resolution.backend));
     return operation(mediaPath, outputPaths, reportProgress, reportDiagnostic,
                      control, outputCommitStarted, error);
   };
@@ -77,7 +77,7 @@ Job::Operation makeModelOperation(std::filesystem::path modelPath,
   };
 }
 
-Job::Operation makeBundledModelOperation(InferenceBackend backend) {
+Job::Operation makeDefaultModelOperation(InferenceBackend backend) {
   return [backend = std::move(backend)](
             const std::filesystem::path& mediaPath,
             const ArtifactPaths& outputPaths,
