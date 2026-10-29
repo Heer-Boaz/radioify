@@ -146,7 +146,7 @@ class Coordinator final : public playback_media_processing::Service {
     FileExportOperation exportTranscriptText;
   };
 
-  // Uses Radioify's production melody, loop-split, Vulkan transcript, and
+  // Uses Radioify's production melody, loop-split, Qwen/Whisper transcript, and
   // native Windows NVIDIA separation backends.
   explicit Coordinator(AudioPlaybackRuntime& audioPlayback);
   // The operation boundary keeps lifecycle and presentation tests independent

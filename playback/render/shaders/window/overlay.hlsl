@@ -30,7 +30,7 @@ cbuffer Constants : register(b0) {
     float outputSdrWhiteNits;
     float outputPeakNits;
     float outputFullFrameNits;
-    float asciiGlyphPeakNits;
+    float outputPadding;
 };
 
 PS_INPUT VS(uint vid : SV_VertexID) {
@@ -43,7 +43,7 @@ PS_INPUT VS(uint vid : SV_VertexID) {
 Texture2D texSubtitle : register(t4);
 SamplerState sam : register(s0);
 
-#include "hdr_generate.hlsli"
+#include "color_output.hlsli"
 
 float4 PS_UI(PS_INPUT input) : SV_Target {
     float2 uv = input.tex;
@@ -59,9 +59,9 @@ float4 PS_UI(PS_INPUT input) : SV_Target {
             if (t.a > 0.01) {
                 subtitleColor = t;
                 if (outputColorSpace != RADIOIFY_OUTPUT_COLOR_SDR) {
-                    float3 nits2020 = RadioifySdrUi709ToGeneratedNits2020(
-                        subtitleColor.rgb, outputSdrWhiteNits, outputPeakNits,
-                        outputFullFrameNits);
+                    float3 nits2020 = RadioifyLinearBt709ToBt2020(
+                        RadioifySdrUi709ToBaseNits709(
+                            subtitleColor.rgb, outputSdrWhiteNits));
                     subtitleColor.rgb = RadioifyEncodeNits2020ToOutput(
                         nits2020, outputColorSpace, outputSdrWhiteNits);
                 }

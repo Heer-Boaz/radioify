@@ -9,6 +9,7 @@ namespace {
 bool audioCanDriveMaster(const SampleRequest& request) {
   const AudioClockStatus& audio = request.audio;
   return audio.active && audio.mayDriveMaster &&
+         !audio.outputRecovering &&
          audio.serial == request.currentSerial && audio.ready && audio.fresh &&
          !audio.starved && audio.us > 0;
 }
@@ -91,6 +92,8 @@ Snapshot Controller::sample(const SampleRequest& request) {
   snapshot.audioMasterBlocked =
       request.audio.active && !request.audio.mayDriveMaster;
   snapshot.audioStarved = request.audio.starved;
+  snapshot.audioOutputRecovering = request.audio.active &&
+                                    request.audio.outputRecovering;
   snapshot.audioClockUs = request.audio.us;
   snapshot.audioClockUpdatedUs = request.audio.lastUpdatedUs;
   snapshot.audioBufferedFrames = request.audio.bufferedFrames;

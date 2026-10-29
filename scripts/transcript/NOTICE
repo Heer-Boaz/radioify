@@ -1,0 +1,17 @@
+Radioify offline transcript runtime
+
+Recognition: Qwen/Qwen3-ASR-1.7B-hf, revision
+bcd2b5b7f32b480ab5790554cfa8347f246a14f3 (Apache-2.0).
+The original model card is included beside the model weights.
+https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf
+https://github.com/QwenLM/Qwen3-ASR
+
+Alignment: OpenAI Whisper large-v3 (MIT), via stable-ts (MIT).
+https://github.com/openai/whisper
+https://github.com/jianfch/stable-ts
+
+The embedded Python distribution includes LICENSE.txt. The pinned Python
+packages include their upstream licenses in their package and dist-info
+directories. requirements.lock and runtime.json identify the bundled versions.
+The application-local Microsoft C++ runtime DLLs are redistributed from the
+Visual Studio x64 redistributable directory under the Visual Studio terms.

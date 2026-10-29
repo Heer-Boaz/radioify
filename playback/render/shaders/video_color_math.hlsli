@@ -114,6 +114,22 @@ float3 RadioifyHlgEotf(float3 v)
                   RadioifyHlgEotf(v.b));
 }
 
+float RadioifyHlgOetf(float v)
+{
+    const float a = 0.17883277;
+    const float b = 1.0 - 4.0 * a;
+    const float c = 0.5 - a * log(4.0 * a);
+    v = max(v, 0.0);
+    return (v <= 1.0 / 12.0) ? sqrt(3.0 * v)
+                              : a * log(12.0 * v - b) + c;
+}
+
+float3 RadioifyHlgOetf(float3 v)
+{
+    return float3(RadioifyHlgOetf(v.r), RadioifyHlgOetf(v.g),
+                  RadioifyHlgOetf(v.b));
+}
+
 float RadioifyToneMapFilmic(float x)
 {
     const float A = 0.15;

@@ -3008,6 +3008,9 @@ struct Player::Impl {
         handleEvent(ev);
       }
 
+      if (audioStartOk.load(std::memory_order_relaxed)) {
+        audioPlayback.serviceOutputDevice();
+      }
       observePlaybackPipeline();
     }
     applyStateChange(playbackState.beginClosing());

@@ -1,5 +1,6 @@
 #include "asciiart_gpu.h"
 #include "playback/video/gpu/gpu_runtime.h"
+#include "playback/video/color_conversion.h"
 #include <d3d11.h>
 #include <d3d10.h>
 #include <dxgi.h>
@@ -27,11 +28,14 @@ namespace {
         uint32_t fg;
         uint32_t bg;
         uint32_t hasBg;
+        uint32_t hdrFg;
+        uint32_t hdrBg;
     };
 
     struct GpuAsciiDotSample {
         uint32_t color;
         uint32_t metrics;
+        uint32_t hdrColor;
     };
 
 #define RADIOIFY_ASCII_BOOL(name, value) constexpr bool name = value;
@@ -67,14 +71,31 @@ bool GpuAsciiRenderer::ReadOutputBuffer(AsciiArt& out, int outW, int outH) {
                 out.cells[i].ch = static_cast<wchar_t>(gpuCells[i].ch);
 
                 uint32_t fg = gpuCells[i].fg;
+                out.cells[i].fg = Color{};
                 out.cells[i].fg.r = (fg) & 0xFF;
                 out.cells[i].fg.g = (fg >> 8) & 0xFF;
                 out.cells[i].fg.b = (fg >> 16) & 0xFF;
 
                 uint32_t bg = gpuCells[i].bg;
+                out.cells[i].bg = Color{};
                 out.cells[i].bg.r = (bg) & 0xFF;
                 out.cells[i].bg.g = (bg >> 8) & 0xFF;
                 out.cells[i].bg.b = (bg >> 16) & 0xFF;
+
+                auto& fgColor = out.cells[i].fg;
+                auto& bgColor = out.cells[i].bg;
+                fgColor.hdr = gpuCells[i].hdrFg;
+                bgColor.hdr = gpuCells[i].hdrBg;
+                // Terminal output is SDR. Keep its colour alongside the HDR
+                // representation, which reaches the window shader unchanged.
+                if (fgColor.hdr != 0) {
+                    playback_video_color::hdrColorToSrgb8(
+                        fgColor.hdr, fgColor.r, fgColor.g, fgColor.b);
+                }
+                if (bgColor.hdr != 0) {
+                    playback_video_color::hdrColorToSrgb8(
+                        bgColor.hdr, bgColor.r, bgColor.g, bgColor.b);
+                }
 
                 out.cells[i].hasBg = (gpuCells[i].hasBg & 1u) != 0;
             }
@@ -521,6 +542,10 @@ void GpuAsciiRenderer::RefineOutputAndSyncHistory(UINT dispatchX,
     m_context->CSSetShaderResources(0, 5, nullSRV5);
 
     m_context->CSSetShader(m_syncHistoryShader.Get(), nullptr, 0);
+    ID3D11ShaderResourceView* syncSRVs[] = {
+        nullptr, nullptr, nullptr, nullptr, m_dotEdgeSRV.Get()
+    };
+    m_context->CSSetShaderResources(0, 5, syncSRVs);
     ID3D11UnorderedAccessView* syncUavs[] = {
         m_outputUAV.Get(), m_historyUAV.Get()
     };
@@ -1118,9 +1143,9 @@ bool GpuAsciiRenderer::RenderFromCache(GpuVideoFrameCache& cache, AsciiArt& out,
             cb->time = 0.0f;
             cb->frameCount = m_frameCount++;
             cb->isFullRange = 1;
-            cb->bitDepth = 8;
-            cb->yuvMatrix = static_cast<uint32_t>(YuvMatrix::Bt709);
-            cb->yuvTransfer = static_cast<uint32_t>(YuvTransfer::Sdr);
+            cb->bitDepth = static_cast<uint32_t>(cache.GetBitDepth());
+            cb->yuvMatrix = static_cast<uint32_t>(cache.GetMatrix());
+            cb->yuvTransfer = static_cast<uint32_t>(cache.GetTransfer());
             cb->rotationQuarterTurns =
                 static_cast<uint32_t>(cache.GetRotationQuarterTurns() & 3);
             cb->padding = 0;

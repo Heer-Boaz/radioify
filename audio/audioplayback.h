@@ -33,6 +33,7 @@ struct AudioPerfStats {
   uint32_t sampleRate = 0;
   uint32_t channels = 0;
   bool usingFfmpeg = false;
+  bool outputRecovering = false;
 };
 
 struct AudioPlaybackConfig {
@@ -79,6 +80,8 @@ class AudioPlaybackRuntime final : public audio_playback::Session {
   void stop() override;
   AudioPlaybackSnapshot snapshot() const override;
   AudioPerfStats perfStats() const;
+  // Service OS endpoint changes outside the audio callback.
+  void serviceOutputDevice();
   bool startStream(uint64_t totalFrames);
   void stopStream();
   size_t streamBufferedFrames() const;

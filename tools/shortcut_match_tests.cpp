@@ -2559,6 +2559,51 @@ int main() {
                "Reacquiring audio must not block video-clock playback");
   clockRequest.audio.starved = false;
 
+  auto stoppedOutputRequest = clockRequest;
+  stoppedOutputRequest.audio.mayDriveMaster = true;
+  stoppedOutputRequest.audio.outputRecovering = true;
+  auto stoppedOutput = mainClock.sample(stoppedOutputRequest);
+  ok &= expect(stoppedOutput.source == PlayerClockSource::Video &&
+                   stoppedOutput.audioOutputRecovering,
+               "A stopped output must not supply an extrapolated audio clock");
+  auto stoppedOutputPlan = playback_video_sync::planFrame(
+      reacquireLoop, PlayerState::Playing, reacquireFrame, stoppedOutput, 1000000);
+  ok &= expect(stoppedOutputPlan.waitForAudioRecovery,
+               "Video must wait at its PTS while the output device is restored");
+  stoppedOutputRequest.audio.ready = false;
+  stoppedOutputRequest.audio.fresh = false;
+  stoppedOutput = mainClock.sample(stoppedOutputRequest);
+  ok &= expect(playback_video_sync::planFrame(
+                   reacquireLoop, PlayerState::Playing, reacquireFrame,
+                   stoppedOutput, 3000000).waitForAudioRecovery,
+               "Output recovery must still hold video after audio clock expiry");
+  stoppedOutputRequest.audio.active = false;
+  auto noAudioOutput = mainClock.sample(stoppedOutputRequest);
+  ok &= expect(!playback_video_sync::planFrame(
+                    reacquireLoop, PlayerState::Playing, reacquireFrame,
+                    noAudioOutput, 3000000).waitForAudioRecovery,
+               "Video-only playback must not wait for an absent audio device");
+  ok &= expect(!playback_video_sync::planFrame(
+                    reacquireLoop, PlayerState::Seeking, reacquireFrame,
+                    stoppedOutput, 3000000).waitForAudioRecovery &&
+                   !playback_video_sync::planFrame(
+                    reacquireLoop, PlayerState::Priming, reacquireFrame,
+                    stoppedOutput, 3000000).waitForAudioRecovery,
+               "Output recovery must not block seeking or initial priming");
+  stoppedOutput.policy = playback_video_main_clock::MasterPolicy::Video;
+  ok &= expect(!playback_video_sync::planFrame(
+                    reacquireLoop, PlayerState::Playing, reacquireFrame,
+                    stoppedOutput, 3000000).waitForAudioRecovery,
+               "An explicitly selected video master must remain independent");
+  stoppedOutputRequest.audio = clockRequest.audio;
+  stoppedOutputRequest.audio.mayDriveMaster = true;
+  auto restoredOutput = mainClock.sample(stoppedOutputRequest);
+  ok &= expect(restoredOutput.source == PlayerClockSource::Audio &&
+                   !playback_video_sync::planFrame(
+                    reacquireLoop, PlayerState::Playing, reacquireFrame,
+                    restoredOutput, 1000000).waitForAudioRecovery,
+               "Restored audio must resume video scheduling from the audio PTS");
+
   playback_video_sync::LoopState convertedLoop{};
   convertedLoop.frameTimerUs = 500000;
   playback_video_sync::PreparedFrame convertedFrame{};

@@ -198,14 +198,23 @@ set(RADIOIFY_NEURAL_PITCH_MODEL_URL
 set(RADIOIFY_NEURAL_PITCH_MODEL_SHA256
     "cd119f6f5f608d9342a1c6f81e4653f21dbcde440a96d474ecbf6f27c6253466"
     CACHE STRING "Expected SHA256 hash for the downloaded neural pitch ONNX model")
+# Upgrade the former packaged default in existing build directories as well.
+# Explicit custom model configurations keep their own path, URL and checksum.
+if (RADIOIFY_WHISPER_MODEL_PATH STREQUAL "${CMAKE_SOURCE_DIR}/models/ggml-base-q5_1.bin"
+    AND RADIOIFY_WHISPER_MODEL_URL STREQUAL "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin"
+    AND RADIOIFY_WHISPER_MODEL_SHA256 STREQUAL "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898")
+  unset(RADIOIFY_WHISPER_MODEL_PATH CACHE)
+  unset(RADIOIFY_WHISPER_MODEL_URL CACHE)
+  unset(RADIOIFY_WHISPER_MODEL_SHA256 CACHE)
+endif()
 set(RADIOIFY_WHISPER_MODEL_PATH
-    "${CMAKE_SOURCE_DIR}/models/ggml-base-q5_1.bin" CACHE FILEPATH
+    "${CMAKE_SOURCE_DIR}/models/ggml-large-v3.bin" CACHE FILEPATH
     "Path to the multilingual Whisper model used for indexed transcripts")
 set(RADIOIFY_WHISPER_MODEL_URL
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin"
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3.bin"
     CACHE STRING "URL used to download the indexed-transcript Whisper model")
 set(RADIOIFY_WHISPER_MODEL_SHA256
-    "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898"
+    "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2"
     CACHE STRING "Expected SHA256 hash for the indexed-transcript Whisper model")
 set(RADIOIFY_AUDIO_SEPARATION_MODEL_PATH
     "${CMAKE_SOURCE_DIR}/models/audio_separation/bandit-v2-multi-mask-core-fp16.onnx"
@@ -362,6 +371,8 @@ if (NOT TARGET miniaudio::miniaudio)
     "miniaudio overlay.")
 endif()
 target_link_libraries(radioify_audio PRIVATE miniaudio::miniaudio)
+target_link_libraries(radioify_tool_audio_device_recovery_tests
+  PRIVATE miniaudio::miniaudio)
 target_link_libraries(radioify_loopsplit PRIVATE miniaudio::miniaudio)
 target_link_libraries(radioify_tui PRIVATE miniaudio::miniaudio)
 
@@ -627,6 +638,21 @@ radioify_link_repo_target(audio_playback_pipeline_tests)
 add_test(NAME audio_playback_pipeline_tests
          COMMAND $<TARGET_FILE:audio_playback_pipeline_tests>)
 
+add_executable(audio_device_recovery_tests)
+target_sources(audio_device_recovery_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_audio_device_recovery_tests>
+  $<TARGET_OBJECTS:radioify_audio>
+  $<TARGET_OBJECTS:radioify_analysis>
+  $<TARGET_OBJECTS:radioify_audiofilter>
+  $<TARGET_OBJECTS:radioify_config>
+  $<TARGET_OBJECTS:radioify_core_runtime>
+  ${CMAKE_SOURCE_DIR}/core/file_output.cpp
+)
+radioify_configure_repo_target(audio_device_recovery_tests)
+target_link_libraries(audio_device_recovery_tests PRIVATE miniaudio::miniaudio)
+add_test(NAME audio_device_recovery_tests
+         COMMAND $<TARGET_FILE:audio_device_recovery_tests>)
+
 add_executable(audio_media_format_tests)
 target_sources(audio_media_format_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_audio_media_format_tests>
@@ -679,6 +705,18 @@ radioify_link_repo_target(ascii_shader_tests)
 if (WIN32)
   target_link_libraries(ascii_shader_tests PRIVATE d3d10 d3d11 dxgi ole32 windowscodecs)
 endif()
+
+add_executable(ascii_hdr_tests)
+target_sources(ascii_hdr_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_ascii_hdr_tests>
+  $<TARGET_OBJECTS:radioify_ascii_gpu>
+  ${CMAKE_SOURCE_DIR}/playback/framebuffer/mini_player_tui.cpp
+)
+radioify_link_repo_target(ascii_hdr_tests)
+if (WIN32)
+  target_link_libraries(ascii_hdr_tests PRIVATE d3d10 d3d11 dxgi)
+endif()
+add_test(NAME ascii_hdr_tests COMMAND $<TARGET_FILE:ascii_hdr_tests>)
 
 add_executable(shortcut_match_tests)
 target_sources(shortcut_match_tests PRIVATE
@@ -1749,6 +1787,12 @@ target_sources(indexed_transcript_smoke PRIVATE
 radioify_link_repo_target(indexed_transcript_smoke)
 target_link_libraries(indexed_transcript_smoke PRIVATE radioify_core_sha256)
 
+# Diagnostic capture before application filtering; run explicitly on local PCM.
+add_executable(whisper_recognition_probe
+  ${CMAKE_SOURCE_DIR}/tools/whisper_recognition_probe.cpp)
+radioify_link_repo_target(whisper_recognition_probe)
+target_link_libraries(whisper_recognition_probe PRIVATE whisper nlohmann_json::nlohmann_json)
+
 add_executable(scene_analysis_tests)
 target_sources(scene_analysis_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_scene_analysis_tests>
@@ -1933,7 +1977,7 @@ add_custom_target(radioify_whisper_runtime_model ALL
           "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/models"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${RADIOIFY_WHISPER_MODEL_PATH}"
-          "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/models/ggml-base-q5_1.bin"
+          "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/models/ggml-large-v3.bin"
   COMMENT "Publishing Whisper transcript model beside the Radioify build"
   VERBATIM
 )
@@ -1976,27 +2020,26 @@ set(RADIOIFY_VIDEO_LUMINANCE_STATS_HLSLI
     "${RADIOIFY_SHADER_DIR}/video_luminance_stats.hlsli")
 set(RADIOIFY_VIDEO_COLOR_MATH_HLSLI
     "${RADIOIFY_SHADER_DIR}/video_color_math.hlsli")
-set(RADIOIFY_VIDEO_HDR_TO_SDR_HLSLI
-    "${RADIOIFY_SHADER_DIR}/video_hdr_to_sdr.hlsli")
 set(RADIOIFY_WINDOW_RENDER_HLSL "${RADIOIFY_SHADER_DIR}/window/render.hlsl")
 set(RADIOIFY_WINDOW_OVERLAY_HLSL "${RADIOIFY_SHADER_DIR}/window/overlay.hlsl")
 set(RADIOIFY_WINDOW_GPU_TEXT_GRID_HLSL "${RADIOIFY_SHADER_DIR}/window/gpu_text_grid.hlsl")
-set(RADIOIFY_WINDOW_HDR_GENERATE_HLSLI "${RADIOIFY_SHADER_DIR}/window/hdr_generate.hlsli")
+set(RADIOIFY_VIDEO_HDR_COLOR_HLSLI "${RADIOIFY_SHADER_DIR}/video_hdr_color.hlsli")
+set(RADIOIFY_WINDOW_COLOR_OUTPUT_HLSLI "${RADIOIFY_SHADER_DIR}/window/color_output.hlsli")
 set(RADIOIFY_ASCII_GPU_SHADER_DEPS
   "${RADIOIFY_COMPUTE_SHADER_HLSL}"
   "${RADIOIFY_ASCII_CONSTANTS_INC}"
-  "${RADIOIFY_VIDEO_HDR_TO_SDR_HLSLI}"
+  "${RADIOIFY_VIDEO_HDR_COLOR_HLSLI}"
   "${RADIOIFY_VIDEO_COLOR_MATH_HLSLI}"
 )
 set(RADIOIFY_ASCII_STATS_SHADER_DEPS
   "${RADIOIFY_STATS_SHADER_HLSL}"
   "${RADIOIFY_ASCII_CONSTANTS_INC}"
   "${RADIOIFY_VIDEO_LUMINANCE_STATS_HLSLI}"
-  "${RADIOIFY_VIDEO_HDR_TO_SDR_HLSLI}"
   "${RADIOIFY_VIDEO_COLOR_MATH_HLSLI}"
 )
 set(RADIOIFY_WINDOW_HDR_SHADER_DEPS
-  "${RADIOIFY_WINDOW_HDR_GENERATE_HLSLI}"
+  "${RADIOIFY_WINDOW_COLOR_OUTPUT_HLSLI}"
+  "${RADIOIFY_VIDEO_HDR_COLOR_HLSLI}"
   "${RADIOIFY_VIDEO_COLOR_MATH_HLSLI}"
 )
 set(RADIOIFY_COMPUTE_SHADER_CSO_MAIN
@@ -2383,6 +2426,7 @@ if (WIN32)
   add_dependencies(radioify radioify_shader_blobs)
   add_dependencies(radioify_video radioify_shader_blobs)
   add_dependencies(radioify_ascii_gpu radioify_shader_blobs)
+  add_dependencies(radioify_tool_ascii_hdr_tests radioify_shader_blobs)
   target_include_directories(radioify_project_options INTERFACE "${RADIOIFY_GENERATED_DIR}")
   target_sources(radioify PRIVATE ${RADIOIFY_SHADER_HEADERS})
 endif()
@@ -2534,6 +2578,7 @@ if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(audio_export_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
+  target_link_directories(audio_device_recovery_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(analysis_inference_probe PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_edit_export_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
@@ -2558,6 +2603,7 @@ target_link_libraries(media_export_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(audio_export_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARIES})
+target_link_libraries(audio_device_recovery_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(analysis_inference_probe PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(analysis_inference_tests PRIVATE ${FFMPEG_LIBRARIES})
@@ -2836,6 +2882,7 @@ target_link_libraries(radioify_audio PRIVATE psfcore)
 target_link_libraries(radioify PRIVATE psfcore)
 target_link_libraries(radioify PRIVATE sexypsf)
 target_link_libraries(video_frame_step_smoke PRIVATE psfcore sexypsf)
+target_link_libraries(audio_device_recovery_tests PRIVATE psfcore sexypsf)
 
 set(_radioify_warn_deprecated_defined OFF)
 if (DEFINED CMAKE_WARN_DEPRECATED)
@@ -2896,6 +2943,7 @@ radioify_add_external_include_dirs(
 )
 target_link_libraries(radioify PRIVATE kss)
 target_link_libraries(video_frame_step_smoke PRIVATE kss)
+target_link_libraries(audio_device_recovery_tests PRIVATE kss)
 
 set(_radioify_disable_sdl2_defined OFF)
 if (DEFINED CMAKE_DISABLE_FIND_PACKAGE_SDL2)
@@ -2929,6 +2977,7 @@ endforeach()
 radioify_add_external_include_dirs(${gme_SOURCE_DIR})
 target_link_libraries(radioify PRIVATE gme)
 target_link_libraries(video_frame_step_smoke PRIVATE gme)
+target_link_libraries(audio_device_recovery_tests PRIVATE gme)
 if (_radioify_disable_sdl2_defined)
   set(CMAKE_DISABLE_FIND_PACKAGE_SDL2 ${_radioify_disable_sdl2_value})
 else()
@@ -2981,6 +3030,7 @@ if (NOT RADIOIFY_DISABLE_GSF_GPL)
   radioify_configure_external_target(playgsf)
   target_link_libraries(radioify PRIVATE playgsf)
   target_link_libraries(video_frame_step_smoke PRIVATE playgsf)
+  target_link_libraries(audio_device_recovery_tests PRIVATE playgsf)
 endif()
 
 set(LIBVGM_BUILD_PLAYER OFF CACHE BOOL "Build libvgm player app" FORCE)
@@ -3024,6 +3074,7 @@ if (NOT _radioify_libvgm_target)
 endif()
 target_link_libraries(radioify PRIVATE ${_radioify_libvgm_target})
 target_link_libraries(video_frame_step_smoke PRIVATE ${_radioify_libvgm_target})
+target_link_libraries(audio_device_recovery_tests PRIVATE ${_radioify_libvgm_target})
 
 set_target_properties(radioify PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${RADIOIFY_BUILD_RUNTIME_OUTPUT_DIRECTORY}"
@@ -3040,6 +3091,7 @@ endforeach()
 if (WIN32)
   target_link_libraries(radioify PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys comctl32 bcrypt winhttp)
   target_link_libraries(video_frame_step_smoke PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys)
+  target_link_libraries(audio_device_recovery_tests PRIVATE winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi user32 shell32 propsys)
   target_link_libraries(timeline_preview_tests PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
   target_link_libraries(analysis_inference_probe PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
   target_link_libraries(analysis_inference_tests PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
@@ -3055,12 +3107,16 @@ endif()
 # CTest never builds its command executables. Keep the registered test graph
 # as the source of truth for a check target that first refreshes every test
 # binary and the production application, then runs the suite. Also compile the
-# opt-in analysis GPU integration probe; inference itself is not a unit test.
+# opt-in GPU integration probes; inference itself is not a unit test.
 # The three tests
 # whose command names intentionally differ from their executable targets are
 # included explicitly.
 get_property(_radioify_registered_tests DIRECTORY PROPERTY TESTS)
-set(_radioify_test_targets radioify analysis_inference_probe)
+set(_radioify_test_targets radioify analysis_inference_probe indexed_transcript_smoke
+  whisper_recognition_probe)
+if (TARGET audio_separation_smoke)
+  list(APPEND _radioify_test_targets audio_separation_smoke)
+endif()
 foreach(_radioify_test_name IN LISTS _radioify_registered_tests)
   if (TARGET "${_radioify_test_name}")
     list(APPEND _radioify_test_targets "${_radioify_test_name}")

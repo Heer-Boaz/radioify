@@ -22,9 +22,6 @@ static_assert(static_cast<uint32_t>(VideoOutputColorEncoding::ScRgb) == 1);
 static_assert(static_cast<uint32_t>(VideoOutputColorEncoding::Hdr10) == 2);
 
 inline constexpr float kVideoOutputStandardSdrWhiteNits = 80.0f;
-inline constexpr float kVideoOutputBt2408ReferenceWhiteNits = 203.0f;
-inline constexpr float kVideoOutputAsciiGlyphSdrWhiteScale = 3.5f;
-inline constexpr float kVideoOutputAsciiGlyphFullFrameScale = 1.35f;
 
 struct VideoOutputColorState {
     DXGI_FORMAT swapChainFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -33,7 +30,6 @@ struct VideoOutputColorState {
     float outputSdrWhiteNits = kVideoOutputStandardSdrWhiteNits;
     float outputPeakNits = 0.0f;
     float outputFullFrameNits = 0.0f;
-    float asciiGlyphPeakNits = kVideoOutputStandardSdrWhiteNits;
 };
 
 struct VideoOutputDisplayInfo {

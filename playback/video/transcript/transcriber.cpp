@@ -15,6 +15,7 @@
 #include "playback/video/transcript/artifact.h"
 #include "playback/video/transcript/document.h"
 #include "playback/video/transcript/source_identity.h"
+#include "playback/video/transcript/quality_engine.h"
 #include "playback/video/transcript/subtitle_cues.h"
 #include "playback/video/transcript/whisper_engine.h"
 #include "runtime_helpers.h"
@@ -30,7 +31,7 @@ constexpr uint64_t kChunkFrames = 60ull * kSampleRate;
 // chunk, especially when speech follows silence; a short overlap allowed that
 // boundary artifact to leak into otherwise valid SRT timing.
 constexpr uint64_t kOverlapFrames = 16ull * kSampleRate;
-constexpr const char *kDefaultModelName = "ggml-base-q5_1.bin";
+constexpr const char *kDefaultModelName = "ggml-large-v3.bin";
 
 struct WhisperModelSelection {
   std::filesystem::path path;
@@ -42,10 +43,6 @@ struct WhisperModelSelection {
 void setError(std::string *error, std::string message) {
   if (error)
     *error = std::move(message);
-}
-
-bool cancelled(const std::atomic<bool> *cancelRequested) {
-  return cancelRequested && cancelRequested->load(std::memory_order_relaxed);
 }
 
 void report(const ProgressCallback &callback, float fraction,
@@ -120,7 +117,7 @@ bool resolveWhisperModel(WhisperModelSelection *selection, std::string *error) {
         std::error_code ec;
         if (std::filesystem::is_regular_file(candidate, ec) && !ec) {
           selection->path = candidate;
-          selection->alignmentPreset = WhisperAlignmentPreset::Base;
+          selection->alignmentPreset = WhisperAlignmentPreset::LargeV3;
           break;
         }
       }
@@ -129,7 +126,7 @@ bool resolveWhisperModel(WhisperModelSelection *selection, std::string *error) {
     }
     if (selection->path.empty()) {
       setError(error, "Whisper model not found. Rebuild Radioify so "
-                      "models/ggml-base-q5_1.bin is installed, or set "
+                      "models/ggml-large-v3.bin is installed, or set "
                       "RADIOIFY_WHISPER_MODEL.");
       return false;
     }
@@ -597,26 +594,9 @@ bool createIndexedTranscript(const std::filesystem::path &videoPath,
                              std::string *error,
                              const TranscriptCommitStarted &outputCommitStarted,
                              std::filesystem::path *publishedPathResult) {
-  if (error)
-    error->clear();
-  IndexedTranscriptOperation operation;
-  TranscriptOperationControl control;
-  control.cancelled = [cancelRequested]() {
-    return cancelled(cancelRequested);
-  };
-  control.backgroundGpuAllowed = []() { return true; };
-  control.progress = onProgress;
-  TranscriptOperationResult result = operation.resume(
-      videoPath, outputPath, publishMode,
-      TranscriptLanguageMode::SourceLanguage, control, outputCommitStarted);
-  if (result.status != TranscriptOperationStatus::Succeeded) {
-    setError(error, result.detail.empty() ? "Transcript did not complete."
-                                          : std::move(result.detail));
-    return false;
-  }
-  if (publishedPathResult)
-    *publishedPathResult = std::move(result.publishedPath);
-  return true;
+  return createQualityTranscript(videoPath, outputPath, publishMode, onProgress,
+                                 cancelRequested, error, outputCommitStarted,
+                                 publishedPathResult);
 }
 
 } // namespace playback_video_transcript

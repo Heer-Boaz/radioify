@@ -30,7 +30,7 @@ cbuffer Constants : register(b0) {
     float outputSdrWhiteNits;
     float outputPeakNits;
     float outputFullFrameNits;
-    float asciiGlyphPeakNits;
+    float outputPadding;
 };
 
 PS_INPUT VS(uint vid : SV_VertexID) {
@@ -53,7 +53,7 @@ Texture2D texUV : register(t1);
 Texture2D texRGBA : register(t2);
 SamplerState sam : register(s0);
 
-#include "hdr_generate.hlsli"
+#include "color_output.hlsli"
 
 float ExpandYNorm(float yNorm) {
     float maxCode = (float)((1u << bitDepth) - 1u);
@@ -77,7 +77,7 @@ float2 ExpandUV(float2 uvNorm) {
 float3 ConvertVideoToOutput(float3 rgb) {
     return RadioifyVideoToOutput(rgb, yuvTransfer, yuvMatrix,
                                  outputColorSpace, outputSdrWhiteNits,
-                                 outputPeakNits, outputFullFrameNits);
+                                 outputPeakNits);
 }
 
 float4 PS(PS_INPUT input) : SV_Target {

@@ -14,18 +14,31 @@ cbuffer GpuTextGridConstants : register(b0) {
     float outputSdrWhiteNits;
     float outputPeakNits;
     float outputFullFrameNits;
-    float asciiGlyphPeakNits;
+    float outputPadding;
 };
 
 static const uint CELL_FLAG_TRANSPARENT_BG = 2u;
 
-#include "hdr_generate.hlsli"
+#include "color_output.hlsli"
 
 float3 packedRgb(uint rgb) {
     return float3(
         float(rgb & 0xFFu),
         float((rgb >> 8) & 0xFFu),
         float((rgb >> 16) & 0xFFu)) / 255.0;
+}
+
+float3 cellColorNits2020(uint color) {
+    uint transfer = color >> 30u;
+    float3 nits = RadioifyLinearBt709ToBt2020(
+        RadioifySdrUi709ToBaseNits709(packedRgb(color), outputSdrWhiteNits));
+    if (transfer != RADIOIFY_TRANSFER_SDR) {
+        float peak = (transfer == RADIOIFY_TRANSFER_PQ)
+            ? RADIOIFY_PQ_REFERENCE_MAX_NITS
+            : max(outputPeakNits, RADIOIFY_BT2408_REFERENCE_WHITE_NITS);
+        nits = RadioifyUnpackHdrColor(color) * peak;
+    }
+    return nits;
 }
 
 float4 PS_GPU_TEXT_GRID(PS_INPUT input) : SV_Target {
@@ -52,7 +65,8 @@ float4 PS_GPU_TEXT_GRID(PS_INPUT input) : SV_Target {
         glyphCell * cellSize + glyphPixel;
     float coverage = glyphAtlasTex.Load(int3(atlasPixel, 0));
     float3 fg = packedRgb(cell.g);
-    if (outputColorSpace == RADIOIFY_OUTPUT_COLOR_SDR) {
+    bool hdrCell = ((cell.g | cell.b) >> 30u) != 0u;
+    if (outputColorSpace == RADIOIFY_OUTPUT_COLOR_SDR && !hdrCell) {
         if ((cell.a & CELL_FLAG_TRANSPARENT_BG) != 0u) {
             return float4(fg, coverage);
         }
@@ -60,20 +74,17 @@ float4 PS_GPU_TEXT_GRID(PS_INPUT input) : SV_Target {
         return float4(lerp(bg, fg, coverage), 1.0);
     }
 
-    float3 fgNits = RadioifySdr709ToAsciiNits709(
-        fg, outputSdrWhiteNits, asciiGlyphPeakNits, 1.85);
+    float3 fgNits = cellColorNits2020(cell.g);
     if ((cell.a & CELL_FLAG_TRANSPARENT_BG) != 0u) {
         return float4(
-            RadioifyEncodeNits709ToOutput(fgNits, outputColorSpace,
+            RadioifyEncodeNits2020ToOutput(fgNits, outputColorSpace,
                                           outputSdrWhiteNits),
             coverage);
     }
-    float3 bg = packedRgb(cell.b);
-    float3 bgNits = RadioifySdr709ToAsciiNits709(
-        bg, outputSdrWhiteNits, asciiGlyphPeakNits, 1.0);
+    float3 bgNits = cellColorNits2020(cell.b);
     float3 composedNits = lerp(bgNits, fgNits, coverage);
     return float4(
-        RadioifyEncodeNits709ToOutput(composedNits, outputColorSpace,
+        RadioifyEncodeNits2020ToOutput(composedNits, outputColorSpace,
                                       outputSdrWhiteNits),
         1.0);
 }

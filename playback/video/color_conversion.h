@@ -100,6 +100,32 @@ inline float transferToSrgb(float value, YuvTransfer transfer) {
 
 }  // namespace detail
 
+// SDR terminal representation of an HDR text-cell colour. The tagged RGB10
+// value itself is retained separately for native HDR window presentation.
+inline void hdrColorToSrgb8(uint32_t packed, uint8_t& red, uint8_t& green,
+                            uint8_t& blue) {
+  const bool pq = (packed >> 30) == static_cast<uint32_t>(YuvTransfer::Pq);
+  auto decode = [pq](uint32_t code) {
+    const float value = static_cast<float>(code & 1023u) / 1023.0f;
+    return pq ? detail::pqEotf(value) * kPqNominalPeakNits
+              : detail::hlgEotf(value) * 1000.0f;
+  };
+  const float r = decode(packed);
+  const float g = decode(packed >> 10);
+  const float b = decode(packed >> 20);
+  constexpr float white = 203.0f;
+  const float mappedWhite = detail::filmic(1.0f);
+  auto encode = [mappedWhite](float nits) {
+    const float mapped = detail::filmic(std::max(nits, 0.0f) / white) /
+                         mappedWhite;
+    return detail::byte(detail::linearToSrgb(
+        detail::clamp(mapped, 0.0f, 1.0f)) * 255.0f);
+  };
+  red = encode(1.6605f * r - 0.5876f * g - 0.0728f * b);
+  green = encode(-0.1246f * r + 1.1329f * g - 0.0083f * b);
+  blue = encode(-0.0182f * r - 0.1006f * g + 1.1187f * b);
+}
+
 inline uint8_t lumaToSrgb8(int y, bool fullRange, int bitDepth,
                            YuvTransfer transfer) {
   return detail::byte(detail::clamp(

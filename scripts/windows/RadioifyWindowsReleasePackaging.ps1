@@ -183,17 +183,19 @@ function New-RadioifyWindowsDistributionBundle {
         Copy-Item -LiteralPath $iconPath -Destination (Join-Path $stageDir "radioify.ico") -Force
     }
 
-    $whisperModelPath = Join-Path $resolvedRepoRoot "dist\models\ggml-base-q5_1.bin"
+    $whisperModelPath = Join-Path $resolvedRepoRoot "dist\models\ggml-large-v3.bin"
     if (-not (Test-Path -LiteralPath $whisperModelPath)) {
         throw "Indexed-transcript model not found at '$whisperModelPath'. Run .\build.ps1 -Static first."
     }
     $modelStageDir = Join-Path $stageDir "models"
     New-Item -ItemType Directory -Force -Path $modelStageDir | Out-Null
     Copy-Item -LiteralPath $whisperModelPath `
-        -Destination (Join-Path $modelStageDir "ggml-base-q5_1.bin") `
+        -Destination (Join-Path $modelStageDir "ggml-large-v3.bin") `
         -Force
 
     $windowsMlRuntimeContract = Get-RadioifyWindowsMlRuntimeContract
+    Copy-RadioifyTranscriptRuntime -Source (Join-Path $resolvedRepoRoot "dist\transcript-runtime") `
+        -Destination (Join-Path $stageDir "transcript-runtime")
     foreach ($runtimeName in $windowsMlRuntimeContract.ProductionRuntimeFiles) {
         $runtimeSource = Join-Path $resolvedRepoRoot "dist\$runtimeName"
         if (-not (Test-Path -LiteralPath $runtimeSource)) {

@@ -16,7 +16,8 @@ GpuTextGridCell makeCell(char ch, GpuTextGridColor fg, GpuTextGridColor bg) {
 }
 
 uint32_t color(const Color& value) {
-  return gpuTextGridRgb(value.r, value.g, value.b);
+  return value.hdr != 0 ? value.hdr
+                        : gpuTextGridRgb(value.r, value.g, value.b);
 }
 
 GpuTextGridCell makeScreenCell(const ScreenCell& cell) {

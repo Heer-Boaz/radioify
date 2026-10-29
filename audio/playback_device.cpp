@@ -8,6 +8,7 @@
 
 #include "audioplayback.h"
 #include "audioplayback_internal.h"
+#include "runtime_helpers.h"
 
 namespace {
 
@@ -94,6 +95,10 @@ static void deviceNotificationCallback(
       *static_cast<AudioState*>(notification->pDevice->pUserData);
   if (notification->pDevice != &state.device) return;
 
+  // Record only in the device callback; file I/O happens on the polling thread.
+  state.deviceNotifications.fetch_or(1u << static_cast<unsigned>(notification->type),
+                                      std::memory_order_relaxed);
+
   switch (notification->type) {
     case ma_device_notification_type_started:
       state.deviceStopExpected.store(false, std::memory_order_relaxed);
@@ -145,8 +150,13 @@ static bool initPlaybackDeviceUnlocked(AudioPlaybackState& audio) {
   {
     char buf[256];
     std::snprintf(buf, sizeof(buf),
-                  "audio_device_started sampleRate=%u channels=%u",
-                  audio.sampleRate, audio.channels);
+                  "audio_device_started sampleRate=%u channels=%u internalRate=%u internalChannels=%u periodFrames=%u periods=%u delayFrames=%llu",
+                  audio.sampleRate, audio.channels,
+                  audio.state.device.playback.internalSampleRate,
+                  audio.state.device.playback.internalChannels,
+                  audio.state.device.playback.internalPeriodSizeInFrames,
+                  audio.state.device.playback.internalPeriods,
+                  static_cast<unsigned long long>(audio.state.deviceDelayFrames.load()));
     appendAudioTimingLogLine(buf);
   }
 #endif
@@ -154,7 +164,11 @@ static bool initPlaybackDeviceUnlocked(AudioPlaybackState& audio) {
 }
 
 static void uninitPlaybackDeviceUnlocked(AudioPlaybackState& audio) {
-  if (!audio.deviceReady) return;
+  if (!audio.deviceReady) {
+    audio.state.deviceRecoveryPending.store(false, std::memory_order_relaxed);
+    audio.state.deviceStopExpected.store(false, std::memory_order_relaxed);
+    return;
+  }
   if (ma_device_get_state(&audio.state.device) ==
       ma_device_state_uninitialized) {
     audio.deviceReady = false;
@@ -181,8 +195,7 @@ static bool ensurePlaybackDeviceRunningInternalUnlocked(
   }
 
   if (ma_device_get_state(&audio.state.device) ==
-          ma_device_state_uninitialized ||
-      audio.state.deviceRecoveryPending.load(std::memory_order_relaxed)) {
+          ma_device_state_uninitialized) {
     uninitPlaybackDeviceUnlocked(audio);
     return initPlaybackDeviceUnlocked(audio);
   }
@@ -190,6 +203,8 @@ static bool ensurePlaybackDeviceRunningInternalUnlocked(
   const ma_device_state deviceState = ma_device_get_state(&audio.state.device);
   if (deviceState == ma_device_state_started ||
       deviceState == ma_device_state_starting) {
+    // WASAPI can complete a reroute itself. Do not tear down a live device.
+    audio.state.deviceRecoveryPending.store(false, std::memory_order_relaxed);
     updatePlaybackDeviceDelayFramesUnlocked(audio);
     return true;
   }
@@ -208,6 +223,40 @@ static bool ensurePlaybackDeviceRunningInternalUnlocked(
 
 }  // namespace
 
+void audioPlaybackDeviceService(AudioPlaybackState& audio) {
+  std::lock_guard<std::mutex> lock(audio.playbackDeviceMutex);
+  if (!audio.deviceReady &&
+      !audio.state.deviceRecoveryPending.load(std::memory_order_relaxed)) {
+    return;
+  }
+  if (audio.deviceReady) {
+    const ma_device_state state = ma_device_get_state(&audio.state.device);
+    if (state == ma_device_state_started || state == ma_device_state_starting) {
+      if (audio.state.deviceRecoveryPending.exchange(false, std::memory_order_relaxed)) {
+        updatePlaybackDeviceDelayFramesUnlocked(audio);
+      }
+      return;
+    }
+    if (state == ma_device_state_stopping) return;
+  }
+
+  const int64_t now = nowUs();
+  if (now < audio.playbackDeviceRetryAfterUs) return;
+  appendAudioTimingLogLine("audio_device_recovery_begin");
+  invalidatePlaybackDeviceRuntimeState(audio);
+  if (ensurePlaybackDeviceRunningInternalUnlocked(audio)) {
+    audio.playbackDeviceRetryAfterUs = 0;
+    audio.lastInitError.clear();
+    appendAudioTimingLogLine("audio_device_recovery_end");
+  } else {
+    // A headset can disappear before Windows has published its replacement.
+    // Retain the request without busy-looping or changing transport pause.
+    audio.state.deviceRecoveryPending.store(true, std::memory_order_relaxed);
+    audio.playbackDeviceRetryAfterUs = nowUs() + 500000;
+    appendAudioTimingLogLine("audio_device_recovery_retry");
+  }
+}
+
 bool audioPlaybackDeviceEnsureRunning(AudioPlaybackState& audio) {
   std::lock_guard<std::mutex> lock(audio.playbackDeviceMutex);
   return ensurePlaybackDeviceRunningInternalUnlocked(audio);
@@ -216,6 +265,7 @@ bool audioPlaybackDeviceEnsureRunning(AudioPlaybackState& audio) {
 void audioPlaybackDeviceUninit(AudioPlaybackState& audio) {
   std::lock_guard<std::mutex> lock(audio.playbackDeviceMutex);
   uninitPlaybackDeviceUnlocked(audio);
+  audio.playbackDeviceRetryAfterUs = 0;
 }
 
 uint64_t audioPlaybackDeviceLatencyFrames(AudioPlaybackState& audio) {
@@ -228,6 +278,33 @@ void audioPlaybackDeviceFillPerfStats(AudioPlaybackState& audio,
                                       AudioPerfStats* stats) {
   if (!stats) return;
   std::lock_guard<std::mutex> lock(audio.playbackDeviceMutex);
+  stats->outputRecovering =
+      audio.state.deviceRecoveryPending.load(std::memory_order_relaxed);
+  if (audio.deviceReady) {
+    const ma_device_state state = ma_device_get_state(&audio.state.device);
+    stats->outputRecovering = state != ma_device_state_started &&
+                               state != ma_device_state_starting;
+  }
+#if RADIOIFY_ENABLE_TIMING_LOG
+  const uint32_t notifications =
+      audio.state.deviceNotifications.exchange(0, std::memory_order_relaxed);
+  if (notifications != 0) {
+    char line[384];
+    std::snprintf(line, sizeof(line),
+        "audio_device_notifications mask=%u state=%d recovery=%d expected_stop=%d paused=%d hold=%d callbacks=%llu read=%llu clock_ready=%d starved=%d internalRate=%u internalChannels=%u",
+        notifications, static_cast<int>(ma_device_get_state(&audio.state.device)),
+        audio.state.deviceRecoveryPending.load() ? 1 : 0,
+        audio.state.deviceStopExpected.load() ? 1 : 0,
+        audio.state.paused.load() ? 1 : 0, audio.state.hold.load() ? 1 : 0,
+        static_cast<unsigned long long>(audio.state.callbackCount.load()),
+        static_cast<unsigned long long>(audio.state.framesReadTotal.load()),
+        audio.state.streamClockReady.load() ? 1 : 0,
+        audio.state.streamStarved.load() ? 1 : 0,
+        audio.state.device.playback.internalSampleRate,
+        audio.state.device.playback.internalChannels);
+    appendAudioTimingLogLine(line);
+  }
+#endif
   if (!audio.deviceReady ||
       ma_device_get_state(&audio.state.device) ==
           ma_device_state_uninitialized) {

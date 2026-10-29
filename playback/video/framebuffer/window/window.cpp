@@ -937,14 +937,6 @@ float VideoWindow::OutputFullFrameNits() const {
   return m_outputColorState.outputFullFrameNits;
 }
 
-float VideoWindow::AsciiGlyphPeakNits() const {
-  if (VideoOutputUsesHdr(m_outputColorState)) {
-    assert(std::isfinite(m_outputColorState.asciiGlyphPeakNits));
-    assert(m_outputColorState.asciiGlyphPeakNits > 0.0f);
-  }
-  return m_outputColorState.asciiGlyphPeakNits;
-}
-
 void VideoWindow::FillOutputColorConstants(
     ShaderConstants &constants,
     const VideoOutputColorState &outputColor) const {
@@ -952,7 +944,7 @@ void VideoWindow::FillOutputColorConstants(
   constants.outputSdrWhiteNits = outputColor.outputSdrWhiteNits;
   constants.outputPeakNits = outputColor.outputPeakNits;
   constants.outputFullFrameNits = outputColor.outputFullFrameNits;
-  constants.asciiGlyphPeakNits = outputColor.asciiGlyphPeakNits;
+  constants.outputPadding = 0.0f;
 }
 
 void VideoWindow::SetOutputColorAttemptStatus(const std::string &status) {
@@ -1589,6 +1581,12 @@ bool VideoWindow::RestorePictureInPicture(
   return EnterPictureInPicture(focus, &state);
 }
 
+// Known NVIDIA/Bluetooth issue: fullscreen may activate the overlay and headset
+// mic capture. Windows can then switch A2DP -> HFP, changing sound quality and
+// endpoint volume while Radioify's volume stays unchanged (WH-1000XM5 repro).
+// This can persist until NVIDIA releases the mic. Workarounds: disable NVIDIA's
+// mic capture, select another microphone, or disable the overlay.
+// Related fullscreen trigger: https://github.com/mpvnet-player/mpv.net/issues/220
 bool VideoWindow::MakeFullscreen(VideoWindowFocus focus,
                                  const WindowRestoreState *restoreState) {
   std::lock_guard<std::recursive_mutex> lock(m_gpu.mutex());

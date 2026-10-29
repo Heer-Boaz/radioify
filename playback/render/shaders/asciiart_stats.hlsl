@@ -43,7 +43,6 @@ static const uint kTransferHlg = 2u;
 #undef RADIOIFY_ASCII_SCALE_256
 
 #include "video_luminance_stats.hlsli"
-#include "video_hdr_to_sdr.hlsli"
 
 float CodeFromNorm(float norm) {
     norm = saturate(norm);
@@ -72,11 +71,6 @@ float ExpandYCode(float yCode) {
     return saturate((yCode - yMin) / max(yMax - yMin, 1.0f));
 }
 
-float ApplyHdrToSdr(float v) {
-    return RadioifyHdrTransferToSdr(v, yuvTransfer, kHdrScale, kTransferPq,
-                                    kTransferHlg);
-}
-
 static const uint kYCoeffR = 13933u;
 static const uint kYCoeffG = 46871u;
 static const uint kYCoeffB = 4732u;
@@ -94,9 +88,6 @@ uint CodeFromNormRounded(float norm) {
 #if defined(NV12_INPUT)
 uint NormalizeYCodeToByte(uint yCode) {
     float y = ExpandYCode((float)yCode);
-    if (yuvTransfer != kTransferSdr) {
-        y = ApplyHdrToSdr(y);
-    }
     return (uint)(saturate(y) * 255.0f + 0.5f);
 }
 #else

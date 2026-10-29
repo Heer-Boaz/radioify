@@ -106,6 +106,7 @@ struct AudioState {
   std::atomic<bool> streamClockReady{false};
   std::atomic<bool> deviceRecoveryPending{false};
   std::atomic<bool> deviceStopExpected{false};
+  std::atomic<uint32_t> deviceNotifications{0};
   SpscAudioTimeline decodedTimeline;
   SpscAudioTimeline processedTimeline;
   std::mutex streamUpdateMutex;
@@ -123,6 +124,7 @@ struct AudioState {
 struct AudioPlaybackState {
   AudioState state{};
   std::mutex playbackDeviceMutex;
+  int64_t playbackDeviceRetryAfterUs = 0;  // Guarded by playbackDeviceMutex.
   bool deviceReady = false;
   bool decoderReady = false;
   bool enableAudio = false;

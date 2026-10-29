@@ -13,7 +13,7 @@
 namespace {
 
 int runSmoke(const std::filesystem::path &input,
-             const std::filesystem::path &output) {
+             const std::filesystem::path &output, bool cancelAfterLoad = false) {
   namespace transcript = playback_video_transcript;
   std::atomic<bool> cancelRequested{false};
   std::mutex progressMutex;
@@ -21,7 +21,7 @@ int runSmoke(const std::filesystem::path &input,
   int lastPercent = -1;
   std::string lastPhase;
   bool monotonicProgress = true;
-  bool vulkanConfirmed = false;
+  bool qualityBackendConfirmed = false;
   std::string error;
   std::filesystem::path publishedOutput;
   const bool created = transcript::createIndexedTranscript(
@@ -32,8 +32,9 @@ int runSmoke(const std::filesystem::path &input,
           monotonicProgress = false;
         }
         lastFraction = std::max(lastFraction, progress.fraction);
-        if (progress.phase.rfind("Vulkan ready on ", 0) == 0) {
-          vulkanConfirmed = true;
+        if (progress.phase.rfind("Qwen3-ASR 1.7B ready on CUDA", 0) == 0) {
+          qualityBackendConfirmed = true;
+          if (cancelAfterLoad) cancelRequested.store(true);
         }
         const int percent = static_cast<int>(progress.fraction * 100.0f);
         if (percent != lastPercent || progress.phase != lastPhase) {
@@ -43,6 +44,15 @@ int runSmoke(const std::filesystem::path &input,
         }
       },
       &cancelRequested, &error, {}, &publishedOutput);
+  if (cancelAfterLoad) {
+    if (created || !qualityBackendConfirmed || !publishedOutput.empty() ||
+        error.find("cancelled") == std::string::npos) {
+      std::cerr << "indexed_transcript_smoke: cancellation failed: " << error << '\n';
+      return EXIT_FAILURE;
+    }
+    std::cout << "indexed_transcript_smoke: PASS cancelled during GPU inference\n";
+    return EXIT_SUCCESS;
+  }
   if (!created) {
     std::cerr << "indexed_transcript_smoke: " << error << '\n';
     return EXIT_FAILURE;
@@ -52,8 +62,8 @@ int runSmoke(const std::filesystem::path &input,
                  "the run\n";
     return EXIT_FAILURE;
   }
-  if (!vulkanConfirmed) {
-    std::cerr << "indexed_transcript_smoke: Vulkan backend was not confirmed\n";
+  if (!qualityBackendConfirmed) {
+    std::cerr << "indexed_transcript_smoke: Qwen3-ASR CUDA backend was not confirmed\n";
     return EXIT_FAILURE;
   }
   if (publishedOutput.empty() ||
@@ -70,12 +80,12 @@ int runSmoke(const std::filesystem::path &input,
 
 #ifdef _WIN32
 int wmain(int argc, wchar_t **argv) {
-  if (argc != 3) {
-    std::cerr << "Usage: indexed_transcript_smoke <input-media> <output.srt>\n";
+  if (argc != 3 && (argc != 4 || std::wstring(argv[3]) != L"--cancel-after-load")) {
+    std::cerr << "Usage: indexed_transcript_smoke <input-media> <output.srt> [--cancel-after-load]\n";
     return 2;
   }
   return runSmoke(std::filesystem::path(argv[1]),
-                  std::filesystem::path(argv[2]));
+                  std::filesystem::path(argv[2]), argc == 4);
 }
 #else
 int main(int argc, char **argv) {

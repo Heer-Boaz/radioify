@@ -207,6 +207,15 @@ FramePlan planFrame(LoopState& state, PlayerState playbackState,
   const bool seeking =
       projection.transport == playback_video_state_machine::TransportState::Seeking;
 
+  // Keep queued video at its current PTS while the audio owner restores the
+  // endpoint. Falling back to a running video clock would leave audio behind.
+  if (!priming && !seeking && master.policy !=
+          playback_video_main_clock::MasterPolicy::Video &&
+      master.audioOutputRecovering) {
+    plan.waitForAudioRecovery = true;
+    return plan;
+  }
+
   if (!priming && !seeking &&
       master.source == PlayerClockSource::Audio && !master.audioClockReady) {
     plan.waitForAudioClock = true;

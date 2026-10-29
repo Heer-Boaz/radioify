@@ -30,11 +30,14 @@ struct AsciiCell {
     uint fg;
     uint bg;
     uint hasBg;
+    uint hdrFg;
+    uint hdrBg;
 };
 
 struct AsciiDotSample {
     uint color;    // packed RGB
     uint metrics;  // luma, edge, source-blue confidence, unused
+    uint hdrColor;
 };
 
 RWStructuredBuffer<AsciiCell> OutputBuffer : register(u0);
@@ -70,7 +73,7 @@ static const uint kTransferHlg = 2;
 #undef RADIOIFY_ASCII_SIGNAL_U8
 #undef RADIOIFY_ASCII_SCALE_256
 
-#include "video_hdr_to_sdr.hlsli"
+#include "video_hdr_color.hlsli"
 
 // Dithering thresholds (optimized for 2x4 braille)
 // Ranks: 0, 4, 2, 6, 1, 5, 3, 7
@@ -395,16 +398,6 @@ float2 ExpandUV(float2 uvNorm) {
     return (uvCode - cMid) / denom;
 }
 
-float ApplyHdrToSdr(float v) {
-    return RadioifyHdrTransferToSdr(v, yuvTransfer, kHdrScale, kTransferPq,
-                                    kTransferHlg);
-}
-
-float3 ApplyHdrToSdr(float3 v) {
-    return RadioifyHdrTransferToSdr(v, yuvTransfer, kHdrScale, kTransferPq,
-                                    kTransferHlg);
-}
-
 float2 RotateInputUV(float2 uv) {
     uint turns = rotationQuarterTurns & 3u;
     if (turns == 1u) return float2(uv.y, 1.0f - uv.x);
@@ -430,6 +423,7 @@ uint GetInkLevelByteFromLum(float lum) {
 
 struct InputSample {
     float3 rgb;
+    uint hdrColor;
 };
 
 static const uint kYCoeffR = 13933u;
@@ -543,21 +537,11 @@ float3 YuvCodeToRgb(uint yCode, uint uCode, uint vCode) {
     }
 
     float3 rgb = float3(r, g, b);
-#ifdef NV12_INPUT
-    if (yuvTransfer != kTransferSdr) {
-        rgb = ApplyHdrToSdr(rgb);
-    }
-#endif
     return saturate(rgb);
 }
 
 uint NormalizeYCodeToByte(uint yCode) {
     float y = ExpandYCode((float)yCode);
-#ifdef NV12_INPUT
-    if (yuvTransfer != kTransferSdr) {
-        y = ApplyHdrToSdr(y);
-    }
-#endif
     return (uint)(saturate(y) * 255.0f + 0.5f);
 }
 
@@ -570,7 +554,36 @@ InputSample SampleSourceArea(uint dotX, uint dotY, uint dotWCount,
     SourceBoundsForDot(dotX, dotY, dotWCount, dotHCount, start, end);
 
     uint count = 0u;
-    InputSample sample;
+    InputSample sample = (InputSample)0;
+    luma = 0.0;
+    sample.hdrColor = 0u;
+    if (yuvTransfer != kTransferSdr) {
+        // Average source light, not tone-mapped SDR or nonlinear HDR codes.
+        float3 linearSum = 0.0;
+        [loop]
+        for (uint sy = start.y; sy < end.y; ++sy) {
+            [loop]
+            for (uint sx = start.x; sx < end.x; ++sx) {
+#ifdef NV12_INPUT
+                uint yCode = CodeFromNormRounded(TextureY.Load(int3(sx, sy, 0)));
+                float2 uv = TextureUV.Load(int3(sx >> 1u, sy >> 1u, 0));
+                float3 code = YuvCodeToRgb(yCode, CodeFromNormRounded(uv.x),
+                                          CodeFromNormRounded(uv.y));
+#else
+                float3 code = InputTexture.Load(int3(sx, sy, 0)).rgb;
+#endif
+                linearSum += RadioifyHdrCodeToLinear2020(
+                    code, yuvTransfer, yuvMatrix);
+                ++count;
+            }
+        }
+        float3 linearMean = linearSum / max(count, 1u);
+        sample.hdrColor = RadioifyPackHdrColor(linearMean, yuvTransfer);
+        // Perceptual codes drive glyph selection only. Final colours come
+        // from the separate HDR samples, after the glyph mask is final.
+        sample.rgb = RadioifyHdrLinearToCode(linearMean, yuvTransfer);
+        luma = GetLuma(sample.rgb);
+    } else {
 #ifdef NV12_INPUT
     uint sumY = 0u;
     uint sumU = 0u;
@@ -624,6 +637,7 @@ InputSample SampleSourceArea(uint dotX, uint dotY, uint dotWCount,
     luma = (float)avgLuma;
     sample.rgb = float3((float)avgR, (float)avgG, (float)avgB) * (1.0f / 255.0f);
 #endif
+    }
     return sample;
 }
 
@@ -691,6 +705,7 @@ void CSDotPrefilter(uint3 DTid : SV_DispatchThreadID) {
     AsciiDotSample outDot;
     outDot.color = PackColor(sample.rgb);
     outDot.metrics = PackDotMetrics(luma, 0.0f);
+    outDot.hdrColor = sample.hdrColor;
     DotOutputBuffer[DTid.y * dotWCount + DTid.x] = outDot;
 }
 
@@ -1184,6 +1199,8 @@ void CSMain(uint3 DTid : SV_DispatchThreadID) {
     cell.bg = PackColor(curBg);
     
     cell.hasBg = 1u;
+    cell.hdrFg = 0u;
+    cell.hdrBg = 0u;
 
     OutputBuffer[cellIndex] = cell;
 }
@@ -1202,6 +1219,8 @@ AsciiCell RefineInputCellAt(int x, int y) {
         emptyCell.fg = 0u;
         emptyCell.bg = 0u;
         emptyCell.hasBg = 0u;
+        emptyCell.hdrFg = 0u;
+        emptyCell.hdrBg = 0u;
         return emptyCell;
     }
     return RefineInput[(uint)y * outWidth + (uint)x];
@@ -1366,4 +1385,30 @@ void CSSyncHistory(uint3 DTid : SV_DispatchThreadID) {
     }
     uint fg24 = cell.fg & 0x00FFFFFFu;
     HistoryBuffer[cellIndex] = uint2(fg24 | (bitmask << 24), cell.bg);
+
+    uint2 origin = DTid.xy * uint2(2u, 4u);
+    uint transfer = DotInputBuffer[DotSampleIndex(origin.x, origin.y)].hdrColor >> 30u;
+    if (transfer != kTransferSdr) {
+        float3 fgSum = 0.0;
+        float3 bgSum = 0.0;
+        uint fgCount = 0u;
+        [unroll]
+        for (uint i = 0u; i < 8u; ++i) {
+            uint2 dotPos = origin + uint2(i >> 2u, i & 3u);
+            float3 light = RadioifyUnpackHdrColor(
+                DotInputBuffer[DotSampleIndex(dotPos.x, dotPos.y)].hdrColor);
+            if ((bitmask & (1u << BrailleBitFromDotIndex(i))) != 0u) {
+                fgSum += light;
+                ++fgCount;
+            } else {
+                bgSum += light;
+            }
+        }
+        float3 mean = (fgSum + bgSum) / 8.0;
+        cell.hdrFg = RadioifyPackHdrColor(
+            fgCount != 0u ? fgSum / max(fgCount, 1u) : mean, transfer);
+        cell.hdrBg = RadioifyPackHdrColor(
+            fgCount != 8u ? bgSum / max(8u - fgCount, 1u) : mean, transfer);
+        OutputBuffer[cellIndex] = cell;
+    }
 }

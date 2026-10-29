@@ -79,6 +79,7 @@ radioify_add_module_object_library(radioify_transcript_job
 radioify_add_module_object_library(radioify_transcript_engine
   ${CMAKE_CURRENT_SOURCE_DIR}/transcript/subtitle_cues.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/transcript/transcriber.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/transcript/quality_engine.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/transcript/whisper_engine.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/transcript/whisper_model_config.cpp
 )

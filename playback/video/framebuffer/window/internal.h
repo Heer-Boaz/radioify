@@ -32,7 +32,7 @@ struct ShaderConstants {
     float outputSdrWhiteNits;
     float outputPeakNits;
     float outputFullFrameNits;
-    float asciiGlyphPeakNits;
+    float outputPadding;
 };
 
 static_assert((sizeof(ShaderConstants) % 16) == 0,
@@ -48,6 +48,6 @@ static_assert(offsetof(ShaderConstants, outputPeakNits) ==
 static_assert(offsetof(ShaderConstants, outputFullFrameNits) ==
                   offsetof(ShaderConstants, outputColorSpace) + 12,
               "outputFullFrameNits must follow outputColorSpace");
-static_assert(offsetof(ShaderConstants, asciiGlyphPeakNits) ==
+static_assert(offsetof(ShaderConstants, outputPadding) ==
                   offsetof(ShaderConstants, outputColorSpace) + 16,
-              "asciiGlyphPeakNits must share the HDR constants cbuffer row");
+              "outputPadding must complete the HDR constants cbuffer row");

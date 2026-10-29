@@ -26,7 +26,7 @@ struct GpuTextGridConstants {
     float outputSdrWhiteNits = kVideoOutputStandardSdrWhiteNits;
     float outputPeakNits = kVideoOutputStandardSdrWhiteNits;
     float outputFullFrameNits = kVideoOutputStandardSdrWhiteNits;
-    float asciiGlyphPeakNits = kVideoOutputStandardSdrWhiteNits;
+    float outputPadding = 0.0f;
 };
 
 static_assert(sizeof(GpuTextGridConstants) == 32,
@@ -42,9 +42,9 @@ static_assert(offsetof(GpuTextGridConstants, outputPeakNits) ==
 static_assert(offsetof(GpuTextGridConstants, outputFullFrameNits) ==
                   offsetof(GpuTextGridConstants, outputColorSpace) + 12,
               "GPU text outputFullFrameNits must follow outputColorSpace");
-static_assert(offsetof(GpuTextGridConstants, asciiGlyphPeakNits) ==
+static_assert(offsetof(GpuTextGridConstants, outputPadding) ==
                   offsetof(GpuTextGridConstants, outputColorSpace) + 16,
-              "GPU text asciiGlyphPeakNits must share the HDR constants row");
+              "GPU text outputPadding must complete the HDR constants row");
 
 RadioifyTerminalFontMetrics measureTerminalFontMetrics(UINT dpi) {
     HDC memDC = CreateCompatibleDC(nullptr);
@@ -314,7 +314,6 @@ bool VideoWindow::DrawGpuTextGridFrame(ID3D11Device* device,
         constants.outputSdrWhiteNits = OutputSdrWhiteNits();
         constants.outputPeakNits = OutputPeakNits();
         constants.outputFullFrameNits = OutputFullFrameNits();
-        constants.asciiGlyphPeakNits = AsciiGlyphPeakNits();
         std::memcpy(mappedConstants.pData, &constants, sizeof(constants));
         context->Unmap(m_gpuTextGridConstants.Get(), 0);
     }

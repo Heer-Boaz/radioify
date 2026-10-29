@@ -163,28 +163,12 @@ float resolvedOutputFullFrameNits(const VideoOutputDisplayInfo& display) {
     return resolvedOutputPeakNits(display);
 }
 
-float resolveAsciiGlyphPeakNits(const VideoOutputDisplayInfo& display) {
-    const float sdrWhiteNits = resolvedSdrWhiteNits(display);
-    const float outputPeakNits = resolvedOutputPeakNits(display);
-    const float outputFullFrameNits = resolvedOutputFullFrameNits(display);
-    const float diffuseWhite = std::max(kVideoOutputBt2408ReferenceWhiteNits,
-                                        sdrWhiteNits);
-    const float policyTarget =
-        std::max(diffuseWhite *
-                     kVideoOutputAsciiGlyphSdrWhiteScale,
-                 outputFullFrameNits *
-                     kVideoOutputAsciiGlyphFullFrameScale);
-    return std::min(outputPeakNits,
-                    std::max(diffuseWhite + 1.0f, policyTarget));
-}
-
 VideoOutputColorState videoOutputColorStateFromDisplay(
     const VideoOutputDisplayInfo& display) {
     VideoOutputColorState output{};
     output.outputSdrWhiteNits = resolvedSdrWhiteNits(display);
     output.outputPeakNits = resolvedOutputPeakNits(display);
     output.outputFullFrameNits = resolvedOutputFullFrameNits(display);
-    output.asciiGlyphPeakNits = resolveAsciiGlyphPeakNits(display);
     return output;
 }
 
@@ -357,13 +341,10 @@ std::string VideoOutputColorAttemptStatus(
     const VideoOutputColorPlan& plan,
     const VideoOutputColorState& selectedState,
     const char* stage) {
-    const float diffuseWhiteNits =
-        std::max(kVideoOutputBt2408ReferenceWhiteNits,
-                 selectedState.outputSdrWhiteNits);
     char buf[384];
     std::snprintf(
         buf, sizeof(buf),
-        "policy=output_color selected=%s hdr=%d stage=%s monitor=%s paper=%.0f peak=%.0f fullframe=%.0f glyphPeak=%.0f diffuse=%.0f reason=%s",
+        "policy=output_color selected=%s hdr=%d stage=%s monitor=%s paper=%.0f peak=%.0f fullframe=%.0f reason=%s",
         VideoOutputColorEncodingName(selectedState.encoding),
         VideoOutputUsesHdr(selectedState) ? 1 : 0,
         stage ? stage : "unknown",
@@ -373,8 +354,6 @@ std::string VideoOutputColorAttemptStatus(
         selectedState.outputSdrWhiteNits,
         selectedState.outputPeakNits,
         selectedState.outputFullFrameNits,
-        selectedState.asciiGlyphPeakNits,
-        diffuseWhiteNits,
         plan.reason.empty() ? "unspecified" : plan.reason.c_str());
     return std::string(buf);
 }
@@ -385,12 +364,11 @@ std::string VideoOutputColorStateDebugLine(
     char buf[512];
     std::snprintf(
         buf, sizeof(buf),
-        "DBG hdr out=%s fmt=%s set=%s white=%.0f peak=%.0f full=%.0f glyph=%.0f",
+        "DBG hdr out=%s fmt=%s set=%s white=%.0f peak=%.0f full=%.0f",
         VideoOutputColorEncodingName(state.encoding),
         dxgiFormatName(state.swapChainFormat), colorSpaceName(state.colorSpace),
         state.outputSdrWhiteNits,
-        state.outputPeakNits, state.outputFullFrameNits,
-        state.asciiGlyphPeakNits);
+        state.outputPeakNits, state.outputFullFrameNits);
     if (attemptStatus.empty()) {
         return std::string(buf);
     }

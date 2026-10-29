@@ -33,6 +33,8 @@
 
 #include "playback/control/session_command_mailbox.h"
 #include "playback/input/media_keys.h"
+#include "core/runtime_helpers.h"
+#include "core/timing_log.h"
 #include "playback/media/metadata_catalog.h"
 
 namespace {
@@ -203,7 +205,15 @@ struct PlaybackSystemControls::Impl {
           }
           // A focused Radioify surface may have already reported this same
           // physical press through WM_APPCOMMAND or a console key record.
-          if (!admitSystemSessionMediaCommand(*command)) {
+          const bool accepted = admitSystemSessionMediaCommand(*command);
+#if RADIOIFY_ENABLE_TIMING_LOG
+          char line[128];
+          std::snprintf(line, sizeof(line),
+                        "media_command source=smtc command=%u accepted=%d",
+                        static_cast<unsigned>(*command), accepted ? 1 : 0);
+          radioifyAppendTimingLogLine(radioifyLogPath(), line);
+#endif
+          if (!accepted) {
             return;
           }
           commandMailbox.publish(*command);

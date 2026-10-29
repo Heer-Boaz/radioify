@@ -1472,6 +1472,7 @@ int runTui(Options o, ApplicationRuntime &runtime) {
   PlaybackShellTerminalRole previousTerminalRole =
       mediaCoordinator.shellSnapshot().terminalRole;
   while (running) {
+    audioPlayback.serviceOutputDevice();
     synchronizeNativeInputModality();
     TuiMediaCoordinator::PollResult mediaUpdate = mediaCoordinator.poll();
     for (TuiMediaCoordinator::Event &event : mediaUpdate.events) {

@@ -395,7 +395,9 @@ function Publish-BuildArtifacts {
   Copy-Item -LiteralPath $llamaLicenseSource -Destination $llamaLicenseDestination -Force
   Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $llamaLicenseDestination
 
-  $whisperModelSource = Join-Path $Context.Paths.Root "models\ggml-base-q5_1.bin"
+  $whisperModelSource = Get-CMakeCacheValue `
+    -CachePath (Join-Path $Context.Paths.BuildDir "CMakeCache.txt") `
+    -Variable "RADIOIFY_WHISPER_MODEL_PATH"
   if (-not (Test-Path -LiteralPath $whisperModelSource)) {
     Fail-Build "Build completed without the indexed-transcript model at $whisperModelSource."
   }
@@ -403,9 +405,21 @@ function Publish-BuildArtifacts {
   if (-not (Test-Path -LiteralPath $whisperModelDistDir)) {
     New-Item -ItemType Directory -Force -Path $whisperModelDistDir | Out-Null
   }
-  $whisperModelDestination = Join-Path $whisperModelDistDir "ggml-base-q5_1.bin"
+  $whisperModelDestination = Join-Path $whisperModelDistDir "ggml-large-v3.bin"
   Copy-Item -LiteralPath $whisperModelSource -Destination $whisperModelDestination -Force
   Add-PublishedArtifactPath -Artifacts $publishedArtifacts -Path $whisperModelDestination
+
+  # The normal transcript command must work from both dist and the installed
+  # package without a developer virtual environment or model downloads at run time.
+  & (Join-Path $Context.Paths.Root "scripts\transcript\prepare_runtime.ps1") `
+    -Destination (Join-Path $Context.Paths.DistDir "transcript-runtime")
+  Add-PublishedArtifactPath -Artifacts $publishedArtifacts `
+    -Path (Join-Path $Context.Paths.DistDir "transcript-runtime")
+  if ($Context.Options.Tests) {
+    & (Join-Path $Context.Paths.DistDir "transcript-runtime\python.exe") -B `
+      (Join-Path $Context.Paths.Root "scripts\transcript\test_worker.py")
+    if ($LASTEXITCODE -ne 0) { Fail-Build "Transcript worker regression tests failed." }
+  }
 
   $cmakeCachePath = Join-Path $Context.Paths.BuildDir "CMakeCache.txt"
   $audioSeparationSetting = Get-CMakeCacheValue `

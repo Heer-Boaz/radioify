@@ -21,6 +21,7 @@ struct AudioClockStatus {
   bool ready = false;
   bool fresh = false;
   bool starved = false;
+  bool outputRecovering = false;
   int serial = 0;
   int64_t us = 0;
   int64_t lastUpdatedUs = 0;
@@ -52,6 +53,7 @@ struct Snapshot {
   bool audioClockFresh = false;
   bool audioMasterBlocked = false;
   bool audioStarved = false;
+  bool audioOutputRecovering = false;
   int64_t audioClockUs = 0;
   int64_t audioClockUpdatedUs = 0;
   size_t audioBufferedFrames = 0;

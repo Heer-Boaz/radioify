@@ -7,8 +7,8 @@ Console media browser/player with selectable period-radio receiver models.
 - CMake 3.16+
 - MSVC (Visual Studio Build Tools)
 - vcpkg (for `-InstallDeps`)
-- A Vulkan-capable GPU and current graphics driver (generated transcripts and
-  on-demand editing analysis)
+- An NVIDIA Ampere-or-newer CUDA GPU for generated transcripts (16 GB VRAM
+  recommended), with a current driver; Vulkan for on-demand editing analysis
 
 ## Build
 For the repo-specific Windows build/run flow and common failure recovery, see
@@ -28,9 +28,32 @@ The binary is written to `dist/radioify.exe`.
 suite. It
 does not install or launch the MSIX package.
 
-The default build enables whisper.cpp's Vulkan backend and downloads the
-SHA-256-verified multilingual Whisper base model used for offline,
-GPU-accelerated transcript generation. Set
+`Generate transcript...` uses **Qwen3-ASR-1.7B** in bfloat16 for recognition,
+then **Whisper large-v3** with stable-ts for word timing. Recognition combines
+longer conversation windows with independent 20-second windows, with overlap
+and bounded retries in shorter windows when generation hits its output limit.
+Matching phrases from adjacent windows are reconciled using acoustic alignment;
+different overlapping speech and repetitions within a window are retained.
+The two models run sequentially to release GPU memory between stages. This
+improves the difficult-game-audio workflow, but obscured speech and overlapping
+voices still need listening review.
+
+The build provisions a pinned, isolated Python/CUDA runtime and both models in
+`dist/transcript-runtime`; the MSIX and portable package include it. Runtime
+inference is offline and does not use a system Python or the experimental
+virtual environments. Initial provisioning requires Python 3.13 with pip and the
+Hugging Face `hf` CLI, downloads several GB, and is cached under
+`models/transcript-runtime`. Run `scripts/transcript/test_worker.py` for the
+window/repetition/overlap regression tests. Set `RADIOIFY_TRANSCRIPT_LANGUAGE`
+to `auto`, a supported language code such as `en` or `nl`, or its English name
+to override automatic recognition language. A legacy `RADIOIFY_WHISPER_LANGUAGE`
+value is also accepted when the new variable is unset. Missing runtime assets
+or unsupported CUDA hardware produce an error; there is no automatic downgrade
+to a smaller model.
+
+English translation for editing analysis still uses whisper.cpp's Vulkan
+backend and the SHA-256-verified multilingual Whisper large-v3 FP16 model
+(about 3.1 GB), with the matching word-alignment preset. Set
 `RADIOIFY_WHISPER_MODEL` to use another compatible whisper.cpp model at
 runtime. Automatic English evidence rejects English-only checkpoints because
 Whisper's translation task requires a multilingual model. Custom models use
@@ -42,7 +65,7 @@ is reported instead of silently falling back. Automatic language detection is
 kept stable after the first chunk with recognized speech; set
 `RADIOIFY_WHISPER_LANGUAGE` to `auto` or an explicit two-letter source code
 such as `en`, `nl`, `de`, or `fr` when the opening speech is not representative.
-Transcript creation fails with
+Editing-analysis translation fails with
 a clear error if the selected Vulkan device cannot initialize; it never
 silently falls back to CPU. The normal static build keeps the static MSVC
 runtime; it does not require a Visual C++ redistributable install on another

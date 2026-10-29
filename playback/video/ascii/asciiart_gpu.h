@@ -6,6 +6,9 @@
 #include <string>
 #include <memory>
 #include <mutex>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <d3d11.h>
 #include "playback/video/gpu/videoprocessor.h"
 #include "asciiart.h"

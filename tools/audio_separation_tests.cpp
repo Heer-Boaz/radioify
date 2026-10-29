@@ -159,15 +159,39 @@ bool testSpectralContract() {
   ok &= expect(transform.forward(input.data(), input.size(), &spectrogram,
                                  &error),
                "STFT must accept one exact model chunk");
-  const float expectedDc =
-      std::sqrt(static_cast<float>(
-          separation::BanditSpectralTransform::kFftSize)) /
-      2.0f;
+  // Periodic Hann: sum(w) = N/2, sum(w*w) = 3N/8. Torchaudio's
+  // normalized=True means window-energy normalization, so a constant input
+  // has DC = (N/2)/sqrt(3N/8) = sqrt(2N/3).
+  const float expectedDc = std::sqrt(
+      2.0f * separation::BanditSpectralTransform::kFftSize / 3.0f);
   const std::size_t interiorTime = 2;
   const std::size_t dcIndex = 2 * interiorTime;
   ok &= expect(std::abs(spectrogram[dcIndex] - expectedDc) < 2.0e-3f &&
                    std::abs(spectrogram[dcIndex + 1]) < 2.0e-4f,
                "STFT must match torchaudio normalized=True scaling");
+
+  // Check nonzero real/imaginary bins independently of inverse reconstruction.
+  // At frame 2 the reflected prefix ends and this window starts at sample 0.
+  for (std::size_t index = 0; index < input.size(); ++index) {
+    const double phase = 2.0 * std::numbers::pi * index /
+                         separation::BanditSpectralTransform::kFftSize;
+    input[index] = static_cast<float>(0.25 * std::cos(13.0 * phase) +
+                                      0.125 * std::sin(29.0 * phase));
+  }
+  ok &= expect(transform.forward(input.data(), input.size(), &spectrogram,
+                                 &error),
+               "STFT must accept cosine and sine reference tones");
+  const auto binIndex = [interiorTime](std::size_t frequency) {
+    return 2 * (frequency * separation::BanditSpectralTransform::kTimeFrames +
+                interiorTime);
+  };
+  ok &= expect(std::abs(spectrogram[binIndex(13)] - expectedDc * 0.125f) <
+                   2.0e-4f &&
+                   std::abs(spectrogram[binIndex(13) + 1]) < 2.0e-4f &&
+                   std::abs(spectrogram[binIndex(29)]) < 2.0e-4f &&
+                   std::abs(spectrogram[binIndex(29) + 1] +
+                            expectedDc * 0.0625f) < 2.0e-4f,
+               "STFT complex bins must match Hann window-energy normalization");
 
   std::vector<float> identityMask(spectrogram.size(), 0.0f);
   for (std::size_t index = 0; index < identityMask.size(); index += 2) {

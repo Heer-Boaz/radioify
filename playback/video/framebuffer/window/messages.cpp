@@ -1,6 +1,8 @@
 #include "window.h"
 
 #include "input_events.h"
+#include "core/runtime_helpers.h"
+#include "core/timing_log.h"
 
 #include <windowsx.h>
 
@@ -145,6 +147,13 @@ LRESULT CALLBACK VideoWindow::WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam,
             const bool mediaEcho =
                 translation.event->type == InputEvent::Type::Key &&
                 !admitLocalMediaVirtualKey(translation.event->key.vk);
+#if RADIOIFY_ENABLE_TIMING_LOG
+            char line[128];
+            std::snprintf(line, sizeof(line),
+                          "media_command source=appcommand command=%d accepted=%d",
+                          GET_APPCOMMAND_LPARAM(lParam), mediaEcho ? 0 : 1);
+            radioifyAppendTimingLogLine(radioifyLogPath(), line);
+#endif
             if (!mediaEcho) {
                 pThis->m_input.push(std::move(*translation.event));
             }

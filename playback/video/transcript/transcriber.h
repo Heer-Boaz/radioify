@@ -40,7 +40,8 @@ struct TranscriptOperationControl {
   ProgressCallback progress;
   // Optional process-isolated recognizer. Editing analysis provides this
   // so cancellation and GPU pressure can terminate native work immediately;
-  // standalone/manual transcript jobs retain the in-process engine.
+  // without it, this resumable Whisper operation runs in process. Manual
+  // transcripts use the separate Qwen + Whisper worker via createIndexedTranscript.
   std::function<SpeechWorkerResult(
       const SpeechWorkerRequest &, const std::function<void(int)> &)>
       runSpeechChunk;
@@ -78,9 +79,9 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 
-// Decodes the video's primary audio stream to Whisper's native mono 16 kHz
-// format and writes a timestamp-indexed SRT sidecar. The destination is not
-// changed unless the complete transcript succeeds.
+// Decodes the primary audio stream to mono 16 kHz, recognizes it with Qwen3-ASR
+// 1.7B and aligns the words with Whisper large-v3. The destination is not
+// changed unless the complete timestamp-indexed SRT succeeds.
 bool createIndexedTranscript(
     const std::filesystem::path &videoPath,
     const std::filesystem::path &outputPath, TranscriptPublishMode publishMode,

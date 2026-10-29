@@ -21,7 +21,7 @@ GenerationJob::Operation GenerationJob::productionOperation() {
 }
 
 const char* GenerationJob::productionEngineName() {
-  return "Whisper (Vulkan GPU)";
+  return "Qwen3-ASR 1.7B + Whisper large-v3 (CUDA)";
 }
 
 GenerationJob::GenerationJob() : GenerationJob(productionOperation()) {}

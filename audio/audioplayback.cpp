@@ -410,6 +410,10 @@ AudioPerfStats AudioPlaybackRuntime::perfStats() const {
   return audioGetPerfStats(*state_);
 }
 
+void AudioPlaybackRuntime::serviceOutputDevice() {
+  audioPlaybackDeviceService(*state_);
+}
+
 bool AudioPlaybackRuntime::startStream(uint64_t totalFrames) {
   return audioStartStream(*state_, totalFrames);
 }

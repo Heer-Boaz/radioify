@@ -32,6 +32,7 @@ constexpr uint32_t kGpuTextGridCellFlagTransparentBg = 2u;
 
 struct GpuTextGridCell {
     uint32_t glyphIndex = playback_gpu_text_grid::glyphIndex(' ');
+    // RGB8 SDR, or BT.2020 RGB10 tagged with YuvTransfer in the top two bits.
     uint32_t fg = gpuTextGridColorRgb(GpuTextGridColor::Text);
     uint32_t bg = gpuTextGridColorRgb(GpuTextGridColor::Background);
     uint32_t flags = 0;

@@ -258,17 +258,19 @@ function Initialize-RadioifyMsixPackageLayout {
         -Destination (Join-Path $layoutDir "llama-cpp-LICENSE.txt") `
         -Force
 
-    $whisperModelSource = Join-Path $distRoot "models\ggml-base-q5_1.bin"
+    $whisperModelSource = Join-Path $distRoot "models\ggml-large-v3.bin"
     if (-not (Test-Path -LiteralPath $whisperModelSource)) {
         throw "Indexed-transcript model not found at '$whisperModelSource'."
     }
     $modelLayoutDir = Join-Path $layoutDir "models"
     New-Item -ItemType Directory -Force -Path $modelLayoutDir | Out-Null
     Copy-Item -LiteralPath $whisperModelSource `
-        -Destination (Join-Path $modelLayoutDir "ggml-base-q5_1.bin") `
+        -Destination (Join-Path $modelLayoutDir "ggml-large-v3.bin") `
         -Force
 
     $windowsMlRuntimeContract = Get-RadioifyWindowsMlRuntimeContract
+    Copy-RadioifyTranscriptRuntime -Source (Join-Path $distRoot "transcript-runtime") `
+        -Destination (Join-Path $layoutDir "transcript-runtime")
     foreach ($runtimeName in $windowsMlRuntimeContract.ProductionRuntimeFiles) {
         $runtimeSource = Join-Path $distRoot $runtimeName
         if (-not (Test-Path -LiteralPath $runtimeSource)) {
@@ -370,7 +372,8 @@ function Ensure-RadioifyMsixSigningCertificate {
 function New-RadioifySignedMsixPackage {
     param(
         [Parameter(Mandatory = $true)][string]$IntegrationDir,
-        [string]$PackageVersion
+        [string]$PackageVersion,
+        [switch]$NoCompression
     )
 
     Assert-RadioifyMsixArtifactsExist -IntegrationDir $IntegrationDir
@@ -399,12 +402,16 @@ function New-RadioifySignedMsixPackage {
     if (Test-Path -LiteralPath $packagePath) {
         Remove-Item -LiteralPath $packagePath -Force
     }
-    Invoke-RadioifyNativeTool -FilePath $makeAppxExe -Arguments @(
+    $packArguments = @(
         "pack",
         "/d", $packageLayout,
         "/p", $packagePath,
         "/o"
-    ) | Out-Host
+    )
+    # Useful for local validation of multi-GB model packages; release builds
+    # retain compression by default.
+    if ($NoCompression) { $packArguments += "/nc" }
+    Invoke-RadioifyNativeTool -FilePath $makeAppxExe -Arguments $packArguments | Out-Host
     Wait-RadioifyMsixPackageFile -Path $packagePath
     Invoke-RadioifyNativeTool -FilePath $signToolExe -Arguments @(
         "sign",

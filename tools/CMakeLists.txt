@@ -22,6 +22,10 @@ radioify_add_module_object_library(radioify_tool_audio_playback_pipeline_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/audio_playback_pipeline_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_audio_device_recovery_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/audio_device_recovery_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_audio_media_format_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/audio_media_format_tests.cpp
 )
@@ -44,6 +48,10 @@ radioify_add_module_object_library(radioify_tool_frame_clipboard_tests
 
 radioify_add_module_object_library(radioify_tool_ascii_shader_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/ascii_shader_tests.cpp
+)
+
+radioify_add_module_object_library(radioify_tool_ascii_hdr_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/ascii_hdr_tests.cpp
 )
 
 radioify_add_module_object_library(radioify_tool_shortcut_match_tests

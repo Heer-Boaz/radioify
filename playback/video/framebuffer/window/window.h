@@ -317,7 +317,6 @@ private:
   float OutputSdrWhiteNits() const;
   float OutputPeakNits() const;
   float OutputFullFrameNits() const;
-  float AsciiGlyphPeakNits() const;
   void SetOutputColorAttemptStatus(const std::string &status);
   void SetOverlayInteractionMap(playback_overlay::InteractionMap interactions);
   bool OverlayInteractionAt(double x, double y) const;

@@ -49,6 +49,7 @@ playback_video_main_clock::AudioClockStatus sample(
                  (nowUs - status.lastUpdatedUs) <=
                      computeAudioClockFreshnessUs(stats);
   status.starved = audioPlayback.streamStarved();
+  status.outputRecovering = stats.outputRecovering;
   status.bufferedFrames = audioPlayback.streamBufferedFrames();
   status.deviceBufferFrames = stats.bufferFrames;
   if (status.deviceBufferFrames == 0 && stats.periodFrames > 0) {

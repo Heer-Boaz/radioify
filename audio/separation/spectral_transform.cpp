@@ -59,30 +59,34 @@ BanditSpectralTransform::~BanditSpectralTransform() = default;
 bool BanditSpectralTransform::initialize(std::string* error) {
   if (error) error->clear();
   auto implementation = std::make_unique<Impl>();
-  // BandIt was trained with torchaudio's normalized=True contract. That is
-  // an orthonormal DFT in both directions; the Hann window itself is not
-  // normalized.
-  const float transformScale =
-      1.0f / static_cast<float>(std::sqrt(static_cast<double>(kFftSize)));
-  if (av_tx_init(&implementation->forwardContext,
-                 &implementation->forwardFunction, AV_TX_FLOAT_RDFT, 0,
-                 static_cast<int>(kFftSize), &transformScale,
-                 AV_TX_UNALIGNED) < 0 ||
-      av_tx_init(&implementation->inverseContext,
-                 &implementation->inverseFunction, AV_TX_FLOAT_RDFT, 1,
-                 static_cast<int>(kFftSize), &transformScale,
-                 AV_TX_UNALIGNED) < 0) {
-    setError(error, "Could not initialize the BandIt Fourier transforms.");
-    return false;
-  }
-
   implementation->window.resize(kFftSize);
+  double windowEnergy = 0.0;
   for (std::size_t index = 0; index < kFftSize; ++index) {
     const double angle =
         2.0 * std::numbers::pi * static_cast<double>(index) /
         static_cast<double>(kFftSize);
-    const double value = 0.5 - 0.5 * std::cos(angle);
-    implementation->window[index] = static_cast<float>(value);
+    const float value = static_cast<float>(0.5 - 0.5 * std::cos(angle));
+    implementation->window[index] = value;
+    windowEnergy += static_cast<double>(value) * value;
+  }
+  // torchaudio Spectrogram(normalized=True) divides the unnormalized DFT by
+  // sqrt(sum(window**2)), not sqrt(n_fft). InverseSpectrogram restores that
+  // window norm before the usual 1/n_fft inverse. Matching both directions
+  // matters: an identity-mask round trip alone cannot catch the wrong scale
+  // at the model boundary.
+  const double windowNorm = std::sqrt(windowEnergy);
+  const float forwardScale = static_cast<float>(1.0 / windowNorm);
+  const float inverseScale = static_cast<float>(windowNorm / kFftSize);
+  if (av_tx_init(&implementation->forwardContext,
+                 &implementation->forwardFunction, AV_TX_FLOAT_RDFT, 0,
+                 static_cast<int>(kFftSize), &forwardScale,
+                 AV_TX_UNALIGNED) < 0 ||
+      av_tx_init(&implementation->inverseContext,
+                 &implementation->inverseFunction, AV_TX_FLOAT_RDFT, 1,
+                 static_cast<int>(kFftSize), &inverseScale,
+                 AV_TX_UNALIGNED) < 0) {
+    setError(error, "Could not initialize the BandIt Fourier transforms.");
+    return false;
   }
 
   implementation->denominator.assign(kPaddedFrames, 0.0f);

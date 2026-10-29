@@ -1050,6 +1050,9 @@ struct PlaybackLoopRunner::Impl : playback_session_input::SessionPort {
   }
 
   bool executeInputCommand(playback_session_input::SetPaused request) {
+    perfLogAppendf(&perfLog, "ui_set_paused paused=%d previous=%d",
+                   request.paused ? 1 : 0, static_cast<int>(core.playbackState()));
+    perfLogFlush(&perfLog);
     core.setPaused(request.paused);
     return true;
   }
