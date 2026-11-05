@@ -562,6 +562,14 @@ add_test(NAME radio_node_physics_philco
 add_test(NAME radio_node_physics_typical
          COMMAND $<TARGET_FILE:radio_node_physics>
                  --preset typical-1930s)
+foreach(_acoustic_profile IN ITEMS typical-1930s philco-37-116)
+  foreach(_acoustic_rate IN ITEMS 44100 96000)
+    add_test(NAME radio_acoustics_${_acoustic_profile}_${_acoustic_rate}
+             COMMAND $<TARGET_FILE:radio_node_physics>
+                     --preset ${_acoustic_profile} --section acoustics
+                     --sample-rate ${_acoustic_rate})
+  endforeach()
+endforeach()
 
 add_executable(radio_receiver_profile_tests)
 target_sources(radio_receiver_profile_tests PRIVATE

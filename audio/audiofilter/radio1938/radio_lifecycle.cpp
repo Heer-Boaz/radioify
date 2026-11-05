@@ -55,6 +55,10 @@ void refreshIdentityDependentStages(Radio1938& radio) {
   RadioReceiverCircuitNode::reset(radio);
   RadioPowerNode::init(radio, initCtx);
   RadioPowerNode::reset(radio);
+  // The acoustic radiation observer uses the motor parameters and must start
+  // from rest whenever the coupled electromechanical solver is rebuilt.
+  RadioSpeakerNode::init(radio, initCtx);
+  RadioSpeakerNode::reset(radio);
   if (radio.calibration.enabled) {
     radio.resetCalibration();
   }

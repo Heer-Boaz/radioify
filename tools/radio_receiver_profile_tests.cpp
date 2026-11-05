@@ -61,8 +61,10 @@ void expectTypicalReceiverTopology() {
              "BO-1 voice-coil load");
   expectNear(radio.power.outputTransformerPrimaryResistanceOhms, 450.0f,
              0.1f, "BO-1 transformer primary resistance");
-  expectNear(radio.speakerStage.speaker.suspensionHz, 115.0f, 0.1f,
-             "five-inch speaker resonance proxy");
+  if (radio.speakerStage.speaker.suspensionHz < 180.0f ||
+      radio.speakerStage.speaker.suspensionHz > 250.0f) {
+    fail("small speaker left the Knowles period natural-frequency prior");
+  }
 
   radio.init(1, 48000.0f, 5000.0f, 0.012f);
   if (radio.power.nominalOutputPowerWatts < 1.5f ||
@@ -139,7 +141,7 @@ void expectPlaybackFilterOwnsReceiverSwitching() {
   }
 }
 
-float runTypicalPlaybackPeak(std::vector<float> samples) {
+float runPlaybackPeak(std::vector<float> samples, RadioFilterMode mode) {
   constexpr uint32_t kSampleRate = 48000u;
   constexpr uint32_t kBlockFrames = 2048u;
   RadioPlaybackFilter filter;
@@ -148,7 +150,7 @@ float runTypicalPlaybackPeak(std::vector<float> samples) {
   config.outputChannels = 1u;
   config.bandwidthHz = 5500.0f;
   config.noise = 0.012f;
-  config.initialMode = RadioFilterMode::Typical1930s;
+  config.initialMode = mode;
   filter.initialize(config);
 
   AudioPipelineTransition pipelineTransition;
@@ -161,36 +163,35 @@ float runTypicalPlaybackPeak(std::vector<float> samples) {
   }
   float peak = 0.0f;
   for (float sample : samples) {
+    if (!std::isfinite(sample)) fail("non-finite acoustic playback output");
     peak = std::max(peak, std::fabs(sample));
   }
   return peak;
 }
 
-void expectTypicalProgramHeadroom(const char* name,
-                                  std::vector<float> program,
-                                  float minimumPeak) {
-  const float peak = runTypicalPlaybackPeak(std::move(program));
+void expectProgramHeadroom(const char* name, std::vector<float> program,
+                          RadioFilterMode mode, float minimumPeak) {
+  const float peak = runPlaybackPeak(std::move(program), mode);
+  std::cout << "playback_headroom," << static_cast<int>(mode) << ',' << name
+            << ',' << peak << '\n';
   if (peak > 0.95f) {
-    std::cerr << "radio_receiver_profile_tests: typical " << name
+    std::cerr << "radio_receiver_profile_tests: " << name
               << " exhausted digital headroom; peak=" << peak << '\n';
     std::exit(1);
   }
   if (peak < minimumPeak) {
-    fail("typical playback headroom fix attenuated the profile excessively");
+    fail("playback headroom fix attenuated the profile excessively");
   }
 }
 
-void expectTypicalPlaybackKeepsPassbandHeadroom() {
+void expectPlaybackKeepsAcousticPeakHeadroom() {
   constexpr uint32_t kSampleRate = 48000u;
   constexpr uint32_t kFrames = kSampleRate / 2u;
   constexpr float kPi = 3.14159265358979323846f;
 
-  std::vector<float> passbandSine(kFrames);
   std::vector<float> denseProgram(kFrames);
   for (uint32_t frame = 0; frame < kFrames; ++frame) {
     const float seconds = static_cast<float>(frame) / kSampleRate;
-    passbandSine[frame] =
-        0.98f * std::sin(2.0f * kPi * 200.0f * seconds + 0.5f * kPi);
     const float program =
         0.56f * std::sin(2.0f * kPi * 180.0f * seconds) +
         0.29f * std::sin(2.0f * kPi * 830.0f * seconds + 0.7f) +
@@ -198,19 +199,152 @@ void expectTypicalPlaybackKeepsPassbandHeadroom() {
     denseProgram[frame] = std::clamp(program, -0.98f, 0.98f);
   }
 
-  expectTypicalProgramHeadroom("passband sine", std::move(passbandSine),
-                               0.70f);
-  expectTypicalProgramHeadroom("dense programme", std::move(denseProgram),
-                               0.40f);
+  for (const auto mode : {RadioFilterMode::Typical1930s,
+                          RadioFilterMode::Philco37116}) {
+    float strongestPeak = 0.0f;
+    // Cover both the bass resonance and the newly evidenced upper-mid peaks.
+    // A 200 Hz minimum level would demand the former bass-heavy sound again.
+    for (float hz : {125.0f, 200.0f, 315.0f, 500.0f, 1000.0f,
+                     1600.0f, 2000.0f, 2500.0f, 3150.0f, 4000.0f}) {
+      std::vector<float> sine(kFrames);
+      for (uint32_t frame = 0; frame < kFrames; ++frame) {
+        sine[frame] = 0.98f * std::cos(2.0f * kPi * hz *
+                                      static_cast<float>(frame) / kSampleRate);
+      }
+      const float peak = runPlaybackPeak(std::move(sine), mode);
+      std::cout << "playback_headroom," << static_cast<int>(mode) << ','
+                << hz << ',' << peak << '\n';
+      if (peak > 0.95f) fail("acoustic response peak exhausted digital headroom");
+      strongestPeak = std::max(strongestPeak, peak);
+    }
+    if (strongestPeak < 0.55f) fail("acoustic profile attenuated excessively");
+    expectProgramHeadroom("dense programme", denseProgram, mode, 0.20f);
+  }
+}
+
+struct NoiseProbe {
+  std::vector<float> silence;
+  double toneRms = 0.0;
+};
+
+enum class NoiseSource { None, If, Post, Hum, Broadcast, All };
+
+const char* noiseSourceName(NoiseSource source) {
+  switch (source) {
+    case NoiseSource::None: return "residual";
+    case NoiseSource::If: return "if";
+    case NoiseSource::Post: return "post";
+    case NoiseSource::Hum: return "hum";
+    case NoiseSource::Broadcast: return "broadcast";
+    case NoiseSource::All: return "all";
+  }
+  std::abort();
+}
+
+NoiseProbe measurePlaybackNoise(RadioReceiverProfile profile,
+                                NoiseSource source) {
+  constexpr uint32_t kRate = 48000;
+  constexpr uint32_t kFrames = kRate * 2;
+  constexpr double kTwoPi = 6.28318530717958647693;
+  Radio1938 radio;
+  radio.applyReceiverProfile(profile);
+  const bool all = source == NoiseSource::All;
+  if (!all && source != NoiseSource::If) radio.globals.ifNoiseMix = 0.0f;
+  if (!all && source != NoiseSource::Post) radio.globals.postNoiseMix = 0.0f;
+  if (!all && source != NoiseSource::Hum) radio.noiseConfig.enableHumTone = false;
+  if (!all && source != NoiseSource::If) radio.noiseConfig.crackleAmpScale = 0.0f;
+  radio.init(1, kRate, 5500.0f, 0.012f);
+  RadioAmIngressConfig ingress;
+  ingress.broadcastSource.noiseEnabled = all || source == NoiseSource::Broadcast;
+  RadioPreviewPipeline preview;
+  preview.initialize(radio, ingress, RadioPreviewConfig{}, kRate);
+  std::vector<float> samples(kFrames, 0.0f);
+  for (uint32_t i = kRate; i < kFrames; ++i) {
+    samples[i] = static_cast<float>(0.5 * std::sin(kTwoPi * 1000.0 * i / kRate));
+  }
+  for (uint32_t offset = 0; offset < kFrames; offset += 2048) {
+    preview.runBlock(radio, samples.data() + offset,
+                     std::min(2048u, kFrames - offset), 1);
+  }
+  NoiseProbe probe;
+  probe.silence.assign(samples.begin() + kRate / 2, samples.begin() + kRate);
+  double re = 0.0;
+  double im = 0.0;
+  for (uint32_t i = kFrames - kRate / 2; i < kFrames; ++i) {
+    if (!std::isfinite(samples[i])) fail("non-finite noise probe output");
+    re += samples[i] * std::cos(kTwoPi * 1000.0 * i / kRate);
+    im += samples[i] * std::sin(kTwoPi * 1000.0 * i / kRate);
+  }
+  probe.toneRms = std::sqrt(2.0 * (re * re + im * im)) / (kRate / 2);
+  return probe;
+}
+
+double probeRms(const std::vector<float>& samples,
+                const std::vector<float>* reference = nullptr) {
+  double sum = 0.0;
+  double sumSq = 0.0;
+  for (size_t i = 0; i < samples.size(); ++i) {
+    const double y = samples[i] - (reference ? (*reference)[i] : 0.0f);
+    if (!std::isfinite(y)) fail("non-finite noise probe sample");
+    sum += y;
+    sumSq += y * y;
+  }
+  const double mean = sum / samples.size();
+  return std::sqrt(std::max(0.0, sumSq / samples.size() - mean * mean));
+}
+
+void reportPlaybackNoise() {
+  std::cout << "profile,source,silent_carrier_rms,tone_rms,snr_db,added_rms\n";
+  for (auto profile : {RadioReceiverProfile::Typical1930s,
+                       RadioReceiverProfile::Philco37116}) {
+    const auto baseline = measurePlaybackNoise(profile, NoiseSource::None);
+    for (auto source : {NoiseSource::None, NoiseSource::If, NoiseSource::Post,
+                        NoiseSource::Hum, NoiseSource::Broadcast, NoiseSource::All}) {
+      const auto probe = source == NoiseSource::None
+                             ? baseline : measurePlaybackNoise(profile, source);
+      const double noise = probeRms(probe.silence);
+      std::cout << radioReceiverProfileName(profile) << ','
+                << noiseSourceName(source) << ',' << noise << ','
+                << probe.toneRms << ',' << 20.0 * std::log10(probe.toneRms / noise)
+                << ',' << probeRms(probe.silence, &baseline.silence) << '\n';
+    }
+  }
+}
+
+void expectPlaybackNoiseBalance() {
+  double typicalSnr = 0.0;
+  for (auto profile : {RadioReceiverProfile::Typical1930s,
+                       RadioReceiverProfile::Philco37116}) {
+    const auto probe = measurePlaybackNoise(profile, NoiseSource::All);
+    const double noise = probeRms(probe.silence);
+    const double snr = 20.0 * std::log10(probe.toneRms / noise);
+    std::cout << "playback_noise," << radioReceiverProfileName(profile)
+              << ',' << noise << ',' << probe.toneRms << ',' << snr << '\n';
+    // Engineering guards for the default noise control, not historical SNR
+    // claims. Compare signal-relative levels so makeup gain cannot hide noise.
+    if (!std::isfinite(snr) || snr < 28.0 || snr > 45.0) {
+      fail("default playback noise left its signal-relative guard band");
+    }
+    if (profile == RadioReceiverProfile::Typical1930s) {
+      typicalSnr = snr;
+    } else if (std::fabs(snr - typicalSnr) > 6.0) {
+      fail("receiver gain introduced an excessive noise contrast");
+    }
+  }
 }
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--noise-report") {
+    reportPlaybackNoise();
+    return 0;
+  }
   expectProfileParserContract();
   expectTypicalReceiverTopology();
   expectInitializedProfileSwitchRebuildsPhysicalModel();
   expectPlaybackFilterOwnsReceiverSwitching();
-  expectTypicalPlaybackKeepsPassbandHeadroom();
+  expectPlaybackKeepsAcousticPeakHeadroom();
+  expectPlaybackNoiseBalance();
   return 0;
 }

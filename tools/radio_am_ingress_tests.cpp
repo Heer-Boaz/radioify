@@ -122,6 +122,63 @@ void expectHotProgramLevelReachesAmIngress() {
   }
 }
 
+void expectTerminalObservationPreservesPlayback() {
+  constexpr uint32_t kFrames = 4096;
+  std::vector<float> program(kFrames);
+  std::vector<RadioAmReceptionSample> reception(kFrames);
+  for (uint32_t i = 0; i < kFrames; ++i) {
+    program[i] = 0.5f * std::sin(0.13f * i);
+    reception[i].desiredCarrierI = 0.92f;
+    reception[i].desiredCarrierQ = 0.03f;
+  }
+  for (auto profile : {RadioReceiverProfile::Typical1930s,
+                       RadioReceiverProfile::Philco37116}) {
+    Radio1938 plain;
+    plain.applyReceiverProfile(profile);
+    // AFC publishes tuning changes once per block. Hold tuning fixed to test
+    // ingress/observation partitioning independently of that control cadence.
+    plain.tuning.magneticTuningEnabled = false;
+    plain.init(2, kSampleRate, kBandwidthHz, 0.012f);
+    plain.demod.am.waveformMaxSubsteps = 1;
+    plain.warmInputCarrier(kCarrierRmsVolts, 512);
+    Radio1938 observed = plain;
+    Radio1938 split = plain;
+    std::vector<float> expected(kFrames * 2), actual(kFrames * 2), divided(kFrames * 2);
+    std::vector<float> terminal(kFrames), splitTerminal(kFrames);
+    plain.processAmAudio(program.data(), expected.data(), kFrames,
+                          kCarrierRmsVolts, kModulationIndex, reception.data());
+    observed.processAmAudio(program.data(), actual.data(), kFrames,
+                             kCarrierRmsVolts, kModulationIndex, reception.data(),
+                             terminal.data());
+    for (uint32_t offset = 0; offset < kFrames; offset += 127) {
+      split.processAmAudio(program.data() + offset, divided.data() + offset * 2,
+                            std::min(127u, kFrames - offset), kCarrierRmsVolts,
+                            kModulationIndex, reception.data() + offset,
+                            splitTerminal.data() + offset);
+    }
+    if (expected != actual) fail("Terminal observation changed playback samples.");
+    float peak = 0.0f;
+    for (uint32_t i = 0; i < kFrames; ++i) {
+      peak = std::max(peak, std::fabs(terminal[i]));
+      if (!std::isfinite(terminal[i]) ||
+          std::fabs(terminal[i] - splitTerminal[i]) > 1e-3f) {
+        fail("Terminal observation changed with block partitioning: " +
+             std::string(radioReceiverProfileName(profile)) + " frame=" +
+             std::to_string(i) + " difference=" +
+             std::to_string(terminal[i] - splitTerminal[i]));
+      }
+      for (uint32_t channel = 0; channel < 2; ++channel) {
+        if (std::fabs(actual[i * 2 + channel] - divided[i * 2 + channel]) > 1e-4f) {
+          fail("Observed audio changed with block partitioning.");
+        }
+      }
+    }
+    if (peak < 0.01f || terminal.back() != observed.speakerStage.physicalDriveVolts) {
+      fail("Observation did not capture actual speaker terminal voltage.");
+    }
+  }
+}
+
 void expectReceptionProfileContract() {
   if (kDefaultRadioReceptionProfile !=
       RadioReceptionProfile::Everyday1938) {
@@ -170,7 +227,8 @@ void expectReceptionProfileContract() {
 
 void expectReceptionSidecarShapesRf() {
   Radio1938 radio = makeIngressOnlyRadio();
-  radio.iqInput.iqPhase = 0.5f * kRadioPi;
+  radio.iqInput.carrierOscCos = 0.0f;
+  radio.iqInput.carrierOscSin = 1.0f;
   const float program = 0.0f;
   float output = 0.0f;
   RadioAmReceptionSample reception;
@@ -706,6 +764,14 @@ void expectSpeakerDerivedPhysicsRefreshesFromConfig() {
       speaker.forceFactorBl != 0.0f) {
     fail("Speaker derived electromechanical values leaked into config.");
   }
+
+  RadioSampleContext ctx{};
+  RadioSpeakerNode::run(radio, 0.5f, ctx);
+  radio.setIdentitySeed(radio.identity.seed);
+  const float atRest = RadioSpeakerNode::run(radio, 0.0f, ctx);
+  if (atRest != 0.0f || speaker.coneDisplacementMeters != 0.0f) {
+    fail("Identity refresh left acoustic state after resetting the motor.");
+  }
 }
 
 }  // namespace
@@ -713,6 +779,7 @@ void expectSpeakerDerivedPhysicsRefreshesFromConfig() {
 int main() {
   expectBlockInvariantAmIngress();
   expectHotProgramLevelReachesAmIngress();
+  expectTerminalObservationPreservesPlayback();
   expectReceptionProfileContract();
   expectReceptionSidecarShapesRf();
   expectStrongLocalReceptionIsTransparent();

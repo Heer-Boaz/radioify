@@ -45,15 +45,15 @@ float RadioAMDetectorNode::run(Radio1938& radio,
   ensureAMDetectorConfigured(radio);
   if (radio.ifStrip.enabled) {
     y = demod.am.run(ctx.signal.detectorInputI, ctx.signal.detectorInputQ,
-                     ctx.derived.demodIfNoiseAmp, radio,
+                     radio,
                      ctx.derived.demodIfCrackleAmp,
                      ctx.derived.demodIfCrackleRate);
   } else if (ctx.signal.mode == SourceInputMode::ComplexEnvelope) {
-    y = demod.am.run(ctx.signal.i, ctx.signal.q, ctx.derived.demodIfNoiseAmp,
-                     radio, ctx.derived.demodIfCrackleAmp,
+    y = demod.am.run(ctx.signal.i, ctx.signal.q, radio,
+                     ctx.derived.demodIfCrackleAmp,
                      ctx.derived.demodIfCrackleRate);
   } else {
-    y = demod.am.run(y, 0.0f, ctx.derived.demodIfNoiseAmp, radio,
+    y = demod.am.run(y, 0.0f, radio,
                      ctx.derived.demodIfCrackleAmp,
                      ctx.derived.demodIfCrackleRate);
   }

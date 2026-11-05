@@ -95,7 +95,6 @@ struct AMDetector {
   void reset();
   float run(float signalI,
             float signalQ,
-            float ifNoiseAmp,
             Radio1938& radio,
             float ifCrackleAmp = 0.0f,
             float ifCrackleRate = 0.0f);

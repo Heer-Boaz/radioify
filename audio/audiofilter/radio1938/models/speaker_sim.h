@@ -4,6 +4,7 @@
 #include "../../math/biquad.h"
 
 struct SpeakerSim {
+  Biquad radiation;
   Biquad suspensionRes;
   Biquad coneBody;
   Biquad upperBreakup;

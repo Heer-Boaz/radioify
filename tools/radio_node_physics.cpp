@@ -74,7 +74,7 @@ void printUsage() {
       << "  --noise <value>\n"
       << "  --radio-settings <path>\n"
       << "  --preset <name>\n"
-      << "  --section <all|control|rf|detector|audio|output>\n"
+      << "  --section <all|control|rf|detector|audio|output|acoustics>\n"
       << "  --node <all|Tuning|Input|AVC|AFC|ControlBus|InterferenceDerived|"
          "FrontEnd|Mixer|IFStrip|AMDetector|DetectorAudio|"
          "ReceiverInputNetwork|ReceiverCircuit|Tone|Power|Noise|"
@@ -534,6 +534,102 @@ double measureSpeakerElectricalImpedanceMagnitude(Radio1938& radio,
   return std::sqrt(voltageSumSq / std::max(currentSumSq, 1e-18));
 }
 
+struct AcousticToneRms {
+  double speaker;
+  double cabinet;
+};
+
+AcousticToneRms measureVoltageDrivenAcoustics(Radio1938& radio, float hz) {
+  // Constant terminal voltage, including the motor's back EMF and inductance.
+  // RF/IF, detector, tubes, makeup gain and room placement are excluded. This
+  // isolates the acoustic response instead of fitting AM bandwidth to a speaker
+  // curve. The production speaker and cabinet nodes process the result.
+  auto& speaker = radio.speakerStage.speaker;
+  resetSpeakerElectromechanics(speaker);
+  RadioSpeakerNode::reset(radio);
+  RadioCabinetNode::reset(radio);
+  const int steps = static_cast<int>(radio.globals.oversampleFactor) *
+                    radio.power.outputTransformer.integrationSubsteps;
+  const float dt = 1.0f / (radio.sampleRate * steps);
+  const uint32_t halfFrames = static_cast<uint32_t>(0.2f * radio.sampleRate);
+  double speakerSum = 0.0;
+  double cabinetSum = 0.0;
+  RadioSampleContext ctx{};
+  for (uint32_t frame = 0; frame < 2u * halfFrames; ++frame) {
+    for (int step = 0; step < steps; ++step) {
+      const double seconds = (static_cast<double>(frame) +
+                              static_cast<double>(step + 1) / steps) /
+                             radio.sampleRate;
+      const float volts = 0.1f * static_cast<float>(
+          std::sin(6.283185307179586 * hz * seconds));
+      const auto load = linearizeSpeakerElectricalLoad(
+          speaker, radio.power.outputLoadResistanceOhms, dt);
+      commitSpeakerElectricalLoad(speaker, load, volts);
+    }
+    const float motor = speaker.electricalCurrentAmps *
+                        speaker.effectiveVoiceCoilResistanceOhms;
+    const float pressure = RadioSpeakerNode::run(radio, motor, ctx);
+    const float mounted = RadioCabinetNode::run(radio, pressure, ctx);
+    if (frame >= halfFrames) {
+      speakerSum += static_cast<double>(pressure) * pressure;
+      cabinetSum += static_cast<double>(mounted) * mounted;
+    }
+  }
+  return {std::sqrt(speakerSum / halfFrames),
+          std::sqrt(cabinetSum / halfFrames)};
+}
+
+std::vector<TestRow> runAcousticPhysics(const HarnessConfig& config) {
+  Radio1938 radio = makeNodeFixture(config, 0.0f, {PassId::Cabinet});
+  const bool typical = radio.receiverProfile == RadioReceiverProfile::Typical1930s;
+  const auto reference = measureVoltageDrivenAcoustics(radio, 1000.0f);
+  std::vector<TestRow> rows;
+  // User-supplied transcriptions of Knowles (1933), Fig. 7B and 7A.
+  // The tolerances below are deliberately SMOOTH MODEL acceptance bands, not
+  // scan uncertainty, manufacturing variation, or a population envelope.
+  // NA is omitted; the irregular printed >4 kHz axis is not a precise target.
+  struct Point { float hz; float k5; float k12; float tolerance; };
+  constexpr Point points[] = {
+      {125, -25, -6.5f, 6}, {160, -14.5f, -4.5f, 5},
+      {200, -4.5f, -4.5f, 5}, {250, -6.5f, -4, 4},
+      {315, -7, -3.5f, 4}, {400, -5.5f, -3.5f, 4},
+      {500, -5.5f, -2.5f, 4}, {630, -5, 0, 4},
+      {800, -2.5f, 0.5f, 4}, {1000, 0, 0, 0.01f},
+      {1250, -1, 2, 4}, {1600, -0.5f, 4, 4},
+      {2000, 5.5f, 7, 4}, {2500, 5, 8, 4},
+      {3150, 4.5f, 7, 4}, {4000, -2.5f, 6, 4}};
+  for (const auto& point : points) {
+    const auto measured = measureVoltageDrivenAcoustics(radio, point.hz);
+    const double target = typical ? point.k5 : point.k12;
+    addRange(rows, "Speaker", "mounted_response_" +
+                 std::to_string(static_cast<int>(point.hz)) + "hz_db",
+             ratioDb(measured.cabinet, reference.cabinet),
+             target - point.tolerance, target + point.tolerance,
+             typical ? "K5 cabinet example; relative to own 1 kHz"
+                     : "K12 size-adjacent example; not measured Type-W");
+  }
+  const auto bass = measureVoltageDrivenAcoustics(radio, 50.0f);
+  const auto top = measureVoltageDrivenAcoustics(radio, 8000.0f);
+  addRange(rows, "Speaker", "sub_bass_is_attenuated_db",
+           ratioDb(bass.cabinet, reference.cabinet), -90.0,
+           typical ? -30.0 : -12.0, "model extrapolation, not a digitized point");
+  addRange(rows, "Speaker", "upper_octave_rolloff_db",
+           ratioDb(top.cabinet, reference.cabinet), -25.0, -4.0,
+           "broad design guard; Knowles HF axis is tentative; Duode not fitted");
+  if (typical) {
+    constexpr std::array<std::pair<float, float>, 5> mounting{{
+        {125, -10.5f}, {160, -9.5f}, {200, -4.5f}, {250, -3}, {315, -1.5f}}};
+    for (const auto& [hz, db] : mounting) {
+      const auto measured = measureVoltageDrivenAcoustics(radio, hz);
+      addRange(rows, "Cabinet", "mounting_change_" +
+                   std::to_string(static_cast<int>(hz)) + "hz_db",
+               ratioDb(measured.cabinet, measured.speaker), db - 2.5, db + 2.5,
+               "K5 same driver in two mountings; total change, not isolated dipole");
+    }
+  }
+  return rows;
+}
+
 struct EnvelopeMetrics {
   double riseMs = 0.0;
   double fallMs = 0.0;
@@ -983,7 +1079,7 @@ std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
     RadioSampleContext ctx{};
     RadioInterferenceDerivedNode::run(radio, ctx);
     addRange(rows, "InterferenceDerived", "zero_noise_zeroes_rf_noise",
-             ctx.derived.demodIfNoiseAmp, 0.0, 0.0, "noiseWeight=0");
+             ctx.derived.ifInputNoiseAmp, 0.0, 0.0, "noiseWeight=0");
     addRange(rows, "InterferenceDerived", "zero_noise_zeroes_audio_noise",
              ctx.derived.noiseAmp, 0.0, 0.0, "noiseWeight=0");
   }
@@ -1018,19 +1114,13 @@ std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
     radio.globals.postNoiseMix = 0.20f;
     RadioSampleContext ctx{};
     RadioInterferenceDerivedNode::run(radio, ctx);
-    double avcT = 0.625 / 1.25;
-    double rfGainControl =
-        std::max(0.35, 1.0 - radio.frontEnd.avcGainDepth * avcT);
-    double ifGainControl =
-        std::max(0.20, 1.0 - radio.ifStrip.avcGainDepth * avcT);
     double expectedRfNoise =
-        radio.noiseDerived.baseNoiseAmp * radio.globals.ifNoiseMix * rfGainControl *
-        ifGainControl;
+        radio.noiseDerived.baseNoiseAmp * radio.globals.ifNoiseMix;
     double expectedAudioNoise =
         radio.noiseDerived.baseNoiseAmp * radio.globals.postNoiseMix;
-    addRange(rows, "InterferenceDerived", "rf_noise_matches_gain_law",
-             ctx.derived.demodIfNoiseAmp, expectedRfNoise - 1e-6,
-             expectedRfNoise + 1e-6, "baseNoise * ifMix * RF AVC * IF AVC");
+    addRange(rows, "InterferenceDerived", "if_noise_is_input_referred",
+             ctx.derived.ifInputNoiseAmp, expectedRfNoise - 1e-6,
+             expectedRfNoise + 1e-6, "gain and filtering belong to IFStrip");
     addRange(rows, "InterferenceDerived", "audio_noise_matches_post_mix",
              ctx.derived.noiseAmp, expectedAudioNoise - 1e-6,
              expectedAudioNoise + 1e-6, "baseNoise * postNoiseMix");
@@ -1039,8 +1129,61 @@ std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
   return rows;
 }
 
+struct IfNoiseStats {
+  double carrier = 0.0;
+  double noise = 0.0;
+};
+
+IfNoiseStats measureIfNoise(HarnessConfig config, float rate, float bw,
+                           float stageGain) {
+  config.sampleRate = rate;
+  config.bandwidthHz = bw;
+  Radio1938 radio = makeNodeFixture(config, 0.0f, {PassId::IFStrip});
+  radio.ifStrip.stageGain = stageGain;
+  radio.mixer.conversionGain = 1.0f;
+  radio.controlBus.controlVoltage = 0.0f;
+  const auto frames = static_cast<uint32_t>(rate);
+  double sum = 0.0;
+  double sumSq = 0.0;
+  for (uint32_t i = 0; i < frames; ++i) {
+    RadioSampleContext ctx{};
+    ctx.signal.setComplexEnvelope(0.05f, 0.0f);
+    ctx.derived.ifInputNoiseAmp = 0.003f;
+    RadioIFStripNode::run(radio, 0.05f, ctx);
+    if (i >= frames / 4) {
+      const double y = ctx.signal.detectorInputI;
+      sum += y;
+      sumSq += y * y;
+    }
+  }
+  const double count = frames - frames / 4;
+  const double mean = sum / count;
+  return {mean, std::sqrt(std::max(0.0, sumSq / count - mean * mean))};
+}
+
 std::vector<TestRow> runRfPhysics(const HarnessConfig& config) {
   std::vector<TestRow> rows;
+
+  {
+    const auto base = measureIfNoise(config, 48000.0f, 5000.0f, 1.0f);
+    const auto amplified = measureIfNoise(config, 48000.0f, 5000.0f, 4.6f);
+    addRange(rows, "IFStrip", "gain_preserves_input_referred_snr",
+             (amplified.carrier / amplified.noise) / (base.carrier / base.noise),
+             0.995, 1.005, "carrier and noise traverse the same gain");
+    const auto narrow = measureIfNoise(config, 48000.0f, 2500.0f, 1.0f);
+    addRange(rows, "IFStrip", "bandwidth_filters_input_noise",
+             narrow.noise / base.noise, 0.60, 0.85,
+             "halving bandwidth reduces integrated noise");
+    // At 5 kHz service BW the IF model hits its 0.20*fs cutoff cap at
+    // 44.1/48 kHz. Use 2 kHz here so the physical IF bandwidth is unchanged.
+    const auto densityRef = measureIfNoise(config, 48000.0f, 2000.0f, 1.0f);
+    for (float rate : {44100.0f, 96000.0f}) {
+      const auto other = measureIfNoise(config, rate, 2000.0f, 1.0f);
+      addRange(rows, "IFStrip", "noise_density_at_" + std::to_string(int(rate)),
+               other.noise / densityRef.noise, 0.90, 1.10,
+               "same physical bandwidth and input noise density");
+    }
+  }
 
   {
     Radio1938 radio = makeNodeFixture(config, 0.0f, {PassId::Input});
@@ -1825,6 +1968,7 @@ std::vector<TestRow> runOutputPhysics(const HarnessConfig& config) {
   {
     Radio1938 flat = makeNodeFixture(config, 0.0f, {PassId::Speaker});
     Radio1938 breakup = makeNodeFixture(config, 0.0f, {PassId::Speaker});
+    flat.speakerStage.speaker.upperBreakupGainDb = 0.0f;
     breakup.speakerStage.speaker.upperBreakupHz = 2400.0f;
     breakup.speakerStage.speaker.upperBreakupQ = 0.90f;
     breakup.speakerStage.speaker.upperBreakupGainDb = 3.0f;
@@ -1894,22 +2038,20 @@ std::vector<TestRow> runOutputPhysics(const HarnessConfig& config) {
     untreated.cabinet.clarifier1AttenuationDb = 0.0f;
     untreated.cabinet.clarifier2AttenuationDb = 0.0f;
     untreated.cabinet.clarifier3AttenuationDb = 0.0f;
+    // Isolate the Bobb resonance/absorber comparison. The separately measured
+    // full acoustic chain includes the empirical mounting loss exactly once.
+    untreated.cabinet.mountingHpHz = 0.0f;
+    treated.cabinet.mountingHpHz = 0.0f;
     RadioInitContext initCtx{};
     RadioCabinetNode::init(untreated, initCtx);
     RadioCabinetNode::init(treated, initCtx);
 
     if (radio.receiverProfile == RadioReceiverProfile::Typical1930s) {
-      addRange(rows, "Cabinet", "typical_compact_panel_near_155hz",
-               treated.cabinet.panelHz, 145.0, 165.0,
-               "reduced-order 38-12C cabinet proxy");
       addRange(rows, "Cabinet", "typical_has_no_acoustic_clarifiers",
                std::fabs(treated.cabinet.clarifier1Hz) +
                    std::fabs(treated.cabinet.clarifier2Hz) +
                    std::fabs(treated.cabinet.clarifier3Hz),
                0.0, 0.0, "compact table set has no Type-K clarifiers");
-      addRange(rows, "Cabinet", "typical_open_back_delay_is_submillisecond",
-               treated.cabinet.rearDelayMs, 0.8, 1.1,
-               "six-and-a-quarter-inch cabinet depth proxy");
     } else {
       addRange(rows, "Cabinet", "philco_cabinet_resonance_near_95hz",
                treated.cabinet.panelHz, 90.0, 100.0,
@@ -2132,6 +2274,12 @@ int main(int argc, char** argv) {
     if (wantsSection(config, "output")) {
       auto rows = filterRowsForNode(config, runOutputPhysics(config));
       printRows("output", rows);
+      ok = ok && allPassed(rows);
+      allRows.insert(allRows.end(), rows.begin(), rows.end());
+    }
+    if (wantsSection(config, "acoustics")) {
+      auto rows = filterRowsForNode(config, runAcousticPhysics(config));
+      printRows("acoustics", rows);
       ok = ok && allPassed(rows);
       allRows.insert(allRows.end(), rows.begin(), rows.end());
     }

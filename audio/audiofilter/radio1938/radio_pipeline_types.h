@@ -45,7 +45,9 @@ struct RadioBlockControl {
 };
 
 struct RadioDerivedSampleParams {
-  float demodIfNoiseAmp = 0.0f;
+  // IF input voltage noise, before IF gain and loaded-can filtering. The
+  // amplitude convention is referenced to a 48 kHz complex-envelope rate.
+  float ifInputNoiseAmp = 0.0f;
   float demodIfCrackleAmp = 0.0f;
   float demodIfCrackleRate = 0.0f;
   float noiseAmp = 0.0f;

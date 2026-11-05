@@ -6,6 +6,12 @@
 
 void RadioCabinetNode::init(Radio1938& radio, RadioInitContext&) {
   auto& cabinet = radio.cabinet;
+  if (cabinet.mountingHpHz > 0.0f && cabinet.mountingHpQ > 0.0f) {
+    cabinet.mountingHp.setHighpass(radio.sampleRate, cabinet.mountingHpHz,
+                                  cabinet.mountingHpQ);
+  } else {
+    cabinet.mountingHp = Biquad{};
+  }
   auto initClarifier = [&](Biquad& clarifier, float hz, float q,
                            float attenuationDb) {
     if (hz > 0.0f && q > 0.0f && std::fabs(attenuationDb) > 1e-4f) {
@@ -94,6 +100,7 @@ void RadioCabinetNode::init(Radio1938& radio, RadioInitContext&) {
 
 void RadioCabinetNode::reset(Radio1938& radio) {
   auto& cabinet = radio.cabinet;
+  cabinet.mountingHp.reset();
   cabinet.panel.reset();
   cabinet.chassis.reset();
   cabinet.cavityDip.reset();
@@ -111,6 +118,7 @@ float RadioCabinetNode::run(Radio1938& radio, float y, RadioSampleContext&) {
   auto& cabinet = radio.cabinet;
   if (!cabinet.enabled) return y;
 
+  y = cabinet.mountingHp.process(y);
   float out = y;
   // Cabinet panel, chassis, and cavity responses are parallel acoustic paths
   // around the same speaker pressure, not cascaded electrical stages.

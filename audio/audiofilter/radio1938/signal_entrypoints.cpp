@@ -28,7 +28,8 @@ void Radio1938::processAmAudio(const float* audioSamples,
                                uint32_t frames,
                                float receivedCarrierRmsVolts,
                                float modulationIndex,
-                               const RadioAmReceptionSample* receptionSamples) {
+                               const RadioAmReceptionSample* receptionSamples,
+                               float* terminalVolts) {
   if (!audioSamples || !outSamples || frames == 0 || graph.bypass) return;
 
   auto& rfScratch = iqInput.rfScratch;
@@ -41,9 +42,10 @@ void Radio1938::processAmAudio(const float* audioSamples,
   const float carrierStepSin = std::sin(carrierStep);
   const float carrierPeak =
       std::sqrt(2.0f) * std::max(receivedCarrierRmsVolts, 0.0f);
-  float phase = iqInput.iqPhase;
-  float carrierCos = std::cos(phase);
-  float carrierSin = std::sin(phase);
+  // Keep the oscillator itself across blocks. Reconstructing it from a
+  // separately accumulated float phase introduced a discontinuity per block.
+  auto& carrierCos = iqInput.carrierOscCos;
+  auto& carrierSin = iqInput.carrierOscSin;
 
   for (uint32_t frame = 0; frame < frames; ++frame) {
     const float sampleVal = audioSamples[frame];
@@ -61,11 +63,8 @@ void Radio1938::processAmAudio(const float* audioSamples,
     }
     advanceNormalizedOscillator(carrierStepCos, carrierStepSin, carrierCos,
                                 carrierSin);
-    phase += carrierStep;
-    if (phase >= kRadioTwoPi) phase -= kRadioTwoPi;
   }
 
-  iqInput.iqPhase = phase;
   RadioBlockControl block{};
   beginRadioPipelineBlock(*this, frames, block);
   for (uint32_t frame = 0; frame < frames; ++frame) {
@@ -75,6 +74,7 @@ void Radio1938::processAmAudio(const float* audioSamples,
     ctx.signal.setRealRf(x);
     float y = runRadioPipelineSample(*this, x, ctx, PassId::Input);
     writeMonoToInterleaved(outSamples, frame, channels, y);
+    if (terminalVolts) terminalVolts[frame] = speakerStage.physicalDriveVolts;
   }
   finishRadioPipelineBlock(*this);
 }

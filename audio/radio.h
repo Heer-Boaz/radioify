@@ -15,6 +15,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <random>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -307,10 +308,14 @@ struct Radio1938 {
   } globals;
 
   struct IqInputState {
-    float iqPhase = 0.0f;
+    float carrierOscCos = 1.0f;
+    float carrierOscSin = 0.0f;
     std::vector<float> rfScratch;
 
-    void resetRuntime() { iqPhase = 0.0f; }
+    void resetRuntime() {
+      carrierOscCos = 1.0f;
+      carrierOscSin = 0.0f;
+    }
   } iqInput;
 
   struct TuningNodeState {
@@ -449,6 +454,9 @@ struct Radio1938 {
     // plus one loaded complex envelope transfer feeding the detector.
     IQBiquad sourceEnvelope;
     IQBiquad loadedCanEnvelope;
+    std::mt19937 noiseRng{0x1942u};
+    std::uniform_real_distribution<float> noiseDist{-1.0f, 1.0f};
+    float noiseSampleScale = 1.0f;
   } ifStrip;
 
   struct DemodNodeState {
@@ -691,6 +699,10 @@ struct Radio1938 {
 
   struct CabinetNodeState {
     bool enabled = false;
+    // Empirical total mounting loss; not a geometry-derived dipole corner.
+    float mountingHpHz = 0.0f;
+    float mountingHpQ = 0.0f;
+    Biquad mountingHp;
     float panelHz = 0.0f;
     float panelQ = 0.0f;
     float panelGainDb = 0.0f;
@@ -777,12 +789,15 @@ struct Radio1938 {
   void init(int ch, float sr, float bw, float noise);
   void reset();
   void processIfReal(float* samples, uint32_t frames);
+  // Optional observation: frames mono terminal-voltage samples in a separate,
+  // caller-owned buffer. The complete audio graph runs unchanged.
   void processAmAudio(const float* audioSamples,
                       float* outSamples,
                       uint32_t frames,
                       float receivedCarrierRmsVolts,
                       float modulationIndex,
-                      const RadioAmReceptionSample* receptionSamples = nullptr);
+                      const RadioAmReceptionSample* receptionSamples = nullptr,
+                      float* terminalVolts = nullptr);
   void processIqBaseband(const float* iqInterleaved,
                          float* outSamples,
                          uint32_t frames);

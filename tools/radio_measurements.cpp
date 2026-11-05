@@ -1,5 +1,6 @@
 #include "radio.h"
 #include "audiofilter/radio1938/audio_pipeline_execution.h"
+#include "audiofilter/math/signal_math.h"
 
 #include <algorithm>
 #include <array>
@@ -15,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -57,34 +59,42 @@ struct HarnessConfig {
   std::string settingsPath;
   std::string presetName;
   std::string section = "all";
+  bool observeTerminalVoltage = false;
+  float speakerNaturalHzOverride = 0.0f;
 };
 
 // --- Target ranges for harness validation (historical/model anchors) ---
 struct ReceiverReferenceBands {
-  float audioLow3dBMin;
-  float audioLow3dBMax;
-  float audioHigh3dBMin;
-  float audioHigh3dBMax;
-  float imdDbMin;
-  float imdDbMax;
-  float sinadNominalDbMin;
-  float sinadNominalDbMax;
+  float terminalLow3dBMin;
+  float terminalLow3dBMax;
+  float terminalHigh3dBMin;
+  float terminalHigh3dBMax;
+  float terminalImdDbMax;
+  float terminalSinadDbMin;
+  float acousticPeakHigh3dBMin;
+  float acousticPeakHigh3dBMax;
+  float acousticImdDbMax;
+  float acousticSinadDbMin;
   float speakerReferenceRatioMin;
   float speakerReferenceRatioMax;
   float nominalOutputPowerMinWatts;
   float nominalOutputPowerMaxWatts;
 };
 
+// Response/quality bounds are engineering guards, not measured Philco data.
+// Terminal-voltage observations have no acoustic low-pass suppressing noise
+// and harmonics; the former acoustically weighted SINAD cannot be reused here.
+// See docs/radio1938-period-acoustics.md for both measurements and their limits.
 constexpr ReceiverReferenceBands kPhilco37116ReferenceBands{
-    60.0f, 200.0f, 2500.0f, 5500.0f, -100.0f, -25.0f,
-    35.0f, 100.0f, 0.85f, 1.10f, 12.0f, 18.0f};
+    60.0f, 200.0f, 2500.0f, 5500.0f, -38.0f, 30.0f,
+    2500.0f, 5500.0f, -35.0f, 28.0f, 0.85f, 1.10f, 12.0f, 18.0f};
 
 // The mass-market profile deliberately validates against its own 2 W,
 // single-ended receiver class. Reusing the 37-116's 15 W / high-fidelity
 // bands would turn the test into a demand that both physical models converge.
 constexpr ReceiverReferenceBands kTypical1930sReferenceBands{
-    100.0f, 250.0f, 2200.0f, 3500.0f, -100.0f, -25.0f,
-    20.0f, 100.0f, 0.18f, 0.40f, 1.5f, 2.5f};
+    100.0f, 250.0f, 2500.0f, 4500.0f, -23.0f, 18.0f,
+    2200.0f, 3500.0f, -18.0f, 15.0f, 0.18f, 0.40f, 1.5f, 2.5f};
 
 constexpr const ReceiverReferenceBands& referenceBandsForProfile(
     RadioReceiverProfile profile) {
@@ -287,6 +297,7 @@ void printUsage() {
       << "  --noise-only <value>\n"
       << "  --detector-spc <value>\n"
       << "  --detector-max-substeps <count>\n"
+      << "  --speaker-natural-hz <hz>  Override the unmeasured mechanical prior for comparisons\n"
       << "  --radio-settings <path>\n"
       << "  --preset <name>\n"
       << "  --section <all|sweep|envelope|levels|imd|overdrive|sinad|weak|transient|reference|noise|spectrum|am_validate|am_convergence|power_bench>\n";
@@ -314,6 +325,13 @@ HarnessConfig parseArgs(int argc, char** argv) {
     } else if (arg == "--detector-max-substeps") {
       config.detectorWaveformMaxSubsteps =
           parseIntArg(argv, i, argc, "--detector-max-substeps");
+    } else if (arg == "--speaker-natural-hz") {
+      config.speakerNaturalHzOverride =
+          parseFloatArg(argv, i, argc, "--speaker-natural-hz");
+      if (!std::isfinite(config.speakerNaturalHzOverride) ||
+          config.speakerNaturalHzOverride <= 0.0f) {
+        fail("invalid speaker natural-frequency override");
+      }
     } else if (arg == "--radio-settings") {
       if (i + 1 >= argc) fail("missing value for --radio-settings");
       config.settingsPath = argv[++i];
@@ -329,6 +347,10 @@ HarnessConfig parseArgs(int argc, char** argv) {
     } else {
       fail(std::string("unknown argument: ") + std::string(arg));
     }
+  }
+  if (config.speakerNaturalHzOverride > 0.0f &&
+      config.speakerNaturalHzOverride >= 0.45f * config.sampleRate) {
+    fail("speaker natural-frequency override exceeds the sample-rate limit");
   }
   return config;
 }
@@ -364,6 +386,10 @@ Radio1938 makeRadio(const HarnessConfig& config, float noiseWeight,
     }
   }
   applyHarnessDetectorWaveformSettings(config, radio);
+  if (config.speakerNaturalHzOverride > 0.0f) {
+    radio.speakerStage.speaker.suspensionHz = config.speakerNaturalHzOverride;
+    radio.init(1, config.sampleRate, config.bandwidthHz, noiseWeight);
+  }
   radio.setCalibrationEnabled(true);
   if (warmWithCarrier) {
     warmCarrier(radio, config.carrierRmsVolts);
@@ -380,9 +406,13 @@ RunResult runAmProgram(const HarnessConfig& config,
                        float noiseWeight) {
   RunResult result{makeRadio(config, noiseWeight, true), {}};
   result.output.resize(program.size(), 0.0f);
+  std::vector<float> terminal;
+  if (config.observeTerminalVoltage) terminal.resize(program.size());
   result.radio.processAmAudio(program.data(), result.output.data(),
                               static_cast<uint32_t>(program.size()),
-                              config.carrierRmsVolts, modulationIndex);
+                              config.carrierRmsVolts, modulationIndex, nullptr,
+                              terminal.empty() ? nullptr : terminal.data());
+  if (config.observeTerminalVoltage) result.output = std::move(terminal);
   return result;
 }
 
@@ -460,27 +490,13 @@ EnvelopeTraceResult runAmProgramWithEnvelopeTrace(const HarnessConfig& config,
   result.audioEnv.resize(program.size(), 0.0f);
   result.avcEnv.resize(program.size(), 0.0f);
 
-  float safeSampleRate = std::max(config.sampleRate, 1.0f);
-  float carrierHz = result.radio.resolvedInputCarrierHz();
-  float carrierStep = kRadioTwoPi * (carrierHz / safeSampleRate);
-  float carrierPeak =
-      std::sqrt(2.0f) * std::max(config.carrierRmsVolts, 0.0f);
-  float phase = result.radio.iqInput.iqPhase;
-  float normScale = amProgramNormScale(program);
-  std::array<float, 1> sample{};
   for (size_t i = 0; i < program.size(); ++i) {
-    float envelopeFactor =
-        std::max(0.0f, 1.0f + modulationIndex * program[i] * normScale);
-    sample[0] = carrierPeak * envelopeFactor * std::cos(phase);
-    phase += carrierStep;
-    if (phase >= kRadioTwoPi) phase -= kRadioTwoPi;
-    result.radio.processIfReal(sample.data(), 1u);
-    result.output[i] = sample[0];
+    result.radio.processAmAudio(&program[i], &result.output[i], 1u,
+                                config.carrierRmsVolts, modulationIndex);
     result.detectorNode[i] = result.radio.demod.am.detectorNode;
     result.audioEnv[i] = result.radio.detectorAudio.audioEnv;
     result.avcEnv[i] = result.radio.demod.am.avcEnv;
   }
-  result.radio.iqInput.iqPhase = phase;
   return result;
 }
 
@@ -909,6 +925,7 @@ void printConfig(const HarnessConfig& config) {
   std::cout << "modulation_index," << config.modulationIndex << "\n";
   std::cout << "noise_weight," << config.noiseWeight << "\n";
   std::cout << "noise_only_weight," << config.noiseOnlyWeight << "\n";
+  std::cout << "speaker_natural_hz_override," << config.speakerNaturalHzOverride << "\n";
   std::cout << "detector_waveform_spc_override,"
             << config.detectorWaveformSamplesPerCycle << "\n";
   std::cout << "detector_waveform_max_substeps_override,"
@@ -1506,6 +1523,15 @@ bool runReference(const HarnessConfig& config) {
   std::cout << "[reference]\n";
   std::cout << "metric,measured,low,high,in_band\n";
   SweepSummary sweep = summarizeSweep(measureSweepPoints(config));
+  // Keep receiver quality limits independent of the rising period speaker
+  // response, and ALSO validate/report the complete acoustic output below.
+  HarnessConfig electricalConfig = config;
+  electricalConfig.observeTerminalVoltage = true;
+  SweepSummary electricalSweep =
+      summarizeSweep(measureSweepPoints(electricalConfig));
+  ReferenceAnchorSummary electricalAnchors =
+      measureReferenceAnchorSummary(electricalConfig);
+  double electricalImdDb = measureImdSummaryDb(electricalConfig);
   EdgeMetrics envelope =
       measureEnvelopeMetrics(
           runAmProgramWithEnvelopeTrace(
@@ -1535,13 +1561,26 @@ bool runReference(const HarnessConfig& config) {
   // detector / AVC timing rows below are based on named RC state and service
   // sideband constraints, not on arbitrary output-envelope taste metrics.
   bool allInBand = true;
-  allInBand &= printReferenceRow("audio_low_3db_hz", sweep.low3dBHz,
-                                 bands.audioLow3dBMin, bands.audioLow3dBMax);
-  allInBand &= printReferenceRow("audio_high_3db_hz", sweep.high3dBHz,
-                                 bands.audioHigh3dBMin,
-                                 bands.audioHigh3dBMax);
-  allInBand &=
-      printReferenceRow("imd_db", imdDb, bands.imdDbMin, bands.imdDbMax);
+  allInBand &= printReferenceRow("terminal_low_3db_hz", electricalSweep.low3dBHz,
+                                 bands.terminalLow3dBMin, bands.terminalLow3dBMax);
+  allInBand &= printReferenceRow("terminal_high_3db_hz", electricalSweep.high3dBHz,
+                                 bands.terminalHigh3dBMin, bands.terminalHigh3dBMax);
+  allInBand &= printReferenceRow("terminal_imd_db", electricalImdDb,
+                                 -100.0, bands.terminalImdDbMax);
+  allInBand &= printReferenceRow("terminal_sinad_nominal_db",
+                                 electricalAnchors.sinadNominalDb,
+                                 bands.terminalSinadDbMin, 100.0);
+  // These edges bound the TOP of the broad 2-3 kHz rise, not usable bass.
+  // Source-labelled acoustic tests constrain bass and relative levels too.
+  allInBand &= printReferenceRow("acoustic_peak_low_3db_hz", sweep.low3dBHz,
+                                 1000.0f, 2500.0f);
+  allInBand &= printReferenceRow("acoustic_peak_high_3db_hz", sweep.high3dBHz,
+                                 bands.acousticPeakHigh3dBMin,
+                                 bands.acousticPeakHigh3dBMax);
+  // Acoustic weighting raises existing harmonics and noise around 2-3 kHz.
+  // These are engineering guards, not historical distortion measurements.
+  allInBand &= printReferenceRow("acoustic_imd_db", imdDb, -100.0,
+                                 bands.acousticImdDbMax);
   allInBand &= printReferenceRow("detector_tau_us", detectorTauUs,
                                  kTargetDetectorTauUsMin,
                                  kTargetDetectorTauUsMax);
@@ -1554,9 +1593,8 @@ bool runReference(const HarnessConfig& config) {
                                  envelope.rise10To90Ms, 0.0, 10.0);
   allInBand &= printReferenceRow("envelope_fall_ms_observed",
                                  envelope.fall90To10Ms, 0.0, 10.0);
-  allInBand &= printReferenceRow("sinad_nominal_db", anchors.sinadNominalDb,
-                                 bands.sinadNominalDbMin,
-                                 bands.sinadNominalDbMax);
+  allInBand &= printReferenceRow("acoustic_sinad_nominal_db", anchors.sinadNominalDb,
+                                 bands.acousticSinadDbMin, 100.0);
   // Speaker/reference and digital output targets (measured from nominal run)
   allInBand &= printReferenceRow(
       "speaker_reference_ratio", anchors.speakerReferenceRatio,

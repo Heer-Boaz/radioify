@@ -57,12 +57,13 @@ void RadioInterferenceDerivedNode::run(Radio1938& radio,
                                         0.0f, 1.0f);
   float crackleExposureSq = crackleExposure * crackleExposure;
 
-  // RF/IF interference follows the same AVC-governed gain as the incoming
-  // carrier. Impulsive bursts are most audible when carrier capture is weak,
-  // either because the station is weak or because the tuned passband is
-  // offset enough that the detector sees an asymmetric envelope.
-  ctx.derived.demodIfNoiseAmp =
-      noiseDerived.baseNoiseAmp * radio.globals.ifNoiseMix * preDetectorGain;
+  // Input-referred IF noise passes through the actual IF gain/filter. Applying
+  // only AVC here and injecting at the detector made nominal stage gain an
+  // artificial SNR improvement (especially the console's 4.6x IF gain).
+  ctx.derived.ifInputNoiseAmp =
+      noiseDerived.baseNoiseAmp * radio.globals.ifNoiseMix;
+  // Impulsive bursts retain the detector-side capture/exposure approximation.
+  // They are most audible with a weak carrier or asymmetric tuned envelope.
   bool crackleAtDetector =
       radio.graph.isEnabled(PassId::IFStrip) &&
       radio.graph.isEnabled(PassId::Demod);

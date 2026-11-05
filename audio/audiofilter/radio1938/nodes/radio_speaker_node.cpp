@@ -20,6 +20,17 @@ float asymmetricSoftLimit(float x, float positiveLimit, float negativeLimit) {
 }
 
 void initSpeakerModel(SpeakerSim& speaker, float fs) {
+  // Power supplies I*Re (motor force scaled into volts), not pressure.
+  // Far-field piston pressure follows acceleration. For the mechanical branch
+  // M*x'' + R*x' + x/C = Bl*I, pressure / motor is the high-pass
+  // s^2 / (s^2 + (R/M)*s + 1/(M*C)). Back EMF is already in the electrical
+  // solve, so use mechanical Q here, never the electrically loaded total Q.
+  const float mass = speaker.effectiveMovingMassKg;
+  const float omega = 1.0f / std::sqrt(
+      mass * speaker.effectiveSuspensionComplianceMetersPerNewton);
+  speaker.radiation.setHighpass(
+      fs, omega / kRadioTwoPi,
+      mass * omega / speaker.effectiveMechanicalDampingNsPerMeter);
   float suspensionHzDerived =
       speaker.suspensionHz * (1.0f + 0.45f * speaker.coneMassTolerance -
                               0.65f * speaker.suspensionComplianceTolerance);
@@ -81,6 +92,7 @@ void initSpeakerModel(SpeakerSim& speaker, float fs) {
 }
 
 void resetSpeakerModel(SpeakerSim& speaker) {
+  speaker.radiation.reset();
   speaker.suspensionRes.reset();
   speaker.coneBody.reset();
   speaker.upperBreakup.reset();
@@ -92,6 +104,7 @@ void resetSpeakerModel(SpeakerSim& speaker) {
 
 float runSpeakerModel(SpeakerSim& speaker, float x, bool& clipped) {
   float y = x * std::max(speaker.drive, 0.0f);
+  y = speaker.radiation.process(y);
   y = speaker.suspensionRes.process(y);
   y = speaker.coneBody.process(y);
   y = speaker.upperBreakup.process(y);
@@ -152,13 +165,11 @@ void RadioSpeakerNode::init(Radio1938& radio, RadioInitContext&) {
   speakerStage.osLpOut.setLowpass(osFs, osCut, kRadioBiquadQ);
   initSpeakerModel(speakerStage.speaker, osFs);
   speakerStage.speaker.drive = speakerStage.drive;
-  speakerStage.physicalDriveVolts = 0.0f;
 }
 
 void RadioSpeakerNode::reset(Radio1938& radio) {
   auto& speakerStage = radio.speakerStage;
   speakerStage.osPrev = 0.0f;
-  speakerStage.physicalDriveVolts = 0.0f;
   speakerStage.osLpIn.reset();
   speakerStage.osLpOut.reset();
   resetSpeakerModel(speakerStage.speaker);

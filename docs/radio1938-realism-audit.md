@@ -2,6 +2,11 @@
 
 Date: 2026-07-15
 
+Acoustic update, 2026-11-05: the [period evidence and acoustic fit](radio1938-period-acoustics.md)
+supersede the speaker/cabinet estimates, acoustic response targets and output
+measurements below. The original electrical anchors and the distinction between
+exact-part data, family examples and the Bobb clarifier proxy are retained.
+
 ## Verdict
 
 The Radio1938 filter is not a simple equalizer-and-noise effect. It contains a

@@ -123,19 +123,12 @@ void AMDetector::reset() {
 
 float AMDetector::run(float signalI,
                       float signalQ,
-                      float ifNoiseAmp,
                       Radio1938& radio,
                       float ifCrackleAmp,
                       float ifCrackleRate) {
-  constexpr float kInvSqrt2 = 0.70710678118f;
   metricsEnabled = radio.calibration.enabled;
   float ifI = signalI;
   float ifQ = signalQ;
-  if (ifNoiseAmp > 0.0f) {
-    float noiseScale = ifNoiseAmp * kInvSqrt2;
-    ifI += dist(rng) * noiseScale;
-    ifQ += dist(rng) * noiseScale;
-  }
   if (ifCrackleAmp > 0.0f && ifCrackleRate > 0.0f && fs > 0.0f) {
     float chance = std::min(ifCrackleRate / fs, 1.0f);
     float eventDraw = 0.5f * (dist(rng) + 1.0f);

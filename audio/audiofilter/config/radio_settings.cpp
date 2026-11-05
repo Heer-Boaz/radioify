@@ -578,8 +578,10 @@ static const std::array<RadioSettingEntry, 33> kSpeakerSettings = {{
     RADIO_FLOAT_ENTRY("mechanicaldampingnspermeter", radio.speakerStage.speaker.mechanicalDampingNsPerMeter, "speaker.mechanicalDampingNsPerMeter"),
 }};
 
-static const std::array<RadioSettingEntry, 15> kCabinetSettings = {{
+static const std::array<RadioSettingEntry, 17> kCabinetSettings = {{
     RADIO_BOOL_ENTRY("enabled", radio.cabinet.enabled, "cabinet.enabled"),
+    RADIO_FLOAT_ENTRY("mountinghphz", radio.cabinet.mountingHpHz, "cabinet.mountingHpHz"),
+    RADIO_FLOAT_ENTRY("mountinghpq", radio.cabinet.mountingHpQ, "cabinet.mountingHpQ"),
     RADIO_FLOAT_ENTRY("panelhz", radio.cabinet.panelHz, "cabinet.panelHz"),
     RADIO_FLOAT_ENTRY("panelq", radio.cabinet.panelQ, "cabinet.panelQ"),
     RADIO_FLOAT_ENTRY("panelgaindb", radio.cabinet.panelGainDb, "cabinet.panelGainDb"),

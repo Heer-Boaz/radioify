@@ -88,7 +88,8 @@ std::array<float, 2> runLoadedIfCanEquivalent(Radio1938& radio,
                                               float sourceEnvI,
                                               float sourceEnvQ,
                                               float mixerConversionGain,
-                                              float ifGain) {
+                                              float ifGain,
+                                              float inputNoiseAmp) {
   auto& ifStrip = radio.ifStrip;
   float tuneCos = ifStrip.ifEnvelopeOscCos;
   float tuneSin = ifStrip.ifEnvelopeOscSin;
@@ -101,8 +102,19 @@ std::array<float, 2> runLoadedIfCanEquivalent(Radio1938& radio,
   ifStrip.ifEnvelopePhase =
       wrapPhase(ifStrip.ifEnvelopePhase + ifStrip.ifEnvelopeStepRadians);
 
-  float ifEnvI = rotatedEnv[0] * mixerConversionGain * ifGain;
-  float ifEnvQ = rotatedEnv[1] * mixerConversionGain * ifGain;
+  float ifEnvI = rotatedEnv[0] * mixerConversionGain;
+  float ifEnvQ = rotatedEnv[1] * mixerConversionGain;
+  if (inputNoiseAmp > 0.0f) {
+    // Independent quadratures model equivalent IF input noise. Preserve its
+    // spectral density as the envelope sample rate changes; the IF filter
+    // determines the integrated bandwidth. Absolute noise figure is unmeasured.
+    constexpr float kInvSqrt2 = 0.70710678118f;
+    const float scale = inputNoiseAmp * ifStrip.noiseSampleScale * kInvSqrt2;
+    ifEnvI += ifStrip.noiseDist(ifStrip.noiseRng) * scale;
+    ifEnvQ += ifStrip.noiseDist(ifStrip.noiseRng) * scale;
+  }
+  ifEnvI *= ifGain;
+  ifEnvQ *= ifGain;
   auto loadedCanEnv = ifStrip.loadedCanEnvelope.process(ifEnvI, ifEnvQ);
 
   // The detector must see the loaded IF can mapped back into the original
@@ -209,6 +221,7 @@ void ensureIfStripConfigured(Radio1938& radio) {
 }  // namespace
 
 void RadioIFStripNode::init(Radio1938& radio, RadioInitContext&) {
+  radio.ifStrip.noiseSampleScale = std::sqrt(radio.sampleRate / 48000.0f);
   configureIfStrip(radio);
 }
 
@@ -245,7 +258,8 @@ float RadioIFStripNode::run(Radio1938& radio, float y, RadioSampleContext& ctx) 
          std::fabs(mixerConversionGain) >= 1e-6f);
   auto sourceEnv = extractSourceEnvelope(radio, y, ctx.signal, rfGain);
   auto detectorEnv = runLoadedIfCanEquivalent(radio, sourceEnv[0], sourceEnv[1],
-                                              mixerConversionGain, ifGain);
+                                              mixerConversionGain, ifGain,
+                                              ctx.derived.ifInputNoiseAmp);
   assert(std::isfinite(detectorEnv[0]) && std::isfinite(detectorEnv[1]));
   ctx.signal.detectorInputI = detectorEnv[0];
   ctx.signal.detectorInputQ = detectorEnv[1];

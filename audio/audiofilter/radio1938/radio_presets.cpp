@@ -203,11 +203,9 @@ void applyPhilco37116Preset(Radio1938& radio) {
                    radio.power.outputTubePlateCurrentAmps *
                        (0.5f * radio.power.outputTransformerPrimaryResistanceOhms) -
                    radio.power.outputTubePlateDcVolts) < 1.0f);
-  // Downstream listening-level calibration only. The patent-anchored cabinet
-  // response has more low-frequency transient gain than the former flat fit;
-  // keep nominal program peaks below the digital safety clip without changing
-  // the physical speaker reference used by the power-stage calibration.
-  radio.output.digitalMakeupGain = 1.03f;
+  // Downstream listening level: reserve headroom for the period upper-mid
+  // response rise. This does not change the electrical power reference.
+  radio.output.digitalMakeupGain = 0.18f;
 
   radio.globals.oversampleFactor = 2.0f;
   radio.globals.oversampleCutoffFraction = 0.45f;
@@ -250,21 +248,25 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.noiseRuntime.hum.humSecondHarmonicMix = 0.42f;
 
   radio.speakerStage.drive = 1.0f;
-  radio.speakerStage.speaker.suspensionHz = 65.0f;
+  // Unsized 70-120 Hz period suspension prior (Seabert/Olson), NOT Type-W T/S.
+  // The acoustic fit is a smooth K12 (Knowles Fig. 7A) family comparison.
+  // Gains below compensate the complete motor + radiation + mounting chain;
+  // they are not individual measured cone-mode amplitudes. See the evidence doc.
+  radio.speakerStage.speaker.suspensionHz = 80.0f;
   radio.speakerStage.speaker.suspensionQ = 0.90f;
-  radio.speakerStage.speaker.suspensionGainDb = 1.5f;
-  radio.speakerStage.speaker.coneBodyHz = 1200.0f;
-  radio.speakerStage.speaker.coneBodyQ = 0.50f;
-  radio.speakerStage.speaker.coneBodyGainDb = 0.25f;
-  radio.speakerStage.speaker.upperBreakupHz = 2600.0f;
-  radio.speakerStage.speaker.upperBreakupQ = 1.05f;
-  radio.speakerStage.speaker.upperBreakupGainDb = 0.25f;
+  radio.speakerStage.speaker.suspensionGainDb = 0.0f;
+  radio.speakerStage.speaker.coneBodyHz = 650.0f;
+  radio.speakerStage.speaker.coneBodyQ = 1.50f;
+  radio.speakerStage.speaker.coneBodyGainDb = 2.2f;
+  radio.speakerStage.speaker.upperBreakupHz = 3000.0f;
+  radio.speakerStage.speaker.upperBreakupQ = 0.65f;
+  radio.speakerStage.speaker.upperBreakupGainDb = 16.0f;
   radio.speakerStage.speaker.coneDipHz = 1850.0f;
   radio.speakerStage.speaker.coneDipQ = 0.85f;
-  radio.speakerStage.speaker.coneDipGainDb = -0.35f;
-  radio.speakerStage.speaker.topLpHz = 5000.0f;
+  radio.speakerStage.speaker.coneDipGainDb = 0.0f;
+  radio.speakerStage.speaker.topLpHz = 6500.0f;
   radio.speakerStage.speaker.hfLossLpHz = 4000.0f;
-  radio.speakerStage.speaker.hfLossDepth = 0.12f;
+  radio.speakerStage.speaker.hfLossDepth = 0.0f;
   radio.speakerStage.speaker.filterQ = kRadioBiquadQ;
   radio.speakerStage.speaker.drive = 1.0f;
   radio.speakerStage.speaker.limit = 0.0f;
@@ -286,6 +288,11 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.speakerStage.speaker.asymBias = 0.06f;
 
   radio.cabinet.enabled = true;
+  // Residual LF mounting fit against the whole K12 family response, with the
+  // motor and the separate Bobb clarifier proxy included. This is NOT a
+  // measured 37-116 baffle corner or a prediction from its exterior dimensions.
+  radio.cabinet.mountingHpHz = 120.0f;
+  radio.cabinet.mountingHpQ = kRadioBiquadQ;
   // Philco patent US2059929 measures the family cabinet resonance from 70 to
   // 150 Hz, peaking at 95 Hz. The untreated response rises by roughly 8-10 dB
   // there. This peaking section is the resonance before the absorbers below.
@@ -300,14 +307,12 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.cabinet.cavityDipHz = 0.0f;
   radio.cabinet.cavityDipQ = 0.0f;
   radio.cabinet.cavityDipGainDb = 0.0f;
-  // The sound diffuser and cloth should not duplicate the Type-W cone's
-  // 5 kHz roll-off. Keep only a mild upper-octave loss here.
-  radio.cabinet.grilleLpHz = 8000.0f;
-  // The patent cabinet is open-backed and approximately 12 inches deep. A
-  // 1.8 ms rear path represents one depth out and back; its deliberately low
-  // mix avoids pretending that one fixed listener/wall placement is exact.
-  radio.cabinet.rearDelayMs = 1.80f;
-  radio.cabinet.rearMix = 0.08f;
+  // The wideband fit already includes mounting. Neither original cloth loss
+  // nor a listening-position rear path is measured; do not layer them on top.
+  // The 37-116 catalog depth is 17.25 in, not the earlier 116X's 12 in.
+  radio.cabinet.grilleLpHz = 0.0f;
+  radio.cabinet.rearDelayMs = 0.0f;
+  radio.cabinet.rearMix = 0.0f;
   radio.cabinet.rearHpHz = 0.0f;
   radio.cabinet.rearLpHz = 1200.0f;
   // Service Bulletin 258 specifies three identical Type-K clarifiers (part
@@ -525,12 +530,9 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.power.outputLoadResistanceOhms = 3.5f;
   radio.power.nominalOutputPowerWatts = 0.0f;
   // Normal programme listening is below the 41's 2 W / roughly 10% distortion
-  // rating. Restore playback level only after the physical speaker reference,
-  // rather than driving the small output stage continuously at its limit. The
-  // compact speaker/cabinet response peaks in the 150-400 Hz passband, so the
-  // listening-level calibration is anchored to that strongest band instead
-  // of the 1 kHz reference alone.
-  radio.output.digitalMakeupGain = 1.95f;
+  // rating. Calibrate listening level after the physical speaker reference,
+  // allowing headroom for the complete acoustic curve, including 2-3 kHz.
+  radio.output.digitalMakeupGain = 0.60f;
 
   radio.globals.oversampleFactor = 2.0f;
   radio.globals.oversampleCutoffFraction = 0.45f;
@@ -572,25 +574,27 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.noiseRuntime.hum.hissDriftSlowMix = 0.04f;
   radio.noiseRuntime.hum.humSecondHarmonicMix = 0.42f;
 
-  // Exact Thiele-Small data and anechoic curves do not survive for BO-1.
-  // These are conservative reduced-order values for its documented five-inch
-  // field-coil construction, intentionally distinct from the 14-inch Type-W.
+  // No exact BO-1 T/S or response was located. The 200 Hz choice is within
+  // Knowles's stated 180-250 Hz natural-frequency prior for a small speaker.
+  // Fit the full acoustic chain to the K5 small-cabinet example, not Quam's
+  // strong bass in an unspecified mounting. These EQ sections are a smooth
+  // residual fit; their gains are not claimed physical cone-mode measurements.
   radio.speakerStage.drive = 1.0f;
-  radio.speakerStage.speaker.suspensionHz = 115.0f;
+  radio.speakerStage.speaker.suspensionHz = 200.0f;
   radio.speakerStage.speaker.suspensionQ = 1.10f;
-  radio.speakerStage.speaker.suspensionGainDb = 2.5f;
-  radio.speakerStage.speaker.coneBodyHz = 1450.0f;
-  radio.speakerStage.speaker.coneBodyQ = 0.65f;
-  radio.speakerStage.speaker.coneBodyGainDb = 0.8f;
-  radio.speakerStage.speaker.upperBreakupHz = 2850.0f;
-  radio.speakerStage.speaker.upperBreakupQ = 1.0f;
-  radio.speakerStage.speaker.upperBreakupGainDb = 0.7f;
-  radio.speakerStage.speaker.coneDipHz = 2100.0f;
-  radio.speakerStage.speaker.coneDipQ = 0.85f;
-  radio.speakerStage.speaker.coneDipGainDb = -0.3f;
-  radio.speakerStage.speaker.topLpHz = 6000.0f;
+  radio.speakerStage.speaker.suspensionGainDb = 0.0f;
+  radio.speakerStage.speaker.coneBodyHz = 1000.0f;
+  radio.speakerStage.speaker.coneBodyQ = 1.50f;
+  radio.speakerStage.speaker.coneBodyGainDb = 3.5f;
+  radio.speakerStage.speaker.upperBreakupHz = 2800.0f;
+  radio.speakerStage.speaker.upperBreakupQ = 0.90f;
+  radio.speakerStage.speaker.upperBreakupGainDb = 14.4f;
+  radio.speakerStage.speaker.coneDipHz = 4000.0f;
+  radio.speakerStage.speaker.coneDipQ = 2.50f;
+  radio.speakerStage.speaker.coneDipGainDb = -2.7f;
+  radio.speakerStage.speaker.topLpHz = 6500.0f;
   radio.speakerStage.speaker.hfLossLpHz = 4500.0f;
-  radio.speakerStage.speaker.hfLossDepth = 0.12f;
+  radio.speakerStage.speaker.hfLossDepth = 0.0f;
   radio.speakerStage.speaker.filterQ = kRadioBiquadQ;
   radio.speakerStage.speaker.drive = 1.0f;
   radio.speakerStage.speaker.limit = 0.0f;
@@ -607,22 +611,24 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.speakerStage.speaker.asymBias = 0.09f;
 
   radio.cabinet.enabled = true;
-  // The compact open-back C cabinet is only about 6.25 inches deep. The
-  // sub-millisecond rear path follows that dimension; the broad low-mid panel
-  // rise is an explicit inference, not a claimed factory response trace.
-  radio.cabinet.panelHz = 155.0f;
-  radio.cabinet.panelQ = 1.15f;
-  radio.cabinet.panelGainDb = 4.0f;
+  // Smooth approximation to K5's cabinet-minus-large-baffle LF observations.
+  // This is the TOTAL mounting difference, not an isolated dipole function.
+  // Do not add a second cabinet transfer to the resulting in-cabinet curve.
+  radio.cabinet.mountingHpHz = 235.0f;
+  radio.cabinet.mountingHpQ = kRadioBiquadQ;
+  radio.cabinet.panelHz = 0.0f;
+  radio.cabinet.panelQ = 0.0f;
+  radio.cabinet.panelGainDb = 0.0f;
   radio.cabinet.chassisHz = 0.0f;
   radio.cabinet.chassisQ = 0.0f;
   radio.cabinet.chassisGainDb = 0.0f;
   radio.cabinet.cavityDipHz = 0.0f;
   radio.cabinet.cavityDipQ = 0.0f;
   radio.cabinet.cavityDipGainDb = 0.0f;
-  radio.cabinet.grilleLpHz = 8000.0f;
-  radio.cabinet.rearDelayMs = 0.95f;
-  radio.cabinet.rearMix = 0.14f;
-  radio.cabinet.rearHpHz = 90.0f;
+  radio.cabinet.grilleLpHz = 0.0f;
+  radio.cabinet.rearDelayMs = 0.0f;
+  radio.cabinet.rearMix = 0.0f;
+  radio.cabinet.rearHpHz = 0.0f;
   radio.cabinet.rearLpHz = 1000.0f;
   radio.cabinet.clarifier1Hz = 0.0f;
   radio.cabinet.clarifier1Q = 0.0f;
