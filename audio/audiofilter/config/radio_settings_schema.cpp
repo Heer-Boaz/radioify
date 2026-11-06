@@ -55,10 +55,13 @@ bool validateIfStrip(const Radio1938& radio, std::string* error) {
     valid = valid && std::isfinite(v) && v > 0;
   for (float k : {s.interstageCouplingCoeff, s.outputCouplingCoeff})
     valid = valid && std::isfinite(k) && k >= 0 && k < .5f;
+  valid = valid && s.avcStageCount >= 0 && s.avcStageCount <= 3 &&
+          std::isfinite(s.stageBiasVolts) && s.stageBiasVolts < 0 &&
+          std::isfinite(s.stageScreenVolts) && s.stageScreenVolts > 0;
   if (!valid && error)
     *error =
-        "IF requires 1..3 transformers, positive L/R/reference values and coupling in "
-        "[0, .5).";
+        "IF requires 1..3 transformers, positive L/R/reference values, coupling in "
+        "[0, .5), 0..3 AVC stages, a negative stage bias and a positive screen voltage.";
   return valid;
 }
 
@@ -66,25 +69,38 @@ bool validateThermionic(const Radio1938& radio, std::string* error) {
   const auto& d = radio.demod.am;
   const auto& p = radio.powerSupply.config;
   bool valid = true;
-  for (const auto* diode : {&d.audioDiode, &d.avcDiode, &p.rectifier})
+  for (const auto* diode : {&d.audioDiode, &p.rectifier})
     valid = valid && diode->perveance > 0 && diode->thermalVolts > 0;
   for (float v : {d.detectorStorageCapFarads, d.audioChargeResistanceOhms,
-                  d.avcChargeResistanceOhms, d.avcDischargeResistanceOhms,
-                  d.avcFilterCapFarads, p.secondaryResistanceOhms, p.reservoirFarads,
+                  d.avcFilterResistanceOhms, d.avcFilterCapFarads,
+                  p.secondaryResistanceOhms, p.reservoirFarads,
                   p.filterFarads, p.filterResistanceOhms, p.returnResistanceOhms})
     valid = valid && v > 0;
   for (float v :
        {d.audioDischargeResistanceOhms, d.filterResistanceOhms, d.filterCapFarads,
-        p.filterHenries, p.returnHenries, p.auxiliaryHenries, p.returnFarads,
+        d.avcDelayBiasVolts, p.filterHenries, p.returnHenries, p.auxiliaryHenries, p.returnFarads,
         radio.powerSupply.auxiliaryOtherLoadAmps, p.auxiliaryResistanceOhms,
         p.auxiliaryFarads, p.audioFarads, radio.powerSupply.otherLoadAmps,
         radio.powerSupply.screenCurrentRatio, radio.noiseConfig.humHzDefault})
     valid = valid && v >= 0;
+  // A delay needs its own AVC rectifier; simple AVC follows the detector load.
+  valid = valid && (d.avcFromIfEnvelope || d.avcDelayBiasVolts == 0);
   if (!valid && error)
     *error =
         "Thermionic detector/supply requires positive perveance, temperature, "
-        "resistance and reservoir capacitors, and nonnegative other L/C/load/mains "
-        "values.";
+        "resistance and reservoir capacitors, nonnegative other L/C/load/mains "
+        "values, and an AVC delay only with avcFromIfEnvelope.";
+  return valid;
+}
+
+bool validatePower(const Radio1938& radio, std::string* error) {
+  const auto& p = radio.power;
+  const bool valid = p.gridPotentiometerOhms >= 0 && p.gridPotentiometerCapFarads >= 0 &&
+                     p.gridPotentiometerPosition >= 0 && p.gridPotentiometerPosition <= 1;
+  if (!valid && error)
+    *error =
+        "Power grid potentiometer requires nonnegative resistance and capacitance and a "
+        "wiper position in 0..1.";
   return valid;
 }
 
@@ -108,16 +124,17 @@ bool validateFrontEnd(const Radio1938& radio, std::string* error) {
   const float station = radio.tuning.stationFrequencyHz;
   const bool valid =
       std::isfinite(station) && station >= 530000 && station <= 1710000 &&
-      std::isfinite(f.rfGain) && f.rfGain >= 0 && std::isfinite(f.avcGainDepth) &&
-      f.avcGainDepth >= 0 && positive(f.antennaInductanceHenries) &&
+      std::isfinite(f.rfGain) && f.rfGain >= 0 && positive(f.antennaInductanceHenries) &&
       positive(f.antennaCoilQ) && positive(f.antennaShuntLoadOhms) &&
+      positive(-f.rfStageBiasVolts) && positive(f.rfStageScreenVolts) &&
       (!f.secondTunedCircuitEnabled ||
        (positive(f.rfInductanceHenries) && positive(f.rfCoilQ) &&
         positive(f.rfShuntLoadOhms)));
   if (!valid && error)
     *error =
-        "Front end requires a 530-1710 kHz station, nonnegative gain/AVC depth and "
-        "positive inductance, coil Q and shunt load for each tuned circuit.";
+        "Front end requires a 530-1710 kHz station, nonnegative gain, a negative RF "
+        "stage bias, a positive screen voltage and positive inductance, coil Q and "
+        "shunt load for each tuned circuit.";
   return valid;
 }
 
@@ -127,6 +144,7 @@ bool validateReceiverInput(const Radio1938& radio, std::string* error) {
   if (!(r.volumeControlResistanceOhms > 0) || !(r.gridLeakResistanceOhms > 0) ||
       !(r.tubePlateSupplyVolts > 0) || !(r.tubeLoadResistanceOhms > 0) ||
       !(r.tubeMu > 0) || r.tubeDcFeedResistanceOhms < 0 || r.couplingCapFarads < 0 ||
+      !(r.tubePlateShuntCapFarads >= 0) ||
       r.volumeControlLoudnessResistanceOhms < 0 || r.volumeControlLoudnessCapFarads < 0 ||
       r.volumeControlPosition < 0 || r.volumeControlPosition > 1 ||
       r.volumeControlTapResistanceOhms < 0 ||
@@ -213,8 +231,10 @@ constexpr std::array kTuningSettings{
 
 constexpr std::array kFrontEndSettings{
     setting("rfGain", [](Radio1938& radio) -> auto& { return radio.frontEnd.rfGain; }),
-    setting("avcGainDepth",
-            [](Radio1938& radio) -> auto& { return radio.frontEnd.avcGainDepth; }),
+    setting("rfStageBiasVolts",
+            [](Radio1938& radio) -> auto& { return radio.frontEnd.rfStageBiasVolts; }),
+    setting("rfStageScreenVolts",
+            [](Radio1938& radio) -> auto& { return radio.frontEnd.rfStageScreenVolts; }),
     setting("antennaInductanceHenries",
             [](Radio1938& radio) -> auto& {
               return radio.frontEnd.antennaInductanceHenries;
@@ -289,8 +309,12 @@ constexpr std::array kIfStripSettings{
             [](Radio1938& radio) -> auto& { return radio.ifStrip.ifMinBwHz; }),
     setting("stageGain",
             [](Radio1938& radio) -> auto& { return radio.ifStrip.stageGain; }),
-    setting("avcGainDepth",
-            [](Radio1938& radio) -> auto& { return radio.ifStrip.avcGainDepth; }),
+    setting("avcStageCount",
+            [](Radio1938& radio) -> auto& { return radio.ifStrip.avcStageCount; }),
+    setting("stageBiasVolts",
+            [](Radio1938& radio) -> auto& { return radio.ifStrip.stageBiasVolts; }),
+    setting("stageScreenVolts",
+            [](Radio1938& radio) -> auto& { return radio.ifStrip.stageScreenVolts; }),
     setting("ifCenterHz",
             [](Radio1938& radio) -> auto& { return radio.ifStrip.ifCenterHz; }),
     setting(
@@ -327,15 +351,8 @@ constexpr std::array kDemodSettings{
             [](Radio1938& radio) -> auto& {
               return radio.demod.am.audioDiode.contactPotentialVolts;
             }),
-    setting("avcDiodePerveance",
-            [](Radio1938& radio) -> auto& { return radio.demod.am.avcDiode.perveance; }),
-    setting(
-        "avcDiodeThermalVolts",
-        [](Radio1938& radio) -> auto& { return radio.demod.am.avcDiode.thermalVolts; }),
-    setting("avcDiodeContactPotentialVolts",
-            [](Radio1938& radio) -> auto& {
-              return radio.demod.am.avcDiode.contactPotentialVolts;
-            }),
+    setting("avcFromIfEnvelope",
+            [](Radio1938& radio) -> auto& { return radio.demod.am.avcFromIfEnvelope; }),
     setting("avcDelayBiasVolts",
             [](Radio1938& radio) -> auto& { return radio.demod.am.avcDelayBiasVolts; }),
     setting("detectorStorageCapFarads",
@@ -351,12 +368,8 @@ constexpr std::array kDemodSettings{
               return radio.demod.am.audioDischargeResistanceOhms;
             }),
     setting(
-        "avcChargeResistanceOhms",
-        [](Radio1938& radio) -> auto& { return radio.demod.am.avcChargeResistanceOhms; }),
-    setting("avcDischargeResistanceOhms",
-            [](Radio1938& radio) -> auto& {
-              return radio.demod.am.avcDischargeResistanceOhms;
-            }),
+        "avcFilterResistanceOhms",
+        [](Radio1938& radio) -> auto& { return radio.demod.am.avcFilterResistanceOhms; }),
     setting("avcFilterCapFarads",
             [](Radio1938& radio) -> auto& { return radio.demod.am.avcFilterCapFarads; }),
     setting("controlVoltageRef",
@@ -446,6 +459,10 @@ constexpr std::array kReceiverCircuitSettings{
     setting("tubeLoadResistanceOhms",
             [](Radio1938& radio) -> auto& {
               return radio.receiverCircuit.tubeLoadResistanceOhms;
+            }),
+    setting("tubePlateShuntCapFarads",
+            [](Radio1938& radio) -> auto& {
+              return radio.receiverCircuit.tubePlateShuntCapFarads;
             }),
     setting("tubeplatresistanceohms",
             [](Radio1938& radio) -> auto& {
@@ -549,6 +566,14 @@ constexpr std::array kPowerSettings{
             [](Radio1938& radio) -> auto& { return radio.power.gridCouplingCapFarads; }),
     setting("gridLeakResistanceOhms",
             [](Radio1938& radio) -> auto& { return radio.power.gridLeakResistanceOhms; }),
+    setting("gridPotentiometerOhms",
+            [](Radio1938& radio) -> auto& { return radio.power.gridPotentiometerOhms; }),
+    setting("gridPotentiometerPosition",
+            [](Radio1938& radio) -> auto& { return radio.power.gridPotentiometerPosition; }),
+    setting("gridPotentiometerCapFarads",
+            [](Radio1938& radio) -> auto& {
+              return radio.power.gridPotentiometerCapFarads;
+            }),
     setting(
         "driverSourceResistanceOhms",
         [](Radio1938& radio) -> auto& { return radio.power.driverSourceResistanceOhms; }),
@@ -1059,7 +1084,7 @@ constexpr std::array kSections{
     section("demod", kDemodSettings),
     section("receivercircuit", kReceiverCircuitSettings, &validateReceiverInput),
     section("tone", kToneSettings),
-    section("power", kPowerSettings),
+    section("power", kPowerSettings, &validatePower),
     section("powersupply", kPowerSupplySettings, &validateThermionic),
     section("noise", kNoiseSettings),
     section("speaker", kSpeakerSettings, &validateSpeaker),

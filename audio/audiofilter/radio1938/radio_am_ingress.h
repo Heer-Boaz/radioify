@@ -6,10 +6,16 @@
 #include <cstdint>
 
 struct RadioAmReceptionSample {
-  // Complex multiplier for the complete desired AM waveform, followed by an
-  // optional already-real RF voltage from another carrier.
+  // Complex gain of the direct (groundwave) path of the desired AM waveform.
   float desiredCarrierI = 1.0f;
   float desiredCarrierQ = 0.0f;
+  // Complex gain of a second, later-arriving copy of the same waveform
+  // (skywave). Its RF phase is part of the gain; the delay applies to the
+  // modulation, so sidebands and carrier fade differently.
+  float skywaveI = 0.0f;
+  float skywaveQ = 0.0f;
+  float skywaveDelaySamples = 0.0f;
+  // Optional already-real RF voltage from another carrier.
   float additiveRf = 0.0f;
 };
 

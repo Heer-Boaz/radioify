@@ -58,6 +58,7 @@ void RadioReceiverCircuitNode::reset(Radio1938& radio) {
   receiver.couplingCapVoltage = 0.0f;
   receiver.couplingCapCurrent = 0.0f;
   receiver.volumeControlTapCapCurrent = 0.0f;
+  receiver.volumeControlTapCapVoltage = 0.0f;
   receiver.gridVoltage = 0.0f;
   receiver.volumeControlTapVoltage = 0.0f;
   receiver.warmStartPending = true;

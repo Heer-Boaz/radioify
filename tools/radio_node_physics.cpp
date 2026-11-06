@@ -30,7 +30,7 @@ constexpr float kReceiverIfCenterHz = 470000.0f;
 constexpr float kPhilcoUndistortedOutputWatts = 15.0f;
 constexpr float kPhilcoVolumeControlOhms = 2000000.0f;
 constexpr float kPhilcoVolumeTapOhms = 1000000.0f;
-constexpr float kPhilcoLoudnessResistanceOhms = 490000.0f;
+constexpr float kPhilcoLoudnessResistanceOhms = 70000.0f;
 constexpr float kPhilcoFirstAudioCouplingCapFarads = 0.01e-6f;
 constexpr float kTypicalOutputWatts = 2.0f;
 constexpr float kTypicalVolumeControlOhms = 500000.0f;
@@ -1102,8 +1102,6 @@ std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
   {
     Radio1938 radio = makeNodeFixture(config, 0.4f, {PassId::InterferenceDerived});
     radio.controlBus.controlVoltage = 0.625f;
-    radio.frontEnd.avcGainDepth = 0.40f;
-    radio.ifStrip.avcGainDepth = 0.60f;
     radio.globals.ifNoiseMix = 0.35f;
     radio.globals.postNoiseMix = 0.20f;
     RadioSampleContext ctx{};
@@ -1234,9 +1232,11 @@ std::vector<TestRow> runRfPhysics(const HarnessConfig& config) {
     Radio1938 radioAvcHigh = makeNodeFixture(config, 0.0f, {PassId::FrontEnd});
     double lowAvc = runFrontEndRms(radioAvcLow, radioAvcLow.tuning.sourceCarrierHz, 0.0f);
     double highAvc = runFrontEndRms(radioAvcHigh, radioAvcHigh.tuning.sourceCarrierHz, 1.25f);
-    addPredicate(rows, "FrontEnd", "avc_reduces_rf_gain",
-                 highAvc < lowAvc, highAvc / std::max(lowAvc, 1e-12),
-                 "high AVC / low AVC RMS");
+    // Only a set with an RF amplifier has an AVC-controlled front end.
+    addPredicate(rows, "FrontEnd", "avc_controls_only_an_rf_amplifier",
+                 radio.frontEnd.secondTunedCircuitEnabled ? highAvc < 0.5 * lowAvc
+                                                          : highAvc == lowAvc,
+                 highAvc / std::max(lowAvc, 1e-12), "high AVC / low AVC RMS");
 
     Radio1938 muted = makeNodeFixture(config, 0.0f, {PassId::FrontEnd});
     muted.frontEnd.rfGain = 0.0f;
@@ -1494,15 +1494,17 @@ std::vector<TestRow> runDetectorPhysics(const HarnessConfig& config) {
     Radio1938 strong = makeNodeFixture(config, 0.0f, {PassId::Demod});
     RadioAMDetectorNode::reset(weak);
     RadioAMDetectorNode::reset(strong);
+    // A delayed AVC stays at zero below its delay; drive past it.
+    const float strongEnv = 0.90f + strong.demod.am.avcDelayBiasVolts;
     for (uint32_t i = 0; i < kNodeTestFrames; ++i) {
       RadioSampleContext weakCtx{};
       RadioSampleContext strongCtx{};
       weakCtx.signal.setComplexEnvelope(0.04f, 0.0f);
-      strongCtx.signal.setComplexEnvelope(0.90f, 0.0f);
+      strongCtx.signal.setComplexEnvelope(strongEnv, 0.0f);
       weakCtx.signal.detectorInputI = 0.04f;
-      strongCtx.signal.detectorInputI = 0.90f;
+      strongCtx.signal.detectorInputI = strongEnv;
       RadioAMDetectorNode::run(weak, 0.04f, weakCtx);
-      RadioAMDetectorNode::run(strong, 0.90f, strongCtx);
+      RadioAMDetectorNode::run(strong, strongEnv, strongCtx);
     }
     addPredicate(rows, "AMDetector", "stronger_input_charges_more_avc",
                  strong.demod.am.avcEnv > weak.demod.am.avcEnv,
@@ -1549,6 +1551,9 @@ std::vector<TestRow> runDetectorPhysics(const HarnessConfig& config) {
   {
     Radio1938 lowThreshold = makeNodeFixture(config, 0.0f, {PassId::Demod});
     Radio1938 highThreshold = makeNodeFixture(config, 0.0f, {PassId::Demod});
+    // A delay bias belongs to a separate AVC rectifier on the IF envelope.
+    lowThreshold.demod.am.avcFromIfEnvelope = true;
+    highThreshold.demod.am.avcFromIfEnvelope = true;
     lowThreshold.demod.am.avcDelayBiasVolts = 0;
     highThreshold.demod.am.avcDelayBiasVolts = .72f;
     RadioAMDetectorNode::reset(lowThreshold);
@@ -1563,10 +1568,51 @@ std::vector<TestRow> runDetectorPhysics(const HarnessConfig& config) {
       RadioAMDetectorNode::run(lowThreshold, 0.90f, lowCtx);
       RadioAMDetectorNode::run(highThreshold, 0.90f, highCtx);
     }
-    addPredicate(rows, "AMDetector", "avc_diode_params_shift_charge_threshold",
+    addPredicate(rows, "AMDetector", "avc_delay_bias_shifts_control_threshold",
                  lowThreshold.demod.am.avcEnv > highThreshold.demod.am.avcEnv,
                  lowThreshold.demod.am.avcEnv - highThreshold.demod.am.avcEnv,
                  "low-threshold minus high-threshold AVC");
+  }
+
+  {
+    // Simple AVC hangs its filter resistor on the detector load: an AC load
+    // the DC load does not see. Deep modulation then loses its troughs. With
+    // a separate AVC rectifier the filter resistor must not touch the node.
+    auto recoveredModulation = [&](float avcFilterOhms) {
+      Radio1938 radio = makeNodeFixture(config, 0.0f, {PassId::Demod});
+      radio.demod.am.avcFilterResistanceOhms = avcFilterOhms;
+      RadioAMDetectorNode::reset(radio);
+      const uint32_t frames = static_cast<uint32_t>(0.4f * radio.sampleRate);
+      const uint32_t settle = frames / 2;
+      float lo = 1e9f, hi = -1e9f;
+      for (uint32_t i = 0; i < frames; ++i) {
+        const float t = static_cast<float>(i) / radio.sampleRate;
+        const float env = 0.9f * (1.0f + 0.95f * std::sin(kRadioTwoPi * 200.0f * t));
+        RadioSampleContext ctx{};
+        ctx.signal.setComplexEnvelope(env, 0.0f);
+        ctx.signal.detectorInputI = env;
+        RadioAMDetectorNode::run(radio, env, ctx);
+        if (i >= settle) {
+          lo = std::min(lo, radio.demod.am.detectorNode);
+          hi = std::max(hi, radio.demod.am.detectorNode);
+        }
+      }
+      return std::make_pair(radio.demod.am.avcFromIfEnvelope,
+                            (hi - lo) / std::max(hi + lo, 1e-9f));
+    };
+    Radio1938 nominal = makeNodeFixture(config, 0.0f, {PassId::Demod});
+    const auto loaded = recoveredModulation(nominal.demod.am.avcFilterResistanceOhms);
+    const auto unloaded = recoveredModulation(1e12f);
+    if (loaded.first) {
+      addRange(rows, "AMDetector", "separate_avc_rectifier_leaves_detector_load",
+               std::abs(loaded.second - unloaded.second), 0.0, 1e-6,
+               "recovered modulation change from AVC filter R");
+    } else {
+      addPredicate(rows, "AMDetector", "simple_avc_ac_load_clips_deep_troughs",
+                   loaded.second < unloaded.second - 0.02f,
+                   unloaded.second - loaded.second,
+                   "recovered 95% modulation lost to the AVC AC load");
+    }
   }
 
   {
@@ -1581,7 +1627,7 @@ std::vector<TestRow> runDetectorPhysics(const HarnessConfig& config) {
     double sidebandPeriodUs =
         1e6 / std::max<double>(radio.tuning.tunedBw, 1.0);
     double avcTauMs =
-        1e3 * std::max<double>(radio.demod.am.avcDischargeResistanceOhms, 1e-6) *
+        1e3 * std::max<double>(radio.demod.am.avcFilterResistanceOhms, 1e-6) *
         std::max<double>(radio.demod.am.avcFilterCapFarads, 1e-12);
     addPredicate(rows, "DetectorAudio", "audio_env_nonnegative",
                  metrics.minValue >= -1e-7, metrics.minValue,
@@ -1649,11 +1695,10 @@ std::vector<TestRow> runDetectorPhysics(const HarnessConfig& config) {
                radio.receiverCircuit.volumeControlTapResistanceOhms,
                0.95f * kPhilcoVolumeTapOhms, 1.05f * kPhilcoVolumeTapOhms,
                "Service Bulletin 258");
-      addRange(rows, "ReceiverInputNetwork", "philco_loudness_resistor_490k",
+      addRange(rows, "ReceiverInputNetwork", "philco_loudness_resistor_70k",
                radio.receiverCircuit.volumeControlLoudnessResistanceOhms,
-               kPhilcoLoudnessResistanceOhms - 30000.0f,
-               kPhilcoLoudnessResistanceOhms + 30000.0f,
-               "Service Bulletin 258");
+               0.95f * kPhilcoLoudnessResistanceOhms,
+               1.05f * kPhilcoLoudnessResistanceOhms, "Service Bulletin 258, 103");
     } else {
       addRange(rows, "ReceiverInputNetwork", "typical_volume_total_500k",
                radio.receiverCircuit.volumeControlResistanceOhms,

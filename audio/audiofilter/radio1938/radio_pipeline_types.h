@@ -126,6 +126,10 @@ struct RadioFrontEndNode {
 // front end is bypassed and real RF reaches the mixer directly.
 std::array<float, 2> convertRealRfToSourceEnvelope(Radio1938& radio, float rf);
 
+// Negative AVC line voltage magnitude, in volts, applied to every controlled
+// grid return. The control bus is normalized to the detector's reference.
+float radioAvcLineVolts(const Radio1938& radio);
+
 struct RadioMixerNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);

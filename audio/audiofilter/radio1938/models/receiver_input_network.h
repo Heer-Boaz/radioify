@@ -16,7 +16,8 @@ struct ReceiverInputNetworkStep {
   double tapHistory = 0;
   double gridConductance = 0;
   double gridHistoryVoltage = 0;
-  double tapCapConductance = 0;
+  double tapConductance = 0;
+  double tapHistoryVoltage = 0;
 };
 
 ReceiverInputNetworkStep receiverInputNetworkStep(

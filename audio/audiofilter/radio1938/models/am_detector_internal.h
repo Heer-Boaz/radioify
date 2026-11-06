@@ -16,14 +16,14 @@ inline uint64_t monotonicNowNs() {
                                    .count());
 }
 
-struct DetectorSolveResult {
-  float detectorNode = 0.0f;
-  float avcNode = 0.0f;
-};
-
+// Affine load on the detector output node: I = conductance * V + historyCurrent.
+// avcConductance is the part of conductance that belongs to a simple AVC
+// filter fed from this node; its capacitor blocks DC, so it is excluded when
+// solving the DC working point.
 struct DetectorLoad {
   float conductance = 0;
   float historyCurrent = 0;
+  float avcConductance = 0;
 };
 
 struct EnvelopeTrajectory {
@@ -35,14 +35,10 @@ struct EnvelopeTrajectory {
   float q2 = 0.0f;
 };
 
-void primeDetectorWarmStart(AMDetector& detector, float carrierPeak, DetectorLoad load);
+void primeDetectorWarmStart(AMDetector& detector, float carrierPeak, DetectorLoad& load);
 
 float stepDetectorAudioNode(AMDetector& detector, float dt, float sourceVolts,
                             DetectorLoad load);
-
-DetectorSolveResult stepDetectorStorageAndAvc(AMDetector& detector, float dt,
-                                              float detectorDriveVolts, float avcDrive,
-                                              DetectorLoad load);
 
 int detectorWaveformSubsteps(const AMDetector& detector, float sampleRate,
                              float carrierHz);

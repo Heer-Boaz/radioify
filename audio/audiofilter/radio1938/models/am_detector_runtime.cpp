@@ -21,8 +21,20 @@ am_detector_internal::DetectorLoad detectorLoad(const Radio1938& radio) {
       receiver.warmStartPending
           ? receiverInputNetworkDc(receiver)
           : receiverInputNetworkStep(receiver, 1 / std::max<double>(radio.sampleRate, 1));
-  return {dischargeG + static_cast<float>(port.inputConductance),
-          static_cast<float>(port.historyCurrent)};
+  am_detector_internal::DetectorLoad load{
+      dischargeG + static_cast<float>(port.inputConductance),
+      static_cast<float>(port.historyCurrent), 0};
+  // Simple AVC: the filter resistor hangs on the detector load, so at audio
+  // frequencies it is in parallel with it (its capacitor is an AC short)
+  // while drawing no DC. That lowers the AC/DC load ratio and clips the
+  // troughs of deep modulation. A separate AVC rectifier does not load here.
+  const auto& am = radio.demod.am;
+  if (!am.avcFromIfEnvelope) {
+    load.avcConductance = 1.0f / am.avcFilterResistanceOhms;
+    load.conductance += load.avcConductance;
+    load.historyCurrent -= load.avcConductance * am.avcEnv;
+  }
+  return load;
 }
 
 float detectorWaveformCarrierHz(const AMDetector& detector, const Radio1938& radio) {
@@ -36,6 +48,9 @@ void AMDetector::init(float newFs, float newBw, float newTuneHz) {
   fs = newFs;
   bwHz = newBw;
   tuneOffsetHz = newTuneHz;
+  const double avcTau = double(avcFilterResistanceOhms) * avcFilterCapFarads;
+  avcTick = avcTau > 0 ? static_cast<float>(1 - std::exp(-1 / (std::max(fs, 1.0f) * avcTau)))
+                       : 1.0f;
   setBandwidth(newBw, newTuneHz);
   reset();
 }
@@ -90,7 +105,6 @@ void AMDetector::setSenseWindow(float lowHz, float highHz) {
 
 void AMDetector::reset() {
   audioRect = 0.0f;
-  avcRect = 0.0f;
   detectorStorageNode = 0.0f;
   filteredStorageNode = 0.0f;
   detectorNode = 0.0f;
@@ -167,6 +181,8 @@ float AMDetector::run(float signalI, float signalQ, Radio1938& radio) {
   if (metricsEnabled) {
     detectorIslandTimeNs += am_detector_internal::monotonicNowNs() - islandStartNs;
   }
+  const float avcSource = avcFromIfEnvelope ? std::sqrt(ifI * ifI + ifQ * ifQ) : detectorNode;
+  avcEnv += avcTick * (std::max(avcSource - avcDelayBiasVolts, 0.0f) - avcEnv);
   assert(std::isfinite(detectorNode) && std::isfinite(avcEnv));
   if (radio.calibration.enabled) {
     radio.calibration.detectorNodeVolts.accumulate(detectorNode);

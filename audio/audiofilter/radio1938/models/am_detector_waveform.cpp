@@ -49,7 +49,6 @@ float sampleIfWave(const EnvelopeTrajectory& trajectory, float t, float c, float
 
 struct DetectorIslandAccum {
   double audioRectArea = 0.0f;
-  double avcRectArea = 0.0f;
   double detectorNodeArea = 0.0f;
   int solveSteps = 0;
   int intervalCount = 0;
@@ -60,13 +59,9 @@ void accumulateDetectorInterval(AMDetector& detector, float dt, float intervalWi
                                 float ifWave, DetectorLoad load,
                                 DetectorIslandAccum& accum) {
   float prevNode = detector.filteredStorageNode;
-  DetectorSolveResult solve =
-      stepDetectorStorageAndAvc(detector, dt, ifWave, ifWave, load);
-  detector.filteredStorageNode = solve.detectorNode;
-  detector.avcEnv = solve.avcNode;
-  accum.audioRectArea += solve.detectorNode * intervalWidth;
-  accum.avcRectArea += solve.avcNode * intervalWidth;
-  accum.detectorNodeArea += 0.5f * (prevNode + solve.detectorNode) * intervalWidth;
+  const float node = stepDetectorAudioNode(detector, dt, ifWave, load);
+  accum.audioRectArea += node * intervalWidth;
+  accum.detectorNodeArea += 0.5f * (prevNode + node) * intervalWidth;
   accum.solveSteps += 1;
 }
 
@@ -82,13 +77,9 @@ void runEnvelopeDetectorPath(AMDetector& detector, float ifMagnitude, DetectorLo
   detector.lastWaveformSubsteps = 1;
   float dt = 1.0f / std::max(detector.fs, 1.0f);
   if (detector.warmStartPending) primeDetectorWarmStart(detector, ifMagnitude, load);
-  DetectorSolveResult solve =
-      stepDetectorStorageAndAvc(detector, dt, ifMagnitude, ifMagnitude, load);
-  detector.filteredStorageNode = solve.detectorNode;
-  detector.detectorNode = solve.detectorNode;
-  detector.avcEnv = solve.avcNode;
-  detector.avcRect = solve.avcNode;
-  detector.audioRect = solve.detectorNode;
+  const float node = stepDetectorAudioNode(detector, dt, ifMagnitude, load);
+  detector.detectorNode = node;
+  detector.audioRect = node;
 }
 
 void runWaveformDetectorIsland(AMDetector& detector, float ifI, float ifQ,
@@ -143,11 +134,8 @@ void runWaveformDetectorIsland(AMDetector& detector, float ifI, float ifQ,
     float nextS = s * cStep + c * sStep;
     float ifWaveMid = sampleIfWave(trajectory, tMid, cMid, sMid);
     float ifWaveEnd = sampleIfWave(trajectory, t1, nextC, nextS);
-    float audioForwardThreshold =
+    float forwardThreshold =
         detector.detectorStorageNode - 4 * detector.audioDiode.thermalVolts;
-    float avcForwardThreshold =
-        detector.avcEnv + detector.avcDelayBiasVolts - 4 * detector.avcDiode.thermalVolts;
-    float forwardThreshold = std::min(audioForwardThreshold, avcForwardThreshold);
     float ifWavePeak = std::max(ifWaveStart, std::max(ifWaveMid, ifWaveEnd));
     bool shouldSplit = ifWavePeak > forwardThreshold;
 
@@ -180,7 +168,6 @@ void runWaveformDetectorIsland(AMDetector& detector, float ifI, float ifQ,
   }
 
   detector.audioRect = static_cast<float>(accum.audioRectArea);
-  detector.avcRect = static_cast<float>(accum.avcRectArea);
   detector.detectorNode = static_cast<float>(accum.detectorNodeArea);
   detector.lastWaveformSubsteps = accum.solveSteps;
   detector.waveformIntervalCount += static_cast<uint64_t>(accum.intervalCount);

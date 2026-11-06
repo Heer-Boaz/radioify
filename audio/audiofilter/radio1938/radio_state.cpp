@@ -49,7 +49,6 @@ void Radio1938::warmInputCarrier(float receivedCarrierRmsVolts,
 }
 
 void Radio1938::resetAfterCarrierWarmup() {
-  demod.am.avcRect = 0.0f;
   demod.am.avcEnv = 0.0f;
   demod.am.afcError = 0.0f;
   controlSense.reset();

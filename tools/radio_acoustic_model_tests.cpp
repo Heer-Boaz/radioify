@@ -18,6 +18,7 @@
 #include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
 #include "audiofilter/radio1938/radio_pipeline_types.h"
 #include "radio.h"
+#include "receiver_input_reference.h"
 
 namespace {
 constexpr double kPi = 3.14159265358979323846;
@@ -65,37 +66,34 @@ ToneResult speakerTone(SpeakerSim speaker, float fs, float frequency, float volt
           std::sqrt(voltageSq / currentSq), speaker.coilTemperatureRiseKelvin};
 }
 
-struct ReceiverInputReference {
-  std::complex<double> grid, inputCurrent;
-};
-
+// Grid volts per detector volt using the exact z-domain image of a
+// trapezoidal capacitor, so the discrete solver can be compared directly.
 ReceiverInputReference receiverInputReference(
     const Radio1938::ReceiverCircuitNodeState& r, double fs, double hz) {
-  // Independent series/parallel impedances, with the exact z-domain impedance
-  // of a trapezoidal capacitor. No conductance-matrix stamps or tiny wires.
   using C = std::complex<double>;
   const C z = std::polar(1.0, -2 * kPi * hz / fs);
-  const C s = 2 * fs * (C{1, 0} - z) / (C{1, 0} + z);
-  const double total = r.volumeControlResistanceOhms;
-  const double w = r.volumeControlPosition * total;
-  const double t = r.volumeControlTapResistanceOhms;
-  const double blend = t > 0 ? std::clamp((t - w) / t, 0.0, 1.0) : 0;
-  const C yw = C{1, 0} / (double(r.gridLeakResistanceOhms) +
-                          C{1, 0} / (s * double(r.couplingCapFarads)));
-  const C yt = blend * (s * double(r.volumeControlLoudnessCapFarads) +
-                        (r.volumeControlLoudnessResistanceOhms > 0
-                             ? 1.0 / r.volumeControlLoudnessResistanceOhms
-                             : 0));
-  const bool wiperAbove = w >= t;
-  const double bottom = std::min(w, t), middle = std::abs(w - t);
-  const C bottomZ = bottom / (C{1, 0} + bottom * (wiperAbove ? yt : yw));
-  const C lowerZ = middle + bottomZ;
-  const C upperZ = lowerZ / (C{1, 0} + lowerZ * (wiperAbove ? yw : yt));
-  const C current = C{1, 0} / (total - std::max(w, t) + upperZ);
-  const C upperV = current * upperZ;
-  const C lowerV = std::abs(lowerZ) > 0 ? upperV * bottomZ / lowerZ : C{};
-  return {(wiperAbove ? upperV : lowerV) * yw * double(r.gridLeakResistanceOhms),
-          current};
+  return receiverInputReference(r, 2 * fs * (C{1, 0} - z) / (C{1, 0} + z));
+}
+
+// The reference must be continuous through the tap (wiper and tap coincide
+// at exactly 0.5 on the Philco control).
+void testReferenceContinuousAtTap() {
+  Radio1938 radio;
+  radio.applyReceiverProfile(RadioReceiverProfile::Philco37116);
+  auto& r = radio.receiverCircuit;
+  for (double hz : {100.0, 1000.0, 4000.0}) {
+    const std::complex<double> s{0, 2 * kPi * hz};
+    r.volumeControlPosition = .5f;
+    const double at = std::abs(receiverInputReference(r, s).grid);
+    for (float position : {.4999f, .5001f}) {
+      r.volumeControlPosition = position;
+      const double near = std::abs(receiverInputReference(r, s).grid);
+      // The response moves about 0.03 dB per 0.0001 here; a lost term would
+      // jump by tens of dB.
+      check(std::isfinite(at) && std::abs(20 * std::log10(near / at)) < .1,
+            "volume-control reference is discontinuous at the tap");
+    }
+  }
 }
 
 void testReceiverInput(bool validate) {
@@ -727,6 +725,7 @@ int main(int argc, char** argv) {
     testRoom(fs);
   }
   testThermalMemory();
+  testReferenceContinuousAtTap();
   testReceiverInput(true);
   testDetectorInputCoupling();
   testDetectorMultirateCoupling(true);

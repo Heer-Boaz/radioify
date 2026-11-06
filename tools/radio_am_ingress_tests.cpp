@@ -203,6 +203,11 @@ void expectReceptionProfileContract() {
       radioReceptionProfileName(parsed) != "strong-local") {
     fail("strong-local reception profile does not round-trip.");
   }
+  if (!parseRadioReceptionProfile("night-skywave", parsed) ||
+      parsed != RadioReceptionProfile::NightSkywave ||
+      radioReceptionProfileName(parsed) != "night-skywave") {
+    fail("night-skywave reception profile does not round-trip.");
+  }
   if (parseRadioReceptionProfile("weak", parsed) ||
       parseRadioReceptionProfile("Everyday1938", parsed)) {
     fail("Reception profile parser accepted an undocumented name.");
@@ -222,6 +227,61 @@ void expectReceptionProfileContract() {
       RadioReceptionProfile::StrongLocal);
   if (strongLocal.enabled) {
     fail("strong-local does not preserve ideal reception.");
+  }
+
+  // After dark at the fringe of the groundwave area the two paths are
+  // comparable, with the same fade rate and a one-hop path delay.
+  const RadioReceptionConfig night = radioReceptionConfigForProfile(
+      RadioReceptionProfile::NightSkywave);
+  if (!night.enabled || std::fabs(night.skywaveGain / night.groundwaveGain - 1) > .25f ||
+      night.skywaveDopplerMinHz != everyday.skywaveDopplerMinHz ||
+      night.skywaveDelayMinMs < 0.1f || night.skywaveDelayMaxMs > 1.0f ||
+      everyday.skywaveDelayMinMs != night.skywaveDelayMinMs) {
+    fail("night-skywave is not a comparable-path, one-hop profile.");
+  }
+}
+
+// Ingress-level check of selective fading: with the skywave carrier in
+// antiphase and equal strength the carrier vanishes, while sidebands whose
+// path phase 2*pi*f*delay is an odd multiple of pi add instead.
+void expectDelayedSkywaveFadesSelectively() {
+  constexpr float kDelaySamples = 12.0f;  // 0.25 ms
+  constexpr float kToneHz = 2000.0f;      // 2*pi*f*delay = pi
+  constexpr uint32_t kFrames = 48000u;
+  Radio1938 radio = makeIngressOnlyRadio();
+  std::vector<float> program(kFrames), output(kFrames);
+  std::vector<RadioAmReceptionSample> reception(kFrames);
+  for (uint32_t i = 0; i < kFrames; ++i) {
+    program[i] = std::sin(kRadioTwoPi * kToneHz * i / kSampleRate);
+    reception[i].desiredCarrierI = 0.5f;
+    reception[i].desiredCarrierQ = 0.0f;
+    reception[i].skywaveI = -0.5f;
+    reception[i].skywaveQ = 0.0f;
+    reception[i].skywaveDelaySamples = kDelaySamples;
+  }
+  const float m = 0.5f;
+  radio.processAmAudio(program.data(), output.data(), kFrames, kCarrierRmsVolts, m,
+                       reception.data());
+  const float carrierHz = radio.resolvedInputCarrierHz();
+  const auto amplitude = [&](float hz) {
+    double re = 0, im = 0;
+    for (uint32_t i = kFrames / 2; i < kFrames; ++i) {
+      re += output[i] * std::cos(kRadioTwoPi * hz * i / kSampleRate);
+      im += output[i] * std::sin(kRadioTwoPi * hz * i / kSampleRate);
+    }
+    return 2 * std::hypot(re, im) / (kFrames / 2);
+  };
+  const double peak = std::sqrt(2.0) * kCarrierRmsVolts;
+  const double carrier = amplitude(carrierHz);
+  const double upper = amplitude(carrierHz + kToneHz);
+  const double lower = amplitude(carrierHz - kToneHz);
+  // Each sideband of the direct wave is m/2 * peak * 0.5; the skywave adds an
+  // equal one in phase.
+  const double expectedSideband = 0.5 * m * peak;
+  if (carrier > 1e-3 * peak || std::fabs(upper / expectedSideband - 1) > .02 ||
+      std::fabs(lower / expectedSideband - 1) > .02) {
+    fail("Delayed skywave does not fade selectively; carrier=" + std::to_string(carrier) +
+         " upper=" + std::to_string(upper) + " lower=" + std::to_string(lower));
   }
 }
 
@@ -310,8 +370,9 @@ void expectEverydayReceptionProducesSlowCoherentFading() {
   constexpr uint32_t kFrames = 2u * 48000u;
   for (uint32_t i = 0; i < kFrames; ++i) {
     RadioPreviewReceptionNode::run(preview, 0.0f, ctx);
-    const float magnitude = std::hypot(reception.desiredCarrierI,
-                                       reception.desiredCarrierQ);
+    // The unmodulated carrier sees both paths; delay only affects sidebands.
+    const float magnitude = std::hypot(reception.desiredCarrierI + reception.skywaveI,
+                                       reception.desiredCarrierQ + reception.skywaveQ);
     minimumMagnitude = std::min(minimumMagnitude, magnitude);
     maximumMagnitude = std::max(maximumMagnitude, magnitude);
     if (reception.additiveRf != 0.0f) {
@@ -729,6 +790,10 @@ void expectPreviewSourceAndReceptionAreBlockInvariant() {
                   splitBlocks.reception[i].desiredCarrierQ));
     maxReceptionDiff = std::max(
         maxReceptionDiff,
+        std::fabs(oneBlock.reception[i].skywaveI - splitBlocks.reception[i].skywaveI) +
+            std::fabs(oneBlock.reception[i].skywaveQ - splitBlocks.reception[i].skywaveQ));
+    maxReceptionDiff = std::max(
+        maxReceptionDiff,
         std::fabs(oneBlock.reception[i].additiveRf -
                   splitBlocks.reception[i].additiveRf));
   }
@@ -788,6 +853,7 @@ int main() {
   expectReceptionSidecarShapesRf();
   expectStrongLocalReceptionIsTransparent();
   expectEverydayReceptionProducesSlowCoherentFading();
+  expectDelayedSkywaveFadesSelectively();
   expectIntermittentCarrierIsRareRfInsteadOfPermanentWhistle();
   expectPreviewCapsDetectorWork();
   expectPreviewUsesRequestedAudioBandwidthOnce();

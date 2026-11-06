@@ -39,18 +39,24 @@ float solveStorage(const ThermionicDiode& diode, double dt, double source, doubl
 }
 }  // namespace
 
-void primeDetectorWarmStart(AMDetector& detector, float carrierPeak, DetectorLoad load) {
+void primeDetectorWarmStart(AMDetector& detector, float carrierPeak, DetectorLoad& load) {
+  // A charged AVC capacitor draws no DC: solve the working point on the DC
+  // load, then let the AVC branch start from that equilibrium.
+  const DetectorLoad dc{load.conductance - load.avcConductance,
+                        load.historyCurrent + load.avcConductance * detector.avcEnv, 0};
   detector.filteredStorageNode = static_cast<float>(
       equilibrium(detector.audioDiode, carrierPeak, 0, detector.audioChargeResistanceOhms,
-                  load, detector.filterResistanceOhms));
+                  dc, detector.filterResistanceOhms));
   detector.detectorStorageNode =
       detector.filteredStorageNode +
       detector.filterResistanceOhms *
-          (load.conductance * detector.filteredStorageNode + load.historyCurrent);
+          (dc.conductance * detector.filteredStorageNode + dc.historyCurrent);
   detector.detectorNode = detector.filteredStorageNode;
-  detector.avcEnv = static_cast<float>(equilibrium(
-      detector.avcDiode, carrierPeak, detector.avcDelayBiasVolts,
-      detector.avcChargeResistanceOhms, {1 / detector.avcDischargeResistanceOhms, 0}));
+  detector.avcEnv = std::max(
+      (detector.avcFromIfEnvelope ? carrierPeak : detector.filteredStorageNode) -
+          detector.avcDelayBiasVolts,
+      0.0f);
+  load.historyCurrent = dc.historyCurrent - load.avcConductance * detector.avcEnv;
   detector.warmStartPending = false;
 }
 
@@ -84,12 +90,4 @@ float stepDetectorAudioNode(AMDetector& detector, float dt, float sourceVolts,
   return node;
 }
 
-DetectorSolveResult stepDetectorStorageAndAvc(AMDetector& detector, float dt,
-                                              float detectorDriveVolts, float avcDrive,
-                                              DetectorLoad load) {
-  return {stepDetectorAudioNode(detector, dt, detectorDriveVolts, load),
-          solveStorage(detector.avcDiode, dt, avcDrive - detector.avcDelayBiasVolts,
-                       detector.avcChargeResistanceOhms, detector.avcFilterCapFarads,
-                       detector.avcEnv, {1 / detector.avcDischargeResistanceOhms, 0})};
-}
 }  // namespace am_detector_internal

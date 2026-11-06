@@ -17,6 +17,209 @@ remaining approximations and changed acceptance assumptions are recorded separat
 
 ## Verdict
 
+### AVC and selective fading, 2026-11-06
+
+**The AVC barely regulated.** The AVC line was charged by a separate diode
+through 1 Mohm into 500 kohm and a 0.54 V delay. That divider let the line reach
+only about 0.3 V at the nominal 0.12 V RMS carrier while the detector stood
+at 2.4 V, and the RF and IF stages then reduced their gain linearly with a
+hard floor (`max(0.35, 1 - 0.18 x)` and `max(0.20, 1 - 0.18 x)`). From 30 mV
+to 3 V at the antenna the audio rose by about 32 dB. Both schematics show
+something else:
+
+- 38-12 ([Bulletin 284](https://philcoradio.com/library/download/service%20info/service%20bulletins/Philco%20Service%20Bulletin%20284.pdf),
+  parts 9-14): simple, undelayed AVC. The 6A7 and 78 grid returns take the
+  DC at the top of the 500 k volume control through 2 Mohm and 0.03 uF (60 ms).
+- 37-116 ([Bulletin 258](https://philcoradio.com/library/download/service%20info/service%20bulletins/Philco%20Service%20Bulletin%20258.pdf),
+  parts 80, 90-92, 95): the "A.V.C. 6J5G" has its plate grounded, so only its
+  grid-cathode diode works. It takes the last IF plate through 110 pF, returns
+  through 20 k / 1 M with .01 uF, and its cathode sits at +25 V (Fig. 2): a
+  delayed AVC rectifier on the IF, separate from the audio detector. It feeds
+  the RF, mixer and both IF grids.
+
+The AVC line is now an RC filter whose source is the detector-load DC
+(38-12) or a delayed rectifier on the IF envelope (37-116). The diode,
+charge and discharge settings are removed; `avcFromIfEnvelope`,
+`avcFilterResistanceOhms`, `avcFilterCapFarads` and `avcDelayBiasVolts`
+describe the network.
+
+**Controlled stages follow their tube.** Each AVC-controlled RF or IF stage
+scales with its own transconductance, gm(bias - AVC) / gm(bias). The 78 and
+6K7 share RCA's "super-control" characteristic
+([RCA-78, graph 92S-5248, April 5, 1937](https://frank.pocnet.net/sheets/049/7/78.pdf)):
+the -3 V point is RCA's 1450 umho rating, -4 to -22 V a two-exponential fit to
+graphical readings within 10%, and the tail below -22 V, where the curve
+merges into the axis, is extrapolated to its visible cutoff near -40 V. The
+graph's 75/100/125 V screen curves coincide after scaling grid volts by
+100/Ec2, so the operating screen voltage scales the grid axis. Operating
+points are from the socket-voltage figures: Philco RF 6K7G -3 V / 84 V
+screen, both IF 6K7G -3 V / 90 V; 38-12 IF 78 -2.3 V / 90 V. The 38-12 has
+no RF amplifier, so its antenna circuit is no longer AVC-controlled. The
+converters keep their existing pentode model with the full AVC line.
+
+**Calibration choices.** The model's IF scale is calibrated, not absolute,
+so the Philco's documented threshold (+25 V cathode against a -3 V AVC
+return, about 28 V of IF plate signal) cannot be transferred. Its delay is
+set to 4 V, which keeps the detector at its former 2.4 V working point at
+the nominal carrier; that working point sets the diode distortion. The 75 ms
+Philco filter remains a prior, because the AVC bus beyond 90-92 could not be
+traced unambiguously. The Philco's tapped volume control stays at 25%, since
+turning it changes the bass compensation; its nominal playback falls from
+0.62 to 0.53 of the rated reference volts (-1.4 dB), and the reference band
+is now 0.5-0.8. The 38-12's untapped control moves from 5% to 8.5% so the
+app's default playback level stays where it was: a listener setting, not
+circuit data.
+
+Audio at the speaker terminals relative to the nominal carrier (1 kHz, 30%):
+
+| Antenna carrier | 38-12 before | 38-12 after | Philco before | Philco after |
+| --- | ---: | ---: | ---: | ---: |
+| 10 mV | -22.7 dB | -18.7 dB | -22.6 dB | -22.5 dB |
+| 30 mV | -11.9 dB | -8.9 dB | -11.6 dB | -11.3 dB |
+| 0.3 V | +6.7 dB | +4.2 dB | +6.2 dB | +2.3 dB |
+| 1 V | +14.1 dB | +8.3 dB | +20.1 dB | +4.0 dB |
+
+(`radio_measurements --section avc`.) Strong stations are now held, the
+Philco more firmly than the table set. Below the Philco's delay the curve is
+unchanged, as expected of delayed AVC. At 3 V the Philco output jumps by
+about 20 dB both before and after this change; that overload is outside this
+revision.
+
+**Simple AVC loads the 38-12 detector.** The 38-12's 2 Mohm AVC resistor
+hangs on the top of the volume control. Its 0.03 uF capacitor blocks DC but
+is a short at audio frequencies, so the detector sees 500 k for DC and about
+400 k in parallel with the first-audio branch for audio. When the modulation
+is deeper than that AC/DC ratio allows, the troughs are clipped. The AVC
+branch is now part of the detector's affine load (the warm start solves the
+DC working point without it). The Philco's separate 6J5G rectifier does not
+load its detector, and a delay bias is now accepted only with
+`avcFromIfEnvelope`, since simple AVC follows the detector load directly.
+
+Whole-chain 1 kHz SINAD of the 38-12 at the nominal carrier
+(`radio_measurements --section sinad --mod-index <m>`):
+
+| Modulation | 30% | 60% | 80% | 90% | 95% |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Without AVC load | 27.5 dB | 20.6 dB | 17.8 dB | 16.2 dB | 15.3 dB |
+| With AVC load | 27.4 dB | 20.4 dB | 16.6 dB | 14.6 dB | 13.8 dB |
+
+Playback is 0.5 dB quieter. The volume setting is unchanged, because that
+loss belongs to the circuit. The Philco results are identical.
+
+**Two documented 38-12 capacitors were missing.** Rider's Volume VIII,
+Philco pp. 8-69/8-70 (Model 38-12, Code 121, June 1937) shows part 21, a
+0.01 uF capacitor across the output-transformer primary (41 plate to B+), and
+part 17, 250 mmf from the 75 plate to ground. Neither was modelled. Part 21
+is the fixed top cut of a pentode output stage: against the roughly 9 k
+reflected load it rolls the terminal response off from about 2 kHz. The output
+transformer now accepts a capacitor on one winding only (that node was
+previously required to have one on both), and the first-audio plate has a
+`tubePlateShuntCapFarads` setting, solved with the interstage coupling
+network. The same page gives the detector filter as 51 k, not 50 k. It also
+names the speaker: Model BO-1, part 36-1366, cone and voice coil 36-3981.
+
+Whole-chain acoustic sweep of the 38-12, change from the former model
+(`radio_measurements --section sweep`):
+
+| Hz | 1,000 | 2,000 | 2,500 | 3,150 | 4,000 | 5,000 | 6,000 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Change | +0.4 dB | -0.3 dB | -2.2 dB | -5.3 dB | -9.5 dB | -13.7 dB | -17.3 dB |
+
+The terminal -3 dB point moves from 2.5 to 2.0 kHz. Terminal SINAD rises from
+18.7 to 19.5 dB and acoustic SINAD from 15.6 to 16.4 dB, because harmonics
+above 2 kHz are attenuated. The speaker's acoustic fit to Knowles K5 drives the
+voice coil directly, so this electrical cut is not counted twice. The 9 k
+primary load remains derived from RCA's 180 V operating point; a 44:1 ratio
+quoted from a later replacement listing (about 6.8 k) could not be traced to
+its source.
+
+**The Philco's loudness network was wrong.** Bulletin 258 (schematic p. 3,
+parts list p. 4) was read at full resolution. The 1 M tap of the 2 M volume
+control (102) returns through 70 k (103) to .008 uF (104) and .006 uF (105)
+in series; the tone switch grounds the 70 k end, the capacitor junction, or
+neither. The model used 490 k in parallel with 110 pF instead, and weakened
+that branch with an invented factor that depended on the wiper position
+(`blend`). The branch is now a series R-C that is always connected, so its
+effect follows from the pot geometry alone. The switch position is
+undocumented: the drawn position (70 k + 3.43 nF) is the chosen listening
+setting, not a known factory default.
+
+The same page corrects the driver input. The first-audio plate has 110 pF
+(97X) to ground. It feeds the 6F6G driver through .05 uF (96) with a 240 k
+(108) grid return; the model had 0.02 uF and 100 k without a source, which
+cut the bass from about 75 Hz. The grid sits on the wiper of the 500 k
+expander potentiometer (106), which is ganged with the I.F. expander and has
+110 pF (107) at its far end. Its mechanical law is undocumented, so the
+wiper is set at the coupling end (full audio fidelity); only the network's
+load remains. There is no capacitor across the output transformer. The
+Philco's generic tone EQ (+0.3 dB at 2.1 kHz, 0.9 dB tilt) has no source and
+is removed.
+
+The loudness network makes the volume setting part of the tone. At the
+former 25% setting playback fell by 12 dB. The listening setting is now 54%,
+just above the tap, where the nominal carrier gives the former level
+(speaker reference ratio 0.532); the tap network still shapes the response
+there. Acoustic sweep relative to 1 kHz (`radio_measurements --section
+sweep`):
+
+| Hz | 100 | 200 | 400 | 1,000 | 2,500 | 4,000 | 6,000 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Former model | -6.5 dB | -5.2 dB | -4.1 dB | 0 | +7.6 dB | +2.7 dB | -10.2 dB |
+| Without loudness branch | -1.8 dB | -3.9 dB | -3.3 dB | 0 | +8.2 dB | +4.6 dB | -7.1 dB |
+| New, 54% | +5.7 dB | 0.0 dB | -1.7 dB | 0 | +7.4 dB | +3.0 dB | -9.0 dB |
+
+The middle row isolates the driver coupling and tone-EQ corrections; the
+loudness branch adds the rest. Terminal SINAD is 34.6 dB and acoustic SINAD
+30.1 dB (34.6 and 29.5 before). The real compensation depends on where the
+knob sits for a given loudness, which depends on the absolute sensitivity
+noted below.
+
+The reference bandwidth rows now measure the receiver without the loudness
+branch, since they describe its bandwidth rather than a volume-dependent
+tone. A new row, `loudness_branch_error_db`, checks the branch in the full
+chain against an independent nodal impedance calculation of the tapped pot
+(ideal source) at 10% modulation, from 100 Hz to 4 kHz: 0.06 dB, limit 0.3
+dB. At 85% modulation the difference reaches 1.1 dB because the detector is
+no longer linear, so the check is made at low modulation.
+
+**Remaining limit: sensitivity.** The receivers' absolute RF/IF gain is
+declared, so they are far less sensitive than real sets, which delivered
+full output from microvolts. A real set receiving 0.12 V is deep in AVC
+regulation; here the Philco's AVC is only just active at that level (0.18 V)
+and the 38-12's simple AVC at 1.2 V. Fades of the received carrier are
+therefore compensated less than in a real receiver. Correcting it needs
+documented sensitivity data and a rebalanced gain chain.
+
+**Selective fading.** A skywave arrives later than the groundwave. The
+reception sample now carries it as a second, delayed copy of the transmitted
+waveform with its own complex gain, instead of a multiplier on the whole
+waveform. Its RF phase is in the gain; the delay applies to the modulation,
+interpolated with a four-point Lagrange filter. One hop reflected near 100 km
+at 100-300 km ground range adds 60-125 km of path, 0.2-0.4 ms, drawn per seed
+from its own stream so the fade realisation of a seed is unchanged. Sidebands
+1/delay apart then fade in turn and independently of the carrier.
+
+- `everyday-1938` keeps its weak skywave (0.10 against 0.92); the delay adds
+  at most about 0.9 dB of slow ripple across the audio band.
+- New `night-skywave`: the fringe of the groundwave area after dark, both
+  paths at 0.60, the skywave amplitude varying about 3 dB (ITU-R P.1321) and
+  rotating at the same 10.8-28.8 fades per hour.
+
+Snapshots with equal paths and a 0.3 ms skywave (`--section fading`, 1 kHz):
+
+| Skywave phase | Carrier | 38-12 audio | 38-12 THD | Philco audio | Philco THD |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0 deg | +1.6 dB | 0 dB | -36 dB | 0 dB | -46 dB |
+| 90 deg | -1.4 dB | -2.0 dB | -23 dB | -1.5 dB | -21 dB |
+| 150 deg | -10.2 dB | -5.9 dB | +1 dB | -7.8 dB | +1 dB |
+| 180 deg | null | -1.9 dB | 2nd harmonic only | -4.2 dB | 2nd harmonic only |
+
+As the carrier fades below its sidebands the envelope detector rectifies
+them and distortion rises past the fundamental: the impairment the ITU
+envelope-detector study cited below describes. `radio_am_ingress_tests`
+checks that an antiphase, equal-strength skywave removes the carrier while
+sidebands at 2*pi*f*delay = pi add.
+
 ### Physical RF front end, 2026-11-06
 
 The former front end placed series-RLC "tanks" and helper bandpasses on the
@@ -484,10 +687,14 @@ digital makeup restores listening level without pretending the physical output
 stage is continuously delivering its maximum power.
 
 The concrete receiver dimensions, five-inch cone, electrical load, circuit
-values, and output topology are documented. The 115 Hz speaker suspension
-proxy, cone breakup, broad 155 Hz cabinet panel rise, and short open-back path
-are explicit reduced-order estimates because no surviving anechoic or
-whole-cabinet curve was found for the BO-1/38-12C combination.
+values, and output topology are documented. The speaker and its mounting are
+explicit reduced-order estimates, because no BO-1 Thiele/Small data and no
+surviving anechoic or whole-cabinet curve was found for the BO-1/38-12C
+combination: a 200 Hz suspension resonance within Knowles's 180-250 Hz
+natural-frequency range for a small speaker, smooth cone-region sections
+fitted to the K5 small-cabinet example, and a 235 Hz mounting high-pass for
+K5's total cabinet-minus-baffle difference. No separate panel resonance or
+open-back path is added on top of that total.
 
 ## Philco 37-116 historical anchors
 
@@ -587,11 +794,10 @@ It is not copied as an exact full-range 37-116 curve.
 - the broadcast program limiter and transmitter transfer use a peak-envelope
   compressor and calibrated cubic term instead of a component-level studio and
   transmitter circuit simulation.
-- reception uses one stable groundwave phasor and one slowly rotating,
-  stochastic skywave phasor rather than a geographic ionosphere, antenna, and
-  multipath field solver; the current weak-skywave profile applies flat
-  composite fading and does not claim to reproduce frequency-selective
-  sideband fading;
+- reception uses one stable groundwave path and one slowly rotating,
+  stochastic, delayed skywave path rather than a geographic ionosphere,
+  antenna, and multipath field solver; the delay makes the fading frequency
+  selective (see "AVC and selective fading, 2026-11-06");
 - a rare interferer is synthesized as a second real RF carrier before the
   receiver front end, so any heterodyne is created by the existing physical
   tuning, IF, and envelope-detector path.

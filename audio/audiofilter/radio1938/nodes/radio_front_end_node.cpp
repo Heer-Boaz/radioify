@@ -1,5 +1,6 @@
 #include "../../../radio.h"
 #include "../../math/signal_math.h"
+#include "../../models/remote_cutoff_pentode.h"
 
 #include <algorithm>
 #include <cmath>
@@ -94,6 +95,8 @@ void RadioFrontEndNode::reset(Radio1938& radio) {
   frontEnd.dialOscSin = 0.0f;
   frontEnd.antennaTank.reset();
   frontEnd.rfTank.reset();
+  frontEnd.appliedAvcVolts = -1.0f;
+  frontEnd.avcGain = 1.0f;
 }
 
 float RadioFrontEndNode::run(Radio1938& radio, float x, RadioSampleContext& ctx) {
@@ -114,9 +117,17 @@ float RadioFrontEndNode::run(Radio1938& radio, float x, RadioSampleContext& ctx)
   advanceNormalizedOscillator(frontEnd.dialStepCos, frontEnd.dialStepSin,
                               frontEnd.dialOscCos, frontEnd.dialOscSin);
 
-  const float rfHold = clampf(radio.controlBus.controlVoltage / 1.25f, 0.0f, 1.0f);
-  const float gain =
-      frontEnd.rfGain * std::max(0.35f, 1.0f - frontEnd.avcGainDepth * rfHold);
+  // A set without an RF amplifier has no AVC-controlled tube before the
+  // converter; its antenna circuit is passive.
+  if (frontEnd.secondTunedCircuitEnabled) {
+    const float avcVolts = radioAvcLineVolts(radio);
+    if (std::fabs(avcVolts - frontEnd.appliedAvcVolts) > 1e-4f) {
+      frontEnd.avcGain = static_cast<float>(remoteCutoffRelativeGain(
+          frontEnd.rfStageBiasVolts, avcVolts, frontEnd.rfStageScreenVolts));
+      frontEnd.appliedAvcVolts = avcVolts;
+    }
+  }
+  const float gain = frontEnd.rfGain * frontEnd.avcGain;
   ctx.signal.setComplexEnvelope(gain * envelope[0], gain * envelope[1]);
   return std::sqrt(ctx.signal.i * ctx.signal.i + ctx.signal.q * ctx.signal.q);
 }

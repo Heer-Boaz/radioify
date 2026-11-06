@@ -67,6 +67,11 @@ void validateReceptionConfig(const RadioReceptionConfig& config,
          config.skywaveDopplerMaxHz >= config.skywaveDopplerMinHz);
   requireNonNegativeFinite(config.skywaveDopplerWanderRmsHz);
   requirePositiveFinite(config.skywaveDopplerWanderSeconds);
+  requireNonNegativeFinite(config.skywaveDelayMinMs);
+  assert(std::isfinite(config.skywaveDelayMaxMs) &&
+         config.skywaveDelayMaxMs >= config.skywaveDelayMinMs);
+  assert(config.skywaveDelayMaxMs * 0.001f * sampleRate <=
+         static_cast<float>(Radio1938::IqInputState::kEnvelopeHistory - 4));
   assert(config.seed != 0u);
 
   if (!config.intermittentCarrierEnabled) return;
@@ -176,10 +181,11 @@ void advanceSkywave(RadioPreviewPipeline::RadioReceptionRuntime& runtime,
       0.35, 1.65);
   const double skyGain =
       static_cast<double>(config.skywaveGain) * amplitudeScale;
-  reception.desiredCarrierI = static_cast<float>(
-      config.groundwaveGain + skyGain * runtime.skyOscCos);
-  reception.desiredCarrierQ =
-      static_cast<float>(skyGain * runtime.skyOscSin);
+  reception.desiredCarrierI = config.groundwaveGain;
+  reception.desiredCarrierQ = 0.0f;
+  reception.skywaveI = static_cast<float>(skyGain * runtime.skyOscCos);
+  reception.skywaveQ = static_cast<float>(skyGain * runtime.skyOscSin);
+  reception.skywaveDelaySamples = runtime.skyDelaySamples;
 
   const double dopplerHz =
       runtime.skyDopplerBaseHz +
@@ -260,6 +266,13 @@ void RadioPreviewReceptionNode::reset(RadioPreviewPipeline& preview) {
   runtime.skyDopplerBaseHz =
       nextSignedUnit(runtime.randomState) < 0.0f ? -dopplerMagnitude
                                                 : dopplerMagnitude;
+  // The path geometry gets its own stream so the fading realisation of a
+  // seed is unchanged by it.
+  uint32_t geometryState = config.seed ^ 0x9E3779B9u;
+  if (geometryState == 0u) geometryState = 1u;
+  runtime.skyDelaySamples =
+      0.001f * runtime.sampleRate *
+      randomRange(geometryState, config.skywaveDelayMinMs, config.skywaveDelayMaxMs);
   runtime.intermittentActiveFrames = 0u;
   runtime.intermittentEnvelope = 0.0f;
   runtime.intermittentTarget = 0.0f;

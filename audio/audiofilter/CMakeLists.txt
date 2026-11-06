@@ -6,6 +6,7 @@ radioify_add_module_object_library(radioify_audiofilter
   ${CMAKE_CURRENT_SOURCE_DIR}/math/oversampling.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/models/rectifier_supply.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/models/resonant_networks.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/models/remote_cutoff_pentode.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/models/coupled_if_transformer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/models/transformer_models.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/models/tube_models.cpp

@@ -52,12 +52,18 @@ void Radio1938::processAmAudio(const float* audioSamples,
     const float envelopeFactor =
         std::max(0.0f, 1.0f + modulationIndex * sampleVal);
     const float envelope = carrierPeak * envelopeFactor;
+    iqInput.pushEnvelope(envelope);
     if (receptionSamples) {
       const auto& reception = receptionSamples[frame];
+      float skywave = 0.0f;
+      if (reception.skywaveI != 0.0f || reception.skywaveQ != 0.0f) {
+        skywave = iqInput.delayedEnvelope(reception.skywaveDelaySamples) *
+                  (reception.skywaveI * carrierCos - reception.skywaveQ * carrierSin);
+      }
       rf[frame] =
           envelope * (reception.desiredCarrierI * carrierCos -
                       reception.desiredCarrierQ * carrierSin) +
-          reception.additiveRf;
+          skywave + reception.additiveRf;
     } else {
       rf[frame] = envelope * carrierCos;
     }

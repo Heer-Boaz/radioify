@@ -422,6 +422,10 @@ Radio reception:
   slowly fading skywave path and a rare weak co-channel RF carrier.
 - `--radio-reception strong-local`: preserve the former clean, ideal AM
   reception for a strong local station.
+- `--radio-reception night-skywave`: a station roughly 100-300 km away after
+  dark, where groundwave and skywave arrive at comparable strength. The
+  delayed skywave causes slow, deep and frequency-selective fading, with the
+  distortion bursts of a carrier fading below its sidebands.
 
 KSS options:
 - 50Hz (auto/forced)

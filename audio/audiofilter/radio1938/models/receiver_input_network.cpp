@@ -13,13 +13,23 @@ ReceiverInputNetworkStep makeStep(const Radio1938::ReceiverCircuitNodeState& rec
   const double w = std::clamp<double>(receiver.volumeControlPosition, 0, 1);
   const double t =
       std::clamp(receiver.volumeControlTapResistanceOhms / resistance, 0.0, 1.0);
-  const double blend = t > 0 ? std::clamp((t - w) / t, 0.0, 1.0) : 0;
-  const double loudnessG = receiver.volumeControlLoudnessResistanceOhms > 0
-                               ? blend / receiver.volumeControlLoudnessResistanceOhms
-                               : 0;
-  const double tapCapG =
-      dt > 0 ? 2 * blend * receiver.volumeControlLoudnessCapFarads / dt : 0;
-  const double tapG = loudnessG + tapCapG;
+  // Loudness branch: tap -- R -- C -- ground (Philco 37-116: 70 k with the
+  // tone-switch capacitor). It is always connected; how much it shapes the
+  // wiper follows from the pot geometry alone. C = 0 means no capacitor in
+  // the branch (a plain resistor); the capacitor blocks DC.
+  const double loudnessR = receiver.volumeControlLoudnessResistanceOhms;
+  const double loudnessC = receiver.volumeControlLoudnessCapFarads;
+  double tapG = 0;
+  double tapHistoryVoltage = 0;
+  if (t > 0 && loudnessC > 0) {
+    if (dt > 0) {
+      tapG = 1 / (loudnessR + dt / (2 * loudnessC));
+      tapHistoryVoltage = receiver.volumeControlTapCapVoltage +
+                          dt / (2 * loudnessC) * receiver.volumeControlTapCapCurrent;
+    }
+  } else if (t > 0 && loudnessR > 0) {
+    tapG = 1 / loudnessR;
+  }
   const double gridG =
       dt > 0 && receiver.couplingCapFarads > 0
           ? 1 / (receiver.gridLeakResistanceOhms + dt / (2 * receiver.couplingCapFarads))
@@ -43,9 +53,7 @@ ReceiverInputNetworkStep makeStep(const Radio1938::ReceiverCircuitNodeState& rec
       (gridG > 0 ? dt / (2 * receiver.couplingCapFarads) * receiver.couplingCapCurrent
                  : 0);
   const double gridHistory = gridG * gridHistoryVoltage;
-  const double tapHistory = tapCapG > 0 ? tapCapG * receiver.volumeControlTapVoltage +
-                                              receiver.volumeControlTapCapCurrent
-                                        : 0;
+  const double tapHistory = tapG * tapHistoryVoltage;
   const double h1 = zww * gridHistory + zwt * tapHistory;
   const double h2 = zwt * gridHistory + ztt * tapHistory;
   ReceiverInputNetworkStep step;
@@ -55,7 +63,8 @@ ReceiverInputNetworkStep makeStep(const Radio1938::ReceiverCircuitNodeState& rec
   step.tapHistory = (a * h2 - c * h1) / det;
   step.gridConductance = gridG;
   step.gridHistoryVoltage = gridHistoryVoltage;
-  step.tapCapConductance = tapCapG;
+  step.tapConductance = tapG;
+  step.tapHistoryVoltage = tapHistoryVoltage;
   // Reciprocity gives the source current: V/R + w*I_grid + t*I_tap.
   step.inputConductance =
       1 / resistance + w * gridG * step.wiperGain + t * tapG * step.tapGain;
@@ -84,6 +93,9 @@ void primeReceiverInputNetwork(Radio1938::ReceiverCircuitNodeState& receiver,
   receiver.gridVoltage = 0;
   receiver.couplingCapCurrent = 0;
   receiver.volumeControlTapCapCurrent = 0;
+  // At DC the loudness capacitor carries no current and holds the tap voltage.
+  receiver.volumeControlTapCapVoltage =
+      receiver.volumeControlLoudnessCapFarads > 0 ? receiver.volumeControlTapVoltage : 0;
   receiver.warmStartPending = false;
 }
 
@@ -95,11 +107,11 @@ void advanceReceiverInputNetwork(Radio1938::ReceiverCircuitNodeState& receiver,
   const double gridCurrent = step.gridConductance * (wiper - step.gridHistoryVoltage);
   const double grid = receiver.gridLeakResistanceOhms * gridCurrent;
   receiver.couplingCapCurrent = static_cast<float>(gridCurrent);
-  receiver.volumeControlTapCapCurrent =
-      step.tapCapConductance > 0
-          ? static_cast<float>(step.tapCapConductance *
-                                   (tap - receiver.volumeControlTapVoltage) -
-                               receiver.volumeControlTapCapCurrent)
+  const double tapCurrent = step.tapConductance * (tap - step.tapHistoryVoltage);
+  receiver.volumeControlTapCapCurrent = static_cast<float>(tapCurrent);
+  receiver.volumeControlTapCapVoltage =
+      receiver.volumeControlLoudnessCapFarads > 0
+          ? static_cast<float>(tap - receiver.volumeControlLoudnessResistanceOhms * tapCurrent)
           : 0;
   receiver.gridVoltage = static_cast<float>(grid);
   receiver.couplingCapVoltage = static_cast<float>(wiper - grid);

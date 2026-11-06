@@ -17,6 +17,7 @@
 #include "audiofilter/radio1938/radio_pipeline_types.h"
 #include "audiofilter/radio1938/radio_receiver_profile.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -318,10 +319,35 @@ struct Radio1938 {
     float carrierOscCos = 1.0f;
     float carrierOscSin = 0.0f;
     std::vector<float> rfScratch;
+    // Transmitted envelope history for a delayed propagation path.
+    static constexpr uint32_t kEnvelopeHistory = 512;
+    std::array<float, kEnvelopeHistory> envelopeHistory{};
+    uint32_t envelopeWrite = 0;
+
+    void pushEnvelope(float envelope) {
+      envelopeWrite = (envelopeWrite + 1) & (kEnvelopeHistory - 1);
+      envelopeHistory[envelopeWrite] = envelope;
+    }
+    // Four-point Lagrange interpolation, delaySamples in [0, kEnvelopeHistory - 4].
+    float delayedEnvelope(float delaySamples) const {
+      const int whole = std::max(1, static_cast<int>(delaySamples));
+      const float mu = delaySamples - static_cast<float>(whole);
+      const auto at = [&](int age) {
+        return envelopeHistory[(envelopeWrite - static_cast<uint32_t>(age)) &
+                               (kEnvelopeHistory - 1)];
+      };
+      const float cm1 = -mu * (mu - 1) * (mu - 2) / 6;
+      const float c0 = (mu + 1) * (mu - 1) * (mu - 2) / 2;
+      const float c1 = -(mu + 1) * mu * (mu - 2) / 2;
+      const float c2 = (mu + 1) * mu * (mu - 1) / 6;
+      return cm1 * at(whole - 1) + c0 * at(whole) + c1 * at(whole + 1) + c2 * at(whole + 2);
+    }
 
     void resetRuntime() {
       carrierOscCos = 1.0f;
       carrierOscSin = 0.0f;
+      envelopeHistory.fill(0.0f);
+      envelopeWrite = 0;
     }
   } iqInput;
 
@@ -386,9 +412,14 @@ struct Radio1938 {
   struct FrontEndNodeState {
     bool secondTunedCircuitEnabled = true;
     uint32_t appliedConfigRevision = 0;
-    // Declared antenna-to-mixer-grid voltage gain at resonance.
+    // Declared antenna-to-mixer-grid voltage gain at resonance and zero AVC.
     float rfGain = 0.0f;
-    float avcGainDepth = 0.0f;
+    // Remote-cutoff RF amplifier between the two tuned circuits; present only
+    // with the second circuit. Its gm follows the full AVC line.
+    float rfStageBiasVolts = -3.0f;
+    float rfStageScreenVolts = 100.0f;
+    float appliedAvcVolts = -1.0f;
+    float avcGain = 1.0f;
     // Ganged circuits aligned to the dial. Shunt loads are the reflected
     // antenna, RF-plate and grid damping, not physical resistors.
     float antennaInductanceHenries = 0.0f;
@@ -450,8 +481,14 @@ struct Radio1938 {
     bool enabled = false;
     uint32_t appliedConfigRevision = 0;
     float ifMinBwHz = 0.0f;
+    // IF voltage gain at zero AVC. The AVC-controlled remote-cutoff stages
+    // each scale it by their gm ratio.
     float stageGain = 0.0f;
-    float avcGainDepth = 0.0f;
+    int avcStageCount = 1;
+    float stageBiasVolts = -3.0f;
+    float stageScreenVolts = 100.0f;
+    float appliedAvcVolts = -1.0f;
+    float avcGain = 1.0f;
     float ifCenterHz = 0.0f;
     float primaryInductanceHenries = 0.0f;
     float secondaryInductanceHenries = 0.0f;
@@ -522,6 +559,8 @@ struct Radio1938 {
     float couplingCapVoltage = 0.0f;
     float couplingCapCurrent = 0.0f;
     float volumeControlTapCapCurrent = 0.0f;
+    // Voltage on the loudness capacitor (series R-C from tap to ground).
+    float volumeControlTapCapVoltage = 0.0f;
     float gridVoltage = 0.0f;
     bool warmStartPending = true;
     float tubePlateSupplyVolts = 0.0f;
@@ -533,6 +572,8 @@ struct Radio1938 {
     bool tubeTriodeConnected = false;
     float tubeLoadResistanceOhms = 0.0f;
     float tubeDcFeedResistanceOhms = 0.0f;
+    // Bypass capacitor from the first-audio plate to ground (0 = none).
+    float tubePlateShuntCapFarads = 0.0f;
     float tubeSupplyVolts = 0;
     double tubeSupplyCurrentAmps = 0;
     float tubeEffectiveSupplyVolts = 0.0f;
@@ -584,6 +625,16 @@ struct Radio1938 {
     float gridCouplingCapVoltage = 0.0f;
     float gridVoltage = 0.0f;
     float driverSourceResistanceOhms = 0.0f;
+    // AC voltage on the first-audio plate bypass capacitor.
+    float driverPlateCapVoltage = 0.0f;
+    // Optional potentiometer from the coupling node to a capacitor to ground,
+    // with the grid on its wiper (Philco 37-116: 106, 500 k, and 107, 110 pF).
+    // Position is the wiper height above the capacitor end: 1 puts the grid
+    // on the coupling node. 0 ohms disables the network.
+    float gridPotentiometerOhms = 0.0f;
+    float gridPotentiometerPosition = 1.0f;
+    float gridPotentiometerCapFarads = 0.0f;
+    float gridPotentiometerCapVoltage = 0.0f;
     float tubePlateSupplyVolts = 0.0f;
     float tubePlateDcVolts = 0.0f;
     float tubeQuiescentPlateVolts = 0.0f;

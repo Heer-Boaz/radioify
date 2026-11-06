@@ -7,6 +7,7 @@
 enum class RadioReceptionProfile : uint8_t {
   Everyday1938,
   StrongLocal,
+  NightSkywave,
 };
 
 inline constexpr RadioReceptionProfile kDefaultRadioReceptionProfile =
@@ -17,7 +18,7 @@ struct RadioReceptionConfig {
   bool enabled = true;
 
   // Stable groundwave plus a weak, slowly rotating skywave phasor. The
-  // Doppler range gives 10.8-28.8 composite fades per hour.
+  // Doppler range gives 10.8-28.8 composite fades per hour (ITU: 10-30).
   float groundwaveGain = 0.92f;
   float skywaveGain = 0.10f;
   float skywaveAmplitudeVariationRms = 0.18f;
@@ -26,6 +27,12 @@ struct RadioReceptionConfig {
   float skywaveDopplerMaxHz = 0.008f;
   float skywaveDopplerWanderRmsHz = 0.001f;
   float skywaveDopplerWanderSeconds = 75.0f;
+  // Extra path length of a one-hop skywave: reflection near 100 km height at
+  // 100-300 km ground range adds 60-125 km, 0.2-0.4 ms. The delayed
+  // modulation makes the composite frequency selective: sidebands spaced
+  // 1/delay apart fade in turn, independently of the carrier.
+  float skywaveDelayMinMs = 0.20f;
+  float skywaveDelayMaxMs = 0.40f;
 
   // US co-channel carrier-only scenario: two compliant +/-50 Hz carriers
   // differ by at most 100 Hz (FRC rule effective June 22, 1932). The uniform

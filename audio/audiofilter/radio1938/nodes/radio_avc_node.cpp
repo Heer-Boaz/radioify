@@ -1,6 +1,10 @@
 #include "../../../radio.h"
 #include "../../math/signal_math.h"
 
+float radioAvcLineVolts(const Radio1938& radio) {
+  return radio.controlBus.controlVoltage * radio.demod.am.controlVoltageRef;
+}
+
 void RadioAVCNode::init(Radio1938&, RadioInitContext&) {}
 
 void RadioAVCNode::reset(Radio1938&) {}

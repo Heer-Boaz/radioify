@@ -1,5 +1,6 @@
 #include "../../../radio.h"
 #include "../../math/signal_math.h"
+#include "../../models/remote_cutoff_pentode.h"
 
 #include <algorithm>
 #include <cassert>
@@ -153,6 +154,8 @@ void RadioIFStripNode::init(Radio1938& radio, RadioInitContext&) {
 void RadioIFStripNode::reset(Radio1938& radio) {
   auto& ifStrip = radio.ifStrip;
   ifStrip.prevSourceMode = SourceInputMode::ComplexEnvelope;
+  ifStrip.appliedAvcVolts = -1.0f;
+  ifStrip.avcGain = 1.0f;
   resetIfStripRuntimeEnvelopeState(ifStrip);
 }
 
@@ -167,10 +170,14 @@ float RadioIFStripNode::run(Radio1938& radio, float y, RadioSampleContext& ctx) 
     return y;
   }
 
-  float avcT = clampf(radio.controlBus.controlVoltage / 1.25f, 0.0f, 1.0f);
-  float ifGainControl =
-      std::max(0.20f, 1.0f - ifStrip.avcGainDepth * avcT);
-  float ifGain = ifStrip.stageGain * ifGainControl;
+  const float avcVolts = radioAvcLineVolts(radio);
+  if (std::fabs(avcVolts - ifStrip.appliedAvcVolts) > 1e-4f) {
+    ifStrip.avcGain = static_cast<float>(std::pow(
+        remoteCutoffRelativeGain(ifStrip.stageBiasVolts, avcVolts, ifStrip.stageScreenVolts),
+        ifStrip.avcStageCount));
+    ifStrip.appliedAvcVolts = avcVolts;
+  }
+  float ifGain = ifStrip.stageGain * ifStrip.avcGain;
   if (ifStrip.prevSourceMode != mode) {
     resetIfStripRuntimeEnvelopeState(ifStrip);
   }

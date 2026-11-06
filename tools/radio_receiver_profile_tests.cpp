@@ -101,6 +101,34 @@ void expectInitializedProfileSwitchRebuildsPhysicalModel() {
   }
 }
 
+// A profile reached through the other profile must be the same receiver as a
+// freshly built one: every circuit value either profile sets is set by both.
+std::vector<float> renderProfile(RadioReceiverProfile first, RadioReceiverProfile target) {
+  Radio1938 radio;
+  radio.applyReceiverProfile(first);
+  radio.init(1, 48000.0f, 5000.0f, 0.0f);
+  if (first != target) radio.applyReceiverProfile(target);
+  radio.warmInputCarrier(0.12f);
+  std::vector<float> input(9600), output(input.size());
+  for (size_t i = 0; i < input.size(); ++i) {
+    const double t = double(i) / 48000.0;
+    input[i] = float(0.4 * std::sin(2 * 3.14159265358979 * 1000 * t) +
+                     0.2 * std::sin(2 * 3.14159265358979 * 4000 * t));
+  }
+  radio.processAmAudio(input.data(), output.data(), uint32_t(input.size()), 0.12f, 0.85f);
+  return output;
+}
+
+void expectProfileSwitchMatchesFreshReceiver() {
+  for (auto [other, target] :
+       {std::pair{RadioReceiverProfile::Philco37116, RadioReceiverProfile::Typical1930s},
+        std::pair{RadioReceiverProfile::Typical1930s, RadioReceiverProfile::Philco37116}}) {
+    if (renderProfile(target, target) != renderProfile(other, target)) {
+      fail("a receiver switched from the other profile differs from a fresh one");
+    }
+  }
+}
+
 void expectPlaybackFilterOwnsReceiverSwitching() {
   RadioPlaybackFilter filter;
   RadioPlaybackFilterConfig config;
@@ -343,6 +371,7 @@ int main(int argc, char** argv) {
   expectProfileParserContract();
   expectTypicalReceiverTopology();
   expectInitializedProfileSwitchRebuildsPhysicalModel();
+  expectProfileSwitchMatchesFreshReceiver();
   expectPlaybackFilterOwnsReceiverSwitching();
   expectPlaybackKeepsAcousticPeakHeadroom();
   expectPlaybackNoiseBalance();

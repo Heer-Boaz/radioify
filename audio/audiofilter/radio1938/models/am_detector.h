@@ -17,7 +17,6 @@ struct AMDetector {
   Biquad afcErrorLp;
 
   float audioRect = 0.0f;
-  float avcRect = 0.0f;
   float detectorStorageNode = 0.0f;
   float filteredStorageNode = 0.0f;
   float detectorNode = 0.0f;
@@ -49,15 +48,20 @@ struct AMDetector {
   bool warmStartPending = true;
   float afcError = 0.0f;
   ThermionicDiode audioDiode;
-  ThermionicDiode avcDiode;
-  float avcDelayBiasVolts = 0.54f;
+  // AVC line: an RC filter whose source is either the DC of the detector load
+  // (simple AVC, the audio node) or a separate delayed rectifier on the IF
+  // envelope. The controlled grid returns draw no DC from it. The delay bias
+  // is subtracted from the source before filtering and requires the separate
+  // rectifier. Simple AVC loads the detector through its filter resistor.
+  bool avcFromIfEnvelope = false;
+  float avcDelayBiasVolts = 0.0f;
+  float avcFilterResistanceOhms = 0.0f;
+  float avcTick = 0.0f;
   float detectorStorageCapFarads = 0.0f;
   float filterResistanceOhms = 0;
   float filterCapFarads = 0;
   float audioChargeResistanceOhms = 0.0f;
   float audioDischargeResistanceOhms = 0.0f;
-  float avcChargeResistanceOhms = 0.0f;
-  float avcDischargeResistanceOhms = 0.0f;
   float avcFilterCapFarads = 0.0f;
 
   float controlVoltageRef = 0.0f;

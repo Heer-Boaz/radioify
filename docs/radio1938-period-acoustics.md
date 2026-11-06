@@ -82,7 +82,16 @@ must not be read as separately measured physical breakup-mode amplitudes.
 
 The small model uses a **200 Hz natural-frequency prior**, within Knowles's
 180-250 Hz statement for the small speaker under discussion. This is not a
-measured free-air BO-1 resonance. The console uses **80 Hz**, within the
+measured free-air BO-1 resonance. A contemporary summary agrees in general
+terms: A. A. Armer of Magnavox described the "general response curve of a
+dynamic speaker" as rising to "a resonance peak" at two hundred cycles, flat
+to about a thousand cycles, where "the cone ceases to vibrate as a piston"
+([IRE Detroit Section, 22 October 1937, Proc. IRE December 1937, p. 1510](https://www.worldradiohistory.com/Archive-IRE/30s/IRE-1937-12.pdf)).
+It is a meeting report without a cone size, mounting or curve, so it
+corroborates the 200 Hz prior and the 1 kHz cone-body section but does not
+measure them. A November 2026 search found no BO-1 data beyond the service
+bulletin: no Philco parts-catalog acoustic entry, no published free-air
+resonance, and no restorer's impedance sweep. The console uses **80 Hz**, within the
 explicitly unsized 70-120 Hz historical prior, not 14-inch-specific T/S data.
 Other unmeasured motor parameters remain estimates.
 
@@ -524,7 +533,8 @@ advances once per audio frame from the interval-average detector voltage.
 Both stages use the same port relation. DC startup primes the capacitors at
 their operating point. Component values and the existing loudness-branch
 weighting remain unchanged; this is a correction of the circuit numerics,
-not new historical evidence for that weighting.
+not new historical evidence for that weighting. (The branch values and the
+weighting were later replaced from Bulletin 258; see the realism audit.)
 
 The finer reference comparison also exposed excessive numerical damping in
 the former backward-Euler integration of the small loudness capacitor.

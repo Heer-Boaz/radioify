@@ -41,7 +41,7 @@ static void showUsage(const char *exe) {
   logLine("  --radio-model <philco-37-116|typical-1930s>");
   logLine("               Select the physical receiver, amplifier, speaker and "
           "cabinet");
-  logLine("  --radio-reception <everyday-1938|strong-local>");
+  logLine("  --radio-reception <everyday-1938|strong-local|night-skywave>");
   logLine("               Select the AM reception environment");
   logLine("  --dry        Bypass radio processing for render/playback");
   logLine("  --no-ascii   Disable ASCII video rendering");
@@ -182,7 +182,7 @@ Options parseArgs(int argc, char **argv) {
     if (arg == "--radio-reception") {
       std::string value = requireValue(arg, &i);
       if (!parseRadioReceptionProfile(value, o.radioReceptionProfile)) {
-        die("--radio-reception expects everyday-1938 or strong-local.");
+        die("--radio-reception expects everyday-1938, strong-local or night-skywave.");
       }
       continue;
     }

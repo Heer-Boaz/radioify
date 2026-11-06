@@ -106,6 +106,7 @@ struct RadioPreviewPipeline {
     double skyDopplerBaseHz = 0.0;
     double skyOscCos = 1.0;
     double skyOscSin = 0.0;
+    float skyDelaySamples = 0.0f;
     uint64_t intermittentWaitFrames = 0;
     uint64_t intermittentActiveFrames = 0;
     float intermittentEnvelope = 0.0f;

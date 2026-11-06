@@ -7,6 +7,7 @@
 #include <array>
 #include <string>
 
+#include "audiofilter/models/remote_cutoff_pentode.h"
 #include "radio.h"
 
 namespace {
@@ -337,6 +338,72 @@ void testFrontEndTunedCircuits() {
         "AFC pull must move the oscillator, not the ganged RF circuits");
 }
 
+// A capacitor across only the primary (the 38-12's 0.01 uF on the 41 plate)
+// must leave the secondary node algebraic. Reference: the capacitor in
+// parallel with leakage + (magnetizing || reflected load).
+void testPrimaryOnlyShuntCapacitor() {
+  const double fs = 96000, ll = 1e-3, lm = 100, load = 3.5, cap = .01e-6;
+  const double n = std::sqrt(9000 / load);
+  for (double f : {500.0, 2000.0, 4000.0}) {
+    CurrentDrivenTransformer transformer;
+    transformer.setModel(float(fs), float(ll), float(lm), float(n), 0, 0, float(cap), 0, 0,
+                         0, 4);
+    Complex response{};
+    const int settle = int(fs / 5), count = int(fs / 5);
+    for (int i = 0; i < settle + count; ++i) {
+      const double drive = 1e-3 * std::sin(2 * pi * f * i / fs);
+      const auto sample = transformer.step(float(drive), float(load));
+      if (i >= settle)
+        response += double(sample.primaryVoltage) * std::polar(2.0 / count, -2 * pi * f * i / fs);
+    }
+    const Complex jw{0, 2 * pi * f};
+    const Complex winding = jw * ll + 1.0 / (1.0 / (jw * lm) + 1.0 / (n * n * load));
+    const Complex z = 1.0 / (jw * cap + 1.0 / winding);
+    const double errorDb = 20 * std::log10(std::abs(response) / (1e-3 * std::abs(z)));
+    check(std::abs(errorDb) < .1, "primary-only shunt capacitor response is wrong");
+  }
+}
+
+void testRemoteCutoffAvc() {
+  // RCA-78/6K7 rating: 1450 umho at Eb 250, Ec2 100, Ec1 -3 V.
+  check(std::abs(remoteCutoffTransconductance(-3) - 1450e-6) < 1e-9,
+        "remote-cutoff curve misses the RCA rating");
+  for (double v = -2; v > -50; v -= .25)
+    check(remoteCutoffTransconductance(v - .25) < remoteCutoffTransconductance(v),
+          "remote-cutoff transconductance must fall with bias");
+  check(remoteCutoffRelativeGain(-3, 0, 90) == 1, "zero AVC must leave the gain alone");
+  check(std::abs(remoteCutoffRelativeGain(-2.52, 8.4, 84) -
+                 remoteCutoffRelativeGain(-3, 10, 100)) < 1e-12,
+        "screen voltage must scale the grid axis");
+  // The tapered grid gives tens of dB of control without cutoff.
+  const double at20 = remoteCutoffRelativeGain(-3, 20, 100);
+  check(at20 > 1e-3 && at20 < .05, "remote-cutoff control range is implausible");
+
+  for (auto profile : {RadioReceiverProfile::Typical1930s, RadioReceiverProfile::Philco37116}) {
+    Radio1938 radio;
+    radio.applyReceiverProfile(profile);
+    radio.init(1, 48000, 5500, 0);
+    radio.controlBus.controlVoltage = 5 / radio.demod.am.controlVoltageRef;
+    check(std::abs(radioAvcLineVolts(radio) - 5) < 1e-5, "AVC line is not in volts");
+    RadioSampleContext ctx{};
+    ctx.signal.setComplexEnvelope(.1f, 0);
+    RadioFrontEndNode::run(radio, 0, ctx);
+    ctx.signal.setComplexEnvelope(.1f, 0);
+    RadioIFStripNode::run(radio, 0, ctx);
+    const auto& f = radio.frontEnd;
+    const auto& s = radio.ifStrip;
+    const double expectedRf =
+        f.secondTunedCircuitEnabled
+            ? remoteCutoffRelativeGain(f.rfStageBiasVolts, 5, f.rfStageScreenVolts)
+            : 1.0;
+    const double expectedIf = std::pow(
+        remoteCutoffRelativeGain(s.stageBiasVolts, 5, s.stageScreenVolts), s.avcStageCount);
+    check(std::abs(f.avcGain / expectedRf - 1) < 1e-5 &&
+              std::abs(s.avcGain / expectedIf - 1) < 1e-5,
+          "AVC does not act through each controlled stage's transconductance");
+  }
+}
+
 void testIndependentTubeCharacteristics() {
   const KorenTriodeLut noTable;
   const auto sixJ5 = rca6J5Characteristic(), seventyFive = rca75Characteristic();
@@ -578,6 +645,8 @@ int main(int argc, char** argv) {
   testCircuitReference();
   testReceiverTuning();
   testFrontEndTunedCircuits();
+  testRemoteCutoffAvc();
+  testPrimaryOnlyShuntCapacitor();
   testIndependentTubeCharacteristics();
   testPhysicalNoiseSources();
   testAfcWithRealCarrier();

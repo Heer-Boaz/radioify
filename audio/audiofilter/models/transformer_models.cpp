@@ -236,8 +236,12 @@ CurrentDrivenTransformerSample CurrentDrivenTransformer::projectStep(
   float primaryInductance = cachedPrimaryInductance;
   float secondaryInductance = cachedSecondaryInductance;
   float mutualInductance = cachedMutualInductance;
-  float primaryCap = requirePositiveFinite(primaryShuntCapFarads);
-  float secondaryCap = requirePositiveFinite(secondaryShuntCapFarads);
+  // A winding without shunt capacitance has an algebraic node: its KCL holds
+  // at the new step instead of integrating a capacitor.
+  const bool primaryHasCap = primaryShuntCapFarads > 0.0f;
+  const bool secondaryHasCap = secondaryShuntCapFarads > 0.0f;
+  float primaryCap = primaryHasCap ? primaryShuntCapFarads : 1.0f;
+  float secondaryCap = secondaryHasCap ? secondaryShuntCapFarads : 1.0f;
   float primaryCoreConductance =
       (primaryCoreLossResistanceOhms > 0.0f)
           ? 1.0f / primaryCoreLossResistanceOhms
@@ -300,6 +304,20 @@ CurrentDrivenTransformerSample CurrentDrivenTransformer::projectStep(
                 projectedSecondaryVoltage -
             dt * (secondaryLoadCurrent / secondaryCap),
     };
+    if (!primaryHasCap) {
+      system[2][0] = 1.0f;
+      system[2][1] = 0.0f;
+      system[2][2] = primaryCoreConductance;
+      system[2][3] = 0.0f;
+      b[2] = primaryDriveCurrentAmps;
+    }
+    if (!secondaryHasCap) {
+      system[3][0] = 0.0f;
+      system[3][1] = 1.0f;
+      system[3][2] = 0.0f;
+      system[3][3] = secondaryLoadConductance;
+      b[3] = -secondaryLoadCurrent;
+    }
     float x[4] = {kNaN, kNaN, kNaN, kNaN};
     bool solved = solveLinear4x4(system, b, x);
     assert(solved);

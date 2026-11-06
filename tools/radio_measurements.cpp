@@ -1,5 +1,7 @@
 #include "radio.h"
+#include "receiver_input_reference.h"
 #include "audiofilter/radio1938/audio_pipeline_execution.h"
+#include "audiofilter/radio1938/radio_am_ingress.h"
 #include "audiofilter/math/signal_math.h"
 
 #include <algorithm>
@@ -63,6 +65,9 @@ struct HarnessConfig {
   std::string section = "all";
   bool observeTerminalVoltage = false;
   float speakerNaturalHzOverride = 0.0f;
+  // Removes the volume-control loudness branch, leaving the receiver's own
+  // bandwidth; the branch is then checked against an impedance reference.
+  bool withoutLoudnessBranch = false;
 };
 
 // --- Target ranges for harness validation (historical/model anchors) ---
@@ -89,10 +94,12 @@ struct ReceiverReferenceBands {
 // See docs/radio1938-period-acoustics.md for both measurements and their limits.
 constexpr ReceiverReferenceBands kPhilco37116ReferenceBands{
     60.0f, 200.0f, 2500.0f, 5500.0f, -38.0f, 30.0f,
-    // The thermionic detector uses several volts of IF and a 25% volume
-    // setting. Nominal playback now uses 36..64% of rated electrical power;
-    // rated 12..18 W capacity and the existing distortion/headroom guards stay.
-    2500.0f, 5500.0f, -35.0f, 28.0f, 0.60f, 0.80f, 12.0f, 18.0f};
+    // The thermionic detector uses several volts of IF. The delayed 6J5G AVC
+    // regulates the nominal carrier, so playback uses 25..64% of rated
+    // electrical power (0.5..0.8 of the reference volts; 0.53 measured at the
+    // 54% listening setting, just above the loudness tap). Rated 12..18 W
+    // capacity and the existing distortion/headroom guards stay.
+    2500.0f, 5500.0f, -35.0f, 28.0f, 0.50f, 0.80f, 12.0f, 18.0f};
 
 // The mass-market profile deliberately validates against its own 2 W,
 // single-ended receiver class. Reusing the 37-116's 15 W / high-fidelity
@@ -116,7 +123,9 @@ constexpr const ReceiverReferenceBands& referenceBandsForProfile(
 // rather than the retired common 350 pF / 160 k surrogate.
 constexpr float kPhilcoDetectorTauUsMin = 30, kPhilcoDetectorTauUsMax = 45;
 constexpr float kTypicalDetectorTauUsMin = 90, kTypicalDetectorTauUsMax = 120;
-constexpr float kTargetAvcTauMsMin = 60.0f;
+// The 38-12's documented 2 M / 0.03 uF AVC network is 60 ms; leave room for
+// its single-precision product.
+constexpr float kTargetAvcTauMsMin = 55.0f;
 constexpr float kTargetAvcTauMsMax = 90.0f;
 // Prefer max digital output < ~0.95
 constexpr float kTargetMaxDigitalOutputMin = 0.0f;
@@ -260,7 +269,7 @@ double effectiveDetectorAudioTauSeconds(const Radio1938& radio) {
 }
 
 double avcTauSeconds(const Radio1938& radio) {
-  return std::max<double>(radio.demod.am.avcDischargeResistanceOhms, 1e-6) *
+  return std::max<double>(radio.demod.am.avcFilterResistanceOhms, 1e-6) *
          std::max<double>(radio.demod.am.avcFilterCapFarads, 1e-12);
 }
 
@@ -310,7 +319,7 @@ void printUsage() {
       << "  --radio-settings <path>\n"
       << "  --receiver-profile <typical-1930s|philco-37-116>  Base receiver before settings\n"
       << "  --preset <name>  TOML preset; a built-in name also selects the receiver unless explicitly overridden\n"
-      << "  --section <all|config|sweep|envelope|levels|imd|overdrive|sinad|weak|transient|reference|noise|spectrum|am_validate|am_convergence|power_bench>\n";
+      << "  --section <all|config|sweep|envelope|levels|imd|overdrive|sinad|weak|avc|fading|transient|reference|noise|spectrum|am_validate|am_convergence|power_bench>\n";
 }
 
 HarnessConfig parseArgs(int argc, char** argv) {
@@ -411,6 +420,10 @@ Radio1938 makeRadio(const HarnessConfig& config, float noiseWeight,
     }
   }
   applyHarnessDetectorWaveformSettings(config, radio);
+  if (config.withoutLoudnessBranch) {
+    radio.receiverCircuit.volumeControlLoudnessResistanceOhms = 0.0f;
+    radio.receiverCircuit.volumeControlLoudnessCapFarads = 0.0f;
+  }
   if (config.speakerNaturalHzOverride > 0.0f) {
     radio.speakerStage.speaker.suspensionHz = config.speakerNaturalHzOverride;
     radio.init(1, config.sampleRate, config.bandwidthHz, noiseWeight);
@@ -1463,6 +1476,79 @@ void runOverdrive(const HarnessConfig& config) {
   std::cout << "\n";
 }
 
+// Static AVC characteristic: speaker-terminal audio and AVC line voltage for a
+// 1 kHz, 30% modulated carrier from 0.3 mV to 1 V RMS at the antenna.
+void runAvcCharacteristic(const HarnessConfig& config) {
+  std::cout << "[avc]\n";
+  std::cout << "carrier_rms,carrier_dbv,terminal_audio_rms,audio_db_re_nominal,"
+               "avc_line_volts,detector_volts\n";
+  constexpr std::array<float, 9> kCarriers = {0.0003f, 0.001f, 0.003f, 0.01f, 0.03f,
+                                              0.12f,   0.3f,   1.0f,   3.0f};
+  const auto input = makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f, 1.0f);
+  const size_t start = static_cast<size_t>(config.sampleRate * 0.25f);
+  HarnessConfig levelConfig = config;
+  levelConfig.observeTerminalVoltage = true;
+  levelConfig.carrierRmsVolts = kDefaultCarrierRmsVolts;
+  const double nominal =
+      measureSignalStats(runAmProgram(levelConfig, input, .3f, 0).output, start).rms;
+  for (float carrier : kCarriers) {
+    levelConfig.carrierRmsVolts = carrier;
+    RunResult run = runAmProgram(levelConfig, input, .3f, 0);
+    const double audio = measureSignalStats(run.output, start).rms;
+    std::cout << carrier << "," << dbFromRatio(carrier) << "," << audio << ","
+              << dbFromRatio(audio / std::max(nominal, 1e-20)) << ","
+              << run.radio.demod.am.avcEnv << "," << run.radio.demod.am.detectorNode
+              << "\n";
+  }
+  std::cout << "\n";
+}
+
+// Selective fading snapshots: equal groundwave and skywave (night-skywave
+// gains), the skywave 0.3 ms late, its RF phase stepped around the circle.
+// Fades are minutes long, so each phase is held while the AVC settles.
+void runSelectiveFading(const HarnessConfig& config) {
+  std::cout << "[fading]\n";
+  std::cout << "sky_phase_deg,carrier_db,terminal_audio_db,thd_db,avc_line_volts\n";
+  const auto reception = radioReceptionConfigForProfile(RadioReceptionProfile::NightSkywave);
+  const float delaySamples = 0.0003f * config.sampleRate;
+  const auto input = makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f, 1.0f);
+  const size_t start = static_cast<size_t>(config.sampleRate * 0.25f);
+  HarnessConfig levelConfig = config;
+  levelConfig.observeTerminalVoltage = true;
+  double reference = 0;
+  for (int step = 0; step <= 12; ++step) {
+    const double phase = 6.283185307179586 * step / 12;
+    std::vector<RadioAmReceptionSample> paths(input.size());
+    for (auto& path : paths) {
+      path.desiredCarrierI = reception.groundwaveGain;
+      path.skywaveI = static_cast<float>(reception.skywaveGain * std::cos(phase));
+      path.skywaveQ = static_cast<float>(reception.skywaveGain * std::sin(phase));
+      path.skywaveDelaySamples = delaySamples;
+    }
+    Radio1938 radio = makeRadio(levelConfig, 0, true);
+    std::vector<float> output(input.size()), terminal(input.size());
+    radio.processAmAudio(input.data(), output.data(), static_cast<uint32_t>(input.size()),
+                         levelConfig.carrierRmsVolts, .3f, paths.data(), terminal.data());
+    std::vector<float> tail(terminal.begin() + start, terminal.end());
+    const auto spectrum = computeSpectrumPeakAmplitudes(tail, config.sampleRate);
+    const double h1 = peakAmplitudeAtHz(spectrum, config.sampleRate, 1000.0f);
+    double harmonics = 0;
+    for (float hz : {2000.0f, 3000.0f, 4000.0f, 5000.0f}) {
+      const double h = peakAmplitudeAtHz(spectrum, config.sampleRate, hz);
+      harmonics += h * h;
+    }
+    const double audio = measureSignalStats(terminal, start).rms;
+    if (step == 0) reference = audio;
+    const double carrier = std::hypot(reception.groundwaveGain + reception.skywaveGain * std::cos(phase),
+                                      reception.skywaveGain * std::sin(phase));
+    std::cout << 30 * step << "," << dbFromRatio(carrier) << ","
+              << dbFromRatio(audio / std::max(reference, 1e-20)) << ","
+              << dbFromRatio(std::sqrt(harmonics) / std::max(h1, 1e-20)) << ","
+              << radio.demod.am.avcEnv << "\n";
+  }
+  std::cout << "\n";
+}
+
 void runSinadSweep(const HarnessConfig& config,
                    std::string_view sectionName,
                    const std::vector<float>& carrierLevels) {
@@ -1551,13 +1637,43 @@ bool printReferenceRow(const char* metric,
 bool runReference(const HarnessConfig& config) {
   std::cout << "[reference]\n";
   std::cout << "metric,measured,low,high,in_band\n";
-  SweepSummary sweep = summarizeSweep(measureSweepPoints(config));
+  // Bandwidth edges describe the receiver, not the volume-dependent loudness
+  // compensation, which is checked separately against the impedance reference.
+  HarnessConfig flatConfig = config;
+  flatConfig.withoutLoudnessBranch = true;
+  SweepSummary sweep = summarizeSweep(measureSweepPoints(flatConfig));
   // Keep receiver quality limits independent of the rising period speaker
   // response, and ALSO validate/report the complete acoustic output below.
   HarnessConfig electricalConfig = config;
   electricalConfig.observeTerminalVoltage = true;
-  SweepSummary electricalSweep =
-      summarizeSweep(measureSweepPoints(electricalConfig));
+  HarnessConfig flatElectricalConfig = electricalConfig;
+  flatElectricalConfig.withoutLoudnessBranch = true;
+  const auto flatElectricalPoints = measureSweepPoints(flatElectricalConfig);
+  SweepSummary electricalSweep = summarizeSweep(flatElectricalPoints);
+  double loudnessErrorDb = 0.0;
+  {
+    const Radio1938 probe = makeRadio(config, 0.0f, false);
+    if (probe.receiverCircuit.volumeControlTapResistanceOhms > 0.0f) {
+      // A linear-network check: at 10% modulation the detector stays in its
+      // linear region, so the branch alone separates the two sweeps.
+      HarnessConfig linearConfig = electricalConfig;
+      linearConfig.modulationIndex = 0.1f;
+      HarnessConfig linearFlatConfig = linearConfig;
+      linearFlatConfig.withoutLoudnessBranch = true;
+      const auto fullPoints = measureSweepPoints(linearConfig);
+      const auto linearFlatPoints = measureSweepPoints(linearFlatConfig);
+      for (size_t i = 0; i < fullPoints.size(); ++i) {
+        const double hz = fullPoints[i].frequencyHz;
+        if (hz < 100.0 || hz > 4000.0) continue;
+        const std::complex<double> laplace{0, 2 * 3.14159265358979323846 * hz};
+        const double predicted = dbFromRatio(
+            std::abs(receiverInputReference(probe.receiverCircuit, laplace).grid) /
+            std::abs(receiverInputReference(probe.receiverCircuit, laplace, false).grid));
+        const double measured = fullPoints[i].gainDb - linearFlatPoints[i].gainDb;
+        loudnessErrorDb = std::max(loudnessErrorDb, std::abs(measured - predicted));
+      }
+    }
+  }
   ReferenceAnchorSummary electricalAnchors =
       measureReferenceAnchorSummary(electricalConfig);
   double electricalImdDb = measureImdSummaryDb(electricalConfig);
@@ -1594,6 +1710,9 @@ bool runReference(const HarnessConfig& config) {
                                  bands.terminalLow3dBMin, bands.terminalLow3dBMax);
   allInBand &= printReferenceRow("terminal_high_3db_hz", electricalSweep.high3dBHz,
                                  bands.terminalHigh3dBMin, bands.terminalHigh3dBMax);
+  // The ideal-source reference omits the detector's own source resistance;
+  // 0.3 dB covers that.
+  allInBand &= printReferenceRow("loudness_branch_error_db", loudnessErrorDb, 0.0, 0.3);
   allInBand &= printReferenceRow("terminal_imd_db", electricalImdDb,
                                  -100.0, bands.terminalImdDbMax);
   allInBand &= printReferenceRow("terminal_sinad_nominal_db",
@@ -1776,6 +1895,8 @@ int main(int argc, char** argv) {
     if (wantsSection(config, "overdrive")) runOverdrive(config);
     if (wantsSection(config, "sinad")) runSinad(config);
     if (wantsSection(config, "weak")) runWeakSignal(config);
+    if (wantsSection(config, "avc")) runAvcCharacteristic(config);
+    if (wantsSection(config, "fading")) runSelectiveFading(config);
     if (wantsSection(config, "transient")) runTransient(config);
     bool referencePassed = true;
     if (wantsSection(config, "reference")) {

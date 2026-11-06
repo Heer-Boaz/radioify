@@ -23,6 +23,88 @@ bool powerUsesSingleEndedOutput(const Radio1938& radio) {
          Radio1938::PowerNodeState::Topology::CapCoupledSingleEnded;
 }
 
+// Thevenin source seen by the interstage coupling capacitor. A plate bypass
+// capacitor is folded in with the same implicit step as the coupling network.
+struct DriverSource {
+  float volts;
+  float ohms;
+};
+
+DriverSource driverPlateSource(const Radio1938& radio, float openCircuitVolts, float dt) {
+  const auto& power = radio.power;
+  const float cap = radio.receiverCircuit.tubePlateShuntCapFarads;
+  if (!(cap > 0.0f)) return {openCircuitVolts, power.driverSourceResistanceOhms};
+  const float sourceG = 1.0f / power.driverSourceResistanceOhms;
+  const float capG = cap / dt;
+  const float totalG = sourceG + capG;
+  return {(sourceG * openCircuitVolts + capG * power.driverPlateCapVoltage) / totalG,
+          1.0f / totalG};
+}
+
+// Coupling node N with grid leak, and a potentiometer from N to a capacitor
+// whose wiper is the grid. All linear parts reduce to a Thevenin source at the
+// wiper; only the positive-grid current is nonlinear. Backward Euler for both
+// capacitors, as in solveCapCoupledGridVoltage.
+float solvePotentiometerGrid(Radio1938& radio, const DriverSource& source, float dt,
+                             float gridLeakOhms, float biasVolts, float gridCurrentOhms) {
+  auto& power = radio.power;
+  const double couplingCap = requirePositiveFinite(power.gridCouplingCapFarads);
+  const double seriesTerm = double(source.ohms) + dt / couplingCap;
+  const double sourceCurrent =
+      (double(source.volts) - power.gridCouplingCapVoltage) / seriesTerm;
+  const double nodeG = 1 / seriesTerm + 1 / double(requirePositiveFinite(gridLeakOhms));
+  const double position = std::clamp<double>(power.gridPotentiometerPosition, 0, 1);
+  const double upperOhms = (1 - position) * power.gridPotentiometerOhms;
+  const double lowerOhms = position * power.gridPotentiometerOhms;
+  const double capacitor = power.gridPotentiometerCapFarads;
+  const double lowerG = capacitor > 0 ? 1 / (lowerOhms + dt / capacitor) : 0;
+  // Thevenin at the wiper.
+  const double nodeR = 1 / nodeG + upperOhms;
+  const double wiperG = 1 / nodeR + lowerG;
+  const double wiperOpenVolts =
+      (sourceCurrent / nodeG / nodeR + lowerG * power.gridPotentiometerCapVoltage) / wiperG;
+  const double gridCurrentG = 1 / double(requirePositiveFinite(gridCurrentOhms));
+  double grid = wiperOpenVolts;
+  for (int i = 0; i < 8; ++i) {
+    const bool conducting = biasVolts + grid > 0;
+    const double f = (wiperOpenVolts - grid) * wiperG -
+                     (conducting ? (biasVolts + grid) * gridCurrentG : 0);
+    const double df = -wiperG - (conducting ? gridCurrentG : 0);
+    grid -= f / df;
+  }
+  const double node =
+      upperOhms > 0 ? (sourceCurrent + grid / upperOhms) / (nodeG + 1 / upperOhms) : grid;
+  const double seriesCurrent = (double(source.volts) - power.gridCouplingCapVoltage - node) /
+                               seriesTerm;
+  power.gridCouplingCapVoltage += static_cast<float>(dt * seriesCurrent / couplingCap);
+  if (capacitor > 0) {
+    const double lowerCurrent = lowerG * (grid - power.gridPotentiometerCapVoltage);
+    power.gridPotentiometerCapVoltage += static_cast<float>(dt * lowerCurrent / capacitor);
+  }
+  power.driverPlateCapVoltage = static_cast<float>(source.volts - source.ohms * seriesCurrent);
+  return static_cast<float>(grid);
+}
+
+float solveDriverCoupling(Radio1938& radio, float y, float dt, float gridLeakOhms,
+                          float biasVolts, float gridCurrentOhms) {
+  auto& power = radio.power;
+  const DriverSource source = driverPlateSource(radio, y, dt);
+  if (power.gridPotentiometerOhms > 0.0f)
+    return solvePotentiometerGrid(radio, source, dt, gridLeakOhms, biasVolts,
+                                  gridCurrentOhms);
+  const float previousCapVoltage = power.gridCouplingCapVoltage;
+  const float gridVoltage = solveCapCoupledGridVoltage(
+      source.volts, previousCapVoltage, dt, power.gridCouplingCapFarads, source.ohms,
+      gridLeakOhms, biasVolts, gridCurrentOhms);
+  const float seriesCurrent =
+      (source.volts - previousCapVoltage - gridVoltage) /
+      (source.ohms + dt / requirePositiveFinite(power.gridCouplingCapFarads));
+  power.gridCouplingCapVoltage +=
+      dt * (seriesCurrent / requirePositiveFinite(power.gridCouplingCapFarads));
+  power.driverPlateCapVoltage = source.volts - source.ohms * seriesCurrent;
+  return gridVoltage;
+}
+
 float runSingleEndedPowerStageSample(Radio1938& radio, float y) {
   auto& power = radio.power;
   const bool calibrationEnabled = radio.calibration.enabled;
@@ -33,16 +115,9 @@ float runSingleEndedPowerStageSample(Radio1938& radio, float y) {
   float sampleRate =
       (power.internalSampleRate > 0.0f) ? power.internalSampleRate : radio.sampleRate;
   float dt = 1.0f / requirePositiveFinite(sampleRate);
-  float previousCapVoltage = power.gridCouplingCapVoltage;
-  power.gridVoltage = solveCapCoupledGridVoltage(
-      y, previousCapVoltage, dt, power.gridCouplingCapFarads,
-      power.driverSourceResistanceOhms, power.outputGridLeakResistanceOhms,
-      power.outputTubeBiasVolts, power.outputGridCurrentResistanceOhms);
-  float seriesCurrent = (y - previousCapVoltage - power.gridVoltage) /
-                        (power.driverSourceResistanceOhms +
-                         dt / requirePositiveFinite(power.gridCouplingCapFarads));
-  power.gridCouplingCapVoltage +=
-      dt * (seriesCurrent / requirePositiveFinite(power.gridCouplingCapFarads));
+  power.gridVoltage =
+      solveDriverCoupling(radio, y, dt, power.outputGridLeakResistanceOhms,
+                          power.outputTubeBiasVolts, power.outputGridCurrentResistanceOhms);
   power.outputGridAVolts = power.gridVoltage;
   power.outputGridBVolts = 0.0f;
 
@@ -113,16 +188,9 @@ float runPowerStageSample(Radio1938& radio, float y) {
   float sampleRate =
       (power.internalSampleRate > 0.0f) ? power.internalSampleRate : radio.sampleRate;
   float dt = 1.0f / requirePositiveFinite(sampleRate);
-  float previousCapVoltage = power.gridCouplingCapVoltage;
-  power.gridVoltage = solveCapCoupledGridVoltage(
-      y, previousCapVoltage, dt, power.gridCouplingCapFarads,
-      power.driverSourceResistanceOhms, power.gridLeakResistanceOhms, power.tubeBiasVolts,
-      power.tubeGridCurrentResistanceOhms);
-  float seriesCurrent = (y - previousCapVoltage - power.gridVoltage) /
-                        (power.driverSourceResistanceOhms +
-                         dt / requirePositiveFinite(power.gridCouplingCapFarads));
-  power.gridCouplingCapVoltage +=
-      dt * (seriesCurrent / requirePositiveFinite(power.gridCouplingCapFarads));
+  power.gridVoltage =
+      solveDriverCoupling(radio, y, dt, power.gridLeakResistanceOhms, power.tubeBiasVolts,
+                          power.tubeGridCurrentResistanceOhms);
   float controlGridVolts = power.tubeBiasVolts + power.gridVoltage;
   if (calibrationEnabled) {
     radio.calibration.driverGridVolts.accumulate(power.gridVoltage);
@@ -388,6 +456,8 @@ void RadioPowerNode::reset(Radio1938& radio) {
   auto& power = radio.power;
   resetPowerSupply(radio);
   power.gridCouplingCapVoltage = 0.0f;
+  power.driverPlateCapVoltage = 0.0f;
+  power.gridPotentiometerCapVoltage = 0.0f;
   power.gridVoltage = 0.0f;
   power.tubePlateVoltage = power.tubeQuiescentPlateVolts;
   power.outputGridAVolts = 0.0f;
