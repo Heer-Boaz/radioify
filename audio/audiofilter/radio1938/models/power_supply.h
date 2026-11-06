@@ -1,12 +1,7 @@
 #ifndef RADIOIFY_AUDIOFILTER_RADIO1938_MODELS_POWER_SUPPLY_H
 #define RADIOIFY_AUDIOFILTER_RADIO1938_MODELS_POWER_SUPPLY_H
-
 #include "../../../radio.h"
-
-float computePowerLoadT(const Radio1938::PowerNodeState& power);
-float computePowerBranchSupplyScale(const Radio1938& radio, float branchDepth);
-void configureRectifierRipple(Radio1938& radio);
-void resetRectifierRipple(Radio1938& radio);
-void advanceRectifierRipplePhase(Radio1938& radio);
-
-#endif  // RADIOIFY_AUDIOFILTER_RADIO1938_MODELS_POWER_SUPPLY_H
+void configurePowerSupply(Radio1938& radio);
+void resetPowerSupply(Radio1938& radio);
+void advancePowerSupply(Radio1938& radio, double outputPlateAmps, double driverPlateAmps);
+#endif

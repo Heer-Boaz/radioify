@@ -17,23 +17,19 @@ void RadioFinalLimiterNode::init(Radio1938& radio, RadioInitContext&) {
   limiter.delayBuf.assign(static_cast<size_t>(limiter.delaySamples), 0.0f);
   limiter.requiredGainBuf.assign(static_cast<size_t>(limiter.delaySamples), 1.0f);
   limiter.delayWriteIndex = 0;
-  float osFs = radio.sampleRate * radio.globals.oversampleFactor;
-  float osCut = radio.sampleRate * radio.globals.oversampleCutoffFraction;
-  limiter.osLpIn.setLowpass(osFs, osCut, kRadioBiquadQ);
-  limiter.osLpOut.setLowpass(osFs, osCut, kRadioBiquadQ);
+  limiter.peakOversampler.configure(radio.globals.oversampleFactor,
+                                   radio.globals.oversampleCutoffFraction);
 }
 
 void RadioFinalLimiterNode::reset(Radio1938& radio) {
   auto& limiter = radio.finalLimiter;
   limiter.gain = 1.0f;
   limiter.targetGain = 1.0f;
-  limiter.osPrev = 0.0f;
   limiter.observedPeak = 0.0f;
   limiter.delayWriteIndex = 0;
   std::fill(limiter.delayBuf.begin(), limiter.delayBuf.end(), 0.0f);
   std::fill(limiter.requiredGainBuf.begin(), limiter.requiredGainBuf.end(), 1.0f);
-  limiter.osLpIn.reset();
-  limiter.osLpOut.reset();
+  limiter.peakOversampler.reset();
 }
 
 float RadioFinalLimiterNode::run(Radio1938& radio,
@@ -43,17 +39,12 @@ float RadioFinalLimiterNode::run(Radio1938& radio,
   if (!limiter.enabled) return y;
   float limitedIn = y;
 
-  float peak = 0.0f;
-  float mid = 0.5f * (limiter.osPrev + limitedIn);
-  float s0 = limiter.osLpIn.process(mid);
-  s0 = limiter.osLpOut.process(s0);
-  peak = std::max(peak, std::fabs(s0));
-
-  float s1 = limiter.osLpIn.process(limitedIn);
-  s1 = limiter.osLpOut.process(s1);
-  peak = std::max(peak, std::fabs(s1));
-
-  limiter.osPrev = limitedIn;
+  // The interpolator is delayed. Include the current discrete sample as well
+  // so a short/disabled lookahead cannot miss an immediately arriving peak.
+  float peak = std::fabs(limitedIn);
+  const auto& interpolated = limiter.peakOversampler.upsample(limitedIn);
+  for (int i = 0; i < limiter.peakOversampler.factor(); ++i)
+    peak = std::max(peak, std::fabs(interpolated[i]));
   limiter.observedPeak = peak;
 
   float requiredGain = 1.0f;

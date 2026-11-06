@@ -3,6 +3,7 @@
 #include "audiofilter/math/signal_math.h"
 #include "audiofilter/radio1938/audio_pipeline.h"
 #include "audiofilter/radio1938/models/power_stage_solver.h"
+#include "audiofilter/radio1938/models/power_supply.h"
 #include "audiofilter/radio1938/radio_pipeline_types.h"
 
 #include <algorithm>
@@ -239,14 +240,16 @@ double correlation(const std::vector<float>& a, const std::vector<float>& b) {
 }
 
 double effectiveDetectorAudioTauSeconds(const Radio1938& radio) {
-  double storageCapFarads =
-      std::max<double>(radio.demod.am.detectorStorageCapFarads, 1e-12);
-  double dischargeG =
-      1.0 / std::max<double>(radio.demod.am.audioDischargeResistanceOhms, 1e-6);
-  double receiverLoadG =
-      std::max<double>(radio.receiverCircuit.detectorLoadConductance, 0.0);
-  double totalLoadG = std::max(dischargeG + receiverLoadG, 1e-12);
-  return storageCapFarads / totalLoadG;
+  const auto& d = radio.demod.am;
+  const double dischargeG = d.audioDischargeResistanceOhms > 0
+      ? 1.0 / d.audioDischargeResistanceOhms : 0;
+  const double receiverLoadG = std::max<double>(radio.receiverCircuit.detectorLoadConductance, 0);
+  const double loadR = 1 / std::max(dischargeG + receiverLoadG, 1e-12);
+  // Dominant release pole of the two-capacitor RC ladder with the diode off.
+  const double a = d.filterResistanceOhms * loadR * d.detectorStorageCapFarads * d.filterCapFarads;
+  const double b = d.filterResistanceOhms * d.detectorStorageCapFarads +
+      loadR * (d.detectorStorageCapFarads + d.filterCapFarads);
+  return .5 * (b + std::sqrt(std::max(b * b - 4 * a, 0.0)));
 }
 
 void addRange(std::vector<TestRow>& rows,
@@ -521,10 +524,7 @@ double measureSpeakerElectricalImpedanceMagnitude(Radio1938& radio,
     const float phase =
         kRadioTwoPi * frequencyHz * (static_cast<float>(i) / sampleRate);
     const float voltage = std::sin(phase);
-    const SpeakerElectricalLinearization load =
-        linearizeSpeakerElectricalLoad(speaker,
-                                       radio.power.outputLoadResistanceOhms, dt);
-    commitSpeakerElectricalLoad(speaker, load, voltage);
+    advanceVoltageDrivenSpeaker(speaker, voltage, dt);
     if (i >= analysisStart) {
       voltageSumSq += static_cast<double>(voltage) * voltage;
       currentSumSq += static_cast<double>(speaker.electricalCurrentAmps) *
@@ -556,19 +556,17 @@ AcousticToneRms measureVoltageDrivenAcoustics(Radio1938& radio, float hz) {
   double cabinetSum = 0.0;
   RadioSampleContext ctx{};
   for (uint32_t frame = 0; frame < 2u * halfFrames; ++frame) {
+    float accelerationSum = 0.0f;
     for (int step = 0; step < steps; ++step) {
       const double seconds = (static_cast<double>(frame) +
                               static_cast<double>(step + 1) / steps) /
                              radio.sampleRate;
       const float volts = 0.1f * static_cast<float>(
           std::sin(6.283185307179586 * hz * seconds));
-      const auto load = linearizeSpeakerElectricalLoad(
-          speaker, radio.power.outputLoadResistanceOhms, dt);
-      commitSpeakerElectricalLoad(speaker, load, volts);
+      advanceVoltageDrivenSpeaker(speaker, volts, dt);
+      accelerationSum += speaker.acousticDriveVolts;
     }
-    const float motor = speaker.electricalCurrentAmps *
-                        speaker.effectiveVoiceCoilResistanceOhms;
-    const float pressure = RadioSpeakerNode::run(radio, motor, ctx);
+    const float pressure = RadioSpeakerNode::run(radio, accelerationSum / steps, ctx);
     const float mounted = RadioCabinetNode::run(radio, pressure, ctx);
     if (frame >= halfFrames) {
       speakerSum += static_cast<double>(pressure) * pressure;
@@ -940,11 +938,12 @@ std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
   {
     Radio1938 radio = makeNodeFixture(config, 0.0f, {PassId::Tuning});
     radio.tuning.tuneOffsetHz = 0.75f * radio.tuning.tunedBw;
-    RadioBlockControl block{};
-    RadioTuningNode::prepare(radio, block, 2048u);
-    addPredicate(rows, "Tuning", "prepare_publishes_positive_tune_norm",
-                 block.tuneNorm > 0.0f && block.tuneNorm <= 1.0f, block.tuneNorm,
-                 "normalized mistune follows tuning sign");
+    RadioSampleContext ctx{};
+    for (int n = 0; n < 2048; ++n) RadioTuningNode::run(radio, ctx);
+    addPredicate(rows, "Tuning", "sample_clock_publishes_positive_tuning",
+                 radio.tuning.tuneAppliedHz > 0 &&
+                     radio.tuning.tuneAppliedHz <= radio.tuning.tuneOffsetHz,
+                 radio.tuning.tuneAppliedHz, "smoothed tuning follows the commanded offset");
   }
 
   {
@@ -967,9 +966,7 @@ std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
   {
     Radio1938 radio = makeNodeFixture(config, 0.0f, {PassId::ControlBus});
     RadioSampleContext dummy{};
-    radio.power.sagStart = 0.2f;
-    radio.power.sagEnd = 0.8f;
-    radio.controlSense.powerSagSense = 0.1f;
+    radio.controlSense.powerSagSense = -0.1f;
     RadioControlBusNode::run(radio, dummy);
     addRange(rows, "ControlBus", "sag_maps_floor", radio.controlBus.supplySag, 0.0,
              0.0, "clamped 0..1");
@@ -977,11 +974,11 @@ std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
     RadioControlBusNode::run(radio, dummy);
     addRange(rows, "ControlBus", "sag_maps_ceiling", radio.controlBus.supplySag, 1.0,
              1.0, "clamped 0..1");
-    radio.controlSense.powerSagSense = 0.5f * (radio.power.sagStart + radio.power.sagEnd);
+    radio.controlSense.powerSagSense = 0.5f;
     RadioControlBusNode::run(radio, dummy);
     addRange(rows, "ControlBus", "sag_midpoint_maps_half_scale",
              radio.controlBus.supplySag, 0.49, 0.51,
-             "linear map between sagStart and sagEnd");
+             "fractional B+ drop passes through");
   }
 
   {
@@ -997,48 +994,47 @@ std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
       radio.tuning.afcDeadband = 0.0f;
       radio.tuning.tuneOffsetHz = 400.0f;
       radio.controlSense.controlVoltageSense = 1.0f;
+      radio.controlSense.tuningSignalVolts = 1.0f;
       radio.controlSense.tuningErrorSense = 0.5f;
       for (int i = 0; i < 512; ++i) {
         RadioAFCNode::run(radio, dummy);
       }
       addPredicate(rows, "AFC", "positive_error_pulls_negative",
-                   radio.tuning.afcCorrectionHz < 0.0f,
-                   radio.tuning.afcCorrectionHz,
+                   radio.tuning.afcCorrectionHz < 0.0f, radio.tuning.afcCorrectionHz,
                    "correction opposes detector error");
 
       Radio1938 radio2 = makeNodeFixture(config, 0.0f, {PassId::AFC});
       radio2.tuning.afcDeadband = 0.0f;
       radio2.tuning.tuneOffsetHz = -400.0f;
       radio2.controlSense.controlVoltageSense = 1.0f;
+      radio2.controlSense.tuningSignalVolts = 1.0f;
       radio2.controlSense.tuningErrorSense = -0.5f;
       for (int i = 0; i < 512; ++i) {
         RadioAFCNode::run(radio2, dummy);
       }
       addPredicate(rows, "AFC", "negative_error_pulls_positive",
-                   radio2.tuning.afcCorrectionHz > 0.0f,
-                   radio2.tuning.afcCorrectionHz,
+                   radio2.tuning.afcCorrectionHz > 0.0f, radio2.tuning.afcCorrectionHz,
                    "correction opposes detector error");
 
       Radio1938 captured = makeNodeFixture(config, 0.0f, {PassId::AFC});
       captured.tuning.afcDeadband = 0.0f;
       captured.tuning.tuneOffsetHz = 4000.0f;
       captured.controlSense.controlVoltageSense = 1.0f;
+      captured.controlSense.tuningSignalVolts = 1.0f;
       captured.controlSense.tuningErrorSense = 0.8f;
-      int settleSamples =
-          static_cast<int>(std::ceil(1.5f * captured.sampleRate));
+      int settleSamples = static_cast<int>(std::ceil(1.5f * captured.sampleRate));
       for (int i = 0; i < settleSamples; ++i) {
         RadioAFCNode::run(captured, dummy);
       }
-      addRange(rows, "AFC", "four_khz_error_is_pulled_to_center",
-               std::fabs(captured.tuning.tuneOffsetHz +
-                         captured.tuning.afcCorrectionHz),
-               0.0, 100.0,
-               "constant discriminator error settles near center");
+      addRange(rows, "AFC", "constant_error_respects_pull_limit",
+               -captured.tuning.afcCorrectionHz, 4900.0, 5000.0,
+               "clamped open-loop pull; actual carrier acquisition is tested separately");
 
       Radio1938 outside = makeNodeFixture(config, 0.0f, {PassId::AFC});
       outside.tuning.afcDeadband = 0.0f;
       outside.tuning.tuneOffsetHz = 5100.0f;
       outside.controlSense.controlVoltageSense = 1.0f;
+      outside.controlSense.tuningSignalVolts = 1.0f;
       outside.controlSense.tuningErrorSense = 1.0f;
       for (int i = 0; i < settleSamples; ++i) {
         RadioAFCNode::run(outside, dummy);
@@ -1050,12 +1046,10 @@ std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
       addRange(rows, "AFC", "typical_has_no_magnetic_tuning",
                radio.tuning.magneticTuningEnabled ? 1.0 : 0.0, 0.0, 0.0,
                "38-12 has no magnetic-tuning circuit");
-      addRange(rows, "AFC", "disabled_preset_has_zero_capture",
-               radio.tuning.afcCaptureHz, 0.0, 0.0,
-               "no AFC acquisition range");
+      addRange(rows, "AFC", "disabled_preset_has_zero_capture", radio.tuning.afcCaptureHz,
+               0.0, 0.0, "no AFC acquisition range");
       addRange(rows, "AFC", "disabled_preset_has_zero_authority",
-               radio.tuning.afcMaxCorrectionHz, 0.0, 0.0,
-               "no AFC correction authority");
+               radio.tuning.afcMaxCorrectionHz, 0.0, 0.0, "no AFC correction authority");
       radio.controlSense.tuningErrorSense = 0.8f;
       RadioAFCNode::run(radio, dummy);
       addRange(rows, "AFC", "disabled_preset_ignores_tuning_error",
@@ -1097,12 +1091,12 @@ std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
     RadioSampleContext mistunedCtx{};
     RadioInterferenceDerivedNode::run(tuned, tunedCtx);
     RadioInterferenceDerivedNode::run(mistuned, mistunedCtx);
-    addPredicate(rows, "InterferenceDerived", "mistune_increases_detector_crackle",
-                 mistunedCtx.derived.demodIfCrackleAmp >
-                     tunedCtx.derived.demodIfCrackleAmp,
-                 mistunedCtx.derived.demodIfCrackleAmp -
-                     tunedCtx.derived.demodIfCrackleAmp,
-                 "detector crackle exposure rises when capture is lost");
+    addPredicate(rows, "InterferenceDerived", "rf_impulse_source_independent_of_tuning",
+                 mistunedCtx.derived.rfImpulseAmp ==
+                     tunedCtx.derived.rfImpulseAmp,
+                 mistunedCtx.derived.rfImpulseAmp -
+                     tunedCtx.derived.rfImpulseAmp,
+                 "receiver filtering determines impulse audibility; source stays constant");
   }
 
   {
@@ -1174,8 +1168,7 @@ std::vector<TestRow> runRfPhysics(const HarnessConfig& config) {
     addRange(rows, "IFStrip", "bandwidth_filters_input_noise",
              narrow.noise / base.noise, 0.60, 0.85,
              "halving bandwidth reduces integrated noise");
-    // At 5 kHz service BW the IF model hits its 0.20*fs cutoff cap at
-    // 44.1/48 kHz. Use 2 kHz here so the physical IF bandwidth is unchanged.
+    // Fixed physical tank bandwidth at all envelope sample rates.
     const auto densityRef = measureIfNoise(config, 48000.0f, 2000.0f, 1.0f);
     for (float rate : {44100.0f, 96000.0f}) {
       const auto other = measureIfNoise(config, rate, 2000.0f, 1.0f);
@@ -1352,12 +1345,12 @@ std::vector<TestRow> runRfPhysics(const HarnessConfig& config) {
         radioDirectRfLow, 100.0f, config.carrierRmsVolts);
     auto directRfHigh = runIfStripRealRfDetectorSidebandResponse(
         radioDirectRfHigh, serviceEdgeHz, config.carrierRmsVolts);
-    addPredicate(rows, "IFStrip", "real_rf_source_envelope_supports_service_edge_sideband",
-                 directRfHigh.detectorFeedRms >
-                     0.45 * std::max(directRfLow.detectorFeedRms, 1e-12),
-                 directRfHigh.detectorFeedRms /
-                     std::max(directRfLow.detectorFeedRms, 1e-12),
-                 "direct real-RF into IF strip, edge / 100 Hz detector-feed ripple");
+    const double representationRatio =
+        (directRfHigh.detectorFeedRms / directRfLow.detectorFeedRms) /
+        (high.detectorFeedRms / low.detectorFeedRms);
+    addRange(rows, "IFStrip", "real_rf_matches_complex_selectivity",
+             representationRatio, .95, 1.05,
+             "representation conversion must preserve physical IF selectivity");
 
     Radio1938 radioDirectCarrier =
         makeNodeFixture(config, 0.0f, {PassId::IFStrip, PassId::Demod, PassId::DetectorAudio});
@@ -1513,32 +1506,18 @@ std::vector<TestRow> runDetectorPhysics(const HarnessConfig& config) {
     zeroCtx.signal.detectorInputI = 0.0f;
     zeroCtx.signal.detectorInputQ = 0.0f;
     float zeroOut = RadioAMDetectorNode::run(zero, 0.0f, zeroCtx);
-    double expectedAudioRect = diodeJunctionRectify(
-        0.0f, zero.demod.am.audioDiodeDrop, zero.demod.am.audioJunctionSlopeVolts);
-    double expectedAvcRectified = diodeJunctionRectify(
-        0.0f, zero.demod.am.avcDiodeDrop, zero.demod.am.avcJunctionSlopeVolts);
-    double expectedAvcDrive =
-        std::max(expectedAvcRectified -
-                     0.18 * std::max<double>(zero.demod.am.controlVoltageRef, 1e-6),
-                 0.0);
-    double dt = 1.0 / std::max<double>(zero.demod.am.fs, 1.0);
-    double avcLeakG =
-        1.0 / std::max<double>(zero.demod.am.avcDischargeResistanceOhms, 1e-6);
-    double avcCapG =
-        std::max<double>(zero.demod.am.avcFilterCapFarads, 1e-12) / dt;
-    double expectedAvcNodeAfterStep =
-        std::max(avcCapG * expectedAvcDrive / std::max(avcCapG + avcLeakG, 1e-12),
-                 0.0);
-    addRange(rows, "AMDetector", "zero_input_matches_diode_equation", zeroOut,
-             expectedAudioRect - 1e-9, expectedAudioRect + 1e-9,
-             "audio rectifier output at zero carrier");
-    addPredicate(rows, "AMDetector", "zero_input_node_does_not_self_charge",
-                 zero.demod.am.detectorNode <= expectedAudioRect + 1e-6,
-                 zero.demod.am.detectorNode - expectedAudioRect,
-                 "warm-started detector node may relax but must not grow at zero carrier");
-    addRange(rows, "AMDetector", "zero_input_avc_follows_rc_relaxation",
-             std::fabs(zero.demod.am.avcEnv - expectedAvcNodeAfterStep),
-             0.0, 1e-7, "warm-started AVC node must follow the RC solution");
+    // A hot cathode can self-bias an unloaded detector without an RF carrier.
+    // Verify equilibrium and the absence of AC, rather than asserting a
+    // semiconductor-like zero-current threshold.
+    const float zeroNode = zero.demod.am.detectorNode;
+    for (int n = 0; n < 100; ++n) RadioAMDetectorNode::run(zero, 0, zeroCtx);
+    addRange(rows, "AMDetector", "zero_carrier_thermal_bias_is_stable",
+             std::abs(zero.demod.am.detectorNode - zeroNode), 0, 2e-6,
+             "thermal detector bias must be DC at zero carrier");
+    addPredicate(rows, "AMDetector", "zero_carrier_bias_is_finite",
+                 std::isfinite(zeroOut) && zeroNode > 0 && zeroNode < .5,
+                 zeroNode, "contact current produces a bounded DC detector bias");
+
   }
 
   {
@@ -1550,21 +1529,19 @@ std::vector<TestRow> runDetectorPhysics(const HarnessConfig& config) {
                                     slowerAfc.demod.am.tuneOffsetHz);
     fasterAfc.demod.am.setBandwidth(fasterAfc.demod.am.bwHz,
                                     fasterAfc.demod.am.tuneOffsetHz);
-    addPredicate(rows, "AMDetector", "afc_sense_lp_hz_controls_probe_bandwidth",
-                 slowerAfc.demod.am.afcLowProbe.i.b0 <
-                     fasterAfc.demod.am.afcLowProbe.i.b0,
-                 fasterAfc.demod.am.afcLowProbe.i.b0 /
-                     std::max<double>(slowerAfc.demod.am.afcLowProbe.i.b0, 1e-12),
-                 "fast/slow AFC probe b0 ratio");
+    addPredicate(rows, "AMDetector", "afc_sense_lp_hz_controls_error_smoothing",
+                 slowerAfc.demod.am.afcErrorLp.b0 <
+                     fasterAfc.demod.am.afcErrorLp.b0,
+                 fasterAfc.demod.am.afcErrorLp.b0 /
+                     std::max<double>(slowerAfc.demod.am.afcErrorLp.b0, 1e-12),
+                 "fast/slow AFC error smoothing b0 ratio");
   }
 
   {
     Radio1938 lowThreshold = makeNodeFixture(config, 0.0f, {PassId::Demod});
     Radio1938 highThreshold = makeNodeFixture(config, 0.0f, {PassId::Demod});
-    lowThreshold.demod.am.avcDiodeDrop = 0.0f;
-    lowThreshold.demod.am.avcJunctionSlopeVolts = 0.002f;
-    highThreshold.demod.am.avcDiodeDrop = 0.18f;
-    highThreshold.demod.am.avcJunctionSlopeVolts = 0.020f;
+    lowThreshold.demod.am.avcDelayBiasVolts = 0;
+    highThreshold.demod.am.avcDelayBiasVolts = .72f;
     RadioAMDetectorNode::reset(lowThreshold);
     RadioAMDetectorNode::reset(highThreshold);
     for (uint32_t i = 0; i < kNodeTestFrames; ++i) {
@@ -1779,6 +1756,12 @@ std::vector<TestRow> runAudioPhysics(const HarnessConfig& config) {
         radio.power.outputTransformer.integrationSubsteps;
     std::vector<float> secondaryZero(kNodeTestFrames, 0.0f);
     RadioSampleContext ctx{};
+    // Isolate zero-input behaviour on a DC bench supply. Real full-wave B+
+    // creates hum at zero programme level, and the coupled inductors must settle.
+    radio.noiseConfig.humHzDefault = 0;
+    configurePowerSupply(radio);
+    for (int n = 0; n < int(radio.sampleRate); ++n)
+      RadioPowerNode::run(radio, 0, ctx);
     for (uint32_t i = 0; i < kNodeTestFrames; ++i) {
       secondaryZero[i] = RadioPowerNode::run(radio, 0.0f, ctx);
     }
@@ -2174,7 +2157,11 @@ std::vector<TestRow> runOutputPhysics(const HarnessConfig& config) {
     RadioOutputClipNode::init(radio, initCtx);
     RadioOutputClipNode::reset(radio);
     RadioSampleContext ctx{};
-    float out = RadioOutputClipNode::run(radio, 1.0f, ctx);
+    // The interpolator has a finite startup response. Check the complete
+    // overload transient and settled output, not only the first input sample.
+    float out = 0.0f;
+    for (int i = 0; i < 256; ++i)
+      out = std::max(out, std::fabs(RadioOutputClipNode::run(radio, 1.0f, ctx)));
     addPredicate(rows, "OutputClip", "clip_threshold_marks_and_clamps",
                  radio.diagnostics.outputClipSamples > 0 && std::fabs(out) <= 0.5f,
                  out, "hard safety clamp");

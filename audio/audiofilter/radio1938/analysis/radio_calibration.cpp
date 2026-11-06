@@ -171,9 +171,8 @@ void Radio1938::CalibrationState::reset() {
   maxSpeakerReferenceRatio = 0.0f;
   speakerReferenceRmsRatio = 0.0f;
   maxDigitalOutput = 0.0f;
-  detectorIfCrackleEventCount = 0;
-  detectorIfCrackleMaxBurstAmp = 0.0f;
-  detectorIfCrackleMaxEnv = 0.0f;
+  rfImpulseEventCount = 0;
+  rfImpulseMaxAmp = 0.0f;
   detectorWaveformAverageSolveSteps = 0.0f;
   detectorWaveformSplitFraction = 0.0f;
   detectorStorageAverageIterations = 0.0f;
@@ -195,7 +194,6 @@ void Radio1938::CalibrationState::reset() {
   powerInterstageSolveUsPerSample = 0.0f;
   powerOutputSolveUsPerSample = 0.0f;
   powerInterstageDriverEvalCallsPerSample = 0.0f;
-  powerInterstageDriverEvalUsPerCall = 0.0f;
   powerInterstageAdaptiveValidationAttempts = 0;
   powerInterstageAdaptiveAcceptedDownshifts = 0;
   powerInterstageAdaptiveAcceptedDownshiftFraction = 0.0f;
@@ -426,11 +424,8 @@ void updateCalibrationSnapshot(Radio1938& radio) {
       radio.calibration.passes[static_cast<size_t>(PassId::ReceiverCircuit)];
   const auto& powerPass =
       radio.calibration.passes[static_cast<size_t>(PassId::Power)];
-  radio.calibration.detectorIfCrackleEventCount =
-      radio.demod.am.ifCrackleEventCount;
-  radio.calibration.detectorIfCrackleMaxBurstAmp =
-      radio.demod.am.ifCrackleMaxBurstAmp;
-  radio.calibration.detectorIfCrackleMaxEnv = radio.demod.am.ifCrackleMaxEnv;
+  radio.calibration.rfImpulseEventCount = radio.input.impulseEventCount;
+  radio.calibration.rfImpulseMaxAmp = radio.input.impulseMaxAmp;
   if (radio.demod.am.waveformSampleCount > 0) {
     radio.calibration.detectorWaveformAverageSolveSteps =
         static_cast<float>(radio.demod.am.waveformSolveStepCount) /
@@ -506,11 +501,6 @@ void updateCalibrationSnapshot(Radio1938& radio) {
     radio.calibration.powerInterstageDriverEvalCallsPerSample =
         static_cast<float>(radio.power.interstageDriverEvalCount) *
         static_cast<float>(invValidation);
-  }
-  if (radio.power.interstageDriverEvalCount > 0) {
-    radio.calibration.powerInterstageDriverEvalUsPerCall = static_cast<float>(
-        static_cast<double>(radio.power.interstageDriverEvalTimeNs) /
-        static_cast<double>(radio.power.interstageDriverEvalCount) * 1e-3);
   }
   radio.calibration.powerInterstageAdaptiveValidationAttempts =
       radio.power.interstageAdaptiveValidationAttemptCount;

@@ -58,6 +58,8 @@ struct HarnessConfig {
   int detectorWaveformMaxSubsteps = 0;
   std::string settingsPath;
   std::string presetName;
+  RadioReceiverProfile receiverProfile = kDefaultRadioReceiverProfile;
+  bool receiverProfileExplicit = false;
   std::string section = "all";
   bool observeTerminalVoltage = false;
   float speakerNaturalHzOverride = 0.0f;
@@ -87,13 +89,16 @@ struct ReceiverReferenceBands {
 // See docs/radio1938-period-acoustics.md for both measurements and their limits.
 constexpr ReceiverReferenceBands kPhilco37116ReferenceBands{
     60.0f, 200.0f, 2500.0f, 5500.0f, -38.0f, 30.0f,
-    2500.0f, 5500.0f, -35.0f, 28.0f, 0.85f, 1.10f, 12.0f, 18.0f};
+    // The thermionic detector uses several volts of IF and a 25% volume
+    // setting. Nominal playback now uses 36..64% of rated electrical power;
+    // rated 12..18 W capacity and the existing distortion/headroom guards stay.
+    2500.0f, 5500.0f, -35.0f, 28.0f, 0.60f, 0.80f, 12.0f, 18.0f};
 
 // The mass-market profile deliberately validates against its own 2 W,
 // single-ended receiver class. Reusing the 37-116's 15 W / high-fidelity
 // bands would turn the test into a demand that both physical models converge.
 constexpr ReceiverReferenceBands kTypical1930sReferenceBands{
-    100.0f, 250.0f, 2500.0f, 4500.0f, -23.0f, 18.0f,
+    100.0f, 250.0f, 1800.0f, 4500.0f, -23.0f, 18.0f,
     2200.0f, 3500.0f, -18.0f, 15.0f, 0.18f, 0.40f, 1.5f, 2.5f};
 
 constexpr const ReceiverReferenceBands& referenceBandsForProfile(
@@ -107,8 +112,10 @@ constexpr const ReceiverReferenceBands& referenceBandsForProfile(
   return kPhilco37116ReferenceBands;
 }
 
-constexpr float kTargetDetectorTauUsMin = 35.0f;
-constexpr float kTargetDetectorTauUsMax = 55.0f;
+// Dominant release poles of the actual 110/110 pF and 100/100 pF ladders,
+// rather than the retired common 350 pF / 160 k surrogate.
+constexpr float kPhilcoDetectorTauUsMin = 30, kPhilcoDetectorTauUsMax = 45;
+constexpr float kTypicalDetectorTauUsMin = 90, kTypicalDetectorTauUsMax = 120;
 constexpr float kTargetAvcTauMsMin = 60.0f;
 constexpr float kTargetAvcTauMsMax = 90.0f;
 // Prefer max digital output < ~0.95
@@ -240,14 +247,16 @@ double dbFromRatio(double ratio) {
 }
 
 double effectiveDetectorAudioTauSeconds(const Radio1938& radio) {
-  double storageCapFarads =
-      std::max<double>(radio.demod.am.detectorStorageCapFarads, 1e-12);
-  double dischargeG =
-      1.0 / std::max<double>(radio.demod.am.audioDischargeResistanceOhms, 1e-6);
-  double receiverLoadG =
-      std::max<double>(radio.receiverCircuit.detectorLoadConductance, 0.0);
-  double totalLoadG = std::max(dischargeG + receiverLoadG, 1e-12);
-  return storageCapFarads / totalLoadG;
+  const auto& d = radio.demod.am;
+  const double dischargeG = d.audioDischargeResistanceOhms > 0
+      ? 1.0 / d.audioDischargeResistanceOhms : 0;
+  const double receiverLoadG = std::max<double>(radio.receiverCircuit.detectorLoadConductance, 0);
+  const double loadR = 1 / std::max(dischargeG + receiverLoadG, 1e-12);
+  // Dominant release pole of the two-capacitor RC ladder with the diode off.
+  const double a = d.filterResistanceOhms * loadR * d.detectorStorageCapFarads * d.filterCapFarads;
+  const double b = d.filterResistanceOhms * d.detectorStorageCapFarads +
+      loadR * (d.detectorStorageCapFarads + d.filterCapFarads);
+  return .5 * (b + std::sqrt(std::max(b * b - 4 * a, 0.0)));
 }
 
 double avcTauSeconds(const Radio1938& radio) {
@@ -299,8 +308,9 @@ void printUsage() {
       << "  --detector-max-substeps <count>\n"
       << "  --speaker-natural-hz <hz>  Override the unmeasured mechanical prior for comparisons\n"
       << "  --radio-settings <path>\n"
-      << "  --preset <name>\n"
-      << "  --section <all|sweep|envelope|levels|imd|overdrive|sinad|weak|transient|reference|noise|spectrum|am_validate|am_convergence|power_bench>\n";
+      << "  --receiver-profile <typical-1930s|philco-37-116>  Base receiver before settings\n"
+      << "  --preset <name>  TOML preset; a built-in name also selects the receiver unless explicitly overridden\n"
+      << "  --section <all|config|sweep|envelope|levels|imd|overdrive|sinad|weak|transient|reference|noise|spectrum|am_validate|am_convergence|power_bench>\n";
 }
 
 HarnessConfig parseArgs(int argc, char** argv) {
@@ -338,6 +348,12 @@ HarnessConfig parseArgs(int argc, char** argv) {
     } else if (arg == "--preset") {
       if (i + 1 >= argc) fail("missing value for --preset");
       config.presetName = argv[++i];
+    } else if (arg == "--receiver-profile") {
+      if (i + 1 >= argc) fail("missing value for --receiver-profile");
+      const std::string_view name = argv[++i];
+      if (!parseRadioReceiverProfile(name, config.receiverProfile))
+        fail("unknown receiver profile: " + std::string(name));
+      config.receiverProfileExplicit = true;
     } else if (arg == "--section") {
       if (i + 1 >= argc) fail("missing value for --section");
       config.section = argv[++i];
@@ -347,6 +363,16 @@ HarnessConfig parseArgs(int argc, char** argv) {
     } else {
       fail(std::string("unknown argument: ") + std::string(arg));
     }
+  }
+  if (!config.presetName.empty()) {
+    RadioReceiverProfile namedProfile{};
+    const bool builtIn = parseRadioReceiverProfile(config.presetName, namedProfile);
+    if (config.settingsPath.empty()) {
+      if (!builtIn) fail("unknown receiver profile: " + config.presetName);
+      if (config.receiverProfileExplicit && config.receiverProfile != namedProfile)
+        fail("conflicting --preset and --receiver-profile without a settings file");
+    }
+    if (builtIn && !config.receiverProfileExplicit) config.receiverProfile = namedProfile;
   }
   if (config.speakerNaturalHzOverride > 0.0f &&
       config.speakerNaturalHzOverride >= 0.45f * config.sampleRate) {
@@ -373,16 +399,15 @@ void applyHarnessDetectorWaveformSettings(const HarnessConfig& config,
 Radio1938 makeRadio(const HarnessConfig& config, float noiseWeight,
                     bool warmWithCarrier) {
   Radio1938 radio;
+  // Receiver identity and TOML overlay selection are separate. A settings
+  // file must never silently replace a requested Philco with the default set.
+  radio.applyReceiverProfile(config.receiverProfile);
   radio.init(1, config.sampleRate, config.bandwidthHz, noiseWeight);
   if (!config.settingsPath.empty()) {
     std::string error;
     if (!applyRadioSettingsIni(radio, config.settingsPath, config.presetName,
                                &error)) {
       fail("failed to apply radio settings: " + error);
-    }
-  } else if (!config.presetName.empty()) {
-    if (!radio.applyReceiverProfile(config.presetName)) {
-      fail("unknown preset: " + config.presetName);
     }
   }
   applyHarnessDetectorWaveformSettings(config, radio);
@@ -917,8 +942,14 @@ std::vector<float> makeSilence(uint32_t frames) {
 }
 
 void printConfig(const HarnessConfig& config) {
+  const auto radio = makeRadio(config, config.noiseWeight, false);
   std::cout << "[config]\n";
   std::cout << "key,value\n";
+  // Report resolved state, after the overlay, rather than echoing CLI intent.
+  std::cout << "receiver_profile," << radioReceiverProfileName(radio.receiverProfile) << "\n";
+  std::cout << "first_audio_mu," << radio.receiverCircuit.tubeMu << "\n";
+  std::cout << "oversample_factor," << radio.globals.oversampleFactor << "\n";
+  std::cout << "nominal_output_power_watts," << radio.power.nominalOutputPowerWatts << "\n";
   std::cout << "sample_rate_hz," << config.sampleRate << "\n";
   std::cout << "bandwidth_hz," << config.bandwidthHz << "\n";
   std::cout << "carrier_rms_volts," << config.carrierRmsVolts << "\n";
@@ -1214,8 +1245,6 @@ void runLevels(const HarnessConfig& config) {
   std::cout << "power_interstage_driver_eval_calls_per_sample,"
             << run.radio.calibration.powerInterstageDriverEvalCallsPerSample
             << "\n";
-  std::cout << "power_interstage_driver_eval_us_per_call,"
-            << run.radio.calibration.powerInterstageDriverEvalUsPerCall << "\n";
   std::cout << "power_interstage_adaptive_validation_attempts,"
             << run.radio.calibration.powerInterstageAdaptiveValidationAttempts
             << "\n";
@@ -1582,8 +1611,8 @@ bool runReference(const HarnessConfig& config) {
   allInBand &= printReferenceRow("acoustic_imd_db", imdDb, -100.0,
                                  bands.acousticImdDbMax);
   allInBand &= printReferenceRow("detector_tau_us", detectorTauUs,
-                                 kTargetDetectorTauUsMin,
-                                 kTargetDetectorTauUsMax);
+                                 config.receiverProfile == RadioReceiverProfile::Philco37116 ? kPhilcoDetectorTauUsMin : kTypicalDetectorTauUsMin,
+                                 config.receiverProfile == RadioReceiverProfile::Philco37116 ? kPhilcoDetectorTauUsMax : kTypicalDetectorTauUsMax);
   allInBand &= printReferenceRow("avc_tau_ms", avcTauMs,
                                  kTargetAvcTauMsMin, kTargetAvcTauMsMax);
   allInBand &= printReferenceRow(

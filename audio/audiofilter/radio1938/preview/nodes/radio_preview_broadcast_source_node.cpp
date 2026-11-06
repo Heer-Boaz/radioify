@@ -36,6 +36,9 @@ float programFilterNoiseGain(float sampleRate, float audioBandwidthHz) {
   Biquad lp;
   hp.setHighpass(sampleRate, 45.0f, kRadioBiquadQ);
   lp.setLowpass(sampleRate, audioBandwidthHz, kRadioBiquadQ);
+  IQFirLowpass imageReject;
+  const float pass = audioBandwidthHz / sampleRate;
+  imageReject.configure(pass, .5f - pass);
 
   double powerSum = 0.0;
   for (uint32_t bin = 0; bin < kNoiseResponseBins; ++bin) {
@@ -44,7 +47,8 @@ float programFilterNoiseGain(float sampleRate, float audioBandwidthHz) {
         static_cast<double>(kNoiseResponseBins);
     const double radians = 3.14159265358979323846 * normalizedFrequency;
     powerSum += biquadMagnitudeSquared(hp, radians) *
-                biquadMagnitudeSquared(lp, radians);
+                biquadMagnitudeSquared(lp, radians) *
+                imageReject.magnitudeSquared(radians);
   }
   return static_cast<float>(
       std::sqrt(powerSum / static_cast<double>(kNoiseResponseBins)));

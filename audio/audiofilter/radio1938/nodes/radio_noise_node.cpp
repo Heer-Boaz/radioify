@@ -13,15 +13,8 @@ void configureNoiseRuntime(NoiseHum& hum, float sampleRate, float noiseBwHz) {
   float safeLp = std::clamp(hum.noiseLpHz, hum.noiseHpHz + 200.0f, hum.fs * 0.45f);
   hum.hp.setHighpass(hum.fs, hum.noiseHpHz, hum.filterQ);
   hum.lp.setLowpass(hum.fs, safeLp, hum.filterQ);
-  hum.crackleHp.setHighpass(hum.fs, hum.noiseHpHz, hum.filterQ);
-  hum.crackleLp.setLowpass(hum.fs, safeLp, hum.filterQ);
   hum.hp.reset();
   hum.lp.reset();
-  hum.crackleHp.reset();
-  hum.crackleLp.reset();
-  hum.scAtk = std::exp(-1.0f / (hum.fs * (hum.scAttackMs / 1000.0f)));
-  hum.scRel = std::exp(-1.0f / (hum.fs * (hum.scReleaseMs / 1000.0f)));
-  hum.crackleDecay = std::exp(-1.0f / (hum.fs * (hum.crackleDecayMs / 1000.0f)));
   hum.humStepRadians = kRadioTwoPi * (hum.humHz / std::max(hum.fs, 1.0f));
   hum.humStepCos = std::cos(hum.humStepRadians);
   hum.humStepSin = std::sin(hum.humStepRadians);
@@ -31,9 +24,6 @@ void resetNoiseRuntime(NoiseHum& hum) {
   hum.humPhase = 0.0f;
   hum.humOscCos = 1.0f;
   hum.humOscSin = 0.0f;
-  hum.scEnv = 0.0f;
-  hum.crackleEnv = 0.0f;
-  hum.cracklePulse = 0.0f;
   hum.pinkFast = 0.0f;
   hum.pinkSlow = 0.0f;
   hum.brown = 0.0f;
@@ -41,8 +31,6 @@ void resetNoiseRuntime(NoiseHum& hum) {
   hum.hissDriftSlow = 0.0f;
   hum.hp.reset();
   hum.lp.reset();
-  hum.crackleHp.reset();
-  hum.crackleLp.reset();
 }
 
 void ensureNoiseRuntimeConfigured(Radio1938& radio) {
@@ -56,16 +44,6 @@ void ensureNoiseRuntimeConfigured(Radio1938& radio) {
 }
 
 float processNoiseRuntime(NoiseHum& hum, const NoiseInput& in) {
-  float programAbs = std::fabs(in.programSample);
-  if (programAbs > hum.scEnv) {
-    hum.scEnv = hum.scAtk * hum.scEnv + (1.0f - hum.scAtk) * programAbs;
-  } else {
-    hum.scEnv = hum.scRel * hum.scEnv + (1.0f - hum.scRel) * programAbs;
-  }
-  float maskT = clampf(hum.scEnv / hum.sidechainMaskRef, 0.0f, 1.0f);
-  float hissMask = 1.0f - hum.hissMaskDepth * maskT;
-  float burstMask = 1.0f - hum.burstMaskDepth * maskT;
-
   float white = hum.dist(hum.rng);
   hum.pinkFast = hum.pinkFastPole * hum.pinkFast + (1.0f - hum.pinkFastPole) * white;
   hum.pinkSlow = hum.pinkSlowPole * hum.pinkSlow + (1.0f - hum.pinkSlowPole) * white;
@@ -80,38 +58,23 @@ float processNoiseRuntime(NoiseHum& hum, const NoiseInput& in) {
   noise += hum.hissDriftSlowMix * hum.hissDriftSlow;
   noise = hum.hp.process(noise);
   noise = hum.lp.process(noise);
-  noise *= in.noiseAmp * hissMask;
-
-  float crackle = 0.0f;
-  if (in.crackleRate > 0.0f && in.crackleAmp > 0.0f && hum.fs > 0.0f) {
-    float chance = in.crackleRate / hum.fs;
-    if (hum.dist01(hum.rng) < chance) {
-      float eventSign = (hum.dist(hum.rng) >= 0.0f) ? 1.0f : -1.0f;
-      float eventAmp = 0.35f + 0.65f * hum.dist01(hum.rng);
-      hum.crackleEnv = std::max(hum.crackleEnv, eventAmp);
-      hum.cracklePulse = clampf(hum.cracklePulse + eventSign * eventAmp,
-                                -1.5f, 1.5f);
-    }
-    hum.cracklePulse *= hum.crackleDecay;
-    hum.crackleEnv *= hum.crackleDecay;
-    float raw = hum.cracklePulse;
-    raw = hum.crackleHp.process(raw);
-    raw = hum.crackleLp.process(raw);
-    crackle = raw * in.crackleAmp * burstMask;
-  }
+  noise *= in.noiseAmp;
 
   float toneHum = 0.0f;
   if (in.humToneEnabled && in.humAmp > 0.0f && hum.fs > 0.0f) {
     advanceNormalizedOscillator(hum.humStepCos, hum.humStepSin, hum.humOscCos,
                                 hum.humOscSin);
     hum.humPhase = wrapPhase(hum.humPhase + hum.humStepRadians);
-    toneHum =
-        hum.humOscSin +
-        hum.humSecondHarmonicMix * 2.0f * hum.humOscSin * hum.humOscCos;
-    toneHum *= in.humAmp * hissMask;
+    const float s1 = hum.humOscSin, c1 = hum.humOscCos;
+    const float s2 = 2 * s1 * c1, c2 = c1 * c1 - s1 * s1;
+    // Full-wave rectifier residual: 2f, 4f, 6f. Separate f pickup allows
+    // heater/ground leakage without confusing it with rectifier ripple.
+    toneHum = hum.humMainsPickupMix * s1 + s2 + hum.humSecondHarmonicMix * 2 * s2 * c2 +
+              hum.humThirdHarmonicMix * s2 * (3 - 4 * s2 * s2);
+    toneHum *= in.humAmp;
   }
 
-  return noise + crackle + toneHum;
+  return noise + toneHum;
 }
 
 }  // namespace
@@ -121,20 +84,26 @@ void RadioNoiseNode::init(Radio1938& radio, RadioInitContext& initCtx) {
   auto& noiseRuntime = radio.noiseRuntime;
   noiseRuntime.hum.humHz = noiseConfig.humHzDefault;
   configureNoiseRuntime(noiseRuntime.hum, radio.sampleRate, initCtx.tunedBw);
+  const auto& speaker = radio.speakerStage.speaker;
+  const float mass = speaker.effectiveMovingMassKg;
+  const float omega =
+      1.0f / std::sqrt(mass * speaker.effectiveSuspensionComplianceMetersPerNewton);
+  noiseRuntime.radiation.setHighpass(
+      radio.sampleRate, omega / kRadioTwoPi,
+      mass * omega / speaker.effectiveMechanicalDampingNsPerMeter);
 }
 
 void RadioNoiseNode::reset(Radio1938& radio) {
   resetNoiseRuntime(radio.noiseRuntime.hum);
+  radio.noiseRuntime.radiation.reset();
 }
 
 float RadioNoiseNode::run(Radio1938& radio, float y, RadioSampleContext& ctx) {
   ensureNoiseRuntimeConfigured(radio);
   NoiseInput noiseIn{};
-  noiseIn.programSample = y;
   noiseIn.noiseAmp = ctx.derived.noiseAmp;
-  noiseIn.crackleAmp = ctx.derived.crackleAmp;
-  noiseIn.crackleRate = ctx.derived.crackleRate;
   noiseIn.humAmp = ctx.derived.humAmp;
   noiseIn.humToneEnabled = ctx.derived.humToneEnabled;
-  return y + processNoiseRuntime(radio.noiseRuntime.hum, noiseIn);
+  return y + radio.noiseRuntime.radiation.process(
+                 processNoiseRuntime(radio.noiseRuntime.hum, noiseIn));
 }

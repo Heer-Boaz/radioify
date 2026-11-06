@@ -8,40 +8,21 @@ namespace {
 
 float clampPublishedBandwidth(const Radio1938& radio, float bwHz) {
   const auto& tuning = radio.tuning;
-  float safeBwMinHz = std::max(tuning.safeBwMinHz, 1.0f);
   float sampleRateLimitedBwHz =
       0.20f * std::max(radio.sampleRate, 1.0f);
+  float safeBwMinHz = std::min(std::max(tuning.safeBwMinHz, 1.0f), sampleRateLimitedBwHz);
   float safeBwMaxHz =
       std::max(safeBwMinHz, std::min(tuning.safeBwMaxHz, sampleRateLimitedBwHz));
   return std::clamp(bwHz, safeBwMinHz, safeBwMaxHz);
 }
 
-float selectSourceCarrierHz(float outputFs,
-                            float internalFs,
-                            float ifCenterHz,
-                            float bwHz) {
-  float maxCarrierByIf = 0.48f * internalFs - ifCenterHz - 8000.0f;
-  float audioSidebandHz = 0.48f * std::max(bwHz, 1.0f);
-  float maxCarrierByOutput =
-      0.5f * std::max(outputFs, 1.0f) - audioSidebandHz - 1600.0f;
-  float maxCarrier = maxCarrierByOutput;
-  if (ifCenterHz > 0.0f) {
-    maxCarrier = std::min(maxCarrierByIf, maxCarrierByOutput);
-  }
-  float minCarrier = std::max(3000.0f, 0.70f * std::max(bwHz, 1.0f));
-  if (maxCarrier <= 6000.0f) {
-    return std::clamp(0.88f * std::max(maxCarrier, 3000.0f), 3000.0f,
-                      std::max(3000.0f, maxCarrierByOutput));
-  }
-  return std::clamp(0.92f * maxCarrier, minCarrier, maxCarrier);
-}
-
 float publishTuningConfig(Radio1938& radio, float tuneHz, float bwHz) {
   auto& tuning = radio.tuning;
   float safeAudioBw = clampPublishedBandwidth(radio, bwHz);
-  float physicalChannelBw = 2.0f * safeAudioBw;
-  float sourceCarrierHz = selectSourceCarrierHz(
-      radio.sampleRate, radio.sampleRate, 0.0f, physicalChannelBw);
+  // A fixed representation carrier leaves equal room for the two AM
+  // sidebands. Transmitter bandwidth is independent of the tuned receiver.
+  tuning.sourceBandwidthHz = std::min(10000.0f, .20f * radio.sampleRate);
+  const float sourceCarrierHz = .25f * radio.sampleRate;
   bool configChanged =
       tuning.configRevision == 0 ||
       std::fabs(tuneHz - tuning.tuneAppliedHz) > tuning.updateEps ||
@@ -64,6 +45,7 @@ void RadioTuningNode::init(Radio1938& radio, RadioInitContext& initCtx) {
   tuning.afcCorrectionHz = 0.0f;
   tuning.configRevision = 0;
   const float rate = std::max(radio.sampleRate, 1.0f);
+  tuning.smoothingTick = 1 - std::exp(-64 / (rate * std::max(tuning.smoothTau, 1e-4f)));
   const float afcSeconds = tuning.afcResponseMs * 0.001f;
   tuning.afcTick =
       (afcSeconds > 0.0f) ? 1.0f - std::exp(-1.0f / (rate * afcSeconds))
@@ -77,18 +59,20 @@ void RadioTuningNode::init(Radio1938& radio, RadioInitContext& initCtx) {
 void RadioTuningNode::reset(Radio1938& radio) {
   auto& tuning = radio.tuning;
   tuning.afcCorrectionHz = 0.0f;
-  tuning.tuneSmoothedHz = tuning.tuneAppliedHz;
-  tuning.bwSmoothedHz = tuning.bwAppliedHz;
+  tuning.tuneSmoothedHz = tuning.tuneOffsetHz;
+  tuning.bwSmoothedHz = clampPublishedBandwidth(radio, radio.bwHz);
+  publishTuningConfig(radio, tuning.tuneSmoothedHz, tuning.bwSmoothedHz);
+  tuning.updateCountdown = 0;
 }
 
-void RadioTuningNode::prepare(Radio1938& radio,
-                              RadioBlockControl& block,
-                              uint32_t frames) {
+void RadioTuningNode::run(Radio1938& radio, RadioSampleContext&) {
   auto& tuning = radio.tuning;
-  float rate = std::max(1.0f, radio.sampleRate);
-  float smoothTau = std::max(tuning.smoothTau, 1e-4f);
-  float tick =
-      1.0f - std::exp(-static_cast<float>(frames) / (rate * smoothTau));
+  if (tuning.updateCountdown > 0) {
+    --tuning.updateCountdown;
+    return;
+  }
+  tuning.updateCountdown = 63;
+  const float tick = tuning.smoothingTick;
   float effectiveTuneHz = tuning.tuneOffsetHz;
   if (tuning.magneticTuningEnabled) {
     effectiveTuneHz += tuning.afcCorrectionHz;
@@ -98,9 +82,6 @@ void RadioTuningNode::prepare(Radio1938& radio,
   tuning.bwSmoothedHz += tick * (targetBwHz - tuning.bwSmoothedHz);
 
   float safeBw = clampPublishedBandwidth(radio, tuning.bwSmoothedHz);
-  float bwHalf = 0.5f * std::max(1.0f, safeBw);
-  block.tuneNorm = clampf(tuning.tuneSmoothedHz / bwHalf, -1.0f, 1.0f);
-
   if (std::fabs(tuning.tuneSmoothedHz - tuning.tuneAppliedHz) >
           tuning.updateEps ||
       std::fabs(safeBw - tuning.bwAppliedHz) > tuning.updateEps) {

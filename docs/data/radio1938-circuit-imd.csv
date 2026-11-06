@@ -1,0 +1,9 @@
+version,profile,sample_rate_hz,bandwidth_hz,tuning_hz,imd_db
+before,typical-1930s,48000,5000,0,-20.6989151
+before,typical-1930s,48000,5000,4500,-20.4249907
+before,philco-37-116,48000,5000,0,-39.1752699
+before,philco-37-116,48000,5000,4500,-38.7188574
+after,typical-1930s,48000,5000,0,-23.7983841
+after,typical-1930s,48000,5000,4500,-27.1076335
+after,philco-37-116,48000,5000,0,-37.6992346
+after,philco-37-116,48000,5000,4500,-37.2055077

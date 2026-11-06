@@ -107,80 +107,7 @@ CurrentDrivenTransformerSample projectNoShuntCap(
       projectedPrimaryCurrent, projectedSecondaryCurrent};
 }
 
-float transformerStateComponent(const CurrentDrivenTransformerSample& s,
-                                int index) {
-  switch (index) {
-    case 0:
-      return s.primaryCurrent;
-    case 1:
-      return s.secondaryCurrent;
-    case 2:
-      return s.primaryVoltage;
-    default:
-      return s.secondaryVoltage;
-  }
-}
-
 }  // namespace
-
-CurrentDrivenTransformerSample evalFixedLoadAffineBase(
-    const std::array<float, 16>& stateA,
-    const CurrentDrivenTransformer& t) {
-  float state[4] = {t.primaryCurrent, t.secondaryCurrent, t.primaryVoltage,
-                    t.secondaryVoltage};
-  float next[4] = {};
-  for (int row = 0; row < 4; ++row) {
-    float sum = 0.0f;
-    for (int col = 0; col < 4; ++col) {
-      sum += stateA[row * 4 + col] * state[col];
-    }
-    next[row] = sum;
-  }
-
-  return CurrentDrivenTransformerSample{next[2], next[3], next[0], next[1]};
-}
-
-FixedLoadAffineTransformerProjection buildFixedLoadAffineProjection(
-    const CurrentDrivenTransformer& t,
-    float secondaryLoadResistanceOhms,
-    float primaryLoadResistanceOhms) {
-  FixedLoadAffineTransformerProjection p{};
-  SecondaryNortonLoad secondaryLoad{};
-  if (secondaryLoadResistanceOhms > 0.0f &&
-      std::isfinite(secondaryLoadResistanceOhms)) {
-    secondaryLoad.conductanceSiemens = 1.0f / secondaryLoadResistanceOhms;
-  }
-
-  CurrentDrivenTransformer zero = t;
-  zero.clearState();
-  p.slope = zero.projectStep(1.0f, secondaryLoad, primaryLoadResistanceOhms);
-
-  for (int col = 0; col < 4; ++col) {
-    CurrentDrivenTransformer basis = t;
-    basis.clearState();
-    switch (col) {
-      case 0:
-        basis.primaryCurrent = 1.0f;
-        break;
-      case 1:
-        basis.secondaryCurrent = 1.0f;
-        break;
-      case 2:
-        basis.primaryVoltage = 1.0f;
-        break;
-      case 3:
-        basis.secondaryVoltage = 1.0f;
-        break;
-    }
-    CurrentDrivenTransformerSample out =
-        basis.projectStep(0.0f, secondaryLoad, primaryLoadResistanceOhms);
-    for (int row = 0; row < 4; ++row) {
-      p.stateA[row * 4 + col] = transformerStateComponent(out, row);
-    }
-  }
-
-  return p;
-}
 
 AffineTransformerProjection buildAffineProjection(
     const CurrentDrivenTransformer& t,
@@ -198,15 +125,14 @@ AffineTransformerProjection buildAffineProjection(
     const CurrentDrivenTransformer& t,
     const SecondaryNortonLoad& secondaryLoad,
     float primaryLoadResistanceOhms) {
-  auto s0 = t.projectStep(0.0f, secondaryLoad, primaryLoadResistanceOhms);
-  auto s1 = t.projectStep(1.0f, secondaryLoad, primaryLoadResistanceOhms);
-
   AffineTransformerProjection p{};
-  p.base = s0;
-  p.slope.primaryVoltage = s1.primaryVoltage - s0.primaryVoltage;
-  p.slope.secondaryVoltage = s1.secondaryVoltage - s0.secondaryVoltage;
-  p.slope.primaryCurrent = s1.primaryCurrent - s0.primaryCurrent;
-  p.slope.secondaryCurrent = s1.secondaryCurrent - s0.secondaryCurrent;
+  p.base = t.projectStep(0.0f, secondaryLoad, primaryLoadResistanceOhms);
+  // A unit drive with zero history gives the sensitivity directly. Subtracting
+  // two projections containing the same large history terms loses precision.
+  auto zero = t;
+  zero.clearState();
+  const SecondaryNortonLoad sensitivityLoad{secondaryLoad.conductanceSiemens, 0.0f};
+  p.slope = zero.projectStep(1.0f, sensitivityLoad, primaryLoadResistanceOhms);
   return p;
 }
 

@@ -85,7 +85,10 @@ void RadioPreviewPipeline::initialize(Radio1938& radioRef,
   sampleRate = newSampleRate;
   assert(radioRef.tuning.tunedBw > 0.0f &&
          "Preview requires an initialized Radio1938 bandwidth");
-  audioBandwidthHz = radioRef.tuning.tunedBw;
+  audioBandwidthHz = radioRef.tuning.sourceBandwidthHz;
+  // Effective piston radii are size-family priors, not measured cone areas.
+  roomRenderer.initialize(radioRef.room, newSampleRate,
+      radioRef.receiverProfile == RadioReceiverProfile::Typical1930s ? .05f : .14f);
   applyPreviewRuntimeBudget(radioRef, previewConfig);
   RadioPreviewInitContext initCtx{};
   lifecycle.initialize(*this, initCtx);
@@ -95,6 +98,7 @@ void RadioPreviewPipeline::initialize(Radio1938& radioRef,
 
 void RadioPreviewPipeline::reset() {
   lifecycle.reset(*this);
+  roomRenderer.reset();
 }
 
 void RadioPreviewPipeline::reserveBlockFrames(uint32_t frames) {
@@ -134,7 +138,15 @@ void RadioPreviewPipeline::runBlock(Radio1938& radioRef,
                               : nullptr);
 
   for (uint32_t frame = 0; frame < frames; ++frame) {
-    writeMonoToInterleaved(samples, frame, static_cast<int>(channels),
-                           filteredScratch[frame]);
+    const auto spatial = roomRenderer.process(filteredScratch[frame]);
+    const float mono = .5f*(spatial.left+spatial.right);
+    const size_t base = static_cast<size_t>(frame)*channels;
+    if (channels == 1) {
+      samples[base] = mono;
+    } else {
+      samples[base] = spatial.left;
+      samples[base+1] = spatial.right;
+      for (uint32_t channel=2; channel<channels; ++channel) samples[base+channel] = mono;
+    }
   }
 }

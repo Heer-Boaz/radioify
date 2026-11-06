@@ -1,7 +1,12 @@
 add_subdirectory(config)
 
 radioify_add_module_object_library(radioify_audiofilter
+  ${CMAKE_CURRENT_SOURCE_DIR}/math/halfband_iir.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/math/iq_fir_lowpass.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/math/oversampling.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/models/rectifier_supply.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/models/resonant_networks.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/models/coupled_if_transformer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/models/transformer_models.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/models/tube_models.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/analysis/radio_calibration.cpp
@@ -20,6 +25,8 @@ radioify_add_module_object_library(radioify_audiofilter
   ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/models/am_detector_solver.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/models/am_detector_waveform.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/models/power_stage_solver.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/models/radio_room.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/models/receiver_input_network.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/models/power_stage_interstage.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/models/power_supply.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/radio1938/nodes/radio_afc_node.cpp

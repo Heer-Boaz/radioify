@@ -27,6 +27,10 @@ struct RadioReceptionConfig {
   float skywaveDopplerWanderRmsHz = 0.001f;
   float skywaveDopplerWanderSeconds = 75.0f;
 
+  // US co-channel carrier-only scenario: two compliant +/-50 Hz carriers
+  // differ by at most 100 Hz (FRC rule effective June 22, 1932). The uniform
+  // scenario draw is not an observed distribution; foreign/off-spec stations
+  // can be represented explicitly with different offsets. No invented programme.
   // A separate real RF carrier, never a post-detector audio oscillator.
   bool intermittentCarrierEnabled = true;
   float intermittentWaitMinSeconds = 60.0f;
@@ -35,8 +39,8 @@ struct RadioReceptionConfig {
   float intermittentDurationMaxSeconds = 10.0f;
   float intermittentLevelMinDb = -50.0f;
   float intermittentLevelMaxDb = -42.0f;
-  float intermittentOffsetMinHz = 320.0f;
-  float intermittentOffsetMaxHz = 900.0f;
+  float intermittentOffsetMinHz = 0.0f;
+  float intermittentOffsetMaxHz = 100.0f;
   float intermittentAttackMs = 750.0f;
   float intermittentReleaseMs = 1800.0f;
 

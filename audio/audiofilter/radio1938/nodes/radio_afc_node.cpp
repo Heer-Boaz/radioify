@@ -18,16 +18,19 @@ void RadioAFCNode::run(Radio1938& radio, RadioSampleContext&) {
   }
 
   float error = controlSense.tuningErrorSense;
-  if (std::fabs(error) < tuning.afcDeadband) error = 0.0f;
+  error = std::copysign(std::max(std::fabs(error) - tuning.afcDeadband, 0.0f), error);
   float captureGate =
       (tuning.afcCaptureHz > 0.0f &&
        std::fabs(tuning.tuneOffsetHz) <= tuning.afcCaptureHz)
           ? 1.0f
           : 0.0f;
-  float signalT =
-      clampf(controlSense.controlVoltageSense / 0.85f, 0.0f, 1.0f);
-  float afcTarget =
-      -error * tuning.afcMaxCorrectionHz * captureGate * signalT;
+  // Magnetic tuning has its own IF detector. Delayed AVC can be zero on a
+  // perfectly usable carrier and must not switch this discriminator off.
+  float signalT = clampf(
+      controlSense.tuningSignalVolts / std::max(tuning.afcSignalReferenceVolts, 1e-6f),
+      0.0f, 1.0f);
+  const float afcTarget = clampf(-error * tuning.afcLoopGain, -1.0f, 1.0f) *
+                          tuning.afcMaxCorrectionHz * captureGate * signalT;
   tuning.afcCorrectionHz +=
       tuning.afcTick * (afcTarget - tuning.afcCorrectionHz);
   tuning.afcCorrectionHz =

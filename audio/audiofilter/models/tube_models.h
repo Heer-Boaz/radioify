@@ -62,6 +62,15 @@ struct FixedPlatePentodeEvaluator {
   float evalDerivative(float gridVolts) const;
 };
 
+// Fit from published characteristic families, independent of a receiver's
+// supply, load or bias. See docs/data/radio1938-triode-characteristics.csv.
+KorenTriodeModel rca6J5Characteristic();
+KorenTriodeModel rca75Characteristic();
+
+TriodeOperatingPoint solveTriodeOperatingPoint(
+    float plateSupplyVolts, float loadResistanceOhms, float biasVolts,
+    float initialPlateVolts, const KorenTriodeModel& model);
+
 TriodeOperatingPoint solveTriodeOperatingPoint(
     float plateSupplyVolts,
     float loadResistanceOhms,

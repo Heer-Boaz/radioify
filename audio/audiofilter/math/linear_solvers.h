@@ -82,36 +82,26 @@ inline bool solveLinear4x4(float a[4][4], float b[4], float x[4]) {
   return true;
 }
 
-inline bool solveLinear3x3Direct(float a00,
-                                 float a01,
-                                 float a02,
-                                 float a10,
-                                 float a11,
-                                 float a12,
-                                 float a20,
-                                 float a21,
-                                 float a22,
-                                 const float rhs[3],
-                                 float x[3]) {
-  float c00 = a11 * a22 - a12 * a21;
-  float c01 = a12 * a20 - a10 * a22;
-  float c02 = a10 * a21 - a11 * a20;
-  float det = a00 * c00 + a01 * c01 + a02 * c02;
+template <typename Real>
+inline bool solveLinear3x3Direct(Real a00, Real a01, Real a02, Real a10, Real a11,
+                                 Real a12, Real a20, Real a21, Real a22,
+                                 const Real rhs[3], Real x[3]) {
+  Real c00 = a11 * a22 - a12 * a21;
+  Real c01 = a12 * a20 - a10 * a22;
+  Real c02 = a10 * a21 - a11 * a20;
+  Real det = a00 * c00 + a01 * c01 + a02 * c02;
   if (!std::isfinite(det) || std::fabs(det) < 1e-12f) {
     return false;
   }
-  float invDet = 1.0f / det;
+  Real invDet = Real{1} / det;
 
-  x[0] = (rhs[0] * c00 +
-          rhs[1] * (a02 * a21 - a01 * a22) +
+  x[0] = (rhs[0] * c00 + rhs[1] * (a02 * a21 - a01 * a22) +
           rhs[2] * (a01 * a12 - a02 * a11)) *
          invDet;
-  x[1] = (rhs[0] * c01 +
-          rhs[1] * (a00 * a22 - a02 * a20) +
+  x[1] = (rhs[0] * c01 + rhs[1] * (a00 * a22 - a02 * a20) +
           rhs[2] * (a02 * a10 - a00 * a12)) *
          invDet;
-  x[2] = (rhs[0] * c02 +
-          rhs[1] * (a01 * a20 - a00 * a21) +
+  x[2] = (rhs[0] * c02 + rhs[1] * (a01 * a20 - a00 * a21) +
           rhs[2] * (a00 * a11 - a01 * a10)) *
          invDet;
   return std::isfinite(x[0]) && std::isfinite(x[1]) && std::isfinite(x[2]);

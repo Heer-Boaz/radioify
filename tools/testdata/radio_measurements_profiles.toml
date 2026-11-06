@@ -1,0 +1,9 @@
+# Deliberately partial overlays: receiver identity must be resolved first.
+[audio-filter.philco-37-116.globals]
+oversampleFactor = 4
+
+[audio-filter.typical-1930s.globals]
+oversampleFactor = 4
+
+[audio-filter.custom.globals]
+oversampleFactor = 4

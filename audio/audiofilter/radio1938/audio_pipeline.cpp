@@ -8,10 +8,10 @@ const Radio1938AudioPipeline& radio1938AudioPipeline() {
                          RadioInitContext,
                          PassId>
         builder;
-    builder.block(PassId::Tuning, "MagneticTuning")
+    builder.control(PassId::Tuning, "MagneticTuning")
         .init(&RadioTuningNode::init)
         .reset(&RadioTuningNode::reset)
-        .prepare(&RadioTuningNode::prepare);
+        .run(&RadioTuningNode::run);
 
     builder.program(PassId::Input, "Input")
         .init(&RadioInputNode::init)
@@ -20,6 +20,7 @@ const Radio1938AudioPipeline& radio1938AudioPipeline() {
     builder.control(PassId::AVC, "AVC")
         .init(&RadioAVCNode::init)
         .reset(&RadioAVCNode::reset)
+        .dependsOn(PassId::Tuning)
         .run(&RadioAVCNode::run);
     builder.control(PassId::AFC, "AFC")
         .init(&RadioAFCNode::init)

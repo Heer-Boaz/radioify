@@ -4,9 +4,11 @@
 #include "../../graph/audio_graph.h"
 #include "../../graph/audio_lifecycle.h"
 #include "../../math/biquad.h"
+#include "../../math/iq_fir_lowpass.h"
 #include "../radio_am_ingress.h"
 #include "../radio1938_constants.h"
 #include "radio_preview_config.h"
+#include "../models/radio_room.h"
 
 #include <cstdint>
 #include <vector>
@@ -125,8 +127,10 @@ struct RadioPreviewPipeline {
   std::vector<float> warmupScratch;
   std::vector<float> filteredScratch;
   std::vector<RadioAmReceptionSample> receptionScratch;
+  RadioRoomRenderer roomRenderer;
   Biquad programHp;
   Biquad programLp;
+  IQFirLowpass programImageReject;
   float broadcastCompressionThreshold = 0.0f;
   float broadcastEnvelope = 0.0f;
   float broadcastGain = 1.0f;

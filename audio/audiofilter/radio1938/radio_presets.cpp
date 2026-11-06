@@ -61,31 +61,41 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.ifStrip.ifMinBwHz = 2400.0f;
   radio.ifStrip.primaryInductanceHenries = 0.00022f;
   radio.ifStrip.secondaryInductanceHenries = 0.00025f;
-  radio.ifStrip.secondaryLoadResistanceOhms = 680.0f;
-  // Reduced-order IF gain stands in for the missing plate-voltage swing of the
-  // 470 kHz strip. Keep enough detector drive for the 6J5/6F6/6B4 chain so the
-  // physical speaker-reference scaling is not forced to make the whole radio
-  // sound abnormally quiet.
-  // This is calibrated against the physical speaker reference, nominal SINAD,
-  // and the measured audio passband rather than against listening loudness.
-  radio.ifStrip.stageGain = 4.6f;
+  // 3 double-tuned transformers; expanded alignment peaks at 465/475 kHz
+  // in Bulletin 258. L, effective RF losses and loading below are explicit
+  // equivalent-circuit priors, not measured winding data.
+  radio.ifStrip.transformerCount = 3;
+  radio.ifStrip.primarySeriesResistanceOhms = 15.0f;
+  radio.ifStrip.secondarySeriesResistanceOhms = 15.0f;
+  radio.ifStrip.referenceTransimpedanceOhms = 17000.0f;
+  radio.ifStrip.secondaryLoadResistanceOhms = 200000.0f;
+  // IF voltage calibration: a hot-cathode detector needs volts of carrier,
+  // followed by the physical volume control. The former sub-volt calibration
+  // relied on an almost ideal diode. This remains an unmeasured gain prior.
+  radio.ifStrip.stageGain = 46.0f;
   radio.ifStrip.avcGainDepth = 0.18f;
   radio.ifStrip.ifCenterHz = 470000.0f;
-  radio.ifStrip.interstageCouplingCoeff = 0.15f;
-  radio.ifStrip.outputCouplingCoeff = 0.11f;
+  radio.ifStrip.interstageCouplingCoeff = 0.032f;
+  radio.ifStrip.outputCouplingCoeff = 0.032f;
 
-  radio.demod.am.audioDiodeDrop = 0.0100f;
-  radio.demod.am.avcDiodeDrop = 0.0080f;
-  radio.demod.am.audioJunctionSlopeVolts = 0.0045f;
-  radio.demod.am.avcJunctionSlopeVolts = 0.0040f;
-  radio.demod.am.detectorStorageCapFarads = 350e-12f;
+  // Hot-cathode diode family priors; no measured 6J5 grid-as-diode / 75
+  // low-current characteristic was located. 850 K gives kT/e = 73 mV.
+  radio.demod.am.audioDiode = {0.00045, 0.073, 0};
+  radio.demod.am.avcDiode = radio.demod.am.audioDiode;
+  radio.demod.am.avcDelayBiasVolts = 0.54f;
+  // Bulletin 258, 72/72A/73: 110 pF -- 51 k -- 110 pF detector filter.
+  radio.demod.am.detectorStorageCapFarads = 110e-12f;
+  radio.demod.am.filterResistanceOhms = 51000;
+  radio.demod.am.filterCapFarads = 110e-12f;
   radio.demod.am.audioChargeResistanceOhms = 5100.0f;
   radio.demod.am.audioDischargeResistanceOhms = 160000.0f;
   radio.demod.am.avcChargeResistanceOhms = 1000000.0f;
   radio.demod.am.avcDischargeResistanceOhms =
       parallelResistance(1000000.0f, 1000000.0f);
   radio.demod.am.avcFilterCapFarads = 0.15e-6f;
-  radio.demod.am.controlVoltageRef = 3.0f;
+  // Keep the normalized control bus, but make one physical AVC volt
+  // impose one volt of mixer grid bias (avcT divides by 1.25).
+  radio.demod.am.controlVoltageRef = radio.mixer.avcGridDriveVolts / 1.25f;
   radio.demod.am.senseLowHz = 0.0f;
   radio.demod.am.senseHighHz = 0.0f;
   radio.demod.am.afcSenseLpHz = 34.0f;
@@ -93,7 +103,7 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.receiverCircuit.enabled = true;
   radio.receiverCircuit.volumeControlResistanceOhms = 2000000.0f;
   radio.receiverCircuit.volumeControlTapResistanceOhms = 1000000.0f;
-  radio.receiverCircuit.volumeControlPosition = 1.0f;
+  radio.receiverCircuit.volumeControlPosition = 0.25f;
   radio.receiverCircuit.volumeControlLoudnessResistanceOhms = 490000.0f;
   // Philco Service Bulletin 258 shows the tapped 2 M volume control feeding a
   // small 110 mmfd loudness / compensation branch, not a broad 15 nF shunt.
@@ -102,15 +112,16 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.receiverCircuit.gridLeakResistanceOhms = 1000000.0f;
   radio.receiverCircuit.tubePlateSupplyVolts = 250.0f;
   radio.receiverCircuit.tubePlateDcVolts = 90.0f;
-  radio.receiverCircuit.tubeScreenVolts = 0.0f;
-  radio.receiverCircuit.tubeBiasVolts = -8.0f;
-  radio.receiverCircuit.tubePlateCurrentAmps = 0.009f;
-  radio.receiverCircuit.tubeMutualConductanceSiemens = 0.0026f;
+  // Circuit bias is an inferred DC prior, separate from the RCA characteristic.
+  // The printed 90 V service reading used a loading 1000 ohms/V meter; it is
+  // not a precision unloaded-voltage measurement.
+  radio.receiverCircuit.tubeBiasVolts = -3.7f;
+  radio.receiverCircuit.tubeTriodeModel = rca6J5Characteristic();
   radio.receiverCircuit.tubeMu = 20.0f;
   radio.receiverCircuit.tubeTriodeConnected = true;
-  radio.receiverCircuit.tubeLoadResistanceOhms = 15000.0f;
-  radio.receiverCircuit.tubePlateKneeVolts = 16.0f;
-  radio.receiverCircuit.tubeGridSoftnessVolts = 0.6f;
+  // Bulletin 258, resistors 97 and 99, with bypass capacitor 98.
+  radio.receiverCircuit.tubeLoadResistanceOhms = 51000.0f;
+  radio.receiverCircuit.tubeDcFeedResistanceOhms = 99000.0f;
 
   radio.tone.presenceHz = 2100.0f;
   radio.tone.presenceQ = 0.82f;
@@ -120,20 +131,13 @@ void applyPhilco37116Preset(Radio1938& radio) {
 
   radio.power.topology =
       Radio1938::PowerNodeState::Topology::TransformerCoupledPushPull;
-  radio.power.sagStart = 0.06f;
-  radio.power.sagEnd = 0.22f;
-  radio.power.rippleDepth = 0.012f;
-  radio.power.sagAttackMs = 60.0f;
-  radio.power.sagReleaseMs = 900.0f;
-  radio.power.rectifierMinHz = 80.0f;
-  radio.power.rippleSecondHarmonicMix = 0.0f;
-  radio.power.gainSagPerPower = 0.015f;
-  radio.power.rippleGainBase = 0.18f;
-  radio.power.rippleGainDepth = 0.08f;
-  radio.power.gainMin = 0.92f;
-  radio.power.gainMax = 1.02f;
-  radio.power.supplyDriveDepth = 0.01f;
-  radio.power.supplyBiasDepth = 0.0f;
+  // Rider 7-31/32: 5U4, 16 uF reservoir, 4.75 H / 80 ohm choke,
+  // 8 uF to CT, 10 uF bias bypass and 360+18 ohm field/bias return.
+  // Field inductance and total unmodelled RF load are explicit priors.
+  radio.powerSupply.config = {};
+  radio.powerSupply.otherLoadAmps = 0.010f;
+  radio.powerSupply.auxiliaryOtherLoadAmps = 0.030f;
+  radio.powerSupply.screenCurrentRatio = 0;
   radio.power.postLpHz = 0.0f;
   radio.power.gridCouplingCapFarads = 0.02e-6f;
   radio.power.gridLeakResistanceOhms = 100000.0f;
@@ -205,7 +209,7 @@ void applyPhilco37116Preset(Radio1938& radio) {
                    radio.power.outputTubePlateDcVolts) < 1.0f);
   // Downstream listening level: reserve headroom for the period upper-mid
   // response rise. This does not change the electrical power reference.
-  radio.output.digitalMakeupGain = 0.18f;
+  radio.output.digitalMakeupGain = 0.25f;
 
   radio.globals.oversampleFactor = 2.0f;
   radio.globals.oversampleCutoffFraction = 0.45f;
@@ -213,7 +217,7 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.globals.postNoiseMix = 0.35f;
   radio.globals.noiseFloorAmp = 0.0f;
 
-  radio.noiseConfig.enableHumTone = true;
+  radio.noiseConfig.enableHumTone = false;
   radio.noiseConfig.humHzDefault = 60.0f;
   radio.noiseConfig.noiseWeightRef = 0.15f;
   radio.noiseConfig.noiseWeightScaleMax = 2.0f;
@@ -224,12 +228,6 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.noiseRuntime.hum.noiseHpHz = 500.0f;
   radio.noiseRuntime.hum.noiseLpHz = 5500.0f;
   radio.noiseRuntime.hum.filterQ = kRadioBiquadQ;
-  radio.noiseRuntime.hum.scAttackMs = 2.0f;
-  radio.noiseRuntime.hum.scReleaseMs = 80.0f;
-  radio.noiseRuntime.hum.crackleDecayMs = 8.0f;
-  radio.noiseRuntime.hum.sidechainMaskRef = 0.15f;
-  radio.noiseRuntime.hum.hissMaskDepth = 0.5f;
-  radio.noiseRuntime.hum.burstMaskDepth = 0.3f;
   radio.noiseRuntime.hum.pinkFastPole = 0.85f;
   radio.noiseRuntime.hum.pinkSlowPole = 0.97f;
   radio.noiseRuntime.hum.brownStep = 0.02f;
@@ -283,8 +281,11 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.speakerStage.speaker.forceFactorBl = 0.0f;
   radio.speakerStage.speaker.suspensionComplianceMetersPerNewton = 0.0f;
   radio.speakerStage.speaker.mechanicalDampingNsPerMeter = 0.0f;
-  radio.speakerStage.speaker.excursionRef = 8.0f;
-  radio.speakerStage.speaker.complianceLossDepth = 0.05f;
+  // Conservative nonlinear/thermal priors, not measured Type-W properties.
+  radio.speakerStage.speaker.motorTravelMeters = 0.004f;
+  radio.speakerStage.speaker.suspensionTravelMeters = 0.003f;
+  radio.speakerStage.speaker.thermalCapacityJoulesPerKelvin = 1.0f;
+  radio.speakerStage.speaker.thermalResistanceKelvinPerWatt = 4.0f;
   radio.speakerStage.speaker.asymBias = 0.06f;
 
   radio.cabinet.enabled = true;
@@ -397,25 +398,35 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.ifStrip.ifMinBwHz = 2200.0f;
   radio.ifStrip.primaryInductanceHenries = 0.00022f;
   radio.ifStrip.secondaryInductanceHenries = 0.00025f;
-  radio.ifStrip.secondaryLoadResistanceOhms = 560.0f;
-  radio.ifStrip.stageGain = 1.00f;
+  radio.ifStrip.transformerCount = 2;
+  radio.ifStrip.primarySeriesResistanceOhms = 5.0f;
+  radio.ifStrip.secondarySeriesResistanceOhms = 5.0f;
+  radio.ifStrip.referenceTransimpedanceOhms = 40000.0f;
+  radio.ifStrip.secondaryLoadResistanceOhms = 200000.0f;
+  radio.ifStrip.stageGain = 20.0f;
   radio.ifStrip.avcGainDepth = 0.24f;
   radio.ifStrip.ifCenterHz = 470000.0f;
-  radio.ifStrip.interstageCouplingCoeff = 0.13f;
-  radio.ifStrip.outputCouplingCoeff = 0.10f;
+  radio.ifStrip.interstageCouplingCoeff = 0.012f;
+  radio.ifStrip.outputCouplingCoeff = 0.012f;
 
-  radio.demod.am.audioDiodeDrop = 0.0100f;
-  radio.demod.am.avcDiodeDrop = 0.0080f;
-  radio.demod.am.audioJunctionSlopeVolts = 0.0045f;
-  radio.demod.am.avcJunctionSlopeVolts = 0.0040f;
-  radio.demod.am.detectorStorageCapFarads = 350e-12f;
+  // Hot-cathode diode family priors; no measured 6J5 grid-as-diode / 75
+  // low-current characteristic was located. 850 K gives kT/e = 73 mV.
+  radio.demod.am.audioDiode = {8.5e-05, 0.073, 0};
+  radio.demod.am.avcDiode = radio.demod.am.audioDiode;
+  radio.demod.am.avcDelayBiasVolts = 0.54f;
+  // Bulletin 284, 12B/12C/13: 100 pF -- 50 k -- 100 pF.
+  radio.demod.am.detectorStorageCapFarads = 100e-12f;
+  radio.demod.am.filterResistanceOhms = 50000;
+  radio.demod.am.filterCapFarads = 100e-12f;
   radio.demod.am.audioChargeResistanceOhms = 5100.0f;
-  radio.demod.am.audioDischargeResistanceOhms = 160000.0f;
+  radio.demod.am.audioDischargeResistanceOhms = 0;  // 500 k volume pot is the DC load
   radio.demod.am.avcChargeResistanceOhms = 1000000.0f;
   radio.demod.am.avcDischargeResistanceOhms =
       parallelResistance(1000000.0f, 1000000.0f);
   radio.demod.am.avcFilterCapFarads = 0.15e-6f;
-  radio.demod.am.controlVoltageRef = 3.0f;
+  // Keep the normalized control bus, but make one physical AVC volt
+  // impose one volt of mixer grid bias (avcT divides by 1.25).
+  radio.demod.am.controlVoltageRef = radio.mixer.avcGridDriveVolts / 1.25f;
   radio.demod.am.senseLowHz = 0.0f;
   radio.demod.am.senseHighHz = 0.0f;
   radio.demod.am.afcSenseLpHz = 34.0f;
@@ -425,22 +436,19 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.receiverCircuit.enabled = true;
   radio.receiverCircuit.volumeControlResistanceOhms = 500000.0f;
   radio.receiverCircuit.volumeControlTapResistanceOhms = 0.0f;
-  radio.receiverCircuit.volumeControlPosition = 1.0f;
+  radio.receiverCircuit.volumeControlPosition = 0.05f;
   radio.receiverCircuit.volumeControlLoudnessResistanceOhms = 0.0f;
   radio.receiverCircuit.volumeControlLoudnessCapFarads = 0.0f;
   radio.receiverCircuit.couplingCapFarads = 0.01e-6f;
   radio.receiverCircuit.gridLeakResistanceOhms = 4000000.0f;
   radio.receiverCircuit.tubePlateSupplyVolts = 200.0f;
   radio.receiverCircuit.tubePlateDcVolts = 90.0f;
-  radio.receiverCircuit.tubeScreenVolts = 0.0f;
-  radio.receiverCircuit.tubeBiasVolts = -2.0f;
-  radio.receiverCircuit.tubePlateCurrentAmps = 0.00058f;
-  radio.receiverCircuit.tubeMutualConductanceSiemens = 0.00110f;
+  radio.receiverCircuit.tubeBiasVolts = -0.5f;
   radio.receiverCircuit.tubeMu = 100.0f;
+  radio.receiverCircuit.tubeTriodeModel = rca75Characteristic();
+  radio.receiverCircuit.tubeDcFeedResistanceOhms = 0.0f;
   radio.receiverCircuit.tubeTriodeConnected = true;
   radio.receiverCircuit.tubeLoadResistanceOhms = 190000.0f;
-  radio.receiverCircuit.tubePlateKneeVolts = 12.0f;
-  radio.receiverCircuit.tubeGridSoftnessVolts = 0.30f;
 
   // This set has no user tone or loudness circuit. The remaining colour comes
   // from its documented audio coupling, output transformer, speaker and case.
@@ -452,20 +460,27 @@ void applyTypical1930sPreset(Radio1938& radio) {
 
   radio.power.topology =
       Radio1938::PowerNodeState::Topology::CapCoupledSingleEnded;
-  radio.power.sagStart = 0.04f;
-  radio.power.sagEnd = 0.16f;
-  radio.power.rippleDepth = 0.018f;
-  radio.power.sagAttackMs = 45.0f;
-  radio.power.sagReleaseMs = 700.0f;
-  radio.power.rectifierMinHz = 80.0f;
-  radio.power.rippleSecondHarmonicMix = 0.0f;
-  radio.power.gainSagPerPower = 0.025f;
-  radio.power.rippleGainBase = 0.18f;
-  radio.power.rippleGainDepth = 0.10f;
-  radio.power.gainMin = 0.89f;
-  radio.power.gainMax = 1.02f;
-  radio.power.supplyDriveDepth = 0.02f;
-  radio.power.supplyBiasDepth = 0.0f;
+  // Bulletin 284: 84 rectifier, 12/4 uF filter, 1500 ohm field,
+  // 250+70 ohm centre-tap return; no separate first-audio supply decoupling.
+  radio.powerSupply.config = {};
+  radio.powerSupply.config.rectifier.perveance = 0.00058f;
+  radio.powerSupply.config.secondaryResistanceOhms = 400;
+  radio.powerSupply.config.reservoirFarads = 12e-6f;
+  radio.powerSupply.config.filterFarads = 4e-6f;
+  radio.powerSupply.config.filterReturnsToCentreTap = false;
+  radio.powerSupply.config.filterHenries = 10;  // field inductance prior
+  radio.powerSupply.config.filterResistanceOhms = 1500;
+  radio.powerSupply.config.returnFarads = 0;
+  radio.powerSupply.config.returnHenries = 0;
+  radio.powerSupply.config.returnResistanceOhms = 320;
+  radio.powerSupply.config.auxiliaryResistanceOhms = 0;
+  radio.powerSupply.config.auxiliaryHenries = 0;
+  radio.powerSupply.config.auxiliaryFarads = 0;
+  radio.powerSupply.config.audioResistanceOhms = 0;
+  radio.powerSupply.config.audioFarads = 0;
+  radio.powerSupply.otherLoadAmps = 0.020f;
+  radio.powerSupply.auxiliaryOtherLoadAmps = 0;
+  radio.powerSupply.screenCurrentRatio = 0.15f;
   radio.power.postLpHz = 0.0f;
   radio.power.gridCouplingCapFarads = 0.01e-6f;
   radio.power.gridLeakResistanceOhms = 490000.0f;
@@ -540,7 +555,7 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.globals.postNoiseMix = 0.35f;
   radio.globals.noiseFloorAmp = 0.0f;
 
-  radio.noiseConfig.enableHumTone = true;
+  radio.noiseConfig.enableHumTone = false;
   radio.noiseConfig.humHzDefault = 60.0f;
   radio.noiseConfig.noiseWeightRef = 0.15f;
   radio.noiseConfig.noiseWeightScaleMax = 2.0f;
@@ -551,12 +566,6 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.noiseRuntime.hum.noiseHpHz = 500.0f;
   radio.noiseRuntime.hum.noiseLpHz = 5000.0f;
   radio.noiseRuntime.hum.filterQ = kRadioBiquadQ;
-  radio.noiseRuntime.hum.scAttackMs = 2.0f;
-  radio.noiseRuntime.hum.scReleaseMs = 80.0f;
-  radio.noiseRuntime.hum.crackleDecayMs = 8.0f;
-  radio.noiseRuntime.hum.sidechainMaskRef = 0.15f;
-  radio.noiseRuntime.hum.hissMaskDepth = 0.5f;
-  radio.noiseRuntime.hum.burstMaskDepth = 0.3f;
   radio.noiseRuntime.hum.pinkFastPole = 0.85f;
   radio.noiseRuntime.hum.pinkSlowPole = 0.97f;
   radio.noiseRuntime.hum.brownStep = 0.02f;
@@ -606,8 +615,11 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.speakerStage.speaker.forceFactorBl = 0.0f;
   radio.speakerStage.speaker.suspensionComplianceMetersPerNewton = 0.0f;
   radio.speakerStage.speaker.mechanicalDampingNsPerMeter = 0.0f;
-  radio.speakerStage.speaker.excursionRef = 3.2f;
-  radio.speakerStage.speaker.complianceLossDepth = 0.10f;
+  // Conservative nonlinear/thermal priors, not measured BO-1 properties.
+  radio.speakerStage.speaker.motorTravelMeters = 0.0015f;
+  radio.speakerStage.speaker.suspensionTravelMeters = 0.001f;
+  radio.speakerStage.speaker.thermalCapacityJoulesPerKelvin = 0.25f;
+  radio.speakerStage.speaker.thermalResistanceKelvinPerWatt = 12.0f;
   radio.speakerStage.speaker.asymBias = 0.09f;
 
   radio.cabinet.enabled = true;

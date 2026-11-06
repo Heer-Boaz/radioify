@@ -394,9 +394,9 @@ void expectPreviewCapsDetectorWork() {
   }
 }
 
-float measurePreviewProgramFilterRms(float frequencyHz) {
+float measurePreviewProgramFilterRms(float frequencyHz, float receiverBw = kBandwidthHz) {
   Radio1938 radio;
-  radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
+  radio.init(1, kSampleRate, receiverBw, 0.0f);
   RadioAmIngressConfig ingress;
   RadioPreviewConfig config;
   RadioPreviewPipeline preview;
@@ -407,10 +407,9 @@ float measurePreviewProgramFilterRms(float frequencyHz) {
   constexpr uint32_t kFrames = 48000u;
   constexpr uint32_t kAnalysisStart = kFrames / 2u;
   for (uint32_t i = 0; i < kFrames; ++i) {
-    const float phase = kRadioTwoPi * frequencyHz *
-                        (static_cast<float>(i) / kSampleRate);
+    const double phase = 6.28318530717958647692 * frequencyHz * i / kSampleRate;
     const float out =
-        RadioPreviewProgramFilterNode::run(preview, std::sin(phase), ctx);
+        RadioPreviewProgramFilterNode::run(preview, static_cast<float>(std::sin(phase)), ctx);
     if (i >= kAnalysisStart) {
       sumSq += static_cast<double>(out) * static_cast<double>(out);
     }
@@ -421,12 +420,17 @@ float measurePreviewProgramFilterRms(float frequencyHz) {
 
 void expectPreviewUsesRequestedAudioBandwidthOnce() {
   const float passbandRms = measurePreviewProgramFilterRms(500.0f);
-  const float edgeRms = measurePreviewProgramFilterRms(kBandwidthHz);
+  const float edgeRms = measurePreviewProgramFilterRms(std::min(10000.0f, .20f * kSampleRate));
   const float edgeRatio = edgeRms / std::max(passbandRms, 1e-9f);
   if (edgeRatio < 0.68f || edgeRatio > 0.74f) {
-    fail("Preview audio-bandwidth edge is not a single -3 dB low-pass; ratio=" +
+    fail("Transmitter audio-bandwidth edge is not a single -3 dB low-pass; ratio=" +
          std::to_string(edgeRatio));
   }
+  if (measurePreviewProgramFilterRms(20000) > passbandRms * 1e-5f)
+    fail("Transmitter lets ultrasonic programme fold into the AM channel");
+  if (std::fabs(measurePreviewProgramFilterRms(6000, 3000) -
+                measurePreviewProgramFilterRms(6000, 6500)) > 1e-6f)
+    fail("Transmitter bandwidth still follows receiver selectivity");
 }
 
 RadioAmIngressConfig makeIsolatedBroadcastSourceConfig() {

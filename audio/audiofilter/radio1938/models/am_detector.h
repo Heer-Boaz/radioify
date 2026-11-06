@@ -2,6 +2,7 @@
 #define RADIOIFY_AUDIOFILTER_RADIO1938_MODELS_AM_DETECTOR_H
 
 #include "../../math/biquad.h"
+#include "../../models/thermionic_diode.h"
 
 #include <cstdint>
 #include <random>
@@ -13,14 +14,12 @@ struct AMDetector {
   float bwHz = 0.0f;
   float tuneOffsetHz = 0.0f;
 
-  std::mt19937 rng{0x1942u};
-  std::uniform_real_distribution<float> dist{-1.0f, 1.0f};
-
   Biquad afcErrorLp;
 
   float audioRect = 0.0f;
   float avcRect = 0.0f;
   float detectorStorageNode = 0.0f;
+  float filteredStorageNode = 0.0f;
   float detectorNode = 0.0f;
   float avcEnv = 0.0f;
   float ifWavePhase = 0.0f;
@@ -49,18 +48,12 @@ struct AMDetector {
   bool metricsEnabled = false;
   bool warmStartPending = true;
   float afcError = 0.0f;
-  float ifCrackleEnv = 0.0f;
-  float ifCrackleDecay = 0.0f;
-  float ifCracklePhase = 0.0f;
-  uint64_t ifCrackleEventCount = 0;
-  float ifCrackleMaxBurstAmp = 0.0f;
-  float ifCrackleMaxEnv = 0.0f;
-
-  float audioDiodeDrop = 0.0f;
-  float avcDiodeDrop = 0.0f;
-  float audioJunctionSlopeVolts = 0.0f;
-  float avcJunctionSlopeVolts = 0.0f;
+  ThermionicDiode audioDiode;
+  ThermionicDiode avcDiode;
+  float avcDelayBiasVolts = 0.54f;
   float detectorStorageCapFarads = 0.0f;
+  float filterResistanceOhms = 0;
+  float filterCapFarads = 0;
   float audioChargeResistanceOhms = 0.0f;
   float audioDischargeResistanceOhms = 0.0f;
   float avcChargeResistanceOhms = 0.0f;
@@ -93,11 +86,7 @@ struct AMDetector {
   void setBandwidth(float newBw, float newTuneHz = 0.0f);
   void setSenseWindow(float lowHz, float highHz);
   void reset();
-  float run(float signalI,
-            float signalQ,
-            Radio1938& radio,
-            float ifCrackleAmp = 0.0f,
-            float ifCrackleRate = 0.0f);
+  float run(float signalI, float signalQ, Radio1938& radio);
 };
 
 #endif  // RADIOIFY_AUDIOFILTER_RADIO1938_MODELS_AM_DETECTOR_H

@@ -1,0 +1,28 @@
+# Optional overrides for both radio filters. The built-in defaults already
+# enable this headphone scene; the existing interface needs no changes.
+# Usage: radioify --radio-settings examples/radio-room.toml <media>
+[audio-filter.headphones.room]
+enabled = true
+headphones = true
+
+# Overall reflected sound, 0..1. Zero leaves the direct directional source.
+reflections = 0.35
+decaySeconds = 0.32
+lateLevel = 0.12
+wallLowpassHz = 4000
+
+# An illustrative listening room, not dimensions of a historic radio cabinet.
+widthMeters = 4
+lengthMeters = 5
+heightMeters = 2.6
+sourceXMeters = 1.4
+sourceYMeters = 1
+sourceZMeters = 1
+listenerXMeters = 1.4
+listenerYMeters = 3
+listenerZMeters = 1
+speakerYawDegrees = 0
+headYawDegrees = 0
+
+# For your own loudspeakers, enabled=false bypasses all simulated room/head
+# processing. headphones=false retains the room but removes binaural cues.

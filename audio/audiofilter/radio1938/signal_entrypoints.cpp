@@ -37,9 +37,9 @@ void Radio1938::processAmAudio(const float* audioSamples,
   float* rf = rfScratch.data();
   const float safeSampleRate = std::max(sampleRate, 1.0f);
   const float carrierHz = resolvedInputCarrierHz();
-  const float carrierStep = kRadioTwoPi * (carrierHz / safeSampleRate);
-  const float carrierStepCos = std::cos(carrierStep);
-  const float carrierStepSin = std::sin(carrierStep);
+  const double carrierStep = 6.28318530717958647692 * carrierHz / safeSampleRate;
+  const float carrierStepCos = static_cast<float>(std::cos(carrierStep));
+  const float carrierStepSin = static_cast<float>(std::sin(carrierStep));
   const float carrierPeak =
       std::sqrt(2.0f) * std::max(receivedCarrierRmsVolts, 0.0f);
   // Keep the oscillator itself across blocks. Reconstructing it from a

@@ -45,21 +45,16 @@ float RadioAMDetectorNode::run(Radio1938& radio,
   ensureAMDetectorConfigured(radio);
   if (radio.ifStrip.enabled) {
     y = demod.am.run(ctx.signal.detectorInputI, ctx.signal.detectorInputQ,
-                     radio,
-                     ctx.derived.demodIfCrackleAmp,
-                     ctx.derived.demodIfCrackleRate);
+                     radio);
   } else if (ctx.signal.mode == SourceInputMode::ComplexEnvelope) {
-    y = demod.am.run(ctx.signal.i, ctx.signal.q, radio,
-                     ctx.derived.demodIfCrackleAmp,
-                     ctx.derived.demodIfCrackleRate);
+    y = demod.am.run(ctx.signal.i, ctx.signal.q, radio);
   } else {
-    y = demod.am.run(y, 0.0f, radio,
-                     ctx.derived.demodIfCrackleAmp,
-                     ctx.derived.demodIfCrackleRate);
+    y = demod.am.run(y, 0.0f, radio);
   }
   radio.controlSense.controlVoltageSense =
       clampf(demod.am.avcEnv / std::max(demod.am.controlVoltageRef, 1e-6f),
              0.0f, 1.25f);
   radio.controlSense.tuningErrorSense = demod.am.afcError;
+  radio.controlSense.tuningSignalVolts = demod.am.detectorNode;
   return y;
 }

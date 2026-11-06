@@ -18,6 +18,22 @@ radioify_add_module_object_library(radioify_tool_radio_am_ingress_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/radio_am_ingress_tests.cpp
 )
 
+radioify_add_module_object_library(radioify_tool_radio_acoustic_model_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio_acoustic_model_tests.cpp
+)
+
+radioify_add_module_object_library(radioify_tool_radio_settings_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio_settings_tests.cpp
+)
+
+radioify_add_module_object_library(radioify_tool_radio_oversampling_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio_oversampling_tests.cpp
+)
+
+radioify_add_module_object_library(radioify_tool_radio_circuit_model_tests
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio_circuit_model_tests.cpp
+)
+
 radioify_add_module_object_library(radioify_tool_audio_playback_pipeline_tests
   ${CMAKE_CURRENT_SOURCE_DIR}/audio_playback_pipeline_tests.cpp
 )

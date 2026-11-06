@@ -11,10 +11,9 @@ struct Radio1938;
 namespace am_detector_internal {
 
 inline uint64_t monotonicNowNs() {
-  return static_cast<uint64_t>(
-      std::chrono::duration_cast<std::chrono::nanoseconds>(
-          std::chrono::steady_clock::now().time_since_epoch())
-          .count());
+  return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                   std::chrono::steady_clock::now().time_since_epoch())
+                                   .count());
 }
 
 struct DetectorSolveResult {
@@ -22,9 +21,9 @@ struct DetectorSolveResult {
   float avcNode = 0.0f;
 };
 
-struct DetectorChargeBranch {
-  float currentAmps = 0.0f;
-  float conductanceSiemens = 0.0f;
+struct DetectorLoad {
+  float conductance = 0;
+  float historyCurrent = 0;
 };
 
 struct EnvelopeTrajectory {
@@ -36,60 +35,33 @@ struct EnvelopeTrajectory {
   float q2 = 0.0f;
 };
 
-void primeDetectorWarmStart(AMDetector& detector,
-                            float audioRect,
-                            float avcDrive);
+void primeDetectorWarmStart(AMDetector& detector, float carrierPeak, DetectorLoad load);
 
-DetectorChargeBranch evaluateDetectorChargeBranch(float sourceVolts,
-                                                  float nodeVolts,
-                                                  float diodeDropVolts,
-                                                  float junctionSlopeVolts,
-                                                  float chargeResistanceOhms);
+float stepDetectorAudioNode(AMDetector& detector, float dt, float sourceVolts,
+                            DetectorLoad load);
 
-float solveDetectorAudioNode(AMDetector& detector,
-                             float dt,
-                             float sourceVolts,
-                             float detectorLeakG);
+DetectorSolveResult stepDetectorStorageAndAvc(AMDetector& detector, float dt,
+                                              float detectorDriveVolts, float avcDrive,
+                                              DetectorLoad load);
 
-DetectorSolveResult stepDetectorStorageAndAvc(AMDetector& detector,
-                                              float dt,
-                                              float detectorDriveVolts,
-                                              float avcDrive,
-                                              float detectorLeakG);
-
-int detectorWaveformSubsteps(const AMDetector& detector,
-                             float sampleRate,
+int detectorWaveformSubsteps(const AMDetector& detector, float sampleRate,
                              float carrierHz);
 
-EnvelopeTrajectory buildEnvelopeTrajectory(bool useQuadratic,
-                                           float prevPrevIfI,
-                                           float prevPrevIfQ,
-                                           float prevIfI,
-                                           float prevIfQ,
-                                           float ifI,
-                                           float ifQ);
+EnvelopeTrajectory buildEnvelopeTrajectory(bool useQuadratic, float prevPrevIfI,
+                                           float prevPrevIfQ, float prevIfI,
+                                           float prevIfQ, float ifI, float ifQ);
 
-void evaluateEnvelopeAt(const EnvelopeTrajectory& trajectory,
-                        float t,
-                        float& envI,
+void evaluateEnvelopeAt(const EnvelopeTrajectory& trajectory, float t, float& envI,
                         float& envQ);
 
-float sampleIfWave(const EnvelopeTrajectory& trajectory,
-                   float t,
-                   float c,
-                   float s);
+float sampleIfWave(const EnvelopeTrajectory& trajectory, float t, float c, float s);
 
 void updateDetectorEnvelopeHistory(AMDetector& detector, float ifI, float ifQ);
 
-void runEnvelopeDetectorPath(AMDetector& detector,
-                             float ifMagnitude,
-                             float detectorLeakG);
+void runEnvelopeDetectorPath(AMDetector& detector, float ifMagnitude, DetectorLoad load);
 
-void runWaveformDetectorIsland(AMDetector& detector,
-                               float ifI,
-                               float ifQ,
-                               float detectorLeakG,
-                               float carrierHz);
+void runWaveformDetectorIsland(AMDetector& detector, float ifI, float ifQ,
+                               DetectorLoad load, float carrierHz);
 
 }  // namespace am_detector_internal
 

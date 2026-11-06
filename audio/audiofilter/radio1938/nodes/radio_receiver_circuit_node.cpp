@@ -11,15 +11,15 @@ namespace {
 
 float runReceiverTriodeStage(Radio1938& radio, float gridVoltage) {
   auto& receiver = radio.receiverCircuit;
-  float receiverSupplyScale =
-      computePowerBranchSupplyScale(radio, radio.power.supplyDriveDepth);
-  assert(receiver.tubeTriodeConnected &&
-         "Receiver audio stage expects a triode model");
-  return processResistorLoadedTriodeStage(
-      receiver.tubeBiasVolts + gridVoltage, receiverSupplyScale,
-      receiver.tubePlateSupplyVolts, receiver.tubeQuiescentPlateVolts,
-      receiver.tubeTriodeModel, &receiver.tubeTriodeLut,
-      receiver.tubeLoadResistanceOhms, receiver.tubePlateVoltage);
+  const float rail = receiver.tubeSupplyVolts;
+  assert(receiver.tubeTriodeConnected && "Receiver audio stage expects a triode model");
+  const float output = processResistorLoadedTriodeStage(
+      receiver.tubeBiasVolts + gridVoltage, 1.0f, rail, receiver.tubeQuiescentPlateVolts,
+      receiver.tubeTriodeModel, &receiver.tubeTriodeLut, receiver.tubeLoadResistanceOhms,
+      receiver.tubePlateVoltage);
+  receiver.tubeSupplyCurrentAmps +=
+      (rail - receiver.tubePlateVoltage) / receiver.tubeLoadResistanceOhms;
+  return output;
 }
 
 }  // namespace
@@ -27,44 +27,47 @@ float runReceiverTriodeStage(Radio1938& radio, float gridVoltage) {
 void RadioReceiverCircuitNode::init(Radio1938& radio, RadioInitContext&) {
   auto& receiver = radio.receiverCircuit;
   if (!receiver.enabled || !receiver.tubeTriodeConnected) return;
-  float oversampleFactor = std::max(radio.globals.oversampleFactor, 1.0f);
-  float osFs = radio.sampleRate * oversampleFactor;
-  float osCut = radio.sampleRate * radio.globals.oversampleCutoffFraction;
-  receiver.osLpIn.setLowpass(osFs, osCut, kRadioBiquadQ);
-  receiver.osLpOut.setLowpass(osFs, osCut, kRadioBiquadQ);
+  receiver.oversampler.configure(radio.globals.oversampleFactor,
+                                 radio.globals.oversampleCutoffFraction);
+  receiver.tubeTriodeModel.mu = receiver.tubeMu;
   TriodeOperatingPoint op = solveTriodeOperatingPoint(
-      receiver.tubePlateSupplyVolts, receiver.tubeLoadResistanceOhms,
-      receiver.tubeBiasVolts, receiver.tubePlateDcVolts,
-      receiver.tubePlateCurrentAmps, receiver.tubeMutualConductanceSiemens,
-      receiver.tubeMu);
+      receiver.tubePlateSupplyVolts,
+      receiver.tubeLoadResistanceOhms + receiver.tubeDcFeedResistanceOhms,
+      receiver.tubeBiasVolts, receiver.tubePlateDcVolts, receiver.tubeTriodeModel);
+  // The bypassed feed resistor belongs to the DC path; it is not the plate's
+  // audio-frequency load. Reservoir dynamics remain in the supply model.
+  receiver.tubeEffectiveSupplyVolts =
+      receiver.tubePlateSupplyVolts -
+      op.plateCurrentAmps * receiver.tubeDcFeedResistanceOhms;
+  receiver.tubeSupplyVolts = receiver.tubeEffectiveSupplyVolts;
+  receiver.tubeSupplyCurrentAmps = op.plateCurrentAmps;
   receiver.tubeQuiescentPlateVolts = op.plateVolts;
   receiver.tubeQuiescentPlateCurrentAmps = op.plateCurrentAmps;
   receiver.tubePlateResistanceOhms = op.rpOhms;
   receiver.tubeTriodeModel = op.model;
   configureRuntimeTriodeLut(receiver.tubeTriodeLut, receiver.tubeTriodeModel,
-                            receiver.tubeBiasVolts,
-                            receiver.tubePlateSupplyVolts, 36.0f, 8.0f);
-  assert((std::fabs(receiver.tubeQuiescentPlateVolts -
-                    receiver.tubePlateDcVolts) <=
+                            receiver.tubeBiasVolts, receiver.tubePlateSupplyVolts, 36.0f,
+                            8.0f);
+  assert((std::fabs(receiver.tubeQuiescentPlateVolts - receiver.tubePlateDcVolts) <=
           receiver.operatingPointToleranceVolts) &&
-         "6J5 first-audio operating point diverged from the preset target");
+         "First-audio operating point diverged from the circuit prior");
 }
 
 void RadioReceiverCircuitNode::reset(Radio1938& radio) {
   auto& receiver = radio.receiverCircuit;
   receiver.couplingCapVoltage = 0.0f;
+  receiver.couplingCapCurrent = 0.0f;
+  receiver.volumeControlTapCapCurrent = 0.0f;
   receiver.gridVoltage = 0.0f;
   receiver.volumeControlTapVoltage = 0.0f;
   receiver.warmStartPending = true;
   receiver.tubePlateVoltage = receiver.tubeQuiescentPlateVolts;
-  receiver.osPrevGridVolts = 0.0f;
-  receiver.osLpIn.reset();
-  receiver.osLpOut.reset();
+  receiver.tubeSupplyVolts = receiver.tubeEffectiveSupplyVolts;
+  receiver.tubeSupplyCurrentAmps = receiver.tubeQuiescentPlateCurrentAmps;
+  receiver.oversampler.reset();
 }
 
-float RadioReceiverCircuitNode::run(Radio1938& radio,
-                                    float y,
-                                    RadioSampleContext&) {
+float RadioReceiverCircuitNode::run(Radio1938& radio, float y, RadioSampleContext&) {
   auto& receiver = radio.receiverCircuit;
   if (!receiver.enabled) return y;
   assert(!receiver.warmStartPending &&
@@ -76,19 +79,16 @@ float RadioReceiverCircuitNode::run(Radio1938& radio,
   if (radio.calibration.enabled) {
     radio.calibration.receiverGridVolts.accumulate(receiver.gridVoltage);
   }
-  float out = 0.0f;
-  out = processOversampled2x(receiver.gridVoltage, receiver.osPrevGridVolts,
-                             receiver.osLpIn, receiver.osLpOut,
-                             [&](float gridVoltage) {
-                               return runReceiverTriodeStage(radio, gridVoltage);
-                             });
+  receiver.tubeSupplyCurrentAmps = 0;
+  const float out = receiver.oversampler.process(
+      receiver.gridVoltage,
+      [&](float gridVoltage) { return runReceiverTriodeStage(radio, gridVoltage); });
+  receiver.tubeSupplyCurrentAmps /= receiver.oversampler.factor();
   if (radio.calibration.enabled) {
     float plateCurrent = static_cast<float>(
-        evaluateKorenTriodePlateRuntime(receiver.tubeBiasVolts +
-                                            receiver.gridVoltage,
+        evaluateKorenTriodePlateRuntime(receiver.tubeBiasVolts + receiver.gridVoltage,
                                         receiver.tubePlateVoltage,
-                                        receiver.tubeTriodeModel,
-                                        receiver.tubeTriodeLut)
+                                        receiver.tubeTriodeModel, receiver.tubeTriodeLut)
             .currentAmps);
     radio.calibration.receiverPlateSwingVolts.accumulate(out);
     radio.calibration.maxReceiverPlateCurrentAmps =

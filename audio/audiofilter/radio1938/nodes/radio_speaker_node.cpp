@@ -20,17 +20,8 @@ float asymmetricSoftLimit(float x, float positiveLimit, float negativeLimit) {
 }
 
 void initSpeakerModel(SpeakerSim& speaker, float fs) {
-  // Power supplies I*Re (motor force scaled into volts), not pressure.
-  // Far-field piston pressure follows acceleration. For the mechanical branch
-  // M*x'' + R*x' + x/C = Bl*I, pressure / motor is the high-pass
-  // s^2 / (s^2 + (R/M)*s + 1/(M*C)). Back EMF is already in the electrical
-  // solve, so use mechanical Q here, never the electrically loaded total Q.
-  const float mass = speaker.effectiveMovingMassKg;
-  const float omega = 1.0f / std::sqrt(
-      mass * speaker.effectiveSuspensionComplianceMetersPerNewton);
-  speaker.radiation.setHighpass(
-      fs, omega / kRadioTwoPi,
-      mass * omega / speaker.effectiveMechanicalDampingNsPerMeter);
+  // Power supplies acceleration in the established pressure-equivalent scale.
+  // These sections are the residual cone-response fit, not a second motor.
   float suspensionHzDerived =
       speaker.suspensionHz * (1.0f + 0.45f * speaker.coneMassTolerance -
                               0.65f * speaker.suspensionComplianceTolerance);
@@ -87,24 +78,19 @@ void initSpeakerModel(SpeakerSim& speaker, float fs) {
   } else {
     speaker.hfLossLp = Biquad{};
   }
-  speaker.excursionAtk = std::exp(-1.0f / (fs * 0.010f));
-  speaker.excursionRel = std::exp(-1.0f / (fs * 0.120f));
 }
 
 void resetSpeakerModel(SpeakerSim& speaker) {
-  speaker.radiation.reset();
   speaker.suspensionRes.reset();
   speaker.coneBody.reset();
   speaker.upperBreakup.reset();
   speaker.coneDip.reset();
   speaker.topLp.reset();
   speaker.hfLossLp.reset();
-  speaker.excursionEnv = 0.0f;
 }
 
 float runSpeakerModel(SpeakerSim& speaker, float x, bool& clipped) {
   float y = x * std::max(speaker.drive, 0.0f);
-  y = speaker.radiation.process(y);
   y = speaker.suspensionRes.process(y);
   y = speaker.coneBody.process(y);
   y = speaker.upperBreakup.process(y);
@@ -118,32 +104,6 @@ float runSpeakerModel(SpeakerSim& speaker, float x, bool& clipped) {
     y = speaker.topLp.process(y);
   }
 
-  // The audible compliance/asymmetry should follow actual cone travel, not
-  // instantaneous speaker voltage. The electrical branch in the power stage
-  // now solves displacement explicitly, so use that state here.
-  float excursionRefMm = std::max(speaker.excursionRef, 1e-6f);
-  float signedExcursionMm = 1000.0f * speaker.coneDisplacementMeters;
-  float excursionMagnitudeMm = std::fabs(signedExcursionMm);
-  if (excursionMagnitudeMm > speaker.excursionEnv) {
-    speaker.excursionEnv =
-        speaker.excursionAtk * speaker.excursionEnv +
-        (1.0f - speaker.excursionAtk) * excursionMagnitudeMm;
-  } else {
-    speaker.excursionEnv =
-        speaker.excursionRel * speaker.excursionEnv +
-        (1.0f - speaker.excursionRel) * excursionMagnitudeMm;
-  }
-
-  float excursionT =
-      clampf(speaker.excursionEnv / excursionRefMm, 0.0f, 1.0f);
-  float signedExcursionT =
-      clampf(signedExcursionMm / excursionRefMm, -1.0f, 1.0f);
-  float asymmetry =
-      1.0f + clampf(speaker.asymBias, -0.75f, 0.75f) * signedExcursionT;
-  float complianceGain =
-      1.0f - speaker.complianceLossDepth * excursionT *
-                 clampf(asymmetry, 0.35f, 1.65f);
-  y *= std::max(0.70f, complianceGain);
   if (speaker.limit > 0.0f) {
     float asym = clampf(speaker.asymBias, -0.75f, 0.75f);
     float positiveLimit = std::max(speaker.limit * (1.0f - 0.35f * asym), 1e-6f);
@@ -159,32 +119,26 @@ float runSpeakerModel(SpeakerSim& speaker, float x, bool& clipped) {
 
 void RadioSpeakerNode::init(Radio1938& radio, RadioInitContext&) {
   auto& speakerStage = radio.speakerStage;
-  float osFs = radio.sampleRate * radio.globals.oversampleFactor;
-  float osCut = radio.sampleRate * radio.globals.oversampleCutoffFraction;
-  speakerStage.osLpIn.setLowpass(osFs, osCut, kRadioBiquadQ);
-  speakerStage.osLpOut.setLowpass(osFs, osCut, kRadioBiquadQ);
+  speakerStage.oversampler.configure(radio.globals.oversampleFactor,
+                                    radio.globals.oversampleCutoffFraction);
+  float osFs = radio.sampleRate * speakerStage.oversampler.factor();
   initSpeakerModel(speakerStage.speaker, osFs);
   speakerStage.speaker.drive = speakerStage.drive;
 }
 
 void RadioSpeakerNode::reset(Radio1938& radio) {
   auto& speakerStage = radio.speakerStage;
-  speakerStage.osPrev = 0.0f;
-  speakerStage.osLpIn.reset();
-  speakerStage.osLpOut.reset();
+  speakerStage.oversampler.reset();
   resetSpeakerModel(speakerStage.speaker);
 }
 
 float RadioSpeakerNode::run(Radio1938& radio, float y, RadioSampleContext&) {
   auto& speakerStage = radio.speakerStage;
   speakerStage.speaker.drive = std::max(speakerStage.drive, 0.0f);
-  y = processOversampled2x(y, speakerStage.osPrev, speakerStage.osLpIn,
-                           speakerStage.osLpOut, [&](float v) {
-                             bool clipped = false;
-                             float out =
-                                 runSpeakerModel(speakerStage.speaker, v, clipped);
-                             if (clipped) radio.diagnostics.markSpeakerClip();
-                             return out;
-                           });
-  return y;
+  return speakerStage.oversampler.process(y, [&](float v) {
+    bool clipped = false;
+    const float out = runSpeakerModel(speakerStage.speaker, v, clipped);
+    if (clipped) radio.diagnostics.markSpeakerClip();
+    return out;
+  });
 }

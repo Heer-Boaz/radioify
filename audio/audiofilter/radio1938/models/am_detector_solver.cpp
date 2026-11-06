@@ -1,115 +1,95 @@
 #include "am_detector_internal.h"
 
-#include "../../math/signal_math.h"
-
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 
 namespace am_detector_internal {
+namespace {
+// DC equilibrium of the periodic detector, only used when starting reception.
+// Both signal and thermal contact currents charge the actual RC load.
+double equilibrium(const ThermionicDiode& diode, double peak, double bias, double sourceR,
+                   DetectorLoad load, double filterR = 0) {
+  double low = 0, high = peak + 2 + std::abs(diode.contactPotentialVolts);
+  for (int iteration = 0; iteration < 36; ++iteration) {
+    const double v = .5 * (low + high);
+    double current = 0;
+    for (int n = 0; n < 64; ++n)
+      current +=
+          diode.current(peak * std::cos(6.283185307179586 * (n + .5) / 64) - bias - v -
+                            filterR * (load.conductance * v + load.historyCurrent),
+                        sourceR) /
+          64;
+    if (current > load.conductance * v + load.historyCurrent)
+      low = v;
+    else
+      high = v;
+  }
+  return .5 * (low + high);
+}
 
-void primeDetectorWarmStart(AMDetector& detector,
-                            float audioRect,
-                            float avcDrive) {
-  detector.detectorStorageNode = audioRect;
-  detector.detectorNode = audioRect;
-  detector.avcEnv = avcDrive;
-  detector.avcRect = detector.avcEnv;
+float solveStorage(const ThermionicDiode& diode, double dt, double source, double sourceR,
+                   double capacitance, double previous, DetectorLoad load,
+                   int* iterations = nullptr) {
+  const double capG = capacitance / dt;
+  const double totalG = capG + load.conductance;
+  const double unloaded = (capG * previous - load.historyCurrent) / totalG;
+  const double current =
+      diode.current(source - unloaded, sourceR + 1 / totalG, iterations);
+  return static_cast<float>(unloaded + current / totalG);
+}
+}  // namespace
+
+void primeDetectorWarmStart(AMDetector& detector, float carrierPeak, DetectorLoad load) {
+  detector.filteredStorageNode = static_cast<float>(
+      equilibrium(detector.audioDiode, carrierPeak, 0, detector.audioChargeResistanceOhms,
+                  load, detector.filterResistanceOhms));
+  detector.detectorStorageNode =
+      detector.filteredStorageNode +
+      detector.filterResistanceOhms *
+          (load.conductance * detector.filteredStorageNode + load.historyCurrent);
+  detector.detectorNode = detector.filteredStorageNode;
+  detector.avcEnv = static_cast<float>(equilibrium(
+      detector.avcDiode, carrierPeak, detector.avcDelayBiasVolts,
+      detector.avcChargeResistanceOhms, {1 / detector.avcDischargeResistanceOhms, 0}));
   detector.warmStartPending = false;
 }
 
-DetectorChargeBranch evaluateDetectorChargeBranch(float sourceVolts,
-                                                  float nodeVolts,
-                                                  float diodeDropVolts,
-                                                  float junctionSlopeVolts,
-                                                  float chargeResistanceOhms) {
-  float safeSlope = requirePositiveFinite(junctionSlopeVolts);
-  float safeResistance = requirePositiveFinite(chargeResistanceOhms);
-  float availableVolts = sourceVolts - nodeVolts - diodeDropVolts;
-  float x = availableVolts / safeSlope;
-  float conductionT = 0.0f;
-  if (x >= 20.0f) {
-    conductionT = 1.0f;
-  } else if (x > -20.0f) {
-    conductionT = 1.0f / (1.0f + std::exp(-x));
-  }
-
-  DetectorChargeBranch branch{};
-  if (availableVolts > 0.0f) {
-    branch.currentAmps = (availableVolts * conductionT) / safeResistance;
-    branch.conductanceSiemens =
-        (conductionT +
-         availableVolts * conductionT * (1.0f - conductionT) / safeSlope) /
-        safeResistance;
-  }
-  return branch;
-}
-
-float solveDetectorAudioNode(AMDetector& detector,
-                             float dt,
-                             float sourceVolts,
-                             float detectorLeakG) {
-  uint64_t startNs = detector.metricsEnabled ? monotonicNowNs() : 0;
-  float storageCapG =
-      std::max(detector.detectorStorageCapFarads, 1e-12f) / dt;
-  float previousNode = std::max(detector.detectorStorageNode, 0.0f);
-  float nodeVolts = previousNode;
+float stepDetectorAudioNode(AMDetector& detector, float dt, float sourceVolts,
+                            DetectorLoad load) {
+  const uint64_t startNs = detector.metricsEnabled ? monotonicNowNs() : 0;
   int iterations = 0;
-
-  if (sourceVolts <= detector.audioDiodeDrop) {
-    detector.storageSolveCallCount++;
-    if (detector.metricsEnabled) {
-      detector.storageSolveTimeNs += monotonicNowNs() - startNs;
-    }
-    return (storageCapG * previousNode) /
-           std::max(storageCapG + detectorLeakG, 1e-12f);
-  }
-
-  for (int iter = 0; iter < 8; ++iter) {
-    iterations = iter + 1;
-    DetectorChargeBranch branch = evaluateDetectorChargeBranch(
-        sourceVolts, nodeVolts, detector.audioDiodeDrop,
-        detector.audioJunctionSlopeVolts, detector.audioChargeResistanceOhms);
-    float f = storageCapG * (nodeVolts - previousNode) +
-              detectorLeakG * nodeVolts - branch.currentAmps;
-    float df = storageCapG + detectorLeakG + branch.conductanceSiemens;
-    assert(std::isfinite(df) && df > 1e-12f);
-    float delta = f / df;
-    nodeVolts = std::max(nodeVolts - delta, 0.0f);
-    if (std::fabs(delta) < 1e-7f) break;
-  }
-
-  detector.storageSolveCallCount++;
-  detector.storageSolveIterationCount += static_cast<uint64_t>(iterations);
+  const double cap1G = detector.detectorStorageCapFarads / double(dt);
+  const double cap2G = detector.filterCapFarads / double(dt);
+  const double outG = cap2G + load.conductance;
+  const double outHistory = cap2G * detector.filteredStorageNode - load.historyCurrent;
+  // Eliminate the post-detector RC node, retaining its capacitor history and
+  // the exact volume-network load. R=0 is an exact wire, without a tiny shunt.
+  const double denominator = 1 + detector.filterResistanceOhms * outG;
+  const double totalG = cap1G + outG / denominator;
+  const double unloaded =
+      (cap1G * detector.detectorStorageNode + outHistory / denominator) / totalG;
+  const double current = detector.audioDiode.current(
+      sourceVolts - unloaded, detector.audioChargeResistanceOhms + 1 / totalG,
+      &iterations);
+  detector.detectorStorageNode = static_cast<float>(unloaded + current / totalG);
+  const float node = static_cast<float>(
+      (detector.detectorStorageNode + detector.filterResistanceOhms * outHistory) /
+      denominator);
+  ++detector.storageSolveCallCount;
+  detector.storageSolveIterationCount += iterations;
   detector.storageSolveMaxIterations =
-      std::max(detector.storageSolveMaxIterations,
-               static_cast<uint32_t>(iterations));
-  if (detector.metricsEnabled) {
-    detector.storageSolveTimeNs += monotonicNowNs() - startNs;
-  }
-
-  return nodeVolts;
+      std::max(detector.storageSolveMaxIterations, static_cast<uint32_t>(iterations));
+  if (detector.metricsEnabled) detector.storageSolveTimeNs += monotonicNowNs() - startNs;
+  detector.filteredStorageNode = node;
+  return node;
 }
 
-DetectorSolveResult stepDetectorStorageAndAvc(AMDetector& detector,
-                                              float dt,
-                                              float detectorDriveVolts,
-                                              float avcDrive,
-                                              float detectorLeakG) {
-  float avcSourceG = 0.0f;
-  if (avcDrive > detector.avcEnv) {
-    avcSourceG = 1.0f / std::max(detector.avcChargeResistanceOhms, 1e-6f);
-  }
-  float avcLeakG = 1.0f / std::max(detector.avcDischargeResistanceOhms, 1e-6f);
-  float avcCapG = std::max(detector.avcFilterCapFarads, 1e-12f) / dt;
-  float a11 = avcSourceG + avcLeakG + avcCapG;
-  float b1 = avcCapG * detector.avcEnv + avcSourceG * avcDrive;
-
-  DetectorSolveResult result{};
-  result.detectorNode =
-      solveDetectorAudioNode(detector, dt, detectorDriveVolts, detectorLeakG);
-  result.avcNode = std::max(b1 / std::max(a11, 1e-12f), 0.0f);
-  return result;
+DetectorSolveResult stepDetectorStorageAndAvc(AMDetector& detector, float dt,
+                                              float detectorDriveVolts, float avcDrive,
+                                              DetectorLoad load) {
+  return {stepDetectorAudioNode(detector, dt, detectorDriveVolts, load),
+          solveStorage(detector.avcDiode, dt, avcDrive - detector.avcDelayBiasVolts,
+                       detector.avcChargeResistanceOhms, detector.avcFilterCapFarads,
+                       detector.avcEnv, {1 / detector.avcDischargeResistanceOhms, 0})};
 }
-
 }  // namespace am_detector_internal

@@ -4,7 +4,6 @@
 #include "../../math/biquad.h"
 
 struct SpeakerSim {
-  Biquad radiation;
   Biquad suspensionRes;
   Biquad coneBody;
   Biquad upperBreakup;
@@ -34,11 +33,12 @@ struct SpeakerSim {
   float coneMassTolerance = 0.0f;
   float breakupTolerance = 0.0f;
   float voiceCoilTolerance = 0.0f;
-  float excursionEnv = 0.0f;
-  float excursionAtk = 0.0f;
-  float excursionRel = 0.0f;
-  float excursionRef = 0.0f;
-  float complianceLossDepth = 0.0f;
+  // Engineering priors, not measured Philco parameters. Zero disables a term.
+  // Bl halves at motorTravelMeters; restoring force doubles at suspensionTravelMeters.
+  float motorTravelMeters = 0.0f;
+  float suspensionTravelMeters = 0.0f;
+  float thermalCapacityJoulesPerKelvin = 0.0f;
+  float thermalResistanceKelvinPerWatt = 0.0f;
   float hfLossDepth = 0.0f;
   float voiceCoilResistanceOhms = 0.0f;
   float voiceCoilInductanceHenries = 0.0f;
@@ -59,6 +59,12 @@ struct SpeakerSim {
   float coneVelocityMetersPerSecond = 0.0f;
   float coneDisplacementMeters = 0.0f;
   float backEmfVolts = 0.0f;
+  float coilTemperatureRiseKelvin = 0.0f;
+  float acousticDriveVolts = 0.0f;
+  // Diagnostics for the coupled solve; no state is committed during iteration.
+  unsigned solverNonconvergenceCount = 0;
+  unsigned solverMaxIterations = 0;
+  float solverMaxResidualVolts = 0.0f;
   float loadSenseVoltage = 0.0f;
   float loadSenseCurrent = 0.0f;
   float loadSenseCoeff = 0.0f;

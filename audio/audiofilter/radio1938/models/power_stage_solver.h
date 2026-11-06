@@ -17,7 +17,6 @@ struct DriverInterstageCenterTappedResult {
   int totalIterations = 0;
   int maxIterations = 0;
   uint64_t driverEvalCount = 0;
-  uint64_t driverEvalTimeNs = 0;
   uint32_t adaptiveValidationAttempts = 0;
   uint32_t adaptiveAcceptedDownshifts = 0;
   float adaptiveBoundaryErrorVolts = 0.0f;
@@ -27,19 +26,26 @@ struct DriverInterstageCenterTappedResult {
 
 struct SpeakerElectricalLinearization {
   SecondaryNortonLoad load;
-  float electricalCoeff = 0.0f;
-  float mechanicalCoeff = 0.0f;
-  float determinant = 0.0f;
-  float rhsElectrical = 0.0f;
-  float rhsMechanical = 0.0f;
-  float dt = 0.0f;
-  float forceFactorBl = 0.0f;
+  double electricalCoeff = 0.0;
+  double electricalCoupling = 0.0;
+  double mechanicalCoeff = 0.0;
+  double determinant = 0.0;
+  double rhsElectrical = 0.0;
+  double rhsMechanical = 0.0;
+  double dt = 0.0;
+  double forceFactorBl = 0.0;
+};
+
+struct SpeakerMotion {
+  double currentAmps = 0.0;
+  double velocityMetersPerSecond = 0.0;
 };
 
 struct OutputStageSubstepResult {
   CurrentDrivenTransformer transformer;
   float averagePrimaryVoltage = 0.0f;
   float averageSecondaryVoltage = 0.0f;
+  float averageAcousticDriveVolts = 0.0f;
   float averagePlateCurrentA = 0.0f;
   float averagePlateCurrentB = 0.0f;
   int transformerSubsteps = 0;
@@ -65,8 +71,11 @@ OutputPrimarySolveResult solveOutputPrimaryAffine(
 
 SpeakerElectricalLinearization linearizeSpeakerElectricalLoad(
     const SpeakerSim& speaker,
-    float nominalLoadOhms,
-    float dt);
+    double dt,
+    const SpeakerMotion& estimate);
+
+// Constant-terminal-voltage bench using the same nonlinear solve as playback.
+void advanceVoltageDrivenSpeaker(SpeakerSim& speaker, float volts, float dt);
 
 void configureSpeakerElectromechanics(SpeakerSim& speaker,
                                       float sampleRate,
@@ -104,7 +113,6 @@ DriverInterstageCenterTappedResult solveDriverInterstageCenterTappedNoCap(
     const Radio1938::PowerNodeState& power,
     float controlGridVolts,
     float driverPlateQuiescent,
-    float driverQuiescentCurrent,
-    bool measureDriverEvalTime);
+    float driverQuiescentCurrent);
 
 #endif  // RADIOIFY_AUDIOFILTER_RADIO1938_MODELS_POWER_STAGE_SOLVER_H

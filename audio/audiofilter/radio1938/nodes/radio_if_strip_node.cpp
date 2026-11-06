@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <stdexcept>
 
 namespace {
 
@@ -21,32 +22,6 @@ std::array<float, 2> unrotateComplexEnvelope(float inI,
   return {inI * c - inQ * s, inQ * c + inI * s};
 }
 
-float resonantCapacitanceFarads(float freqHz, float inductanceHenries) {
-  float omega = kRadioTwoPi * std::max(freqHz, 1.0f);
-  return 1.0f /
-         std::max(omega * omega * std::max(inductanceHenries, 1e-9f), 1e-18f);
-}
-
-float seriesResistanceForBandwidth(float inductanceHenries, float bandwidthHz) {
-  return std::max(kRadioTwoPi * std::max(inductanceHenries, 1e-9f) *
-                      std::max(bandwidthHz, 1.0f),
-                  1e-4f);
-}
-
-float seriesBandwidthHz(float inductanceHenries, float resistanceOhms) {
-  return std::max(resistanceOhms, 1e-4f) /
-         (kRadioTwoPi * std::max(inductanceHenries, 1e-9f));
-}
-
-float parallelLoadBandwidthHz(float capacitanceFarads, float resistanceOhms) {
-  if (capacitanceFarads <= 0.0f || resistanceOhms <= 0.0f) return 0.0f;
-  return 1.0f / (kRadioTwoPi * resistanceOhms * capacitanceFarads);
-}
-
-float downmixImageHz(float sampleRate, float carrierHz) {
-  return std::fabs(sampleRate - 2.0f * carrierHz);
-}
-
 void resetIfStripRuntimeEnvelopeState(Radio1938::IFStripNodeState& ifStrip) {
   ifStrip.sourceDownmixPhase = 0.0f;
   ifStrip.sourceDownmixOscCos = 1.0f;
@@ -55,7 +30,8 @@ void resetIfStripRuntimeEnvelopeState(Radio1938::IFStripNodeState& ifStrip) {
   ifStrip.ifEnvelopeOscCos = 1.0f;
   ifStrip.ifEnvelopeOscSin = 0.0f;
   ifStrip.sourceEnvelope.reset();
-  ifStrip.loadedCanEnvelope.reset();
+  for (auto& transformer : ifStrip.transformers) transformer.reset();
+  ifStrip.previousIfInput = {};
 }
 
 float computeIfTuneOffsetHz(const Radio1938::IFStripNodeState& ifStrip) {
@@ -73,8 +49,10 @@ std::array<float, 2> extractSourceEnvelope(Radio1938& radio,
 
   float c = ifStrip.sourceDownmixOscCos;
   float s = ifStrip.sourceDownmixOscSin;
-  auto sourceEnv = ifStrip.sourceEnvelope.process(2.0f * rfSample * rfGain * c,
-                                                  -2.0f * rfSample * rfGain * s);
+  // Real RF has already traversed FrontEnd, including its gain and AVC.
+  // Applying rfGain here again would count that stage twice.
+  const auto sourceEnv =
+      ifStrip.sourceEnvelope.process(2.0f * rfSample * c, -2.0f * rfSample * s);
   advanceNormalizedOscillator(ifStrip.sourceDownmixStepCos,
                               ifStrip.sourceDownmixStepSin,
                               ifStrip.sourceDownmixOscCos,
@@ -115,7 +93,18 @@ std::array<float, 2> runLoadedIfCanEquivalent(Radio1938& radio,
   }
   ifEnvI *= ifGain;
   ifEnvQ *= ifGain;
-  auto loadedCanEnv = ifStrip.loadedCanEnvelope.process(ifEnvI, ifEnvQ);
+  std::array<float, 2> loadedCanEnv{};
+  // Four short envelope steps limit trapezoidal frequency warping. All cans
+  // share this clock; there is no intermediate host-rate down/up sampling.
+  for (int step = 1; step <= 4; ++step) {
+    const float t = .25f * step;
+    loadedCanEnv = {
+        ifStrip.previousIfInput[0] + t * (ifEnvI - ifStrip.previousIfInput[0]),
+        ifStrip.previousIfInput[1] + t * (ifEnvQ - ifStrip.previousIfInput[1])};
+    for (int can = 0; can < ifStrip.transformerCount; ++can)
+      loadedCanEnv = ifStrip.transformers[can].process(loadedCanEnv[0], loadedCanEnv[1]);
+  }
+  ifStrip.previousIfInput = {ifEnvI, ifEnvQ};
 
   // The detector must see the loaded IF can mapped back into the original
   // source-envelope frame. Unrotate only the residual tuning offset here;
@@ -129,82 +118,41 @@ void configureIfStrip(Radio1938& radio) {
   const auto& tuning = radio.tuning;
 
   float sampleRate = std::max(radio.sampleRate, 1.0f);
-  float safeAudioBw = std::max(tuning.tunedBw, ifStrip.ifMinBwHz);
+  float safeAudioBw =
+      std::min(std::max(tuning.tunedBw, ifStrip.ifMinBwHz), .20f * sampleRate);
   float physicalChannelBw = 2.0f * safeAudioBw;
   ifStrip.sourceCarrierHz = tuning.sourceCarrierHz;
   ifStrip.loFrequencyHz =
       ifStrip.sourceCarrierHz + ifStrip.ifCenterHz + tuning.tuneAppliedHz;
   ifStrip.sourceDownmixStepRadians =
       kRadioTwoPi * (ifStrip.sourceCarrierHz / sampleRate);
-  ifStrip.sourceDownmixStepCos = std::cos(ifStrip.sourceDownmixStepRadians);
-  ifStrip.sourceDownmixStepSin = std::sin(ifStrip.sourceDownmixStepRadians);
+  const double sourceStep = 6.28318530717958647692 * ifStrip.sourceCarrierHz / sampleRate;
+  ifStrip.sourceDownmixStepCos = static_cast<float>(std::cos(sourceStep));
+  ifStrip.sourceDownmixStepSin = static_cast<float>(std::sin(sourceStep));
   ifStrip.ifEnvelopeStepRadians =
       kRadioTwoPi * (computeIfTuneOffsetHz(ifStrip) / sampleRate);
   ifStrip.ifEnvelopeStepCos = std::cos(ifStrip.ifEnvelopeStepRadians);
   ifStrip.ifEnvelopeStepSin = std::sin(ifStrip.ifEnvelopeStepRadians);
 
-  float primaryDrift = std::max(radio.identity.ifPrimaryDrift, 0.65f);
-  float secondaryDrift = std::max(radio.identity.ifSecondaryDrift, 0.65f);
-  float couplingDrift = std::max(radio.identity.ifCouplingDrift, 0.65f);
-  float primaryInductance =
-      std::max(ifStrip.primaryInductanceHenries * primaryDrift, 1e-9f);
-  float secondaryInductance =
-      std::max(ifStrip.secondaryInductanceHenries * secondaryDrift, 1e-9f);
-  float interstageCouplingCoeff =
-      clampf(ifStrip.interstageCouplingCoeff * couplingDrift, 0.05f, 0.35f);
-  float outputCouplingCoeff =
-      clampf(ifStrip.outputCouplingCoeff * couplingDrift, 0.04f, 0.30f);
-  float nominalCanBandwidthHz = std::max(physicalChannelBw * 1.10f, 1200.0f);
-  float secondaryCapacitanceFarads =
-      resonantCapacitanceFarads(ifStrip.ifCenterHz, secondaryInductance);
-  float primarySeriesResistance =
-      seriesResistanceForBandwidth(primaryInductance, nominalCanBandwidthHz);
-  float secondarySeriesResistance =
-      seriesResistanceForBandwidth(secondaryInductance, nominalCanBandwidthHz);
-  float primaryTankBandwidthHz =
-      seriesBandwidthHz(primaryInductance, primarySeriesResistance);
-  float secondaryTankBandwidthHz =
-      seriesBandwidthHz(secondaryInductance, secondarySeriesResistance);
-  float secondaryLoadBandwidthHz = parallelLoadBandwidthHz(
-      secondaryCapacitanceFarads, ifStrip.secondaryLoadResistanceOhms);
-  float inductanceAsymmetry =
-      std::clamp(std::sqrt(primaryInductance / secondaryInductance), 0.85f,
-                 1.18f);
-  float tankBandwidthTracking =
-      std::clamp(0.5f * (primaryTankBandwidthHz + secondaryTankBandwidthHz) /
-                     std::max(nominalCanBandwidthHz, 1.0f),
-                 0.70f, 1.35f);
-  float couplingMean = 0.5f * (interstageCouplingCoeff + outputCouplingCoeff);
-  float loadSeverity =
-      std::clamp(nominalCanBandwidthHz /
-                     std::max(secondaryLoadBandwidthHz, nominalCanBandwidthHz),
-                 0.0f, 1.0f);
-  float tunedCanEnvelopeBandwidthHz =
-      std::clamp(nominalCanBandwidthHz * tankBandwidthTracking *
-                     (1.0f + 1.35f * couplingMean) *
-                     (1.0f - 0.22f * std::fabs(inductanceAsymmetry - 1.0f)) *
-                     (1.0f - 0.18f * loadSeverity),
-                 std::max(1800.0f, 0.80f * safeAudioBw), 0.20f * sampleRate);
-  float tunedCanEnvelopeQ =
-      std::clamp(0.82f + 0.85f * couplingMean - 0.30f * loadSeverity, 0.70f,
-                 1.10f);
-  // Real-RF envelope extraction must reject the image at |fs - 2*fc| after
-  // quadrature downmix. If this lowpass is tied to carrier frequency instead
-  // of service bandwidth, the image leaks into the complex envelope and shows
-  // up as a false audio whistle on an otherwise unmodulated carrier.
-  float sourceEnvelopeMinHz =
-      std::max(1.20f * safeAudioBw, 0.90f * tunedCanEnvelopeBandwidthHz);
-  float sourceEnvelopeMaxHz =
-      std::min(0.24f * sampleRate,
-               0.60f * downmixImageHz(sampleRate, ifStrip.sourceCarrierHz));
-  float sourceEnvelopeLpHz = std::clamp(
-      sourceEnvelopeMinHz, std::max(sourceEnvelopeMinHz, 1800.0f),
-      std::max(sourceEnvelopeMinHz, sourceEnvelopeMaxHz));
-
-  ifStrip.sourceEnvelope.setLowpass(sampleRate, sourceEnvelopeLpHz,
-                                    kRadioBiquadQ);
-  ifStrip.loadedCanEnvelope.setLowpass(sampleRate, tunedCanEnvelopeBandwidthHz,
-                                       tunedCanEnvelopeQ);
+  // Bandwidth is a ganged selectivity setting relative to the default 5.5 kHz
+  // control position, not a universal measured -3 dB bandwidth. The two receiver
+  // presets retain their own coil losses, coupling and number of transformers.
+  const float width = safeAudioBw / 5500.0f;
+  if (ifStrip.transformerCount < 1 || ifStrip.transformerCount > 3)
+    throw std::invalid_argument("IF transformer count must be between 1 and 3");
+  for (int can = 0; can < ifStrip.transformerCount; ++can) {
+    const float k = can + 1 == ifStrip.transformerCount ? ifStrip.outputCouplingCoeff
+                                                        : ifStrip.interstageCouplingCoeff;
+    ifStrip.transformers[can].configure(
+        4 * sampleRate, ifStrip.ifCenterHz,
+        ifStrip.primaryInductanceHenries * radio.identity.ifPrimaryDrift,
+        ifStrip.secondaryInductanceHenries * radio.identity.ifSecondaryDrift,
+        ifStrip.primarySeriesResistanceOhms * width,
+        ifStrip.secondarySeriesResistanceOhms * width,
+        ifStrip.secondaryLoadResistanceOhms / width,
+        k * width * radio.identity.ifCouplingDrift,
+        ifStrip.referenceTransimpedanceOhms / width);
+  }
   ifStrip.senseLowHz = ifStrip.ifCenterHz - 0.5f * physicalChannelBw;
   ifStrip.senseHighHz = ifStrip.ifCenterHz + 0.5f * physicalChannelBw;
   ifStrip.demodBandwidthHz = safeAudioBw;
@@ -223,6 +171,13 @@ void ensureIfStripConfigured(Radio1938& radio) {
 void RadioIFStripNode::init(Radio1938& radio, RadioInitContext&) {
   radio.ifStrip.noiseSampleScale = std::sqrt(radio.sampleRate / 48000.0f);
   configureIfStrip(radio);
+  // Representation conversion is fixed for this sample rate. Keep the FIR
+  // design (including Bessel evaluations) out of ongoing AFC retuning.
+  const float sourceBw = radio.tuning.sourceBandwidthHz;
+  const float imageHz = std::min(2 * radio.ifStrip.sourceCarrierHz,
+                                 radio.sampleRate - 2 * radio.ifStrip.sourceCarrierHz);
+  radio.ifStrip.sourceEnvelope.configure(sourceBw / radio.sampleRate,
+                                         (imageHz - sourceBw) / radio.sampleRate);
 }
 
 void RadioIFStripNode::reset(Radio1938& radio) {

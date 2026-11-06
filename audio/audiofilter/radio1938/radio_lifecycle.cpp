@@ -55,8 +55,9 @@ void refreshIdentityDependentStages(Radio1938& radio) {
   RadioReceiverCircuitNode::reset(radio);
   RadioPowerNode::init(radio, initCtx);
   RadioPowerNode::reset(radio);
-  // The acoustic radiation observer uses the motor parameters and must start
-  // from rest whenever the coupled electromechanical solver is rebuilt.
+  // Residual-noise radiation uses the motor's small-signal parameters.
+  RadioNoiseNode::init(radio, initCtx);
+  RadioNoiseNode::reset(radio);
   RadioSpeakerNode::init(radio, initCtx);
   RadioSpeakerNode::reset(radio);
   if (radio.calibration.enabled) {
@@ -121,7 +122,6 @@ void Radio1938::resetCalibration() {
   power.interstageMaxIterations = 0;
   power.interstageSolveTimeNs = 0;
   power.interstageDriverEvalCount = 0;
-  power.interstageDriverEvalTimeNs = 0;
   power.interstageAdaptiveValidationAttemptCount = 0;
   power.interstageAdaptiveAcceptedDownshiftCount = 0;
   power.interstageAdaptiveBoundaryErrorSumVolts = 0.0;

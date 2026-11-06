@@ -33,55 +33,11 @@ void RadioInterferenceDerivedNode::reset(Radio1938&) {}
 void RadioInterferenceDerivedNode::run(Radio1938& radio,
                                        RadioSampleContext& ctx) {
   auto& noiseDerived = radio.noiseDerived;
-  float avcT = clampf(radio.controlBus.controlVoltage / 1.25f, 0.0f, 1.0f);
-  float rfGainControl = std::max(
-      0.35f, 1.0f - radio.frontEnd.avcGainDepth * avcT);
-  float ifGainControl = std::max(
-      0.20f, 1.0f - radio.ifStrip.avcGainDepth * avcT);
-  float preDetectorGain = rfGainControl * ifGainControl;
-  float mistuneT = 0.0f;
-  if (ctx.block) {
-    mistuneT = clampf(std::fabs(ctx.block->tuneNorm), 0.0f, 1.0f);
-  } else {
-    float bwHalf = 0.5f * std::max(radio.tuning.tunedBw, 1.0f);
-    mistuneT = clampf(std::fabs(radio.tuning.tuneAppliedHz) /
-                          std::max(bwHalf, 1e-6f),
-                      0.0f, 1.0f);
-  }
-  float detectorLockT =
-      1.0f - clampf(std::fabs(radio.controlSense.tuningErrorSense),
-                    0.0f, 1.0f);
-  float tunedCaptureT = 1.0f - mistuneT;
-  float carrierT = clampf(radio.controlBus.controlVoltage, 0.0f, 1.0f);
-  float crackleExposure = 1.0f - clampf(carrierT * tunedCaptureT * detectorLockT,
-                                        0.0f, 1.0f);
-  float crackleExposureSq = crackleExposure * crackleExposure;
-
-  // Input-referred IF noise passes through the actual IF gain/filter. Applying
-  // only AVC here and injecting at the detector made nominal stage gain an
-  // artificial SNR improvement (especially the console's 4.6x IF gain).
-  ctx.derived.ifInputNoiseAmp =
-      noiseDerived.baseNoiseAmp * radio.globals.ifNoiseMix;
-  // Impulsive bursts retain the detector-side capture/exposure approximation.
-  // They are most audible with a weak carrier or asymmetric tuned envelope.
-  bool crackleAtDetector =
-      radio.graph.isEnabled(PassId::IFStrip) &&
-      radio.graph.isEnabled(PassId::Demod);
-  if (crackleAtDetector) {
-    ctx.derived.demodIfCrackleAmp =
-        noiseDerived.baseCrackleAmp * preDetectorGain * crackleExposureSq;
-    ctx.derived.demodIfCrackleRate =
-        noiseDerived.crackleRate * crackleExposure;
-    ctx.derived.crackleAmp = 0.0f;
-    ctx.derived.crackleRate = 0.0f;
-  } else {
-    ctx.derived.demodIfCrackleAmp = 0.0f;
-    ctx.derived.demodIfCrackleRate = 0.0f;
-    ctx.derived.crackleAmp =
-        noiseDerived.baseCrackleAmp * crackleExposureSq;
-    ctx.derived.crackleRate =
-        noiseDerived.crackleRate * crackleExposure;
-  }
+  // Source intensities do not depend on programme level, tuning or AVC.
+  // Filtering and gain control act on the actual RF/noise signal downstream.
+  ctx.derived.ifInputNoiseAmp = noiseDerived.baseNoiseAmp * radio.globals.ifNoiseMix;
+  ctx.derived.rfImpulseAmp = noiseDerived.baseCrackleAmp;
+  ctx.derived.rfImpulseRate = noiseDerived.crackleRate;
   ctx.derived.noiseAmp =
       noiseDerived.baseNoiseAmp * radio.globals.postNoiseMix;
   // Allow a small configurable hum contribution in addition to the supply

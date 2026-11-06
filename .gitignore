@@ -88,6 +88,7 @@ audio/audiofilter/tmp/
 **.txt
 !CMakeLists.txt
 !**/CMakeLists.txt
+!third_party/hiir/license.txt
 **.log
 
 # Package managers and caches
@@ -120,9 +121,11 @@ models/**/*.verified
 !BUILD_WINDOWS.md
 !docs/radio1938-realism-audit.md
 !docs/radio1938-period-acoustics.md
+!docs/radio1938-detector-supply.md
 !docs/chapter-analysis-validation.md
 !docs/video-editing-review.md
 !models/chapter_analysis/CHAPTER-LLAMA-NOTICE.md
+!third_party/hiir/README.radioify.md
 
 # Output files
 **.melody

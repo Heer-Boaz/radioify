@@ -1,20 +1,324 @@
 # Radio1938 realism audit
 
-Date: 2026-07-15
+Initial audit: 2026-07-15. Latest circuit revision: 2026-11-06.
 
 Acoustic update, 2026-11-05: the [period evidence and acoustic fit](radio1938-period-acoustics.md)
 supersede the speaker/cabinet estimates, acoustic response targets and output
 measurements below. The original electrical anchors and the distinction between
-exact-part data, family examples and the Bobb clarifier proxy are retained.
+exact-part data, family examples and the Bobb clarifier proxy remain recorded.
+The model review below qualifies their interpretation: passing engineering
+guards is not evidence that every circuit or fitted tube characteristic is
+historically correct.
+
+Detector/supply follow-up, 2026-11-06: [thermionic detector and loaded supply](radio1938-detector-supply.md)
+supersedes the effective charge-knee, synthesized supply-ripple, IF voltage-scale,
+and AVC normalization descriptions and measurements below. Its circuit data,
+remaining approximations and changed acceptance assumptions are recorded separately.
 
 ## Verdict
+
+### Circuit corrections and remaining limits, 2026-11-06
+
+This section supersedes the November 5 findings below for IF selectivity,
+first-audio characteristics, AFC, interference routing and supplemental hum.
+The earlier findings and measurements remain as a dated record. The acoustic
+fits have not been retuned to conceal the electrical changes.
+
+**The receiver now has coupled IF resonators.** Each transformer contains
+primary and secondary envelope-voltage states for both quadratures, with
+separate winding losses, inductances, secondary loading and mutual coupling.
+For resonant angular frequency `w`, the aligned tank capacitances are
+`Cp = 1/(w*w*Lp)` and `Cs = 1/(w*w*Ls)`. In the narrowband approximation the
+decay rates are `Rp/(2*Lp)` and `Rs/(2*Ls) + 1/(2*Cs*Rload)`, and coupling rate
+is `w*k/2`, with the corresponding inductance-ratio factors between states.
+The code integrates this linear system by the trapezoidal rule at four times
+the envelope sample rate. Fixed-size double-precision histories avoid both
+heap allocation and a nonlinear solver in the IF sample loop.
+
+Changing coupling or loading changes the transfer, including insertion loss.
+`referenceTransimpedanceOhms` is a declared input-unit/gain calibration, not a
+physical resistor or a normalization recomputed to erase those changes.
+Tuning rotates the signal relative to the receiver resonators, while the
+transmitter carrier and programme filter remain fixed. The existing bandwidth
+control scales the equivalent damping/coupling together relative to its
+5.5 kHz position; it is not a measured -3 dB bandwidth shared by both sets.
+
+| Equivalent IF prior at the 5.5 kHz control position | Typical set | Philco |
+| --- | ---: | ---: |
+| Double-tuned transformers | 2 | 3 |
+| Primary / secondary inductance | 220 / 250 uH | 220 / 250 uH |
+| Primary / secondary series loss | 5 / 5 ohms | 15 / 15 ohms |
+| Secondary shunt load | 200 kohms | 200 kohms |
+| Interstage / output coupling | .012 / .012 | .032 / .032 |
+| Reference transimpedance | 40 kohms | 17 kohms |
+
+The [Philco 37-116 service material](https://philcoradio.com/library/download/service%20info/service%20bulletins/Philco%20Service%20Bulletin%20258.pdf),
+also reproduced in [Rider 1937](https://www.worldradiohistory.com/Archive-Rider/37/Rider-1937-PQR.pdf),
+Philco 7-35, names three double-tuned transformers and expanded alignment
+peaks at 465 and 475 kHz. The component losses, coupling and insertion gain
+above are **equivalent-circuit priors**, not measured Philco winding values
+or a recovered factory selectivity curve. The console represents the expanded
+setting. Its wider response is therefore deliberately less affected by a
+4.5 kHz offset than the small set. The RF front end, gain/AVC law and IF
+amplification remain reduced-order models; this change does not turn them into
+a full antenna-to-detector circuit solution.
+
+`radio_circuit_model_tests` compares the envelope transformer against an
+independent complex impedance solution of the full RF L/C/mutual-inductance
+circuit, with varied inductance, coupling, load, positive/negative frequency
+offsets and sample rates of 44.1, 48 and 96 kHz. Maximum magnitude error is
+**0.296 dB** in that grid. Zero coupling transfers no signal; heavier loading
+changes insertion loss. At 48 kHz and the 5.5 kHz control position, detuning
+4.5 kHz makes the two 4 kHz sideband magnitudes differ by **31.23 dB** for
+the typical set and **3.31 dB** for the expanded console. These are numerical
+circuit checks, not historical measurements.
+
+**AFC now senses a real received carrier.** Its two discriminator slopes
+include the carrier and follow tuning in the source-envelope frame. The
+34 Hz setting smooths the error voltage; it no longer incorrectly makes the
+discriminator probes 34 Hz wide. Signal gating uses the detector level rather
+than delayed AVC, which can be zero on a usable carrier. Discriminator gain
+(`afcLoopGain`, default 8) and the 5 kHz pull limit are separate, explicit
+control-model priors. The continuous deadband avoids an abrupt target jump.
+Tuning advances on a fixed 64-sample clock, so host callback sizes cannot
+change acquisition or audio output. Actual RF-carrier tests reduce +/-4 kHz
+to about +/-216 Hz after two seconds and +/-500 Hz to about +/-52 Hz. This
+proportional loop retains a residual error; it is not a measured Philco AFC
+transfer. Normal playback still starts at station centre, without fabricated
+random detuning.
+
+**Transmitter and receiver bandwidths are separate.** The programme lowpass
+is 10 kHz, limited to .20 times the sample rate when necessary for the virtual
+carrier representation. Source anti-image filtering prevents high-frequency
+programme content folding into the radio band (for example 20 kHz becoming
+4 kHz at 48 kHz sampling). Downmix image rejection remains a separate numerical
+filter. Its coefficients are designed at initialization, outside ongoing AFC
+retuning. The source filter has 34 samples of delay, about 0.71 ms at 48 kHz;
+it does not add a long audio-buffer latency. Source-noise calibration includes
+the filter's actual noise bandwidth. A duplicate RF-gain application in the
+real-RF path has also been removed.
+
+**First-audio tube shape is independent of the circuit operating point.**
+The Koren parameters now come from approximate graphical readings of RCA
+characteristic families, retained in the
+[transcription](data/radio1938-triode-characteristics.csv) and reproducible
+with `python tools/fit_radio_triodes.py` (NumPy required). The script fits
+characteristics, then checks separate tabulated points; it does not fit a
+fictitious tube to the receiver's desired plate voltage.
+
+- [6J5 RCA sheet](https://frank.pocnet.net/sheets/049/6/6J5.pdf): family graph
+  92CM-4771R1, April 21, 1943; separate typical-condition table dated 1950.
+- [75 RCA sheet](https://frank.pocnet.net/sheets/049/7/75.pdf), September 2,
+  1941, explicitly refers to the
+  [6SQ7 characteristics](https://frank.pocnet.net/sheets/049/6/6SQ7.pdf),
+  graph 92C-6310, August 13, 1941. The 250 V / -2 V / .8 mA point is also in
+  the [75 manual entry](https://frank.pocnet.net/sheets/021/7/75.pdf).
+
+These later manufacturer curves are type-family evidence, not measurements
+of a 1938 specimen. Held-out current errors are below 20%; for example the
+6J5 90 V / zero-bias current differs by about 15%. Approximate scan readings
+and the compact Koren equation do not justify precision tube tolerances.
+The circuit then solves its own load line. The inferred bias priors are
+-3.7 V for the 6J5 and -.5 V for the 75, giving approximately 89 V / 1.07 mA
+and 89 V / .584 mA respectively. They are not directly measured grid biases.
+The Philco's documented 51 kohm plate resistor and bypassed 99 kohm feed
+resistor are now distinct AC and DC loads. Its printed 90 V service reading
+used a 1000 ohms/volt meter and is not an exact unloaded-voltage target.
+The feed's DC drop is solved; a full dynamic B+ distribution network remains
+outside this revision.
+
+**Interference is applied at its source.** Atmospheric impulses enter ahead
+of the RF front end and IF. Their event rate and source amplitude no longer
+depend on programme level, AVC, or a synthetic detector-exposure formula.
+The receiver determines their filtering and detection. Their absolute rate,
+amplitude distribution and unresolved pulse shape remain scenario priors.
+Supplemental hiss and hum no longer have programme ducking. The hum contains
+120/240/360 Hz rectifier-related terms plus a separate small 60 Hz pickup
+term at the default US mains setting. It still passes through the acoustic
+transfer; real bass attenuation is not undone to make hum louder. The
+existing supply-ripple path already operated at twice mains frequency and
+has not been doubled again.
+
+The everyday reception profile now draws carrier-only co-channel offsets
+between 0 and 100 Hz, a scenario bounded by two compliant US +/-50 Hz
+transmitters. The [FRC annual report](https://docs.fcc.gov/public/attachments/DOC-338477A1.pdf)
+records the June 22, 1932 tolerance change. A uniform draw is not an observed
+1938 distribution, and foreign or out-of-tolerance stations can differ more.
+There is still no second programme source: this remains carrier interference,
+not simulated crosstalk from another broadcast.
+
+**Settings and compatibility:** new IF, DC-feed and AFC controls are registered
+in the settings schema and validated before changes reach the live receiver.
+Invalid settings preserve its complete DSP history. Removed noise settings
+`scAttackMs`, `scReleaseMs`, `sidechainMaskRef`, `hissMaskDepth`, `burstMaskDepth`
+and `crackleDecayMs` now produce an explicit unknown-setting error. Source
+impulses use `crackleAmpScale` and `crackleRateScale`; hum uses `humHzDefault`,
+`humAmpScale`, `humMainsPickupMix`, `humSecondHarmonicMix` and
+`humThirdHarmonicMix`. The last two are relative to the rectified fundamental
+(120 Hz on 60 Hz mains). First-audio `tubeScreenVolts`, `tubePlateCurrentAmps`,
+`tubeMutualConductanceSiemens`, `tubePlateKneeVolts` and `tubeGridSoftnessVolts`
+are removed rather than accepted as ineffective controls on the new fitted
+characteristic. These removals do not apply to similarly named power-stage
+settings. Existing UI controls and the headphone room default are preserved.
+
+**Limits that remain:** the acoustic EQ is still constrained by generic
+period examples, not a measured BO-1 or Type-W response. The supplemental
+hum/noise path is an acoustic proxy, not heater leakage and ripple solved
+through every tube and supply node. The detector still has an effective
+diode/source-resistance charging law, rather than a validated thermionic
+space-charge/contact-potential characteristic. Its `junctionSlopeVolts`
+settings are charge-knee rounding parameters, not cathode `kT/e`. Substituting
+85 mV into that law was evaluated and rejected: at nominal Philco modulation
+it changed acoustic SINAD from about 32.44 to 26.30 dB without establishing
+a valid vacuum-diode model. The 28 dB regression guard was retained. Exact
+diode I/V evidence, a dynamic B+ network, a second broadcast source and
+calibrated receiver/room recordings are still needed for those refinements.
+
+The [before/after sweeps](data/radio1938-circuit-sweeps.csv) and
+[IMD results](data/radio1938-circuit-imd.csv) use 48 kHz, the 5 kHz bandwidth
+control, .12 V RMS carrier, .85 modulation-index setting and disabled AFC
+to isolate detuning. Results are for the acoustic output, not speaker-terminal
+voltage. At a 4.5 kHz offset the typical set's 1 kHz gain now falls 10.27 dB;
+its largest response-shape change relative to 1 kHz is 26.74 dB over 50--6000 Hz,
+versus 1.91 dB before. The console's corresponding shape change is 5.12 dB,
+versus 1.97 dB before. Full-chain IMD need not increase monotonically with
+detuning: attenuation also reduces downstream tube drive. Use the independently
+checked IF sideband asymmetry to assess selectivity rather than treating a
+single final-output IMD number as an IF measurement.
+
+The [nominal results](data/radio1938-circuit-nominal.csv) retain the existing
+receiver-specific engineering guards. At .12 V RMS carrier, .85 nominal
+modulation, 48 kHz, the 5 kHz control position and .012 noise weight, terminal /
+acoustic SINAD is **20.16 / 17.12 dB** for the typical set and **37.77 / 32.44 dB**
+for the Philco. No nominal power, speaker, output or limiter clipping is
+reported. These are synthetic bench results, not measured receiver fidelity.
+
+The triode oversampling comparison now uses the same characteristic, bias
+fraction and effective plate supply in the legacy and current implementations.
+Its regression comparison covers 0--8 kHz, the radio band: comparing the full
+Nyquist band alone incorrectly rewards the legacy resampler for rolling off
+the programme itself. Both full-band and radio-band alias figures remain
+reported in the [alias results](data/radio1938-circuit-alias.csv). The 32x
+reference, default-2x regression margin and 8x improvement guards remain;
+the source-image test also retains its -100 dBc requirement.
+
+For performance, three alternating before/after runs use two seconds of stereo
+playback at 48 kHz in 256-frame callbacks, with initialization/warmup excluded.
+The [raw timings](data/radio1938-circuit-performance.csv) are wall-clock render
+costs, **not output latency**. The baseline binaries were saved before this
+circuit revision, after the earlier oversampling work. Median milliseconds:
+
+| Receiver | Room | Before | After |
+| --- | --- | ---: | ---: |
+| Typical | off | 216.328 | 217.743 |
+| Typical | on | 225.520 | 225.322 |
+| Philco | off | 404.098 | 403.553 |
+| Philco | on | 415.843 | 416.886 |
+
+All four differences are below 1% in this run; this is approximate cost parity,
+not a guaranteed speedup. The speaker solver records no nonconvergences.
+`build.ps1 -Static -Tests` passes **106 CTests plus 15 and 10 Python tests**,
+including real-carrier AFC acquisition, reset, callback-size independence,
+independent IF impedance checks, source bandwidth/image rejection, characteristic
+holdouts, noise-source independence and transactional settings validation.
+The Windows build is published to `dist/radioify.exe`.
+
+### Model review and measurement-tool correction, 2026-11-05
+
+A code review identified material limitations not covered by the earlier
+passing regression tests. The following distinctions now govern further work:
+
+- **IF selectivity is heuristic.** The two coupling settings, inductances and
+  load are collapsed into one second-order complex lowpass with clamped
+  bandwidth/Q. There are no independently coupled resonator states. Detuning
+  does rotate the envelope through that filter, but the response is too broad
+  to stand in for the intended IF transformers. A fresh typical-set measurement
+  at 48 kHz, 5 kHz bandwidth and 4.5 kHz detuning changes the 50--6000 Hz response
+  by at most 1.45 dB absolute, or 1.91 dB after normalization to each trace's
+  1 kHz level. Thus "no effect" is too strong; the inadequate selectivity is a
+  valid finding. The source-image FIR introduced in the numerical audit must
+  be kept distinct from receiver selectivity when this is corrected. Transmitter
+  programme bandwidth must also be separated from receiver bandwidth.
+- **First-audio tube parameters mix operating points.** The 6J5 target combines
+  90 V plate voltage with -8 V grid bias, 9 mA and 2.6 mA/V. The
+  [RCA 6J5 data sheet](https://frank.pocnet.net/sheets/049/6/6J5.pdf), page 1
+  (September 1950), assigns the latter three values to 250 V, and gives a
+  different 90 V operating point. Fitting a Koren equation to the mixed targets
+  does not repair their provenance. The 75 target also needs a full-curve and
+  circuit-bias check. A cutoff estimate of -Va/mu alone is not a replacement
+  for those curves. These presets have not been retuned by this review.
+- **Noise texture and hum are still behavioural.** `hissMask` explicitly
+  attenuates both with programme level; impulses use detector-side exposure
+  gating. That is not an RF impulse passing through the complete receiver.
+  The supplemental tone has mains and second-harmonic terms. Separately, the
+  supply-ripple model already generates full-wave ripple at twice mains
+  frequency. A hum revision must distinguish heater/pickup hum from rectifier
+  ripple instead of simply doubling every existing oscillator.
+- **The supply is incomplete, but not merely an output gain multiplier.**
+  `processResistorLoadedTriodeStage` scales the load-line supply voltage, and
+  the output solver receives a changing plate operating voltage. The waveform
+  and sag envelope driving those voltages are behavioural; a coupled rectifier,
+  reservoir and distribution network is not present. This does not establish
+  quantitatively correct supply-hum rejection in either output topology.
+- **Co-channel offsets need a geographical/historical qualification.** The
+  [Federal Radio Commission annual report](https://docs.fcc.gov/public/attachments/DOC-338477A1.pdf)
+  records a reduction from +/-500 to +/-50 Hz effective June 22, 1932. Two
+  compliant US transmitters on one assigned channel can therefore differ by
+  at most 100 Hz. That bound does not establish a distribution of typical
+  offsets or perfect compliance. The current 320--900 Hz unmodulated interferer
+  is not established as representative US reception in 1938; it also omits the
+  interfering programme.
+- **Acoustic fits remain examples, not validation against the named radios.**
+  A large residual EQ coefficient is not itself the complete acoustic response,
+  since the motor, output stage and cabinet transfers also contribute. However,
+  the current typical-set whole-chain sweep does put 100 Hz 44.56 dB below its
+  maximum. No calibrated recording of the named receiver validates that
+  extrapolation. Ordinary restoration videos would additionally include source,
+  microphone, room and recording processing.
+
+The measurement tool had a separate, reproducible identity error. With
+`--radio-settings`, `--preset philco-37-116` selected a TOML overlay but skipped
+applying the Philco receiver profile. A minimal overlay containing only the
+existing oversampling factor changed speaker-terminal RMS from 6.72715 V to
+0.854946 V and removed the second output-tube grid signal: it was the small set.
+
+**Corrected:** built-in preset names now select their receiver before applying
+an overlay. `--receiver-profile` explicitly selects the base receiver for an
+arbitrarily named TOML preset. Every report prints the resolved receiver name,
+first-audio mu, oversampling factor and nominal output power. For example:
+
+```powershell
+.\build-ninja-clangcl-static\radio_measurements.exe `
+  --receiver-profile philco-37-116 --preset custom `
+  --radio-settings tools/testdata/radio_measurements_profiles.toml --section config
+```
+
+The minimal-overlay signal measurement now matches the original Philco result
+again, including its second output grid. Three CLI regression cases cover
+both built-in identities and an explicitly selected Philco with a custom
+overlay. `build.ps1 -Static -Tests` passes 105 CTests plus 15 and 10 Python tests.
+Playback DSP is unchanged by this tool correction. Earlier Philco measurements
+made with partial TOML overrides require rechecking; ordinary `--preset`
+measurements without a settings file were not affected by this bug.
+
+The next audio revision should first establish a real coupled-resonator IF
+transfer, receiver-specific selectivity and independently checked tube curves/
+bias points. RF impulses, physical hum routing and source/reception separation
+then have a meaningful transfer to pass through. Calibrated acoustic reference
+measurements remain a separate requirement, not something another EQ fit can
+manufacture.
+
+### Earlier audit context
 
 The Radio1938 filter is not a simple equalizer-and-noise effect. It contains a
 reduced-order AM receiver, detector, control loops, tube stages, transformers,
 an electrodynamic speaker load, and a cabinet model. After the remediation in
-this audit, the documented electrical anchors and explicit validation bands of
-both receiver profiles pass. It is a technically credible reduced-order
-period-radio simulation.
+this audit, the documented engineering validation bands of both receiver
+profiles pass. It is a hybrid of circuit simulation, fitted acoustic response
+and behavioural approximations. Its numerical verification is stronger than
+its verification against actual receiver measurements. The IF approximation
+and first-audio tube parameter inconsistencies below prevent a general claim
+of high physical fidelity for the complete chain.
 
 Neither profile is an exact, measurement-identical reproduction. No calibrated
 response or Thiele/Small measurement was located for either original speaker.

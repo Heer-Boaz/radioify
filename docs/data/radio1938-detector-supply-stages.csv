@@ -1,0 +1,15 @@
+profile,stage,dc,tone_rms,sinad,hum120_rms
+typical-1930s,detector_filter,2.22731,1.37899,33.2366,0.000170303
+typical-1930s,first_audio_grid,3.50957e-07,0.068542,33.2368,8.44918e-06
+typical-1930s,first_audio_plate,85.314,3.61042,30.1916,0.0815463
+typical-1930s,speaker_terminal,7.30198e-06,0.731545,20.534,0.00725044
+typical-1930s,acoustic_output,1.82842e-07,0.223952,17.2334,0.000116746
+typical-1930s,auxiliary_bplus,188.143,0.274619,0.502566,0.258371
+typical-1930s,first_audio_bplus,188.143,0.274619,0.502565,0.258371
+philco-37-116,detector_filter,2.07109,1.25856,40.3718,0.000142098
+philco-37-116,first_audio_grid,4.54817e-07,0.155404,40.8685,1.75137e-05
+philco-37-116,first_audio_plate,87.9598,2.31147,36.787,0.00322463
+philco-37-116,speaker_terminal,-4.83763e-05,5.02816,35.0539,0.0165637
+philco-37-116,acoustic_output,-6.36104e-07,0.185742,29.9037,0.000282346
+philco-37-116,auxiliary_bplus,238.606,0.0473448,-5.05694,0.0591913
+philco-37-116,first_audio_bplus,139.179,0.143664,14.207,0.0133967

@@ -26,6 +26,10 @@ void RadioInputNode::init(Radio1938& radio, RadioInitContext&) {
 }
 
 void RadioInputNode::reset(Radio1938& radio) {
+  radio.input.impulseRng.seed(0x1938a1u);
+  radio.input.impulseEventCount = 0;
+  radio.input.impulseMaxAmp = 0;
+  radio.input.impulseRate = -1;
   radio.input.autoEnv = 0.0f;
   radio.input.autoGainDb = 0.0f;
   radio.input.sourceCouplingHp.reset();
@@ -33,6 +37,26 @@ void RadioInputNode::reset(Radio1938& radio) {
 
 float RadioInputNode::run(Radio1938& radio, float x, RadioSampleContext& ctx) {
   auto& input = radio.input;
+  if (input.impulseRate != ctx.derived.rfImpulseRate) {
+    input.impulseRate = ctx.derived.rfImpulseRate;
+    input.impulseProbability = -std::expm1(-input.impulseRate / radio.sampleRate);
+  }
+  if (ctx.derived.rfImpulseAmp > 0 && ctx.derived.rfImpulseRate > 0 &&
+      input.impulseDraw(input.impulseRng) < input.impulseProbability) {
+    // An unresolved atmospheric impulse has fixed area as the host rate
+    // changes. Its ringing comes from the receiver, not a synthetic decay.
+    const float amp = ctx.derived.rfImpulseAmp * (radio.sampleRate / 48000.0f) *
+                      (.35f + .65f * input.impulseDraw(input.impulseRng));
+    const float phase = kRadioTwoPi * input.impulseDraw(input.impulseRng);
+    ++input.impulseEventCount;
+    input.impulseMaxAmp = std::max(input.impulseMaxAmp, amp);
+    if (ctx.signal.mode == SourceInputMode::RealRf) {
+      x += input.impulseDraw(input.impulseRng) < .5f ? -amp : amp;
+    } else {
+      ctx.signal.i += amp * std::cos(phase);
+      ctx.signal.q += amp * std::sin(phase);
+    }
+  }
   if (ctx.signal.mode == SourceInputMode::RealRf) {
     x *= input.sourceDivider;
     if (input.couplingCapFarads > 0.0f) {

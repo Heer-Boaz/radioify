@@ -609,6 +609,15 @@ KorenTriodePlateEval evaluateKorenTriodePlateLut(double vgk,
 
 }  // namespace
 
+KorenTriodeModel rca6J5Characteristic() {
+  return {20, 1.5, 1121.1496843078687, 185.32001015972926, 1592.3556651264014};
+}
+
+KorenTriodeModel rca75Characteristic() {
+  // RCA's 1941 type-75 sheet explicitly refers to the 6SQ7 curves.
+  return {100, 1.5, 753.2299376980543, 708.5831316993057, 12289.894689162393};
+}
+
 TriodeOperatingPoint solveTriodeOperatingPoint(
     float plateSupplyVolts,
     float loadResistanceOhms,
@@ -620,6 +629,13 @@ TriodeOperatingPoint solveTriodeOperatingPoint(
   KorenTriodeModel model = fitKorenTriodeModel(
       biasVolts, targetPlateVolts, targetPlateCurrentAmps,
       targetMutualConductanceSiemens, mu);
+  return solveTriodeOperatingPoint(plateSupplyVolts, loadResistanceOhms,
+                                    biasVolts, targetPlateVolts, model);
+}
+
+TriodeOperatingPoint solveTriodeOperatingPoint(
+    float plateSupplyVolts, float loadResistanceOhms, float biasVolts,
+    float targetPlateVolts, const KorenTriodeModel& model) {
   float solvedPlateVolts = solveLoadLinePlateVoltage(
       plateSupplyVolts, loadResistanceOhms, targetPlateVolts,
       [&](float plateVolts) {

@@ -38,7 +38,6 @@ enum class PassId : uint8_t {
 };
 
 struct RadioBlockControl {
-  float tuneNorm = 0.0f;
   mutable bool programStartCached = false;
   mutable PassId cachedProgramStartPass = PassId::Input;
   mutable size_t cachedProgramStartIndex = 0;
@@ -48,11 +47,9 @@ struct RadioDerivedSampleParams {
   // IF input voltage noise, before IF gain and loaded-can filtering. The
   // amplitude convention is referenced to a 48 kHz complex-envelope rate.
   float ifInputNoiseAmp = 0.0f;
-  float demodIfCrackleAmp = 0.0f;
-  float demodIfCrackleRate = 0.0f;
+  float rfImpulseAmp = 0.0f;
+  float rfImpulseRate = 0.0f;
   float noiseAmp = 0.0f;
-  float crackleAmp = 0.0f;
-  float crackleRate = 0.0f;
   float humAmp = 0.0f;
   bool humToneEnabled = true;
 };
@@ -90,9 +87,7 @@ struct RadioInitContext {
 struct RadioTuningNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);
   static void reset(Radio1938& radio);
-  static void prepare(Radio1938& radio,
-                      RadioBlockControl& block,
-                      uint32_t frames);
+  static void run(Radio1938& radio, RadioSampleContext& ctx);
 };
 
 struct RadioInputNode {

@@ -1,8 +1,6 @@
 #ifndef RADIOIFY_AUDIOFILTER_MODELS_TRANSFORMER_MODELS_H
 #define RADIOIFY_AUDIOFILTER_MODELS_TRANSFORMER_MODELS_H
 
-#include <array>
-
 struct CurrentDrivenTransformerSample {
   float primaryVoltage = 0.0f;
   float secondaryVoltage = 0.0f;
@@ -69,20 +67,6 @@ struct AffineTransformerProjection {
   CurrentDrivenTransformerSample base{};
   CurrentDrivenTransformerSample slope{};
 };
-
-struct FixedLoadAffineTransformerProjection {
-  std::array<float, 16> stateA{};
-  CurrentDrivenTransformerSample slope{};
-};
-
-CurrentDrivenTransformerSample evalFixedLoadAffineBase(
-    const std::array<float, 16>& stateA,
-    const CurrentDrivenTransformer& transformer);
-
-FixedLoadAffineTransformerProjection buildFixedLoadAffineProjection(
-    const CurrentDrivenTransformer& transformer,
-    float secondaryLoadResistanceOhms,
-    float primaryLoadResistanceOhms);
 
 AffineTransformerProjection buildAffineProjection(
     const CurrentDrivenTransformer& transformer,

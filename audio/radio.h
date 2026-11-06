@@ -2,12 +2,17 @@
 #define RADIO_H
 
 #include "audiofilter/math/biquad.h"
+#include "audiofilter/math/oversampling.h"
+#include "audiofilter/math/iq_fir_lowpass.h"
 #include "audiofilter/models/resonant_networks.h"
+#include "audiofilter/models/rectifier_supply.h"
+#include "audiofilter/models/coupled_if_transformer.h"
 #include "audiofilter/models/transformer_models.h"
 #include "audiofilter/models/tube_models.h"
 #include "audiofilter/radio1938/models/am_detector.h"
 #include "audiofilter/radio1938/models/noise_hum.h"
 #include "audiofilter/radio1938/models/speaker_sim.h"
+#include "audiofilter/radio1938/models/radio_room.h"
 #include "audiofilter/radio1938/radio1938_constants.h"
 #include "audiofilter/radio1938/radio_pipeline_types.h"
 #include "audiofilter/radio1938/radio_receiver_profile.h"
@@ -29,6 +34,7 @@ struct Radio1938 {
   float noiseWeight = 0.0f;
   RadioReceiverProfile receiverProfile = kDefaultRadioReceiverProfile;
   bool initialized = false;
+  RadioRoomConfig room;
   Radio1938();
 
   using Graph = RadioGraph;
@@ -103,11 +109,13 @@ struct Radio1938 {
     float controlVoltageSense = 0.0f;
     float powerSagSense = 0.0f;
     float tuningErrorSense = 0.0f;
+    float tuningSignalVolts = 0.0f;
 
     void reset() {
       controlVoltageSense = 0.0f;
       powerSagSense = 0.0f;
       tuningErrorSense = 0.0f;
+      tuningSignalVolts = 0.0f;
     }
   } controlSense;
 
@@ -212,9 +220,8 @@ struct Radio1938 {
     float maxSpeakerReferenceRatio = 0.0f;
     float speakerReferenceRmsRatio = 0.0f;
     float maxDigitalOutput = 0.0f;
-    uint64_t detectorIfCrackleEventCount = 0;
-    float detectorIfCrackleMaxBurstAmp = 0.0f;
-    float detectorIfCrackleMaxEnv = 0.0f;
+    uint64_t rfImpulseEventCount = 0;
+    float rfImpulseMaxAmp = 0.0f;
     float detectorWaveformAverageSolveSteps = 0.0f;
     float detectorWaveformSplitFraction = 0.0f;
     float detectorStorageAverageIterations = 0.0f;
@@ -236,7 +243,6 @@ struct Radio1938 {
     float powerInterstageSolveUsPerSample = 0.0f;
     float powerOutputSolveUsPerSample = 0.0f;
     float powerInterstageDriverEvalCallsPerSample = 0.0f;
-    float powerInterstageDriverEvalUsPerCall = 0.0f;
     uint64_t powerInterstageAdaptiveValidationAttempts = 0;
     uint64_t powerInterstageAdaptiveAcceptedDownshifts = 0;
     float powerInterstageAdaptiveAcceptedDownshiftFraction = 0.0f;
@@ -295,7 +301,7 @@ struct Radio1938 {
   } calibration;
 
   struct GlobalTuning {
-    float oversampleFactor = 0.0f;
+    float oversampleFactor = 0.0f;  // Exactly 1, 2, 4 or 8; presets use 2.
     float ifNoiseMix = 0.0f;
     float postNoiseMix = 0.0f;
     float noiseFloorAmp = 0.0f;
@@ -304,6 +310,7 @@ struct Radio1938 {
     float autoTargetDb = 0.0f;
     float autoMaxBoostDb = 0.0f;
     float outputClipThreshold = 0.0f;
+    // Flat passband edge / host rate. Halfband stop begins at 1 - this value.
     float oversampleCutoffFraction = 0.0f;
   } globals;
 
@@ -324,8 +331,11 @@ struct Radio1938 {
     float afcCorrectionHz = 0.0f;
     float afcCaptureHz = 0.0f;
     float afcMaxCorrectionHz = 0.0f;
+    // Discriminator/control gain is independent of the reactance-tube pull limit.
+    float afcLoopGain = 8.0f;
     float afcDeadband = 0.0f;
     float afcResponseMs = 0.0f;
+    float afcSignalReferenceVolts = 0.05f;
     float afcTick = 0.0f;
     float tunedBw = 0.0f;
     float tuneAppliedHz = 0.0f;
@@ -339,6 +349,9 @@ struct Radio1938 {
     float smoothTau = 0.0f;
     float updateEps = 0.0f;
     float sourceCarrierHz = 0.0f;
+    float sourceBandwidthHz = 0.0f;
+    uint32_t updateCountdown = 0;
+    float smoothingTick = 0;
     uint32_t configRevision = 0;
   } tuning;
 
@@ -357,6 +370,12 @@ struct Radio1938 {
     float inputResistanceOhms = 1.0f;
     float couplingCapFarads = 0.0f;
     float sourceDivider = 1.0f;
+    std::mt19937 impulseRng{0x1938a1u};
+    std::uniform_real_distribution<float> impulseDraw{0.0f, 1.0f};
+    uint64_t impulseEventCount = 0;
+    float impulseMaxAmp = 0;
+    float impulseRate = -1;
+    float impulseProbability = 0;
     Biquad sourceCouplingHp;
   } input;
 
@@ -424,6 +443,10 @@ struct Radio1938 {
     float primaryInductanceHenries = 0.0f;
     float secondaryInductanceHenries = 0.0f;
     float secondaryLoadResistanceOhms = 0.0f;
+    float primarySeriesResistanceOhms = 0.0f;
+    float secondarySeriesResistanceOhms = 0.0f;
+    float referenceTransimpedanceOhms = 0.0f;
+    int transformerCount = 2;
     float interstageCouplingCoeff = 0.0f;
     float outputCouplingCoeff = 0.0f;
     float sourceCarrierHz = 0.0f;
@@ -450,10 +473,10 @@ struct Radio1938 {
     float senseHighHz = 0.0f;
     float demodBandwidthHz = 0.0f;
     float demodTuneOffsetHz = 0.0f;
-    // Active IF runtime: a tuned-can equivalent mapped onto source downmix
-    // plus one loaded complex envelope transfer feeding the detector.
-    IQBiquad sourceEnvelope;
-    IQBiquad loadedCanEnvelope;
+    // Conversion image rejection is independent of receiver selectivity.
+    IQFirLowpass sourceEnvelope;
+    std::array<CoupledIfTransformer, 3> transformers;
+    std::array<float, 2> previousIfInput{};
     std::mt19937 noiseRng{0x1942u};
     std::uniform_real_distribution<float> noiseDist{-1.0f, 1.0f};
     float noiseSampleScale = 1.0f;
@@ -485,38 +508,37 @@ struct Radio1938 {
     float volumeControlTapVoltage = 0.0f;
     float couplingCapFarads = 0.0f;
     float gridLeakResistanceOhms = 0.0f;
-    // Reduced-order load seen by the detector-audio node, derived from the
-    // explicit pot / loudness / first-audio grid path. This is not a generic
-    // gain knob.
+    // DC driving-point conductance, for diagnostics and operating-point probes.
+    // Playback uses the complete affine RC companion (including capacitor
+    // history current), not this conductance alone.
     float detectorLoadConductance = 0.0f;
     // Dynamic state of the receiver input network driven from the detector:
     // coupling-cap voltage, first-audio grid AC voltage, and loudness-tap
     // capacitor state. These belong to the analog-equivalent receiver input,
     // not to the detector solve itself.
     float couplingCapVoltage = 0.0f;
+    float couplingCapCurrent = 0.0f;
+    float volumeControlTapCapCurrent = 0.0f;
     float gridVoltage = 0.0f;
     bool warmStartPending = true;
     float tubePlateSupplyVolts = 0.0f;
     float tubePlateDcVolts = 0.0f;
     float tubeQuiescentPlateVolts = 0.0f;
-    float tubeScreenVolts = 0.0f;
     float tubeBiasVolts = 0.0f;
-    float tubePlateCurrentAmps = 0.0f;
     float tubeQuiescentPlateCurrentAmps = 0.0f;
-    float tubeMutualConductanceSiemens = 0.0f;
     float tubeMu = 0.0f;
     bool tubeTriodeConnected = false;
     float tubeLoadResistanceOhms = 0.0f;
-    float tubePlateKneeVolts = 0.0f;
-    float tubeGridSoftnessVolts = 0.0f;
+    float tubeDcFeedResistanceOhms = 0.0f;
+    float tubeSupplyVolts = 0;
+    double tubeSupplyCurrentAmps = 0;
+    float tubeEffectiveSupplyVolts = 0.0f;
     KorenTriodeModel tubeTriodeModel{};
     KorenTriodeLut tubeTriodeLut;
     float tubePlateResistanceOhms = 0.0f;
     float operatingPointToleranceVolts = 35.0f;
     float tubePlateVoltage = 0.0f;
-    float osPrevGridVolts = 0.0f;
-    Biquad osLpIn;
-    Biquad osLpOut;
+    Oversampler oversampler;
   } receiverCircuit;
 
   struct ToneNodeState {
@@ -528,6 +550,14 @@ struct Radio1938 {
     Biquad presence;
     Biquad tiltLp;
   } tone;
+
+  struct PowerSupplyState {
+    RectifierSupply::Config config;
+    RectifierSupply circuit;
+    float otherLoadAmps = 0;
+    float auxiliaryOtherLoadAmps = 0;
+    float screenCurrentRatio = 0;
+  } powerSupply;
 
   struct PowerNodeState {
     enum class Topology : uint8_t {
@@ -545,30 +575,6 @@ struct Radio1938 {
     };
 
     Topology topology = Topology::TransformerCoupledPushPull;
-    float sagEnv = 0.0f;
-    float sagAtk = 0.0f;
-    float sagRel = 0.0f;
-    float sagStart = 0.0f;
-    float sagEnd = 0.0f;
-    float rectifierPhase = 0.0f;
-    float rectifierStepRadians = 0.0f;
-    float rectifierStepCos = 1.0f;
-    float rectifierStepSin = 0.0f;
-    float rectifierOscCos = 1.0f;
-    float rectifierOscSin = 0.0f;
-    float rectifierRippleWave = 0.0f;
-    float rippleDepth = 0.0f;
-    float sagAttackMs = 0.0f;
-    float sagReleaseMs = 0.0f;
-    float rectifierMinHz = 0.0f;
-    float rippleSecondHarmonicMix = 0.0f;
-    float gainSagPerPower = 0.0f;
-    float rippleGainBase = 0.0f;
-    float rippleGainDepth = 0.0f;
-    float gainMin = 0.0f;
-    float gainMax = 0.0f;
-    float supplyDriveDepth = 0.0f;
-    float supplyBiasDepth = 0.0f;
     float postLpHz = 0.0f;
     float gridCouplingCapFarads = 0.0f;
     float gridLeakResistanceOhms = 0.0f;
@@ -639,7 +645,6 @@ struct Radio1938 {
     float outputLoadResistanceOhms = 0.0f;
     float nominalOutputPowerWatts = 0.0f;
     float internalSampleRate = 0.0f;
-    float osPrevInput = 0.0f;
     CenterTappedInterstageState interstageCt;
     CurrentDrivenTransformer interstageTransformer;
     CurrentDrivenTransformer outputTransformer;
@@ -651,7 +656,6 @@ struct Radio1938 {
     uint32_t interstageMaxIterations = 0;
     uint64_t interstageSolveTimeNs = 0;
     uint64_t interstageDriverEvalCount = 0;
-    uint64_t interstageDriverEvalTimeNs = 0;
     uint64_t interstageAdaptiveValidationAttemptCount = 0;
     uint64_t interstageAdaptiveAcceptedDownshiftCount = 0;
     double interstageAdaptiveBoundaryErrorSumVolts = 0.0;
@@ -659,11 +663,10 @@ struct Radio1938 {
     uint64_t outputSolveTimeNs = 0;
     int interstageAdaptiveSubsteps = 0;
     int interstageAdaptiveValidationCountdown = 0;
-    bool outputTransformerAffineReady = false;
-    std::array<float, 16> outputTransformerAffineStateA{};
-    CurrentDrivenTransformerSample outputTransformerAffineSlope;
-    Biquad osLpIn;
-    Biquad osLpOut;
+    Oversampler oversampler;
+    // Measurement output shares the internal sample clock and needs its own
+    // decimator history; taking the final substep alone aliases terminal data.
+    Oversampler terminalResampler;
     Biquad postLpf;
   } power;
 
@@ -686,14 +689,15 @@ struct Radio1938 {
 
   struct NoiseRuntimeState {
     NoiseHum hum;
+    // Residual texture is defined in the old force-equivalent domain. Convert
+    // only that layer to pressure; receiver noise already traverses the motor.
+    Biquad radiation;
   } noiseRuntime;
 
   struct SpeakerStageState {
-    float osPrev = 0.0f;
     float drive = 0.0f;
     float physicalDriveVolts = 0.0f;
-    Biquad osLpIn;
-    Biquad osLpOut;
+    Oversampler oversampler;
     SpeakerSim speaker;
   } speakerStage;
 
@@ -761,9 +765,7 @@ struct Radio1938 {
     float gain = 1.0f;
     float targetGain = 1.0f;
     float releaseCoeff = 0.0f;
-    float osPrev = 0.0f;
-    Biquad osLpIn;
-    Biquad osLpOut;
+    Oversampler peakOversampler;
     float observedPeak = 0.0f;
   } finalLimiter;
 
@@ -771,9 +773,7 @@ struct Radio1938 {
     // Derived clean speaker-secondary peak from the modeled output stage.
     float digitalReferenceSpeakerVoltsPeak = 1.0f;
     float digitalMakeupGain = 1.0f;
-    float clipOsPrev = 0.0f;
-    Biquad clipOsLpIn;
-    Biquad clipOsLpOut;
+    Oversampler clipOversampler;
   } output;
 
   static std::string_view passName(PassId id);

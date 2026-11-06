@@ -104,23 +104,6 @@ inline float applySeededDrift(float base,
   return base * (1.0f + relativeDepth * seededSignedUnit(seed, salt));
 }
 
-template <typename Nonlinear>
-inline float processOversampled2x(float x,
-                                  float& prev,
-                                  Biquad& lp1,
-                                  Biquad& lp2,
-                                  Nonlinear&& nonlinear) {
-  float mid = 0.5f * (prev + x);
-  float y0 = nonlinear(mid);
-  float y1 = nonlinear(x);
-  y0 = lp1.process(y0);
-  y0 = lp2.process(y0);
-  y1 = lp1.process(y1);
-  y1 = lp2.process(y1);
-  prev = x;
-  return y1;
-}
-
 inline float softClip(float x,
                       float t = kSignalMathDefaultSoftClipThreshold) {
   float ax = std::fabs(x);

@@ -548,6 +548,25 @@ add_test(NAME radio_measurements_philco_reference
 add_test(NAME radio_measurements_typical_reference
          COMMAND $<TARGET_FILE:radio_measurements>
                  --preset typical-1930s --section reference)
+foreach(_measurement_profile IN ITEMS philco-37-116 typical-1930s)
+  add_test(NAME radio_measurements_settings_${_measurement_profile}
+    COMMAND $<TARGET_FILE:radio_measurements>
+      --preset ${_measurement_profile} --section config
+      --radio-settings "${CMAKE_SOURCE_DIR}/tools/testdata/radio_measurements_profiles.toml")
+  if(_measurement_profile STREQUAL "philco-37-116")
+    set(_measurement_mu 20)
+  else()
+    set(_measurement_mu 100)
+  endif()
+  set_tests_properties(radio_measurements_settings_${_measurement_profile} PROPERTIES
+    PASS_REGULAR_EXPRESSION "receiver_profile,${_measurement_profile}[\r\n]+first_audio_mu,${_measurement_mu}[\r\n]+oversample_factor,4")
+endforeach()
+add_test(NAME radio_measurements_explicit_receiver_settings
+  COMMAND $<TARGET_FILE:radio_measurements>
+    --receiver-profile philco-37-116 --preset custom --section config
+    --radio-settings "${CMAKE_SOURCE_DIR}/tools/testdata/radio_measurements_profiles.toml")
+set_tests_properties(radio_measurements_explicit_receiver_settings PROPERTIES
+  PASS_REGULAR_EXPRESSION "receiver_profile,philco-37-116[\r\n]+first_audio_mu,20[\r\n]+oversample_factor,4")
 
 add_executable(radio_node_physics)
 target_sources(radio_node_physics PRIVATE
@@ -594,6 +613,45 @@ target_sources(radio_am_ingress_tests PRIVATE
 radioify_link_repo_target(radio_am_ingress_tests)
 add_test(NAME radio_am_ingress_tests
          COMMAND $<TARGET_FILE:radio_am_ingress_tests>)
+
+add_executable(radio_acoustic_model_tests)
+target_sources(radio_acoustic_model_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_radio_acoustic_model_tests>
+  $<TARGET_OBJECTS:radioify_config>
+  $<TARGET_OBJECTS:radioify_audiofilter>
+)
+radioify_link_repo_target(radio_acoustic_model_tests)
+add_test(NAME radio_acoustic_model_tests
+         COMMAND $<TARGET_FILE:radio_acoustic_model_tests>)
+
+add_executable(radio_settings_tests)
+target_sources(radio_settings_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_radio_settings_tests>
+  $<TARGET_OBJECTS:radioify_config>
+  $<TARGET_OBJECTS:radioify_audiofilter>
+)
+radioify_link_repo_target(radio_settings_tests)
+add_test(NAME radio_settings_tests
+         COMMAND $<TARGET_FILE:radio_settings_tests>)
+
+add_executable(radio_oversampling_tests)
+target_sources(radio_oversampling_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_radio_oversampling_tests>
+  $<TARGET_OBJECTS:radioify_config>
+  $<TARGET_OBJECTS:radioify_audiofilter>
+)
+radioify_link_repo_target(radio_oversampling_tests)
+add_test(NAME radio_oversampling_tests
+         COMMAND $<TARGET_FILE:radio_oversampling_tests>)
+
+add_executable(radio_circuit_model_tests)
+target_sources(radio_circuit_model_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_radio_circuit_model_tests>
+  $<TARGET_OBJECTS:radioify_config>
+  $<TARGET_OBJECTS:radioify_audiofilter>
+)
+radioify_link_repo_target(radio_circuit_model_tests)
+add_test(NAME radio_circuit_model_tests COMMAND $<TARGET_FILE:radio_circuit_model_tests>)
 
 add_executable(audio_playback_pipeline_tests)
 target_sources(audio_playback_pipeline_tests PRIVATE
