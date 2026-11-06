@@ -176,6 +176,12 @@ void testFailuresLeavePlaybackUntouched() {
       "[audio-filter.test.powersupply]\nreservoirFarads = 0\n",
       "[audio-filter.test.powersupply]\nfilterHenries = -1\n",
       "[audio-filter.test.power]\nrippleDepth = .02\n",
+      "[audio-filter.test.frontend]\nantennaLoadResistanceOhms = 2200\n",
+      "[audio-filter.test.frontend]\ninputHpHz = 115\n",
+      "[audio-filter.test.tuning]\npreBwScale = 1\n",
+      "[audio-filter.test.frontend]\nantennaCoilQ = 0\n",
+      "[audio-filter.test.frontend]\nantennaShuntLoadOhms = -1\n",
+      "[audio-filter.test.tuning]\nstationFrequencyHz = 6000000\n",
       "[audio-filter.test.demod]\naudioJunctionSlopeVolts = .0045\n",
       "[audio-filter.test.unknown]\nvalue = 1\n",
   };

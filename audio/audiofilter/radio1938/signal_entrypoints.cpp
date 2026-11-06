@@ -93,7 +93,8 @@ void Radio1938::processIqBaseband(const float* iqInterleaved,
     const float i = iqInterleaved[base];
     const float q = iqInterleaved[base + 1u];
     ctx.signal.setComplexEnvelope(i, q);
-    float y = runRadioPipelineSample(*this, i, ctx, PassId::Mixer);
+    // Baseband input is the antenna envelope; the tuned front end still applies.
+    float y = runRadioPipelineSample(*this, i, ctx, PassId::FrontEnd);
     writeMonoToInterleaved(outSamples, frame, channels, y);
   }
   finishRadioPipelineBlock(*this);

@@ -122,6 +122,7 @@ models/**/*.verified
 !docs/radio1938-realism-audit.md
 !docs/radio1938-period-acoustics.md
 !docs/radio1938-detector-supply.md
+!docs/radio_node_physics.md
 !docs/chapter-analysis-validation.md
 !docs/video-editing-review.md
 !models/chapter_analysis/CHAPTER-LLAMA-NOTICE.md

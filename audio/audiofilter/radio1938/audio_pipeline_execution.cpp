@@ -33,7 +33,7 @@ size_t resolveFirstProgramIndex(Radio1938& radio,
     return block->cachedProgramStartIndex;
   }
   const size_t orderIndex =
-      radio.graph.findOrderIndex(AudioPassDomain::Program, firstProgramPass);
+      radio.graph.findEntryOrderIndex(AudioPassDomain::Program, firstProgramPass);
   if (block) {
     block->cachedProgramStartPass = firstProgramPass;
     block->cachedProgramStartIndex = orderIndex;

@@ -4,6 +4,7 @@
 #include "../graph/audio_graph.h"
 #include "../graph/audio_lifecycle.h"
 
+#include <array>
 #include <cstdint>
 
 struct Radio1938;
@@ -119,6 +120,11 @@ struct RadioFrontEndNode {
   static void reset(Radio1938& radio);
   static float run(Radio1938& radio, float y, RadioSampleContext& ctx);
 };
+
+// Converts one real virtual-carrier RF sample to the source-frame complex
+// envelope. The front end owns this state; the IF strip calls it only when the
+// front end is bypassed and real RF reaches the mixer directly.
+std::array<float, 2> convertRealRfToSourceEnvelope(Radio1938& radio, float rf);
 
 struct RadioMixerNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);

@@ -23,13 +23,9 @@ std::array<float, 2> unrotateComplexEnvelope(float inI,
 }
 
 void resetIfStripRuntimeEnvelopeState(Radio1938::IFStripNodeState& ifStrip) {
-  ifStrip.sourceDownmixPhase = 0.0f;
-  ifStrip.sourceDownmixOscCos = 1.0f;
-  ifStrip.sourceDownmixOscSin = 0.0f;
   ifStrip.ifEnvelopePhase = 0.0f;
   ifStrip.ifEnvelopeOscCos = 1.0f;
   ifStrip.ifEnvelopeOscSin = 0.0f;
-  ifStrip.sourceEnvelope.reset();
   for (auto& transformer : ifStrip.transformers) transformer.reset();
   ifStrip.previousIfInput = {};
 }
@@ -38,28 +34,14 @@ float computeIfTuneOffsetHz(const Radio1938::IFStripNodeState& ifStrip) {
   return ifStrip.loFrequencyHz - ifStrip.sourceCarrierHz - ifStrip.ifCenterHz;
 }
 
-std::array<float, 2> extractSourceEnvelope(Radio1938& radio,
-                                           float rfSample,
-                                           const RadioSignalFrame& signal,
-                                           float rfGain) {
-  auto& ifStrip = radio.ifStrip;
-  if (signal.mode == SourceInputMode::ComplexEnvelope) {
-    return {rfGain * signal.i, rfGain * signal.q};
-  }
-
-  float c = ifStrip.sourceDownmixOscCos;
-  float s = ifStrip.sourceDownmixOscSin;
-  // Real RF has already traversed FrontEnd, including its gain and AVC.
-  // Applying rfGain here again would count that stage twice.
-  const auto sourceEnv =
-      ifStrip.sourceEnvelope.process(2.0f * rfSample * c, -2.0f * rfSample * s);
-  advanceNormalizedOscillator(ifStrip.sourceDownmixStepCos,
-                              ifStrip.sourceDownmixStepSin,
-                              ifStrip.sourceDownmixOscCos,
-                              ifStrip.sourceDownmixOscSin);
-  ifStrip.sourceDownmixPhase =
-      wrapPhase(ifStrip.sourceDownmixPhase + ifStrip.sourceDownmixStepRadians);
-  return sourceEnv;
+// The front end delivers the mixer-grid envelope, including its gain, tuned
+// circuits and AVC. Real RF arrives only when that pass is bypassed; it is then
+// converted without inventing RF gain or selectivity here.
+std::array<float, 2> mixerGridEnvelope(Radio1938& radio,
+                                       float rfSample,
+                                       const RadioSignalFrame& signal) {
+  if (signal.mode == SourceInputMode::ComplexEnvelope) return {signal.i, signal.q};
+  return convertRealRfToSourceEnvelope(radio, rfSample);
 }
 
 std::array<float, 2> runLoadedIfCanEquivalent(Radio1938& radio,
@@ -108,7 +90,7 @@ std::array<float, 2> runLoadedIfCanEquivalent(Radio1938& radio,
 
   // The detector must see the loaded IF can mapped back into the original
   // source-envelope frame. Unrotate only the residual tuning offset here;
-  // source carrier removal was already handled by sourceDownmixPhase.
+  // the front end's source conversion already removed the carrier.
   return unrotateComplexEnvelope(loadedCanEnv[0], loadedCanEnv[1], tuneCos,
                                  tuneSin);
 }
@@ -124,11 +106,6 @@ void configureIfStrip(Radio1938& radio) {
   ifStrip.sourceCarrierHz = tuning.sourceCarrierHz;
   ifStrip.loFrequencyHz =
       ifStrip.sourceCarrierHz + ifStrip.ifCenterHz + tuning.tuneAppliedHz;
-  ifStrip.sourceDownmixStepRadians =
-      kRadioTwoPi * (ifStrip.sourceCarrierHz / sampleRate);
-  const double sourceStep = 6.28318530717958647692 * ifStrip.sourceCarrierHz / sampleRate;
-  ifStrip.sourceDownmixStepCos = static_cast<float>(std::cos(sourceStep));
-  ifStrip.sourceDownmixStepSin = static_cast<float>(std::sin(sourceStep));
   ifStrip.ifEnvelopeStepRadians =
       kRadioTwoPi * (computeIfTuneOffsetHz(ifStrip) / sampleRate);
   ifStrip.ifEnvelopeStepCos = std::cos(ifStrip.ifEnvelopeStepRadians);
@@ -171,13 +148,6 @@ void ensureIfStripConfigured(Radio1938& radio) {
 void RadioIFStripNode::init(Radio1938& radio, RadioInitContext&) {
   radio.ifStrip.noiseSampleScale = std::sqrt(radio.sampleRate / 48000.0f);
   configureIfStrip(radio);
-  // Representation conversion is fixed for this sample rate. Keep the FIR
-  // design (including Bessel evaluations) out of ongoing AFC retuning.
-  const float sourceBw = radio.tuning.sourceBandwidthHz;
-  const float imageHz = std::min(2 * radio.ifStrip.sourceCarrierHz,
-                                 radio.sampleRate - 2 * radio.ifStrip.sourceCarrierHz);
-  radio.ifStrip.sourceEnvelope.configure(sourceBw / radio.sampleRate,
-                                         (imageHz - sourceBw) / radio.sampleRate);
 }
 
 void RadioIFStripNode::reset(Radio1938& radio) {
@@ -187,7 +157,6 @@ void RadioIFStripNode::reset(Radio1938& radio) {
 }
 
 float RadioIFStripNode::run(Radio1938& radio, float y, RadioSampleContext& ctx) {
-  auto& frontEnd = radio.frontEnd;
   auto& mixer = radio.mixer;
   auto& ifStrip = radio.ifStrip;
   ensureIfStripConfigured(radio);
@@ -199,8 +168,6 @@ float RadioIFStripNode::run(Radio1938& radio, float y, RadioSampleContext& ctx) 
   }
 
   float avcT = clampf(radio.controlBus.controlVoltage / 1.25f, 0.0f, 1.0f);
-  float rfGain =
-      frontEnd.rfGain * std::max(0.35f, 1.0f - frontEnd.avcGainDepth * avcT);
   float ifGainControl =
       std::max(0.20f, 1.0f - ifStrip.avcGainDepth * avcT);
   float ifGain = ifStrip.stageGain * ifGainControl;
@@ -211,7 +178,7 @@ float RadioIFStripNode::run(Radio1938& radio, float y, RadioSampleContext& ctx) 
   float mixerConversionGain = mixer.conversionGain;
   assert(std::isfinite(mixerConversionGain) &&
          std::fabs(mixerConversionGain) >= 1e-6f);
-  auto sourceEnv = extractSourceEnvelope(radio, y, ctx.signal, rfGain);
+  auto sourceEnv = mixerGridEnvelope(radio, y, ctx.signal);
   auto detectorEnv = runLoadedIfCanEquivalent(radio, sourceEnv[0], sourceEnv[1],
                                               mixerConversionGain, ifGain,
                                               ctx.derived.ifInputNoiseAmp);

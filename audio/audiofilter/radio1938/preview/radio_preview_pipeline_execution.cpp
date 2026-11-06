@@ -42,7 +42,7 @@ size_t resolveFirstProgramIndex(RadioPreviewPipeline& preview,
     return block->cachedProgramStartIndex;
   }
   const size_t orderIndex =
-      preview.graph.findOrderIndex(AudioPassDomain::Program, firstProgramPass);
+      preview.graph.findEntryOrderIndex(AudioPassDomain::Program, firstProgramPass);
   if (block) {
     block->cachedProgramStartPass = firstProgramPass;
     block->cachedProgramStartIndex = orderIndex;

@@ -101,47 +101,46 @@ class AudioGraphRuntime {
 
   void invalidate() {
     m_compiled = false;
-    m_blockOrder.clear();
-    m_sampleControlOrder.clear();
-    m_programOrder.clear();
-    m_blockOrderIndex.clear();
-    m_sampleControlOrderIndex.clear();
-    m_programOrderIndex.clear();
+    for (auto& schedule : m_schedules) schedule = {};
   }
 
   void compile() {
     if (m_compiled) return;
-    m_blockOrder = compileDomainOrder(AudioPassDomain::Block);
-    m_sampleControlOrder = compileDomainOrder(AudioPassDomain::SampleControl);
-    m_programOrder = compileDomainOrder(AudioPassDomain::Program);
-    m_blockOrderIndex = buildOrderIndexLookup(m_blockOrder);
-    m_sampleControlOrderIndex = buildOrderIndexLookup(m_sampleControlOrder);
-    m_programOrderIndex = buildOrderIndexLookup(m_programOrder);
+    for (auto domain : {AudioPassDomain::Block, AudioPassDomain::SampleControl,
+                        AudioPassDomain::Program}) {
+      schedule(domain) = compileDomainSchedule(domain);
+    }
     m_compiled = true;
   }
 
+  // Enabled passes, in the order they run.
   const std::vector<size_t>& order(AudioPassDomain domain) const {
-    switch (domain) {
-      case AudioPassDomain::Block:
-        return m_blockOrder;
-      case AudioPassDomain::SampleControl:
-        return m_sampleControlOrder;
-      case AudioPassDomain::Program:
-        return m_programOrder;
-    }
-    return m_programOrder;
+    return schedule(domain).active;
   }
 
   const Pass& pass(size_t index) const { return m_passes[index]; }
 
   size_t findOrderIndex(AudioPassDomain domain, Id id) const {
     const auto* passPtr = findPass(id);
-    if (!passPtr) return order(domain).size();
-    const size_t passIndex =
-        static_cast<size_t>(passPtr - m_passes.data());
-    const auto& lookup = orderIndexLookup(domain);
-    if (passIndex < lookup.size()) return lookup[passIndex];
-    return order(domain).size();
+    const auto& compiled = schedule(domain);
+    if (!passPtr) return compiled.active.size();
+    const size_t passIndex = static_cast<size_t>(passPtr - m_passes.data());
+    if (passIndex < compiled.activeIndex.size() &&
+        compiled.activeIndex[passIndex] != kInvalidOrderIndex)
+      return compiled.activeIndex[passIndex];
+    return compiled.active.size();
+  }
+
+  // Entry point for a signal that enters at `id`. An enabled pass starts at
+  // its own position; a disabled one at the next enabled pass in the full
+  // dependency order. Returns order(domain).size() when none remains.
+  size_t findEntryOrderIndex(AudioPassDomain domain, Id id) const {
+    const auto* passPtr = findPass(id);
+    const auto& compiled = schedule(domain);
+    if (!passPtr) return compiled.active.size();
+    const size_t passIndex = static_cast<size_t>(passPtr - m_passes.data());
+    if (passIndex < compiled.entryIndex.size()) return compiled.entryIndex[passIndex];
+    return compiled.active.size();
   }
 
   template <typename Fn>
@@ -155,45 +154,63 @@ class AudioGraphRuntime {
  private:
   static constexpr size_t kInvalidOrderIndex = static_cast<size_t>(-1);
 
-  std::vector<size_t> buildOrderIndexLookup(
-      const std::vector<size_t>& compiledOrder) const {
-    std::vector<size_t> lookup(m_passes.size(), kInvalidOrderIndex);
-    for (size_t orderIndex = 0; orderIndex < compiledOrder.size(); ++orderIndex) {
-      lookup[compiledOrder[orderIndex]] = orderIndex;
-    }
-    return lookup;
+  // The dependency order is solved over every pass of the domain, enabled or
+  // not. Disabling a pass removes it from `active` without dropping the
+  // ordering its dependency edges imposed on the passes that remain.
+  struct DomainSchedule {
+    std::vector<size_t> active{};
+    // Per registered pass: position in `active`, or kInvalidOrderIndex.
+    std::vector<size_t> activeIndex{};
+    // Per registered pass: first `active` position at or after it in the
+    // full order, or active.size().
+    std::vector<size_t> entryIndex{};
+  };
+
+  DomainSchedule& schedule(AudioPassDomain domain) {
+    return m_schedules[static_cast<size_t>(domain)];
+  }
+  const DomainSchedule& schedule(AudioPassDomain domain) const {
+    return m_schedules[static_cast<size_t>(domain)];
   }
 
-  const std::vector<size_t>& orderIndexLookup(AudioPassDomain domain) const {
-    switch (domain) {
-      case AudioPassDomain::Block:
-        return m_blockOrderIndex;
-      case AudioPassDomain::SampleControl:
-        return m_sampleControlOrderIndex;
-      case AudioPassDomain::Program:
-        return m_programOrderIndex;
+  DomainSchedule compileDomainSchedule(AudioPassDomain domain) const {
+    const std::vector<size_t> full = compileFullDomainOrder(domain);
+    DomainSchedule result;
+    result.activeIndex.assign(m_passes.size(), kInvalidOrderIndex);
+    result.entryIndex.assign(m_passes.size(), kInvalidOrderIndex);
+    for (size_t passIndex : full) {
+      if (!m_passes[passIndex].enabled) continue;
+      result.activeIndex[passIndex] = result.active.size();
+      result.active.push_back(passIndex);
     }
-    return m_programOrderIndex;
+    size_t next = result.active.size();
+    for (size_t position = full.size(); position-- > 0;) {
+      const size_t passIndex = full[position];
+      if (result.activeIndex[passIndex] != kInvalidOrderIndex)
+        next = result.activeIndex[passIndex];
+      result.entryIndex[passIndex] = next;
+    }
+    return result;
   }
 
-  std::vector<size_t> compileDomainOrder(AudioPassDomain domain) const {
-    std::vector<size_t> enabledIndices;
-    enabledIndices.reserve(m_passes.size());
+  std::vector<size_t> compileFullDomainOrder(AudioPassDomain domain) const {
+    std::vector<size_t> domainIndices;
+    domainIndices.reserve(m_passes.size());
     for (size_t i = 0; i < m_passes.size(); ++i) {
-      if (m_passes[i].domain == domain && m_passes[i].enabled) {
-        enabledIndices.push_back(i);
+      if (m_passes[i].domain == domain) {
+        domainIndices.push_back(i);
       }
     }
 
     std::vector<int> indegree(m_passes.size(), 0);
     std::vector<std::vector<size_t>> adjacency(m_passes.size());
-    for (size_t passIndex : enabledIndices) {
+    for (size_t passIndex : domainIndices) {
       const auto& pass = m_passes[passIndex];
       for (size_t dependencyIndex = 0;
            dependencyIndex < pass.dependencies.count;
            ++dependencyIndex) {
         const Id dependencyId = pass.dependencies.ids[dependencyIndex];
-        for (size_t candidateIndex : enabledIndices) {
+        for (size_t candidateIndex : domainIndices) {
           if (m_passes[candidateIndex].id == dependencyId) {
             adjacency[candidateIndex].push_back(passIndex);
             indegree[passIndex]++;
@@ -204,15 +221,15 @@ class AudioGraphRuntime {
     }
 
     std::vector<size_t> queue;
-    queue.reserve(enabledIndices.size());
-    for (size_t passIndex : enabledIndices) {
+    queue.reserve(domainIndices.size());
+    for (size_t passIndex : domainIndices) {
       if (indegree[passIndex] == 0) {
         queue.push_back(passIndex);
       }
     }
 
     std::vector<size_t> compiledOrder;
-    compiledOrder.reserve(enabledIndices.size());
+    compiledOrder.reserve(domainIndices.size());
     for (size_t head = 0; head < queue.size(); ++head) {
       const size_t current = queue[head];
       compiledOrder.push_back(current);
@@ -223,7 +240,7 @@ class AudioGraphRuntime {
       }
     }
 
-    if (compiledOrder.size() != enabledIndices.size()) {
+    if (compiledOrder.size() != domainIndices.size()) {
       throw std::runtime_error("Audio pipeline cycle detected");
     }
 
@@ -232,12 +249,7 @@ class AudioGraphRuntime {
 
   std::vector<Pass> m_passes{};
   bool m_compiled = false;
-  std::vector<size_t> m_blockOrder{};
-  std::vector<size_t> m_sampleControlOrder{};
-  std::vector<size_t> m_programOrder{};
-  std::vector<size_t> m_blockOrderIndex{};
-  std::vector<size_t> m_sampleControlOrderIndex{};
-  std::vector<size_t> m_programOrderIndex{};
+  std::array<DomainSchedule, 3> m_schedules{};
 };
 
 #endif  // RADIOIFY_AUDIOFILTER_GRAPH_AUDIO_GRAPH_H

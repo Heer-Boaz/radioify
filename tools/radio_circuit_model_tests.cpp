@@ -140,6 +140,203 @@ void testReceiverTuning() {
   check(console > 2 * small, "receivers need distinct IF selectivity");
 }
 
+// Independent reference: full impedance of a parallel tuned circuit at the
+// dial frequency plus offset. The coil loss is a series resistance fixed by
+// its unloaded Q at the dial; the gang capacitor is aligned to resonance.
+Complex tankReference(double offset, double dialHz, double l, double coilQ, double shunt) {
+  const double w0 = 2 * pi * dialHz;
+  const auto impedance = [&](double omega) {
+    const Complex coil{w0 * l / coilQ, omega * l};
+    return 1. / (1. / coil + Complex{1 / shunt, omega / (w0 * w0 * l)});
+  };
+  return impedance(2 * pi * (dialHz + offset)) / impedance(w0);
+}
+
+Complex measureTank(double fs, double dialHz, double offset, double l, double coilQ,
+                    double shunt) {
+  TunedRfCircuit tank;
+  tank.configure(fs, dialHz, l, coilQ, shunt);
+  Complex result{};
+  const int count = static_cast<int>(fs / 10);
+  for (int n = -count; n < count; ++n) {
+    const auto input = std::polar(1.0, 2 * pi * offset * n / fs);
+    const auto out =
+        tank.process(static_cast<float>(input.real()), static_cast<float>(input.imag()));
+    if (n >= 0) result += Complex{out[0], out[1]} * std::conj(input) / double(count);
+  }
+  return result;
+}
+
+// Steady-state envelope gain of the complete front-end node relative to its
+// declared resonance gain, for a source-frame tone at the given offset.
+double measureFrontEnd(RadioReceiverProfile profile, float tuneOffset, float offset,
+                       float stationHz = 1000000) {
+  Radio1938 radio;
+  radio.applyReceiverProfile(profile);
+  radio.identity.driftDepth = 0;
+  radio.tuning.magneticTuningEnabled = false;
+  radio.tuning.tuneOffsetHz = tuneOffset;
+  radio.tuning.stationFrequencyHz = stationHz;
+  radio.init(1, 48000, 5500, 0);
+  radio.controlBus.controlVoltage = 0;
+  Complex result{};
+  for (int n = -4800; n < 4800; ++n) {
+    const auto in = std::polar(1., 2 * pi * offset * n / 48000);
+    RadioSampleContext ctx{};
+    ctx.signal.setComplexEnvelope(static_cast<float>(in.real()),
+                                  static_cast<float>(in.imag()));
+    RadioFrontEndNode::run(radio, 0, ctx);
+    if (n >= 0)
+      result += Complex{ctx.signal.i, ctx.signal.q} * std::conj(in) / 4800.;
+  }
+  return std::abs(result) / radio.frontEnd.rfGain;
+}
+
+void testFrontEndTunedCircuits() {
+  // Cover the widest transmitted band plus 10 kHz of mechanical detuning, up
+  // to .3 fs; beyond that only a bounded magnitude error is promised. The
+  // discretisation is judged against the symmetric narrowband envelope it
+  // implements; the full impedance adds the circuit's own small asymmetry.
+  double discreteError = 0, wideError = 0, maxError = 0, maxPhaseResidual = 0;
+  for (double fs : {44100., 48000., 96000.}) {
+    const double sourceBw = std::min(10000., .2 * fs);
+    const double covered = std::min(sourceBw + 10000, .3 * fs);
+    for (double dial : {530000., 1000000., 1710000.})
+      for (double l : {200e-6, 260e-6})
+        for (double coilQ : {60., 120.})
+          for (double shunt : {50000., 300000.}) {
+            TunedRfCircuit design;
+            design.configure(fs, dial, l, coilQ, shunt);
+            const auto narrowband = [&](double offset) {
+              return std::abs(1. / Complex{1, offset / design.halfBandwidthHz()});
+            };
+            std::vector<double> offsets, phaseErrors;
+            for (int step = -12; step <= 12; ++step) {
+              const double offset = covered * step / 12;
+              const Complex measured = measureTank(fs, dial, offset, l, coilQ, shunt);
+              const Complex reference = tankReference(offset, dial, l, coilQ, shunt);
+              discreteError = std::max(
+                  discreteError,
+                  std::abs(20 * std::log10(std::abs(measured) / narrowband(offset))));
+              maxError = std::max(
+                  maxError, std::abs(20 * std::log10(std::abs(measured / reference))));
+              offsets.push_back(offset);
+              phaseErrors.push_back(std::arg(measured / reference));
+            }
+            // A common sub-sample delay moves every sideband alike; only the
+            // phase left after removing it can distort the envelope.
+            double num = 0, den = 0;
+            for (size_t i = 0; i < offsets.size(); ++i) {
+              num += offsets[i] * phaseErrors[i];
+              den += offsets[i] * offsets[i];
+            }
+            for (size_t i = 0; i < offsets.size(); ++i)
+              maxPhaseResidual = std::max(
+                  maxPhaseResidual,
+                  std::abs(phaseErrors[i] - num / den * offsets[i]) * 180 / pi);
+            for (double fraction : {-.45, -.4, .4, .45}) {
+              const double offset = fraction * fs;
+              wideError = std::max(
+                  wideError,
+                  std::abs(20 * std::log10(
+                               std::abs(measureTank(fs, dial, offset, l, coilQ, shunt)) /
+                               narrowband(offset))));
+            }
+          }
+  }
+  std::cout << "RF tank discretisation max error dB: " << discreteError
+            << " (to .45 fs: " << wideError
+            << "); full impedance reference max error dB: " << maxError
+            << ", phase residual deg: " << maxPhaseResidual << '\n';
+  check(discreteError < .01, "tuned RF envelope discretisation warps the sidebands");
+  check(wideError < .4, "tuned RF envelope fails near the envelope Nyquist limit");
+  // .17 dB is the real circuit's asymmetry at 530 kHz and 20 kHz offset.
+  check(maxError < .2, "tuned RF envelope diverges from the full RLC circuit");
+  check(maxPhaseResidual < 1.5, "tuned RF envelope phase distorts the sidebands");
+  // The reviewer's case: both Philco circuits at the 44.1 kHz source edge.
+  const double edge = .2 * 44100;
+  const Complex philco = measureTank(44100, 1e6, edge, 230e-6, 100, 150000) *
+                         measureTank(44100, 1e6, edge, 230e-6, 100, 250000);
+  const Complex philcoReference = tankReference(edge, 1e6, 230e-6, 100, 150000) *
+                                  tankReference(edge, 1e6, 230e-6, 100, 250000);
+  const double philcoError = 20 * std::log10(std::abs(philco / philcoReference));
+  std::cout << "Philco RF circuits at 44.1 kHz source edge, error dB: " << philcoError
+            << '\n';
+  // The remaining .075 dB is the real pair's asymmetry about 1 MHz.
+  check(std::abs(philcoError) < .1,
+        "ganged Philco circuits miss the reference at the wide source edge");
+  check(std::abs(measureTank(48000, 1e6, 5000, 230e-6, 100, 50000)) >
+            std::abs(measureTank(48000, 1e6, 5000, 230e-6, 100, 300000)),
+        "heavier antenna loading must broaden the tuned circuit");
+  check(std::abs(measureTank(48000, 1.5e6, 5000, 230e-6, 100, 150000)) >
+            std::abs(measureTank(48000, .6e6, 5000, 230e-6, 100, 150000)),
+        "fixed coil Q must give a wider passband higher on the dial");
+
+  for (auto profile : {RadioReceiverProfile::Typical1930s, RadioReceiverProfile::Philco37116}) {
+    const double centred = measureFrontEnd(profile, 0, 0);
+    check(std::abs(centred - 1) < 1e-3, "front end changed its declared resonance gain");
+    check(std::abs(measureFrontEnd(profile, 3000, 3000) / centred - 1) < 1e-3,
+          "RF tuned circuits do not follow the dial");
+    const double upper = measureFrontEnd(profile, 0, 5000);
+    const double lower = measureFrontEnd(profile, 0, -5000);
+    check(std::abs(20 * std::log10(upper / lower)) < .01,
+          "centred RF response must keep symmetric AM sidebands");
+  }
+  const double small = measureFrontEnd(RadioReceiverProfile::Typical1930s, 0, 5000);
+  const double console = measureFrontEnd(RadioReceiverProfile::Philco37116, 0, 5000);
+  std::cout << "front end 5 kHz sideband dB: typical=" << 20 * std::log10(small)
+            << ", philco=" << 20 * std::log10(console) << '\n';
+  check(console < small, "two ganged RF circuits must be more selective than one");
+
+  // A bypassed front end still delivers real RF to the IF through the same
+  // representation conversion, without inventing RF gain or selectivity.
+  Radio1938 bypassed;
+  bypassed.graph.setEnabled(PassId::FrontEnd, false);
+  bypassed.init(1, 48000, 5500, 0);
+  std::vector<float> program(4800), output(4800);
+  for (int n = 0; n < 4800; ++n)
+    program[n] = .5f * static_cast<float>(std::sin(2 * pi * 1000 * n / 48000));
+  bypassed.processAmAudio(program.data(), output.data(), 4800, .12f, .85f);
+  double energy = 0;
+  for (int n = 2400; n < 4800; ++n) {
+    check(std::isfinite(output[n]), "bypassed front end produced a non-finite sample");
+    energy += output[n] * double(output[n]);
+  }
+  check(energy > 0, "bypassed front end stopped real RF reaching the IF strip");
+
+  // Baseband I/Q enters at the front end; bypassing it must not bypass the
+  // mixer, IF and detector behind it.
+  Radio1938 iqBypassed;
+  iqBypassed.graph.setEnabled(PassId::FrontEnd, false);
+  iqBypassed.init(1, 48000, 5500, 0);
+  std::vector<float> iq(2 * 4800);
+  for (int n = 0; n < 4800; ++n)
+    iq[2 * n] = .1f + .02f * static_cast<float>(std::sin(2 * pi * 1000 * n / 48000));
+  iqBypassed.processIqBaseband(iq.data(), output.data(), 4800);
+  double rawDifference = 0;
+  for (int n = 2400; n < 4800; ++n)
+    rawDifference = std::max(rawDifference, std::abs(double(output[n]) - iq[2 * n]));
+  check(iqBypassed.mixer.inputDriveEnv > 0 && rawDifference > .01,
+        "bypassed front end skipped the I/Q receiver chain");
+
+  // Magnetic Tuning shifts the oscillator only (Rider, 1937); the antenna
+  // and RF circuits stay where the knob put them.
+  Radio1938 pulled;
+  pulled.applyReceiverProfile(RadioReceiverProfile::Philco37116);
+  pulled.identity.driftDepth = 0;
+  pulled.tuning.magneticTuningEnabled = true;
+  pulled.tuning.tuneOffsetHz = 2000;
+  pulled.init(1, 48000, 5500, 0);
+  pulled.tuning.afcCorrectionHz = -1500;
+  RadioSampleContext idle{};
+  for (int n = 0; n < 96000; ++n) RadioTuningNode::run(pulled, idle);
+  RadioFrontEndNode::run(pulled, 0, idle);
+  check(std::abs(pulled.tuning.tuneAppliedHz - 500) < 5 &&
+            std::abs(pulled.tuning.dialAppliedHz - 2000) < 5 &&
+            std::abs(pulled.frontEnd.tunedHz - (pulled.tuning.stationFrequencyHz + 2000)) < 5,
+        "AFC pull must move the oscillator, not the ganged RF circuits");
+}
+
 void testIndependentTubeCharacteristics() {
   const KorenTriodeLut noTable;
   const auto sixJ5 = rca6J5Characteristic(), seventyFive = rca75Characteristic();
@@ -380,6 +577,7 @@ int main(int argc, char** argv) {
   testSupplyConservation();
   testCircuitReference();
   testReceiverTuning();
+  testFrontEndTunedCircuits();
   testIndependentTubeCharacteristics();
   testPhysicalNoiseSources();
   testAfcWithRealCarrier();

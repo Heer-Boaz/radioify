@@ -101,6 +101,26 @@ bool validateTuning(const Radio1938& radio, std::string* error) {
   return valid;
 }
 
+bool validateFrontEnd(const Radio1938& radio, std::string* error) {
+  const auto& f = radio.frontEnd;
+  const auto positive = [](float v) { return std::isfinite(v) && v > 0; };
+  // The tuned-circuit priors describe the medium-wave broadcast band only.
+  const float station = radio.tuning.stationFrequencyHz;
+  const bool valid =
+      std::isfinite(station) && station >= 530000 && station <= 1710000 &&
+      std::isfinite(f.rfGain) && f.rfGain >= 0 && std::isfinite(f.avcGainDepth) &&
+      f.avcGainDepth >= 0 && positive(f.antennaInductanceHenries) &&
+      positive(f.antennaCoilQ) && positive(f.antennaShuntLoadOhms) &&
+      (!f.secondTunedCircuitEnabled ||
+       (positive(f.rfInductanceHenries) && positive(f.rfCoilQ) &&
+        positive(f.rfShuntLoadOhms)));
+  if (!valid && error)
+    *error =
+        "Front end requires a 530-1710 kHz station, nonnegative gain/AVC depth and "
+        "positive inductance, coil Q and shunt load for each tuned circuit.";
+  return valid;
+}
+
 bool validateReceiverInput(const Radio1938& radio, std::string* error) {
   const auto& r = radio.receiverCircuit;
   if (!r.enabled) return true;
@@ -173,10 +193,8 @@ constexpr std::array kTuningSettings{
             [](Radio1938& radio) -> auto& { return radio.tuning.safeBwMinHz; }),
     setting("safeBwMaxHz",
             [](Radio1938& radio) -> auto& { return radio.tuning.safeBwMaxHz; }),
-    setting("preBwScale",
-            [](Radio1938& radio) -> auto& { return radio.tuning.preBwScale; }),
-    setting("postBwScale",
-            [](Radio1938& radio) -> auto& { return radio.tuning.postBwScale; }),
+    setting("stationFrequencyHz",
+            [](Radio1938& radio) -> auto& { return radio.tuning.stationFrequencyHz; }),
     setting("smoothTau",
             [](Radio1938& radio) -> auto& { return radio.tuning.smoothTau; }),
     setting("updateEps",
@@ -194,44 +212,22 @@ constexpr std::array kTuningSettings{
 };
 
 constexpr std::array kFrontEndSettings{
-    setting("inputHpHz",
-            [](Radio1938& radio) -> auto& { return radio.frontEnd.inputHpHz; }),
     setting("rfGain", [](Radio1938& radio) -> auto& { return radio.frontEnd.rfGain; }),
     setting("avcGainDepth",
             [](Radio1938& radio) -> auto& { return radio.frontEnd.avcGainDepth; }),
-    setting("selectivityPeakHz",
-            [](Radio1938& radio) -> auto& { return radio.frontEnd.selectivityPeakHz; }),
-    setting("selectivityPeakQ",
-            [](Radio1938& radio) -> auto& { return radio.frontEnd.selectivityPeakQ; }),
-    setting(
-        "selectivityPeakGainDb",
-        [](Radio1938& radio) -> auto& { return radio.frontEnd.selectivityPeakGainDb; }),
     setting("antennaInductanceHenries",
             [](Radio1938& radio) -> auto& {
               return radio.frontEnd.antennaInductanceHenries;
             }),
-    setting("antennaCapacitanceFarads",
-            [](Radio1938& radio) -> auto& {
-              return radio.frontEnd.antennaCapacitanceFarads;
-            }),
-    setting("antennaSeriesResistanceOhms",
-            [](Radio1938& radio) -> auto& {
-              return radio.frontEnd.antennaSeriesResistanceOhms;
-            }),
-    setting("antennaLoadResistanceOhms",
-            [](Radio1938& radio) -> auto& {
-              return radio.frontEnd.antennaLoadResistanceOhms;
-            }),
+    setting("antennaCoilQ",
+            [](Radio1938& radio) -> auto& { return radio.frontEnd.antennaCoilQ; }),
+    setting("antennaShuntLoadOhms",
+            [](Radio1938& radio) -> auto& { return radio.frontEnd.antennaShuntLoadOhms; }),
     setting("rfInductanceHenries",
             [](Radio1938& radio) -> auto& { return radio.frontEnd.rfInductanceHenries; }),
-    setting("rfCapacitanceFarads",
-            [](Radio1938& radio) -> auto& { return radio.frontEnd.rfCapacitanceFarads; }),
-    setting(
-        "rfSeriesResistanceOhms",
-        [](Radio1938& radio) -> auto& { return radio.frontEnd.rfSeriesResistanceOhms; }),
-    setting(
-        "rfLoadResistanceOhms",
-        [](Radio1938& radio) -> auto& { return radio.frontEnd.rfLoadResistanceOhms; }),
+    setting("rfCoilQ", [](Radio1938& radio) -> auto& { return radio.frontEnd.rfCoilQ; }),
+    setting("rfShuntLoadOhms",
+            [](Radio1938& radio) -> auto& { return radio.frontEnd.rfShuntLoadOhms; }),
 };
 
 constexpr std::array kMixerSettings{
@@ -1057,7 +1053,7 @@ constexpr std::array kNodesSettings{
 constexpr std::array kSections{
     section("globals", kGlobalsSettings, &validateOversampling),
     section("tuning", kTuningSettings, &validateTuning),
-    section("frontend", kFrontEndSettings),
+    section("frontend", kFrontEndSettings, &validateFrontEnd),
     section("mixer", kMixerSettings),
     section("ifstrip", kIfStripSettings, &validateIfStrip),
     section("demod", kDemodSettings),

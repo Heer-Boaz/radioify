@@ -16,7 +16,7 @@ float clampPublishedBandwidth(const Radio1938& radio, float bwHz) {
   return std::clamp(bwHz, safeBwMinHz, safeBwMaxHz);
 }
 
-float publishTuningConfig(Radio1938& radio, float tuneHz, float bwHz) {
+float publishTuningConfig(Radio1938& radio, float tuneHz, float dialHz, float bwHz) {
   auto& tuning = radio.tuning;
   float safeAudioBw = clampPublishedBandwidth(radio, bwHz);
   // A fixed representation carrier leaves equal room for the two AM
@@ -26,10 +26,12 @@ float publishTuningConfig(Radio1938& radio, float tuneHz, float bwHz) {
   bool configChanged =
       tuning.configRevision == 0 ||
       std::fabs(tuneHz - tuning.tuneAppliedHz) > tuning.updateEps ||
+      std::fabs(dialHz - tuning.dialAppliedHz) > tuning.updateEps ||
       std::fabs(safeAudioBw - tuning.bwAppliedHz) > tuning.updateEps ||
       std::fabs(sourceCarrierHz - tuning.sourceCarrierHz) > 1e-3f;
   tuning.tunedBw = safeAudioBw;
   tuning.tuneAppliedHz = tuneHz;
+  tuning.dialAppliedHz = dialHz;
   tuning.bwAppliedHz = safeAudioBw;
   tuning.sourceCarrierHz = sourceCarrierHz;
   if (configChanged) {
@@ -51,17 +53,20 @@ void RadioTuningNode::init(Radio1938& radio, RadioInitContext& initCtx) {
       (afcSeconds > 0.0f) ? 1.0f - std::exp(-1.0f / (rate * afcSeconds))
                           : 0.0f;
   tuning.tuneSmoothedHz = tuning.tuneOffsetHz;
+  tuning.dialSmoothedHz = tuning.tuneOffsetHz;
   tuning.bwSmoothedHz = clampPublishedBandwidth(radio, radio.bwHz);
-  initCtx.tunedBw =
-      publishTuningConfig(radio, tuning.tuneSmoothedHz, tuning.bwSmoothedHz);
+  initCtx.tunedBw = publishTuningConfig(radio, tuning.tuneSmoothedHz,
+                                        tuning.dialSmoothedHz, tuning.bwSmoothedHz);
 }
 
 void RadioTuningNode::reset(Radio1938& radio) {
   auto& tuning = radio.tuning;
   tuning.afcCorrectionHz = 0.0f;
   tuning.tuneSmoothedHz = tuning.tuneOffsetHz;
+  tuning.dialSmoothedHz = tuning.tuneOffsetHz;
   tuning.bwSmoothedHz = clampPublishedBandwidth(radio, radio.bwHz);
-  publishTuningConfig(radio, tuning.tuneSmoothedHz, tuning.bwSmoothedHz);
+  publishTuningConfig(radio, tuning.tuneSmoothedHz, tuning.dialSmoothedHz,
+                      tuning.bwSmoothedHz);
   tuning.updateCountdown = 0;
 }
 
@@ -73,18 +78,21 @@ void RadioTuningNode::run(Radio1938& radio, RadioSampleContext&) {
   }
   tuning.updateCountdown = 63;
   const float tick = tuning.smoothingTick;
+  // Magnetic Tuning pulls only the oscillator; the knob sets the gang.
   float effectiveTuneHz = tuning.tuneOffsetHz;
   if (tuning.magneticTuningEnabled) {
     effectiveTuneHz += tuning.afcCorrectionHz;
   }
   float targetBwHz = clampPublishedBandwidth(radio, radio.bwHz);
   tuning.tuneSmoothedHz += tick * (effectiveTuneHz - tuning.tuneSmoothedHz);
+  tuning.dialSmoothedHz += tick * (tuning.tuneOffsetHz - tuning.dialSmoothedHz);
   tuning.bwSmoothedHz += tick * (targetBwHz - tuning.bwSmoothedHz);
 
   float safeBw = clampPublishedBandwidth(radio, tuning.bwSmoothedHz);
   if (std::fabs(tuning.tuneSmoothedHz - tuning.tuneAppliedHz) >
           tuning.updateEps ||
+      std::fabs(tuning.dialSmoothedHz - tuning.dialAppliedHz) > tuning.updateEps ||
       std::fabs(safeBw - tuning.bwAppliedHz) > tuning.updateEps) {
-    publishTuningConfig(radio, tuning.tuneSmoothedHz, safeBw);
+    publishTuningConfig(radio, tuning.tuneSmoothedHz, tuning.dialSmoothedHz, safeBw);
   }
 }

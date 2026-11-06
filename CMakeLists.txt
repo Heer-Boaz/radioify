@@ -653,6 +653,13 @@ target_sources(radio_circuit_model_tests PRIVATE
 radioify_link_repo_target(radio_circuit_model_tests)
 add_test(NAME radio_circuit_model_tests COMMAND $<TARGET_FILE:radio_circuit_model_tests>)
 
+add_executable(audio_graph_tests)
+target_sources(audio_graph_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_audio_graph_tests>
+)
+radioify_link_repo_target(audio_graph_tests)
+add_test(NAME audio_graph_tests COMMAND $<TARGET_FILE:audio_graph_tests>)
+
 add_executable(audio_playback_pipeline_tests)
 target_sources(audio_playback_pipeline_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_audio_playback_pipeline_tests>

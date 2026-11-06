@@ -1,210 +1,92 @@
 #include "resonant_networks.h"
 
-#include "../math/signal_math.h"
-
 #include <algorithm>
-#include <array>
-#include <cassert>
 #include <cmath>
+#include <complex>
+#include <stdexcept>
 
-void SeriesRlcBandpass::setModel(float newFs,
-                                 float newInductanceHenries,
-                                 float newCapacitanceFarads,
-                                 float newSeriesResistanceOhms,
-                                 float newOutputResistanceOhms,
-                                 int newIntegrationSubsteps) {
-  assert(std::isfinite(newFs) && newFs > 0.0f);
-  assert(std::isfinite(newInductanceHenries) && newInductanceHenries > 0.0f);
-  assert(std::isfinite(newCapacitanceFarads) && newCapacitanceFarads > 0.0f);
-  assert(std::isfinite(newSeriesResistanceOhms) &&
-         newSeriesResistanceOhms >= 0.0f);
-  assert(std::isfinite(newOutputResistanceOhms) &&
-         newOutputResistanceOhms >= 0.0f);
-  assert(newIntegrationSubsteps > 0);
-  fs = newFs;
-  inductanceHenries = newInductanceHenries;
-  capacitanceFarads = newCapacitanceFarads;
-  seriesResistanceOhms = newSeriesResistanceOhms;
-  outputResistanceOhms = newOutputResistanceOhms;
-  integrationSubsteps = newIntegrationSubsteps;
-  dtSub = 1.0f / (fs * static_cast<float>(integrationSubsteps));
-  float subA00 = 1.0f - dtSub * (seriesResistanceOhms / inductanceHenries);
-  float subA01 = -dtSub / inductanceHenries;
-  float subB0 = dtSub / inductanceHenries;
-  float capStep = dtSub / capacitanceFarads;
-  float subA10 = capStep * subA00;
-  float subA11 = 1.0f + capStep * subA01;
-  float subB1 = capStep * subB0;
-  macroA00 = 1.0f;
-  macroA01 = 0.0f;
-  macroA10 = 0.0f;
-  macroA11 = 1.0f;
-  macroB0 = 0.0f;
-  macroB1 = 0.0f;
-  for (int step = 0; step < integrationSubsteps; ++step) {
-    float nextA00 = subA00 * macroA00 + subA01 * macroA10;
-    float nextA01 = subA00 * macroA01 + subA01 * macroA11;
-    float nextA10 = subA10 * macroA00 + subA11 * macroA10;
-    float nextA11 = subA10 * macroA01 + subA11 * macroA11;
-    float nextB0 = subA00 * macroB0 + subA01 * macroB1 + subB0;
-    float nextB1 = subA10 * macroB0 + subA11 * macroB1 + subB1;
-    macroA00 = nextA00;
-    macroA01 = nextA01;
-    macroA10 = nextA10;
-    macroA11 = nextA11;
-    macroB0 = nextB0;
-    macroB1 = nextB1;
+namespace {
+
+constexpr double kPi = 3.14159265358979323846;
+
+// Monic minimum-phase factor {1, g1, g2} of p0 + p1*c + p2*c^2, c = cos(w),
+// where p is positive on [-1, 1]. Each root r in c gives a zero rho with
+// |1 - rho e^-jw|^2 proportional to c - r; it is solved from u = 1/r so a
+// vanishing p2 (a first-order factor) needs no special case.
+std::array<double, 3> minimumPhaseFactor(double p0, double p1, double p2) {
+  using Complex = std::complex<double>;
+  const Complex root = std::sqrt(Complex(p1 * p1 - 4 * p2 * p0));
+  const Complex q = -.5 * (p1 + (p1 >= 0 ? root : -root));
+  const auto zero = [](Complex u) {
+    if (std::abs(u) == 0) return Complex{};
+    const Complex s = std::sqrt(1. - u * u);
+    const Complex inner = (1. - s) / u, outer = (1. + s) / u;
+    return std::abs(inner) < std::abs(outer) ? inner : outer;
+  };
+  const Complex rho1 = zero(p2 / q), rho2 = zero(q / p0);
+  if (!(std::abs(rho1) < 1 && std::abs(rho2) < 1))
+    throw std::runtime_error("RF tank magnitude fit is not realisable");
+  return {1, -(rho1 + rho2).real(), (rho1 * rho2).real()};
+}
+
+}  // namespace
+
+void TunedRfCircuit::configure(double sampleRate, double dialHz, double inductanceHenries,
+                               double coilQ, double shuntLoadOhms) {
+  for (double v : {sampleRate, dialHz, inductanceHenries, coilQ, shuntLoadOhms}) {
+    if (!std::isfinite(v) || v <= 0)
+      throw std::invalid_argument("RF tank values must be finite and positive");
   }
-}
+  const double omega = 2 * kPi * dialHz;
+  loadedQ_ = 1 / (1 / coilQ + omega * inductanceHenries / shuntLoadOhms);
+  const double alpha = omega / (2 * loadedQ_);
+  halfBandwidthHz_ = alpha / (2 * kPi);
 
-void SeriesRlcBandpass::clearState() {
-  inductorCurrent = 0.0f;
-  capacitorVoltage = 0.0f;
-}
-
-float SeriesRlcBandpass::step(float vin) {
-  float nextInductorCurrent =
-      macroA00 * inductorCurrent + macroA01 * capacitorVoltage + macroB0 * vin;
-  float nextCapacitorVoltage =
-      macroA10 * inductorCurrent + macroA11 * capacitorVoltage + macroB1 * vin;
-  inductorCurrent = nextInductorCurrent;
-  capacitorVoltage = nextCapacitorVoltage;
-  assert(std::isfinite(inductorCurrent) && std::isfinite(capacitorVoltage));
-  return inductorCurrent * outputResistanceOhms;
-}
-
-void CoupledTunedTransformer::setModel(float newFs,
-                                       float newPrimaryInductanceHenries,
-                                       float newPrimaryCapacitanceFarads,
-                                       float newPrimaryResistanceOhms,
-                                       float newSecondaryInductanceHenries,
-                                       float newSecondaryCapacitanceFarads,
-                                       float newSecondaryResistanceOhms,
-                                       float newCouplingCoeff,
-                                       float newOutputResistanceOhms,
-                                       int newIntegrationSubsteps) {
-  assert(std::isfinite(newFs) && newFs > 0.0f);
-  assert(std::isfinite(newPrimaryInductanceHenries) &&
-         newPrimaryInductanceHenries > 0.0f);
-  assert(std::isfinite(newPrimaryCapacitanceFarads) &&
-         newPrimaryCapacitanceFarads > 0.0f);
-  assert(std::isfinite(newPrimaryResistanceOhms) &&
-         newPrimaryResistanceOhms >= 0.0f);
-  assert(std::isfinite(newSecondaryInductanceHenries) &&
-         newSecondaryInductanceHenries > 0.0f);
-  assert(std::isfinite(newSecondaryCapacitanceFarads) &&
-         newSecondaryCapacitanceFarads > 0.0f);
-  assert(std::isfinite(newSecondaryResistanceOhms) &&
-         newSecondaryResistanceOhms >= 0.0f);
-  assert(std::isfinite(newCouplingCoeff) && std::fabs(newCouplingCoeff) < 1.0f);
-  assert(std::isfinite(newOutputResistanceOhms) &&
-         newOutputResistanceOhms >= 0.0f);
-  assert(newIntegrationSubsteps > 0);
-  fs = newFs;
-  primaryInductanceHenries = newPrimaryInductanceHenries;
-  primaryCapacitanceFarads = newPrimaryCapacitanceFarads;
-  primaryResistanceOhms = newPrimaryResistanceOhms;
-  secondaryInductanceHenries = newSecondaryInductanceHenries;
-  secondaryCapacitanceFarads = newSecondaryCapacitanceFarads;
-  secondaryResistanceOhms = newSecondaryResistanceOhms;
-  couplingCoeff = newCouplingCoeff;
-  outputResistanceOhms = newOutputResistanceOhms;
-  integrationSubsteps = newIntegrationSubsteps;
-  mutualInductance =
-      couplingCoeff *
-      std::sqrt(primaryInductanceHenries * secondaryInductanceHenries);
-  float determinant = primaryInductanceHenries * secondaryInductanceHenries -
-                      mutualInductance * mutualInductance;
-  assert(determinant > 0.0f);
-  determinantInv = 1.0f / determinant;
-  dtSub = 1.0f / (fs * static_cast<float>(integrationSubsteps));
-  float k = dtSub * determinantInv;
-  float subA00 =
-      1.0f - k * secondaryInductanceHenries * primaryResistanceOhms;
-  float subA01 = k * mutualInductance * secondaryResistanceOhms;
-  float subA02 = -k * secondaryInductanceHenries;
-  float subA03 = k * mutualInductance;
-  float subA10 = k * mutualInductance * primaryResistanceOhms;
-  float subA11 =
-      1.0f - k * primaryInductanceHenries * secondaryResistanceOhms;
-  float subA12 = k * mutualInductance;
-  float subA13 = -k * primaryInductanceHenries;
-  float subB0 = k * secondaryInductanceHenries;
-  float subB1 = -k * mutualInductance;
-  float primaryCapStep = dtSub / primaryCapacitanceFarads;
-  float secondaryCapStep = dtSub / secondaryCapacitanceFarads;
-  std::array<float, 16> subA{
-      subA00, subA01, subA02, subA03, subA10, subA11, subA12, subA13,
-      primaryCapStep * subA00, primaryCapStep * subA01,
-      1.0f + primaryCapStep * subA02, primaryCapStep * subA03,
-      secondaryCapStep * subA10, secondaryCapStep * subA11,
-      secondaryCapStep * subA12, 1.0f + secondaryCapStep * subA13,
-  };
-  std::array<float, 4> subB{
-      subB0,
-      subB1,
-      primaryCapStep * subB0,
-      secondaryCapStep * subB1,
-  };
-  macroA = {};
-  macroA[0] = 1.0f;
-  macroA[5] = 1.0f;
-  macroA[10] = 1.0f;
-  macroA[15] = 1.0f;
-  macroB = {};
-  for (int step = 0; step < integrationSubsteps; ++step) {
-    std::array<float, 16> nextA{};
-    std::array<float, 4> nextB{};
-    for (int row = 0; row < 4; ++row) {
-      for (int col = 0; col < 4; ++col) {
-        float sum = 0.0f;
-        for (int kIdx = 0; kIdx < 4; ++kIdx) {
-          sum += subA[row * 4 + kIdx] * macroA[kIdx * 4 + col];
-        }
-        nextA[row * 4 + col] = sum;
-      }
-      float sum = subB[row];
-      for (int kIdx = 0; kIdx < 4; ++kIdx) {
-        sum += subA[row * 4 + kIdx] * macroB[kIdx];
-      }
-      nextB[row] = sum;
+  // |H|^2 = 1/(1 + (f/B)^2) = N(c)/D(c) with quadratic N and D, D(0) = 1,
+  // solved through five frequencies by Gaussian elimination.
+  constexpr double fractions[]{0, .1, .2, .3, .5};
+  double m[5][6];
+  for (int row = 0; row < 5; ++row) {
+    const double c = std::cos(2 * kPi * fractions[row]);
+    const double x = fractions[row] * sampleRate / halfBandwidthHz_;
+    const double t = 1 / (1 + x * x);
+    const double values[]{1, c, c * c, -t * c, -t * c * c, t};
+    std::copy(std::begin(values), std::end(values), m[row]);
+  }
+  for (int col = 0; col < 5; ++col) {
+    int pivot = col;
+    for (int row = col + 1; row < 5; ++row)
+      if (std::abs(m[row][col]) > std::abs(m[pivot][col])) pivot = row;
+    std::swap(m[col], m[pivot]);
+    for (int row = 0; row < 5; ++row) {
+      if (row == col) continue;
+      const double f = m[row][col] / m[col][col];
+      for (int k = col; k < 6; ++k) m[row][k] -= f * m[col][k];
     }
-    macroA = nextA;
-    macroB = nextB;
   }
+  double p[5];
+  for (int i = 0; i < 5; ++i) p[i] = m[i][5] / m[i][i];
+
+  const auto numerator = minimumPhaseFactor(p[0], p[1], p[2]);
+  const auto denominator = minimumPhaseFactor(1, p[3], p[4]);
+  // Unity gain at resonance fixes the numerator scale.
+  const double scale = (denominator[0] + denominator[1] + denominator[2]) /
+                       (numerator[0] + numerator[1] + numerator[2]);
+  for (int k = 0; k < 3; ++k) b_[k] = scale * numerator[k];
+  a_ = {denominator[1], denominator[2]};
 }
 
-void CoupledTunedTransformer::clearState() {
-  primaryCurrent = 0.0f;
-  primaryCapVoltage = 0.0f;
-  secondaryCurrent = 0.0f;
-  secondaryCapVoltage = 0.0f;
+std::array<float, 2> TunedRfCircuit::process(float i, float q) {
+  const std::array<double, 2> input{i, q};
+  std::array<float, 2> out{};
+  for (int n = 0; n < 2; ++n) {
+    auto& s = state_[n];
+    const double y = b_[0] * input[n] + s[0];
+    s[0] = b_[1] * input[n] - a_[0] * y + s[1];
+    s[1] = b_[2] * input[n] - a_[1] * y;
+    out[n] = static_cast<float>(y);
+  }
+  return out;
 }
 
-float CoupledTunedTransformer::step(float vin) {
-  float nextPrimaryCurrent = macroA[0] * primaryCurrent +
-                             macroA[1] * secondaryCurrent +
-                             macroA[2] * primaryCapVoltage +
-                             macroA[3] * secondaryCapVoltage + macroB[0] * vin;
-  float nextSecondaryCurrent = macroA[4] * primaryCurrent +
-                               macroA[5] * secondaryCurrent +
-                               macroA[6] * primaryCapVoltage +
-                               macroA[7] * secondaryCapVoltage + macroB[1] * vin;
-  float nextPrimaryCapVoltage = macroA[8] * primaryCurrent +
-                                macroA[9] * secondaryCurrent +
-                                macroA[10] * primaryCapVoltage +
-                                macroA[11] * secondaryCapVoltage + macroB[2] * vin;
-  float nextSecondaryCapVoltage = macroA[12] * primaryCurrent +
-                                  macroA[13] * secondaryCurrent +
-                                  macroA[14] * primaryCapVoltage +
-                                  macroA[15] * secondaryCapVoltage + macroB[3] * vin;
-  primaryCurrent = nextPrimaryCurrent;
-  secondaryCurrent = nextSecondaryCurrent;
-  primaryCapVoltage = nextPrimaryCapVoltage;
-  secondaryCapVoltage = nextSecondaryCapVoltage;
-  assert(std::isfinite(primaryCurrent) && std::isfinite(primaryCapVoltage) &&
-         std::isfinite(secondaryCurrent) &&
-         std::isfinite(secondaryCapVoltage));
-
-  return secondaryCurrent * outputResistanceOhms;
-}
+void TunedRfCircuit::reset() { state_ = {}; }

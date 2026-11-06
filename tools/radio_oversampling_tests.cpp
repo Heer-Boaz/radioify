@@ -232,22 +232,18 @@ void testRfImageRejection() {
       Radio1938 radio;
       radio.init(1, fs, bandwidth, 0);
       // Isolate representation conversion from physical RF/IF selectivity.
-      radio.frontEnd.rfGain = radio.ifStrip.stageGain = radio.mixer.conversionGain = 1;
-      radio.ifStrip.transformerCount = 0;  // Isolate representation conversion.
       const int bin = static_cast<int>(.9 * radio.tuning.tunedBw / fs * kFrames);
       std::vector<float> output(kFrames);
       float c = 1, s = 0;
-      RadioSampleContext ctx{};
       for (int i = -kFrames; i < kFrames; ++i) {
         const float envelope =
             1 + .4f * static_cast<float>(std::sin(2 * kPi * bin * i / kFrames));
         const float rf = envelope * c;
-        ctx.signal.setRealRf(rf);
-        RadioIFStripNode::run(radio, rf, ctx);
-        advanceNormalizedOscillator(radio.ifStrip.sourceDownmixStepCos,
-                                    radio.ifStrip.sourceDownmixStepSin, c, s);
+        const auto converted = convertRealRfToSourceEnvelope(radio, rf);
+        advanceNormalizedOscillator(radio.frontEnd.sourceDownmixStepCos,
+                                    radio.frontEnd.sourceDownmixStepSin, c, s);
         if (i >= 0)
-          output[i] = ctx.signal.detectorInputI;
+          output[i] = converted[0];
       }
       const auto bins = spectrum(output);
       double unwanted = 0;
@@ -256,7 +252,7 @@ void testRfImageRejection() {
           unwanted += std::norm(bins[i]);
       const double alias = 10 * std::log10(unwanted / std::norm(bins[bin]));
       std::cout << "rf_image," << fs << ',' << bandwidth << ",residual_db=" << alias
-                << ",delay_samples=" << radio.ifStrip.sourceEnvelope.delaySamples()
+                << ",delay_samples=" << radio.frontEnd.sourceEnvelope.delaySamples()
                 << '\n';
       check(std::fabs(std::abs(bins[bin]) - .4) < 2e-5,
             "real RF extraction changed wanted sideband amplitude");

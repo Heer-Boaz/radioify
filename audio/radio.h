@@ -338,14 +338,18 @@ struct Radio1938 {
     float afcSignalReferenceVolts = 0.05f;
     float afcTick = 0.0f;
     float tunedBw = 0.0f;
+    // Oscillator offset, including AFC pull.
     float tuneAppliedHz = 0.0f;
+    // Mechanical dial offset only; the ganged RF circuits follow it.
+    float dialAppliedHz = 0.0f;
     float bwAppliedHz = 0.0f;
     float tuneSmoothedHz = 0.0f;
+    float dialSmoothedHz = 0.0f;
     float bwSmoothedHz = 0.0f;
     float safeBwMinHz = 0.0f;
     float safeBwMaxHz = 0.0f;
-    float preBwScale = 0.0f;
-    float postBwScale = 0.0f;
+    // Broadcast-band dial position; sets the RF circuits' loaded bandwidth.
+    float stationFrequencyHz = 1000000.0f;
     float smoothTau = 0.0f;
     float updateEps = 0.0f;
     float sourceCarrierHz = 0.0f;
@@ -382,26 +386,35 @@ struct Radio1938 {
   struct FrontEndNodeState {
     bool secondTunedCircuitEnabled = true;
     uint32_t appliedConfigRevision = 0;
-    float inputHpHz = 0.0f;
+    // Declared antenna-to-mixer-grid voltage gain at resonance.
     float rfGain = 0.0f;
     float avcGainDepth = 0.0f;
-    float selectivityPeakHz = 0.0f;
-    float selectivityPeakQ = 0.0f;
-    float selectivityPeakGainDb = 0.0f;
+    // Ganged circuits aligned to the dial. Shunt loads are the reflected
+    // antenna, RF-plate and grid damping, not physical resistors.
     float antennaInductanceHenries = 0.0f;
-    float antennaCapacitanceFarads = 0.0f;
-    float antennaSeriesResistanceOhms = 0.0f;
-    float antennaLoadResistanceOhms = 0.0f;
+    float antennaCoilQ = 0.0f;
+    float antennaShuntLoadOhms = 0.0f;
     float rfInductanceHenries = 0.0f;
-    float rfCapacitanceFarads = 0.0f;
-    float rfSeriesResistanceOhms = 0.0f;
-    float rfLoadResistanceOhms = 0.0f;
-    Biquad hpf;
-    Biquad preLpfIn;
-    Biquad preLpfOut;
-    Biquad selectivityPeak;
-    SeriesRlcBandpass antennaTank;
-    SeriesRlcBandpass rfTank;
+    float rfCoilQ = 0.0f;
+    float rfShuntLoadOhms = 0.0f;
+    float antennaLoadedQ = 0.0f;
+    float rfLoadedQ = 0.0f;
+    // Frequency the gang is set to; it excludes the AFC oscillator pull.
+    double tunedHz = 0.0;
+    TunedRfCircuit antennaTank;
+    TunedRfCircuit rfTank;
+    // Representation conversion of the real virtual-carrier RF to the source
+    // envelope. Image rejection is independent of receiver selectivity.
+    IQFirLowpass sourceEnvelope;
+    float sourceDownmixStepCos = 1.0f;
+    float sourceDownmixStepSin = 0.0f;
+    float sourceDownmixOscCos = 1.0f;
+    float sourceDownmixOscSin = 0.0f;
+    // Rotation from the source frame to the mechanical dial frame.
+    float dialStepCos = 1.0f;
+    float dialStepSin = 0.0f;
+    float dialOscCos = 1.0f;
+    float dialOscSin = 0.0f;
   } frontEnd;
 
   struct MixerNodeState {
@@ -451,14 +464,6 @@ struct Radio1938 {
     float outputCouplingCoeff = 0.0f;
     float sourceCarrierHz = 0.0f;
     float loFrequencyHz = 0.0f;
-    // Phase used only to strip the real RF source carrier down to a complex
-    // source envelope. This is not the IF tuning phase.
-    float sourceDownmixPhase = 0.0f;
-    float sourceDownmixStepRadians = 0.0f;
-    float sourceDownmixStepCos = 1.0f;
-    float sourceDownmixStepSin = 0.0f;
-    float sourceDownmixOscCos = 1.0f;
-    float sourceDownmixOscSin = 0.0f;
     // Phase used only for the residual tuning offset between the source
     // envelope and the IF tuned center. Do not fold the full LO phase into
     // this baseband state or the detector feed will collapse.
@@ -473,8 +478,6 @@ struct Radio1938 {
     float senseHighHz = 0.0f;
     float demodBandwidthHz = 0.0f;
     float demodTuneOffsetHz = 0.0f;
-    // Conversion image rejection is independent of receiver selectivity.
-    IQFirLowpass sourceEnvelope;
     std::array<CoupledIfTransformer, 3> transformers;
     std::array<float, 2> previousIfInput{};
     std::mt19937 noiseRng{0x1942u};

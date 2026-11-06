@@ -17,6 +17,105 @@ remaining approximations and changed acceptance assumptions are recorded separat
 
 ## Verdict
 
+### Physical RF front end, 2026-11-06
+
+The former front end placed series-RLC "tanks" and helper bandpasses on the
+virtual carrier at a quarter of the sample rate. Their bandwidth was derived
+from the audio bandwidth control (about 58 kHz around a 12 kHz carrier, a Q
+near 0.2), so they were practically transparent and their L/R values had no
+physical meaning. A real filter cannot represent the actual problem: a
+medium-wave tuned circuit is roughly 15-27 kHz wide, comparable with the
+virtual carrier itself, so its negative-frequency image would distort the
+sidebands asymmetrically.
+
+The front end now owns the representation conversion (quadrature downmix and
+image-rejection FIR, moved unchanged from the IF strip) and applies the tuned
+circuits to the complex envelope. Each is a parallel tuned circuit ganged to
+the dial: trimmers align it to `stationFrequencyHz + dialAppliedHz`, the
+mechanical knob position. Philco Magnetic Tuning "changes or shifts the
+oscillator frequency" ([Rider 1937 via Philco service tip 33](https://philcoradio.com/repairbench/tips/svctip33.htm)),
+so AFC pull moves the local oscillator and IF, not the antenna and RF
+circuits. Its loaded Q is
+
+`1/QL = 1/Qcoil + w*L/Rshunt`
+
+with envelope half-bandwidth `w/(2*QL)`. `Rshunt` is the reflected antenna,
+RF-plate and grid damping, not a discrete resistor. A fixed coil Q therefore
+gives a wider passband higher on the dial, as in a real receiver. Specimen
+drift changes coil loss, not alignment. The resonance gain `rfGain` is a
+declared antenna-to-mixer-grid gain. It keeps the former effective level at
+the default 5.5 kHz control position (0.237 / 0.509, measured from the former
+discretized tanks). The former coupling of RF gain to the bandwidth control
+is removed.
+
+| Prior at 1 MHz (`stationFrequencyHz` default) | Typical set | Philco |
+| --- | ---: | ---: |
+| Tuned circuits before the converter | antenna | antenna + RF stage |
+| Inductance | 230 uH | 230 / 230 uH |
+| Unloaded coil Q | 80 | 100 / 100 |
+| Reflected shunt load | 100 kohms | 150 / 250 kohms |
+| Loaded Q | 37 | 51 / 63 |
+| Front-end response at +/-5 kHz | -0.56 dB | -2.47 dB |
+
+These coil and loading values are **priors** for period broadcast coils, not
+measured 38-12 or 37-116 windings. The two-circuit console is more selective
+in RF than the single-circuit table set; its expanded IF partly offsets that.
+The dial position is limited to 530-1710 kHz.
+
+A first-order digital filter cannot follow this response once the half-
+bandwidth is a sizeable fraction of the envelope rate: the first version, a
+bilinear one-pole prewarped at 5 kHz, was accurate within +/-6 kHz but lost
+about 1 dB too much through both Philco circuits at the 8.8 kHz source edge
+of 44.1 kHz playback. Each circuit is now a minimum-phase biquad per
+quadrature whose squared magnitude is matched to `1/(1 + (f/B)^2)` at DC,
+.1, .2, .3 fs and Nyquist (a 5x5 solve and spectral factorisation at
+configuration time). Its phase differs from the circuit by an almost
+constant sub-sample advance, which delays all sidebands alike.
+
+`radio_circuit_model_tests` sweeps 530/1000/1710 kHz, two inductances, two
+coil Qs and two loads at 44.1/48/96 kHz over the widest source band plus
+10 kHz of detuning (capped at .3 fs; 13.2, 14.4 and 20 kHz). Against the
+narrowband envelope it implements, the maximum error is **0.004 dB**, and
+**0.33 dB** up to .45 fs. Against the full parallel RLC impedance (series coil
+loss, aligned capacitor, shunt load) it is **0.17 dB**; that remainder is the
+real circuit's asymmetry about resonance at 530 kHz and 20 kHz offset, which
+the symmetric envelope omits. After removing the common delay the phase
+residual is below 0.9 degrees. Both Philco circuits together at the 44.1 kHz
+source edge are within 0.075 dB of the full circuit, again the circuit's own
+asymmetry. The test also checks that heavier loading and a higher dial
+frequency broaden the response, that the circuits follow a 3 kHz detuning,
+that centred sidebands stay symmetric, that the console is more selective
+than the table set, that AFC pull moves the oscillator but not the RF
+circuits, and that a bypassed front end still delivers real RF and baseband
+I/Q to the rest of the receiver.
+
+Removed settings: `frontend.inputHpHz`, `selectivityPeakHz/Q/GainDb`,
+`antennaCapacitanceFarads`, `antennaSeriesResistanceOhms`,
+`antennaLoadResistanceOhms`, the corresponding `rf*` fields and
+`tuning.preBwScale/postBwScale` are rejected as unknown settings. New:
+`frontend.antennaCoilQ`, `antennaShuntLoadOhms`, `rfCoilQ`, `rfShuntLoadOhms`
+and `tuning.stationFrequencyHz`. `processIqBaseband` now enters at the front
+end, so baseband input also passes the tuned circuits. When a signal's entry
+pass is disabled, the pipeline now starts at the next enabled pass in the
+full dependency order (solved over enabled and disabled passes, so disabling a
+pass never reorders the rest); before, a disabled entry pass skipped the
+entire receiver and returned the raw input. `audio_graph_tests` covers this.
+
+Nominal reference harness (48 kHz, 5 kHz control, .12 V RMS carrier, .012 noise),
+before -> after:
+
+| Metric | Typical set | Philco |
+| --- | ---: | ---: |
+| Terminal SINAD, dB | 20.32 -> 20.34 | 34.82 -> 35.05 |
+| Acoustic SINAD, dB | 17.30 -> 17.33 | 29.46 -> 30.18 |
+| Speaker voltage / rated reference | .278 -> .273 | .659 -> .623 |
+
+The harness runs at 5 kHz, where the former tanks had slightly more gain
+than at the 5.5 kHz playback default; that explains the small level changes.
+All 106 CTests pass. The RF section still has no other stations, so image and
+adjacent-channel rejection are not exercised beyond impulses and the
+co-channel carrier.
+
 ### Circuit corrections and remaining limits, 2026-11-06
 
 This section supersedes the November 5 findings below for IF selectivity,
@@ -59,9 +158,10 @@ peaks at 465 and 475 kHz. The component losses, coupling and insertion gain
 above are **equivalent-circuit priors**, not measured Philco winding values
 or a recovered factory selectivity curve. The console represents the expanded
 setting. Its wider response is therefore deliberately less affected by a
-4.5 kHz offset than the small set. The RF front end, gain/AVC law and IF
-amplification remain reduced-order models; this change does not turn them into
-a full antenna-to-detector circuit solution.
+4.5 kHz offset than the small set. The gain/AVC law and IF amplification
+remain reduced-order models; this change does not turn them into a full
+antenna-to-detector circuit solution. The RF front end is described in the
+following section.
 
 `radio_circuit_model_tests` compares the envelope transformer against an
 independent complex impedance solution of the full RF L/C/mutual-inductance

@@ -17,8 +17,7 @@ void applyPhilco37116Preset(Radio1938& radio) {
 
   radio.tuning.safeBwMinHz = 2400.0f;
   radio.tuning.safeBwMaxHz = 9000.0f;
-  radio.tuning.preBwScale = 1.00f;
-  radio.tuning.postBwScale = 1.00f;
+  radio.tuning.stationFrequencyHz = 1000000.0f;
   radio.tuning.smoothTau = 0.05f;
   radio.tuning.updateEps = 0.25f;
   radio.tuning.magneticTuningEnabled = true;
@@ -30,17 +29,20 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.tuning.afcDeadband = 0.015f;
   radio.tuning.afcResponseMs = 240.0f;
 
+  // Antenna circuit, 6K7 RF stage and second tuned circuit before the 6L7.
+  // Coil Q and the reflected antenna/plate loads are priors for a good 1937
+  // broadcast coil, not measured Philco windings. At 1 MHz they give loaded
+  // Q near 51 and 63. The resonance gain keeps the former effective level at
+  // the default 5.5 kHz control position; it is not a measured antenna step-up.
   radio.frontEnd.secondTunedCircuitEnabled = true;
-  radio.frontEnd.inputHpHz = 115.0f;
-  radio.frontEnd.rfGain = 1.0f;
+  radio.frontEnd.rfGain = 0.237f;
   radio.frontEnd.avcGainDepth = 0.18f;
-  radio.frontEnd.selectivityPeakHz = 0.0f;
-  radio.frontEnd.selectivityPeakQ = 0.707f;
-  radio.frontEnd.selectivityPeakGainDb = 0.0f;
-  radio.frontEnd.antennaInductanceHenries = 0.011f;
-  radio.frontEnd.antennaLoadResistanceOhms = 2200.0f;
-  radio.frontEnd.rfInductanceHenries = 0.016f;
-  radio.frontEnd.rfLoadResistanceOhms = 3300.0f;
+  radio.frontEnd.antennaInductanceHenries = 230e-6f;
+  radio.frontEnd.antennaCoilQ = 100.0f;
+  radio.frontEnd.antennaShuntLoadOhms = 150000.0f;
+  radio.frontEnd.rfInductanceHenries = 230e-6f;
+  radio.frontEnd.rfCoilQ = 100.0f;
+  radio.frontEnd.rfShuntLoadOhms = 250000.0f;
 
   radio.mixer.rfGridDriveVolts = 1.0f;
   radio.mixer.loGridDriveVolts = 18.0f;
@@ -354,8 +356,7 @@ void applyTypical1930sPreset(Radio1938& radio) {
 
   radio.tuning.safeBwMinHz = 2200.0f;
   radio.tuning.safeBwMaxHz = 6500.0f;
-  radio.tuning.preBwScale = 1.0f;
-  radio.tuning.postBwScale = 1.0f;
+  radio.tuning.stationFrequencyHz = 1000000.0f;
   radio.tuning.smoothTau = 0.05f;
   radio.tuning.updateEps = 0.25f;
   radio.tuning.magneticTuningEnabled = false;
@@ -366,18 +367,19 @@ void applyTypical1930sPreset(Radio1938& radio) {
 
   // The 38-12 has no separate RF-amplifier stage. Its tuned antenna secondary
   // feeds the 6A7 converter directly, so the second RF tank used by the
-  // high-end receiver is explicitly absent.
+  // high-end receiver is explicitly absent. A plainer coil and the heavier
+  // coupling of a short household antenna give loaded Q near 37 at 1 MHz
+  // (priors, not measured 38-12 windings). The resonance gain keeps the
+  // former effective level at the default 5.5 kHz control position.
   radio.frontEnd.secondTunedCircuitEnabled = false;
-  radio.frontEnd.inputHpHz = 180.0f;
-  radio.frontEnd.rfGain = 0.86f;
+  radio.frontEnd.rfGain = 0.509f;
   radio.frontEnd.avcGainDepth = 0.24f;
-  radio.frontEnd.selectivityPeakHz = 0.0f;
-  radio.frontEnd.selectivityPeakQ = kRadioBiquadQ;
-  radio.frontEnd.selectivityPeakGainDb = 0.0f;
-  radio.frontEnd.antennaInductanceHenries = 0.011f;
-  radio.frontEnd.antennaLoadResistanceOhms = 1800.0f;
-  radio.frontEnd.rfInductanceHenries = 0.011f;
-  radio.frontEnd.rfLoadResistanceOhms = 1800.0f;
+  radio.frontEnd.antennaInductanceHenries = 230e-6f;
+  radio.frontEnd.antennaCoilQ = 80.0f;
+  radio.frontEnd.antennaShuntLoadOhms = 100000.0f;
+  radio.frontEnd.rfInductanceHenries = 0.0f;
+  radio.frontEnd.rfCoilQ = 0.0f;
+  radio.frontEnd.rfShuntLoadOhms = 0.0f;
 
   radio.mixer.rfGridDriveVolts = 0.82f;
   radio.mixer.loGridDriveVolts = 16.0f;

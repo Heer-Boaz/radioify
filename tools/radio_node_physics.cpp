@@ -1211,15 +1211,24 @@ std::vector<TestRow> runRfPhysics(const HarnessConfig& config) {
     Radio1938 radio = makeNodeFixture(config, 0.0f, {PassId::FrontEnd});
     double tunedRms = runFrontEndRms(radio, radio.tuning.sourceCarrierHz, 0.0f);
     Radio1938 radioDetuned = makeNodeFixture(config, 0.0f, {PassId::FrontEnd});
-    float detunedSignalHz = std::min(
-        radioDetuned.tuning.sourceCarrierHz + 2.0f * radioDetuned.tuning.tunedBw,
-        0.45f * radioDetuned.sampleRate);
-    double detunedRms =
-        runFrontEndRms(radioDetuned, detunedSignalHz, 0.0f);
-    addPredicate(rows, "FrontEnd", "tuned_response_exceeds_detuned",
-                 tunedRms > 1.50 * std::max(detunedRms, 1e-12),
-                 tunedRms / std::max(detunedRms, 1e-12),
-                 "tuned/detuned RMS ratio");
+    // Stay inside the source conversion passband so the ratio measures only
+    // the ganged tuned circuits, then compare with their loaded-Q response.
+    const float detunedOffsetHz = std::min(1.5f * radioDetuned.tuning.tunedBw,
+                                           0.8f * radioDetuned.tuning.sourceBandwidthHz);
+    double detunedRms = runFrontEndRms(
+        radioDetuned, radioDetuned.tuning.sourceCarrierHz + detunedOffsetHz, 0.0f);
+    const auto tankMagnitude = [&](const TunedRfCircuit& tank) {
+      const double x = detunedOffsetHz / tank.halfBandwidthHz();
+      return 1.0 / std::sqrt(1.0 + x * x);
+    };
+    double expectedDetuned = tankMagnitude(radio.frontEnd.antennaTank);
+    if (radio.frontEnd.secondTunedCircuitEnabled)
+      expectedDetuned *= tankMagnitude(radio.frontEnd.rfTank);
+    const double detunedRatio = detunedRms / std::max(tunedRms, 1e-12);
+    addPredicate(rows, "FrontEnd", "detuned_response_matches_loaded_q",
+                 std::fabs(20.0 * std::log10(detunedRatio / expectedDetuned)) < 0.5,
+                 detunedRatio / expectedDetuned,
+                 "measured/analytic ganged tuned-circuit response off resonance");
 
     Radio1938 radioAvcLow = makeNodeFixture(config, 0.0f, {PassId::FrontEnd});
     Radio1938 radioAvcHigh = makeNodeFixture(config, 0.0f, {PassId::FrontEnd});
