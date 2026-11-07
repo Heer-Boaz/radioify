@@ -742,10 +742,23 @@ states in a fixed order: unfiltered audio, `typical-1930s`,
 `philco-37-116`, then unfiltered audio again. Receiver choice remains separate
 from the default `everyday-1938` reception environment.
 
-`typical-1930s` is not claimed to be a statistical average of every radio sold
-during the decade. It is a representative mass-market reconstruction anchored
-to the Philco 38-12C, a modest second-or-third household set. The period service
-and parts data establish:
+`typical-1930s` stands for the compact, inexpensive AC table set on which a
+large share of US listeners heard ordinary network programmes in the late
+1930s. It is anchored to the Philco 38-12C (1938 line, introduced June 1937;
+$22.50; 91,800 made). It is not a statistical average of every radio in use,
+and its sound is not the average sound of the decade.
+
+Table sets were the larger part of the market, not a niche. Radio Retailing's
+domestic figures count 3,578,612 table sets against 2,636,872 consoles in
+1937, and 3,573,400 against 1,107,300 in 1938; radio-phonographs and auto sets
+are counted separately. "Table" also covers sets larger than the 38-12C, so
+these figures support the category, not a five-inch speaker as the national
+norm. Philco sold the 38-12 as a "second or third" set for the bedroom or
+kitchen. That is the maker's sales positioning, not evidence of how buyers used
+it; in many homes it may have been the only radio. The profile does not
+represent older sets still in use or battery sets on farms, and as a specific
+model it fits 1937-1940 rather than the earlier 1930s. The period service and
+parts data establish:
 
 - five tubes and a 470 kHz IF, without a separate RF-amplifier tube;
 - one type 41 output pentode rather than a push-pull pair;
@@ -828,6 +841,7 @@ Sources:
 - [Philco speaker table](https://philcoradio.com/library/index.php/parts/speakers/)
 - [Philco volume-control table](https://philcoradio.com/library/index.php/parts/volume-controls/)
 - [Philco 1938 Radio Gallery](https://philcoradio.com/gallery2/1938a/)
+- [Radio Retailing, January 1939, p. 11, business at a glance](https://www.worldradiohistory.com/Archive-Radio-Retailing/30s/Radio-Retailing-1939-01.pdf)
 - [RCA Receiving Tube Manual RC-13, 1937](https://www.worldradiohistory.com/Archive-Catalogs/RCA/RCA-Receiving-Tube-Manual-1937.pdf)
 - [Philco acoustic-clarifier patent US2059929A](https://patents.google.com/patent/US2059929A/en)
 - [Philco Model 116 instructions](https://philcoradio.com/library/wp-content/uploads/2019/12/Philco-116X-Instructions.pdf)
