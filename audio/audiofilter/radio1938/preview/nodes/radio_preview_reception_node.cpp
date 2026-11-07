@@ -73,6 +73,11 @@ void validateReceptionConfig(const RadioReceptionConfig& config,
   assert(config.skywaveDelayMaxMs * 0.001f * sampleRate <=
          static_cast<float>(Radio1938::IqInputState::kEnvelopeHistory - 4));
   assert(config.seed != 0u);
+  if (config.externalNoiseEnabled) {
+    requirePositiveFinite(config.groundwaveFieldVoltsPerMeter);
+    requirePositiveFinite(config.groundwaveGain);
+    assert(config.externalNoiseSeed != 0u);
+  }
 
   if (!config.intermittentCarrierEnabled) return;
   requireNonNegativeFinite(config.intermittentWaitMinSeconds);
@@ -120,6 +125,33 @@ void configureReceptionRuntime(RadioPreviewPipeline& preview) {
   runtime.intermittentReleaseCoefficient = std::exp(
       -1.0f /
       (runtime.sampleRate * config.intermittentReleaseMs * 0.001f));
+  runtime.externalNoiseSigma = 0.0f;
+  if (config.externalNoiseEnabled) {
+    // White RF noise of one-sided density N0 = 2 sigma^2 / fs against a
+    // carrier of power Vrms^2 at unit path gain. The receiver's own
+    // selectivity sets the bandwidth that reaches the detector.
+    const double cn0DbHz = radioReceptionCarrierToNoiseDensityDbHz(
+        config, preview.radio->tuning.stationFrequencyHz);
+    runtime.externalNoiseSigma = static_cast<float>(
+        preview.ingress->receivedCarrierRmsVolts *
+        std::sqrt(0.5 * runtime.sampleRate) * std::pow(10.0, -cn0DbHz / 20.0));
+  }
+}
+
+float nextGaussian(RadioPreviewPipeline::RadioReceptionRuntime& runtime) {
+  if (runtime.externalNoiseSpareValid) {
+    runtime.externalNoiseSpareValid = false;
+    return runtime.externalNoiseSpare;
+  }
+  // Box-Muller; the 24-bit uniform is shifted off zero for the logarithm.
+  const double u1 = (static_cast<double>(nextRandom(runtime.externalNoiseState) >> 8u) + 0.5) /
+                    16777216.0;
+  const double u2 = static_cast<double>(nextUnit(runtime.externalNoiseState));
+  const double radius = std::sqrt(-2.0 * std::log(u1));
+  const double angle = 6.28318530717958647692 * u2;
+  runtime.externalNoiseSpare = static_cast<float>(radius * std::sin(angle));
+  runtime.externalNoiseSpareValid = true;
+  return static_cast<float>(radius * std::cos(angle));
 }
 
 void scheduleIntermittentWait(
@@ -238,11 +270,21 @@ float advanceIntermittentCarrier(
 
 }  // namespace
 
+std::array<float, 2> radioPreviewInitialCarrierGain(const RadioPreviewPipeline& preview) {
+  const auto& config = preview.ingress->reception;
+  if (!config.enabled) return {1.0f, 0.0f};
+  // Groundwave plus the skywave phasor as advanceSkywave first emits it.
+  const auto& runtime = preview.receptionRuntime;
+  return {config.groundwaveGain + config.skywaveGain * static_cast<float>(runtime.skyOscCos),
+          config.skywaveGain * static_cast<float>(runtime.skyOscSin)};
+}
+
 void RadioPreviewReceptionNode::init(RadioPreviewPipeline& preview,
                                      RadioPreviewInitContext&) {
   assert(preview.radio);
   assert(preview.ingress);
-  if (!preview.ingress->reception.enabled) return;
+  const auto& config = preview.ingress->reception;
+  if (!config.enabled && !config.externalNoiseEnabled) return;
   configureReceptionRuntime(preview);
 }
 
@@ -250,10 +292,15 @@ void RadioPreviewReceptionNode::reset(RadioPreviewPipeline& preview) {
   assert(preview.ingress);
   auto& runtime = preview.receptionRuntime;
   const auto& config = preview.ingress->reception;
-  if (!config.enabled) {
+  if (!config.enabled && !config.externalNoiseEnabled) {
     runtime = {};
     return;
   }
+  // The noise has its own stream so the fading realisation of a seed is
+  // unchanged by it.
+  runtime.externalNoiseState = config.externalNoiseSeed;
+  runtime.externalNoiseSpareValid = false;
+  if (!config.enabled) return;
   runtime.randomState = config.seed;
   runtime.skyAmplitudeState = 0.0;
   runtime.skyDopplerState = 0.0;
@@ -293,15 +340,17 @@ float RadioPreviewReceptionNode::run(RadioPreviewPipeline& preview,
   assert(ctx.reception);
   auto& reception = *ctx.reception;
   const auto& config = preview.ingress->reception;
-  if (!config.enabled) {
+  auto& runtime = preview.receptionRuntime;
+  if (config.enabled) {
+    advanceSkywave(runtime, config, reception);
+    reception.additiveRf =
+        config.intermittentCarrierEnabled
+            ? advanceIntermittentCarrier(runtime, config)
+            : 0.0f;
+  } else {
     reception = {};
-    return y;
   }
-
-  advanceSkywave(preview.receptionRuntime, config, reception);
-  reception.additiveRf =
-      config.intermittentCarrierEnabled
-          ? advanceIntermittentCarrier(preview.receptionRuntime, config)
-          : 0.0f;
+  if (config.externalNoiseEnabled)
+    reception.additiveRf += runtime.externalNoiseSigma * nextGaussian(runtime);
   return y;
 }

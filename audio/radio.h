@@ -837,9 +837,13 @@ struct Radio1938 {
   void setCalibrationEnabled(bool enabled);
   void resetCalibration();
   float resolvedInputCarrierHz() const;
+  // Settle the receiver on an unmodulated carrier arriving with the given
+  // complex path gain, so programme starts without a turn-on transient.
   void warmInputCarrier(float receivedCarrierRmsVolts,
-                        uint32_t warmupFrames = 16384u);
-  void resetAfterCarrierWarmup();
+                        uint32_t warmupFrames = 16384u,
+                        float pathGainI = 1.0f,
+                        float pathGainQ = 0.0f);
+  void clearWarmupObservations();
   void init(int ch, float sr, float bw, float noise);
   void reset();
   void processIfReal(float* samples, uint32_t frames);

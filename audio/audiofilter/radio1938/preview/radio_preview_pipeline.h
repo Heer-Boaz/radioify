@@ -10,6 +10,7 @@
 #include "radio_preview_config.h"
 #include "../models/radio_room.h"
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -81,6 +82,8 @@ using RadioPreviewLifecycle =
                           RadioPreviewPassId>;
 
 RadioPreviewGraph makeRadioPreviewGraph();
+// Complex path gain of the unmodulated carrier at the first reception sample.
+std::array<float, 2> radioPreviewInitialCarrierGain(const RadioPreviewPipeline& preview);
 RadioPreviewLifecycle makeRadioPreviewLifecycle();
 
 void beginRadioPreviewPipelineBlock(RadioPreviewPipeline& preview,
@@ -118,6 +121,10 @@ struct RadioPreviewPipeline {
     float intermittentOscSin = 0.0f;
     float intermittentStepCos = 1.0f;
     float intermittentStepSin = 0.0f;
+    uint32_t externalNoiseState = 0;
+    float externalNoiseSigma = 0.0f;
+    float externalNoiseSpare = 0.0f;
+    bool externalNoiseSpareValid = false;
   } receptionRuntime;
 
   Radio1938* radio = nullptr;

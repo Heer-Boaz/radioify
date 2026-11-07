@@ -312,6 +312,9 @@ void expectStrongLocalReceptionIsTransparent() {
   RadioAmIngressConfig ingress;
   ingress.reception = radioReceptionConfigForProfile(
       RadioReceptionProfile::StrongLocal);
+  // Strong local reception has no propagation effects; its external noise
+  // is checked separately.
+  ingress.reception.externalNoiseEnabled = false;
   RadioPreviewConfig config;
   RadioPreviewPipeline preview;
   preview.initialize(radio, ingress, config, kSampleRate);
@@ -348,6 +351,61 @@ void expectStrongLocalReceptionIsTransparent() {
   }
 }
 
+// FCC 1939 primary-service fields against ITU-R P.372 median man-made noise
+// at 1 MHz: residential 72.5 dB and rural 67.2 dB above kT0b, eq. (7).
+void expectExternalNoiseFollowsFieldAndNoiseFigure() {
+  struct Case {
+    RadioReceptionProfile profile;
+    double expectedDbHz;
+  };
+  // 20 log10(uV/m at unit path gain) - (Fa - 95.5).
+  const Case cases[] = {
+      {RadioReceptionProfile::Everyday1938,
+       20.0 * std::log10(2000.0 / 0.92) - (72.5 - 95.5)},
+      {RadioReceptionProfile::StrongLocal,
+       20.0 * std::log10(10000.0) - (72.5 - 95.5)},
+      {RadioReceptionProfile::NightSkywave,
+       20.0 * std::log10(500.0 / 0.60) - (67.2 - 95.5)},
+  };
+  for (const auto& item : cases) {
+    const RadioReceptionConfig reception = radioReceptionConfigForProfile(item.profile);
+    const double cn0 = radioReceptionCarrierToNoiseDensityDbHz(reception, 1e6);
+    if (!reception.externalNoiseEnabled || std::fabs(cn0 - item.expectedDbHz) > 1e-3)
+      fail("external noise C/N0 does not follow the FCC field and P.372 noise: " +
+           std::to_string(cn0) + " vs " + std::to_string(item.expectedDbHz));
+    // The generated RF noise must have that density at every host rate:
+    // one-sided N0 = 2 var / fs against carrier power Vrms^2.
+    for (float rate : {44100.0f, 48000.0f, 96000.0f}) {
+      Radio1938 radio;
+      radio.init(1, rate, kBandwidthHz, 0.0f);
+      RadioAmIngressConfig ingress;
+      ingress.reception = reception;
+      ingress.reception.enabled = false;
+      RadioPreviewPipeline preview;
+      preview.initialize(radio, ingress, RadioPreviewConfig{}, rate);
+      RadioPreviewSampleContext ctx{};
+      RadioAmReceptionSample sample;
+      ctx.reception = &sample;
+      double sumSq = 0.0;
+      constexpr uint32_t kSamples = 400000u;
+      for (uint32_t i = 0; i < kSamples; ++i) {
+        RadioPreviewReceptionNode::run(preview, 0.0f, ctx);
+        sumSq += static_cast<double>(sample.additiveRf) * sample.additiveRf;
+      }
+      const double n0 = 2.0 * (sumSq / kSamples) / rate;
+      const double measured =
+          10.0 * std::log10(double(ingress.receivedCarrierRmsVolts) *
+                            ingress.receivedCarrierRmsVolts / n0);
+      // Propagation disabled: the carrier arrives at unit path gain.
+      const double generated =
+          radioReceptionCarrierToNoiseDensityDbHz(ingress.reception, 1e6);
+      if (std::fabs(measured - generated) > 0.05)
+        fail("generated RF noise density is wrong: " + std::to_string(measured) +
+             " dB-Hz, expected " + std::to_string(generated));
+    }
+  }
+}
+
 void expectEverydayReceptionProducesSlowCoherentFading() {
   Radio1938 radio;
   radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
@@ -358,6 +416,7 @@ void expectEverydayReceptionProducesSlowCoherentFading() {
   receptionConfig.skywaveDopplerMaxHz = 0.5f;
   receptionConfig.skywaveDopplerWanderRmsHz = 0.0f;
   receptionConfig.intermittentCarrierEnabled = false;
+  receptionConfig.externalNoiseEnabled = false;
   RadioPreviewConfig config;
   RadioPreviewPipeline preview;
   preview.initialize(radio, ingress, config, kSampleRate);
@@ -396,6 +455,8 @@ void expectIntermittentCarrierIsRareRfInsteadOfPermanentWhistle() {
   Radio1938 radio;
   radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
   RadioAmIngressConfig ingress;
+  // Only the interfering carrier is under test, not the broadband noise.
+  ingress.reception.externalNoiseEnabled = false;
   RadioPreviewConfig config;
   RadioPreviewPipeline preview;
   preview.initialize(radio, ingress, config, kSampleRate);
@@ -852,6 +913,7 @@ int main() {
   expectReceptionProfileContract();
   expectReceptionSidecarShapesRf();
   expectStrongLocalReceptionIsTransparent();
+  expectExternalNoiseFollowsFieldAndNoiseFigure();
   expectEverydayReceptionProducesSlowCoherentFading();
   expectDelayedSkywaveFadesSelectively();
   expectIntermittentCarrierIsRareRfInsteadOfPermanentWhistle();

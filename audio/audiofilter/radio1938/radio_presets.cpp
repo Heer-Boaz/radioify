@@ -9,7 +9,9 @@ namespace {
 
 void applyPhilco37116Preset(Radio1938& radio) {
   radio.identity.driftDepth = 0.06f;
-  radio.globals.ifNoiseMix = 0.22f;
+  // Receiver noise is negligible at medium frequencies: the external noise
+  // at the antenna (reception profile) is tens of dB above kT0b.
+  radio.globals.ifNoiseMix = 0.0f;
   radio.globals.inputPad = 1.0f;
   radio.globals.enableAutoLevel = false;
   radio.globals.autoTargetDb = -21.0f;
@@ -240,9 +242,13 @@ void applyPhilco37116Preset(Radio1938& radio) {
                    radio.power.outputTubePlateCurrentAmps *
                        (0.5f * radio.power.outputTransformerPrimaryResistanceOhms) -
                    radio.power.outputTubePlateDcVolts) < 1.0f);
-  // Downstream listening level: reserve headroom for the period upper-mid
-  // response rise. This does not change the electrical power reference.
-  radio.output.digitalMakeupGain = 0.25f;
+  // Downstream listening level, not electrical drive: the largest programme
+  // peak over a set of loudly mastered music tracks (all three reception
+  // profiles, room on) reaches about -1 dBFS; the steady full-modulation
+  // reference tone stays at 0.49 of full scale. Programme loudness then stays
+  // about 8.5 dB below the unfiltered source; closing that gap would need
+  // limiting.
+  radio.output.digitalMakeupGain = 0.35f;
 
   radio.globals.oversampleFactor = 2.0f;
   radio.globals.oversampleCutoffFraction = 0.45f;
@@ -379,7 +385,9 @@ void applyTypical1930sPreset(Radio1938& radio) {
   // Philco documented a five-tube 470 kHz superhet, a single 41 output
   // pentode, 2 W audio output, and the five-inch BO-1 field-coil speaker.
   radio.identity.driftDepth = 0.09f;
-  radio.globals.ifNoiseMix = 0.27f;
+  // Receiver noise is negligible at medium frequencies: the external noise
+  // at the antenna (reception profile) is tens of dB above kT0b.
+  radio.globals.ifNoiseMix = 0.0f;
   radio.globals.inputPad = 1.0f;
   radio.globals.enableAutoLevel = false;
   radio.globals.autoTargetDb = -21.0f;
@@ -595,9 +603,11 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.power.outputLoadResistanceOhms = 3.5f;
   radio.power.nominalOutputPowerWatts = 0.0f;
   // Normal programme listening is below the 41's 2 W / roughly 10% distortion
-  // rating. Calibrate listening level after the physical speaker reference,
-  // allowing headroom for the complete acoustic curve, including 2-3 kHz.
-  radio.output.digitalMakeupGain = 0.60f;
+  // rating. Listening level after the physical speaker reference, bounded by
+  // the steady 1 kHz full-modulation reference tone (0.94 of full scale, no
+  // clipping). Music peaks stay about 4 dB lower; programme loudness stays
+  // about 14.5 dB below the unfiltered source.
+  radio.output.digitalMakeupGain = 0.73f;
 
   radio.globals.oversampleFactor = 2.0f;
   radio.globals.oversampleCutoffFraction = 0.45f;

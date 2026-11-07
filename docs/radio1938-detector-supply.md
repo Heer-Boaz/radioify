@@ -53,7 +53,7 @@ Nominal IF gain is now 20 / 46, with physical volume positions .05 / .25.
 These remain gain-staging priors. The normalized AVC reference is
 `mixer.avcGridDriveVolts / 1.25`, so one measured AVC volt imposes one volt of
 additional mixer-grid bias. Previously the normalization multiplied it by
-roughly six. Downstream Philco digital makeup is .25 to retain listening level;
+roughly six. Downstream Philco digital makeup (now .35, see the realism audit) sets listening level;
 this does not increase electrical tube drive.
 
 ## Supply

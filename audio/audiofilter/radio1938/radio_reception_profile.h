@@ -52,7 +52,32 @@ struct RadioReceptionConfig {
   float intermittentReleaseMs = 1800.0f;
 
   uint32_t seed = 0x19380716u;
+
+  // External radio noise at the antenna. At medium frequencies a receiver is
+  // limited by man-made and atmospheric noise picked up with the signal, not
+  // by its own tubes: ITU-R P.372 puts man-made noise at 1 MHz 54-77 dB above
+  // kT0b. Both the carrier field and the noise field act on the same
+  // antenna, so their ratio sets the carrier-to-noise density at the receiver
+  // input whatever its absolute sensitivity. Independent of `enabled`, which
+  // controls only the propagation effects above.
+  bool externalNoiseEnabled = true;
+  // RMS groundwave carrier field. Default: the lower limit of the FCC 1939
+  // primary service field for city residential areas (2-10 mV/m), the field
+  // at which the usual noise of such areas is no longer objectionable.
+  float groundwaveFieldVoltsPerMeter = 2e-3f;
+  // ITU-R P.372 Table 1 median man-made noise, Fam = c - d log10(f / 1 MHz)
+  // dB above kT0b (valid 0.3-250 MHz, short vertical monopole). Default:
+  // residential. The coefficients come from 1970s measurements.
+  float manMadeNoiseC = 72.5f;
+  float manMadeNoiseD = 27.7f;
+  uint32_t externalNoiseSeed = 0x1938a7e5u;
 };
+
+// Carrier-to-noise density ratio (dB-Hz) of the carrier at unit path gain,
+// whose field is groundwaveFieldVoltsPerMeter / groundwaveGain (the
+// groundwave field itself when propagation effects are disabled).
+double radioReceptionCarrierToNoiseDensityDbHz(const RadioReceptionConfig& config,
+                                               double stationFrequencyHz);
 
 std::string_view radioReceptionProfileName(RadioReceptionProfile profile);
 bool parseRadioReceptionProfile(std::string_view name,

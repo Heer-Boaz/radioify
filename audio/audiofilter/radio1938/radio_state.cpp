@@ -11,9 +11,11 @@ float Radio1938::resolvedInputCarrierHz() const {
 }
 
 void Radio1938::warmInputCarrier(float receivedCarrierRmsVolts,
-                                 uint32_t warmupFrames) {
+                                 uint32_t warmupFrames,
+                                 float pathGainI,
+                                 float pathGainQ) {
   if (warmupFrames == 0u) {
-    resetAfterCarrierWarmup();
+    clearWarmupObservations();
     return;
   }
 
@@ -36,24 +38,27 @@ void Radio1938::warmInputCarrier(float receivedCarrierRmsVolts,
     const uint32_t batch =
         std::min<uint32_t>(remaining, batchFrames);
     for (uint32_t frame = 0; frame < batch; ++frame) {
-      writeMonoToInterleaved(warmup.data(), frame, channels,
-                             carrierPeak * carrierCos);
+      writeMonoToInterleaved(
+          warmup.data(), frame, channels,
+          carrierPeak * (pathGainI * carrierCos - pathGainQ * carrierSin));
       advanceNormalizedOscillator(carrierStepCos, carrierStepSin, carrierCos,
                                   carrierSin);
     }
     processIfReal(warmup.data(), batch);
     remaining -= batch;
   }
+  // The transmitter has been sending this carrier all along, so a delayed
+  // propagation path starts with it too.
+  iqInput.envelopeHistory.fill(carrierPeak);
 
-  resetAfterCarrierWarmup();
+  clearWarmupObservations();
 }
 
-void Radio1938::resetAfterCarrierWarmup() {
-  demod.am.avcEnv = 0.0f;
-  demod.am.afcError = 0.0f;
-  controlSense.reset();
-  controlBus.reset();
-  tuning.afcCorrectionHz = 0.0f;
+void Radio1938::clearWarmupObservations() {
+  // The warmup leaves the receiver settled on the carrier, including its
+  // AVC, AFC and supply loops. Clearing those would restart the turn-on
+  // transient (a thump as AVC recharges from full gain), so only the
+  // observations of the warmup itself are discarded.
   diagnostics.reset();
   if (calibration.enabled) {
     resetCalibration();

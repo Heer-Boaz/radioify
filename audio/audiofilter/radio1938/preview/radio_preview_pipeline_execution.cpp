@@ -133,7 +133,8 @@ void RadioPreviewPipeline::runBlock(Radio1938& radioRef,
   radioRef.processAmAudio(filteredScratch.data(), filteredScratch.data(), frames,
                           ingress->receivedCarrierRmsVolts,
                           ingress->modulationIndex,
-                          ingress->reception.enabled
+                          ingress->reception.enabled ||
+                                  ingress->reception.externalNoiseEnabled
                               ? receptionScratch.data()
                               : nullptr);
 

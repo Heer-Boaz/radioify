@@ -190,6 +190,83 @@ and the 38-12's simple AVC at 1.2 V. Fades of the received carrier are
 therefore compensated less than in a real receiver. Correcting it needs
 documented sensitivity data and a rebalanced gain chain.
 
+**Listening level against the unfiltered source.** Rendered with
+`render-radio` (`everyday-1938`, room on), ten loudly mastered music tracks
+(-10 to -24 LUFS) came out 15-19 dB (38-12) and 10-13 dB (Philco) quieter in
+integrated loudness (EBU R128) than the unfiltered source. The radio output
+has a higher peak-to-loudness ratio (15-16 dB against 10-13 dB): the source
+masters are limited, the radio band-limits the treble that R128 weights, and
+the Philco's loudness network boosts bass that costs headroom but adds
+little loudness. Without limiting, the digital makeup gain can only use the
+free headroom. It now stops at the first of two limits: the steady 1 kHz
+full-modulation reference tone may not exceed 0.95 of full scale
+(`max_digital_output`), and no music peak in any of the three reception
+profiles may reach full scale. The 38-12 is bounded by the reference tone
+(0.60 to 0.73, +1.7 dB; tone 0.94, music peaks at most -7 dBFS); the Philco
+by music peaks (0.25 to 0.35, +2.9 dB; music peaks at most -1.2 dBFS, tone
+0.49). The remaining loudness gap is about 14.5 dB (38-12) and 8.5 dB
+(Philco); closing it would need limiting, which stays off.
+
+**Noise comes from the antenna, set by the reception profile.** The hiss
+was a fixed receiver-internal IF noise (`noise` weight x `ifNoiseMix`),
+about 26 dB below programme loudness in both receivers and identical for
+`strong-local` and `everyday-1938`. At medium frequencies a receiver is
+limited by the noise its antenna picks up with the signal, not by its own
+tubes, so that noise is now white RF noise added with the carrier at the
+antenna. Its density follows from two period-independent ratios, so the
+receivers' undocumented absolute sensitivity drops out:
+
+- Carrier field: FCC, *Standards of Good Engineering Practice Concerning
+  Standard Broadcast Stations* (1939), Table I: the groundwave needed to
+  overcome the usual noise is 10-50 mV/m in city business areas, 2-10 mV/m
+  in city residential areas and 0.1-0.5 mV/m in rural areas (winter); towns
+  up to 2,500 need 0.5 mV/m (Table II). Site rule: at least 5-10 mV/m over
+  the most distant residential section of the station's city.
+- Noise field: ITU-R P.372, Table 1, median man-made noise Fam = c - d
+  log f(MHz) dB above kT0b (city 76.8, residential 72.5, rural 67.2, quiet
+  rural 53.6; d = 27.7, 28.6 for quiet rural), converted to field strength
+  with eq. (7), En = Fa + 20 log f(MHz) + 10 log b - 95.5 dB(uV/m).
+
+| Profile | Groundwave | Noise | C/N0 at 1 MHz |
+| --- | ---: | --- | ---: |
+| `strong-local` | 10 mV/m | residential | 103.0 dB-Hz |
+| `everyday-1938` | 2 mV/m (residential limit) | residential | 89.7 dB-Hz |
+| `night-skywave` | 0.5 mV/m | rural | 86.7 dB-Hz |
+
+(C/N0 refers to the carrier at unit path gain, i.e. the groundwave field
+divided by its path gain.) Programme loudness to the noise of a silent
+carrier, R128 integrated, became:
+
+| Receiver | Before | `everyday-1938` | `strong-local` | `night-skywave` |
+| --- | ---: | ---: | ---: | ---: |
+| 38-12 | ~27 dB | 34 dB | 44 dB | 29 dB |
+| Philco | ~26 dB | 31 dB | 44 dB | 26.5 dB |
+
+The Philco hisses more than the 38-12 at the same antenna ratio because its
+IF and acoustic response pass more treble. FCC footnote 5 defines noise as
+objectionable when it is as disturbing as a co-channel programme 20:1
+(26 dB) down; at the residential primary-service limit both receivers stay
+above that, as they should. Caveats: the ITU coefficients are 1970s
+medians and 1938 man-made noise was probably higher; night-time
+atmospheric noise (CCIR Report 322 maps) is not included, so
+`night-skywave` is a lower bound on its noise; atmospheric crashes remain
+the separate impulse model. The receiver-internal IF noise is set to zero.
+Tests check the generated density against the formula at 44.1, 48 and 96
+kHz, and that the audio noise follows the field ratio between
+`everyday-1938` and `strong-local` through the whole receiver (within 1.5
+dB).
+
+**Warm start.** Every playback start, seek and render began with a thump
+(0.38 of full scale in the 38-12, decaying over about 20 ms). The carrier
+warmup settled the receiver and then cleared its AVC, AFC and supply loops,
+so AVC recharged from full gain; it also warmed on a bare unit-gain carrier
+while reception delivers a groundwave plus a skywave phasor, whose delayed
+path started from an empty envelope history. The warmup now keeps the
+settled loops (it only clears its own observations), runs on the actual
+initial complex path gain, and fills the delay history with the carrier.
+The first 50 ms are now no louder than the steady noise floor in every
+profile.
+
 **Selective fading.** A skywave arrives later than the groundwave. The
 reception sample now carries it as a second, delayed copy of the transmitted
 waveform with its own complex gain, instead of a multiplier on the whole

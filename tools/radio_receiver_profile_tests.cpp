@@ -245,7 +245,9 @@ void expectPlaybackKeepsAcousticPeakHeadroom() {
       if (peak > 0.95f) fail("acoustic response peak exhausted digital headroom");
       strongestPeak = std::max(strongestPeak, peak);
     }
-    if (strongestPeak < 0.55f) fail("acoustic profile attenuated excessively");
+    // Steady-state peak: the receiver starts settled on the carrier, so no
+    // turn-on AVC transient inflates it (that transient once exceeded 0.55).
+    if (strongestPeak < 0.50f) fail("acoustic profile attenuated excessively");
     expectProgramHeadroom("dense programme", denseProgram, mode, 0.20f);
   }
 }
@@ -255,12 +257,12 @@ struct NoiseProbe {
   double toneRms = 0.0;
 };
 
-enum class NoiseSource { None, If, Post, Hum, Broadcast, All };
+enum class NoiseSource { None, External, Post, Hum, Broadcast, All };
 
 const char* noiseSourceName(NoiseSource source) {
   switch (source) {
     case NoiseSource::None: return "residual";
-    case NoiseSource::If: return "if";
+    case NoiseSource::External: return "external";
     case NoiseSource::Post: return "post";
     case NoiseSource::Hum: return "hum";
     case NoiseSource::Broadcast: return "broadcast";
@@ -270,19 +272,22 @@ const char* noiseSourceName(NoiseSource source) {
 }
 
 NoiseProbe measurePlaybackNoise(RadioReceiverProfile profile,
-                                NoiseSource source) {
+                                NoiseSource source,
+                                RadioReceptionProfile reception =
+                                    RadioReceptionProfile::Everyday1938) {
   constexpr uint32_t kRate = 48000;
   constexpr uint32_t kFrames = kRate * 2;
   constexpr double kTwoPi = 6.28318530717958647693;
   Radio1938 radio;
   radio.applyReceiverProfile(profile);
   const bool all = source == NoiseSource::All;
-  if (!all && source != NoiseSource::If) radio.globals.ifNoiseMix = 0.0f;
   if (!all && source != NoiseSource::Post) radio.globals.postNoiseMix = 0.0f;
   if (!all && source != NoiseSource::Hum) radio.noiseConfig.enableHumTone = false;
-  if (!all && source != NoiseSource::If) radio.noiseConfig.crackleAmpScale = 0.0f;
+  if (!all) radio.noiseConfig.crackleAmpScale = 0.0f;
   radio.init(1, kRate, 5500.0f, 0.012f);
   RadioAmIngressConfig ingress;
+  ingress.reception = radioReceptionConfigForProfile(reception);
+  ingress.reception.externalNoiseEnabled = all || source == NoiseSource::External;
   ingress.broadcastSource.noiseEnabled = all || source == NoiseSource::Broadcast;
   RadioPreviewPipeline preview;
   preview.initialize(radio, ingress, RadioPreviewConfig{}, kRate);
@@ -326,7 +331,7 @@ void reportPlaybackNoise() {
   for (auto profile : {RadioReceiverProfile::Typical1930s,
                        RadioReceiverProfile::Philco37116}) {
     const auto baseline = measurePlaybackNoise(profile, NoiseSource::None);
-    for (auto source : {NoiseSource::None, NoiseSource::If, NoiseSource::Post,
+    for (auto source : {NoiseSource::None, NoiseSource::External, NoiseSource::Post,
                         NoiseSource::Hum, NoiseSource::Broadcast, NoiseSource::All}) {
       const auto probe = source == NoiseSource::None
                              ? baseline : measurePlaybackNoise(profile, source);
@@ -340,24 +345,40 @@ void reportPlaybackNoise() {
 }
 
 void expectPlaybackNoiseBalance() {
-  double typicalSnr = 0.0;
   for (auto profile : {RadioReceiverProfile::Typical1930s,
                        RadioReceiverProfile::Philco37116}) {
-    const auto probe = measurePlaybackNoise(profile, NoiseSource::All);
-    const double noise = probeRms(probe.silence);
-    const double snr = 20.0 * std::log10(probe.toneRms / noise);
-    std::cout << "playback_noise," << radioReceiverProfileName(profile)
-              << ',' << noise << ',' << probe.toneRms << ',' << snr << '\n';
-    // Engineering guards for the default noise control, not historical SNR
-    // claims. Compare signal-relative levels so makeup gain cannot hide noise.
-    if (!std::isfinite(snr) || snr < 28.0 || snr > 45.0) {
-      fail("default playback noise left its signal-relative guard band");
-    }
-    if (profile == RadioReceiverProfile::Typical1930s) {
-      typicalSnr = snr;
-    } else if (std::fabs(snr - typicalSnr) > 6.0) {
-      fail("receiver gain introduced an excessive noise contrast");
-    }
+    const auto measure = [&](RadioReceptionProfile reception) {
+      // Only the noise this source adds: the deterministic residual of the
+      // silent carrier is subtracted sample by sample.
+      const auto probe = measurePlaybackNoise(profile, NoiseSource::External, reception);
+      const auto residual = measurePlaybackNoise(profile, NoiseSource::None, reception);
+      const double noise = probeRms(probe.silence, &residual.silence);
+      const double snr = 20.0 * std::log10(probe.toneRms / noise);
+      std::cout << "playback_noise," << radioReceiverProfileName(profile) << ','
+                << radioReceptionProfileName(reception) << ',' << noise << ','
+                << probe.toneRms << ',' << snr << '\n';
+      if (!std::isfinite(snr)) fail("non-finite playback noise ratio");
+      return snr;
+    };
+    // Signal-relative, so makeup gain cannot hide noise. Noise enters at the
+    // antenna with the carrier and AVC holds the carrier, so a stronger field
+    // must improve the audio ratio by the field ratio itself, whatever the
+    // receiver's gain.
+    const double everyday = measure(RadioReceptionProfile::Everyday1938);
+    const double strong = measure(RadioReceptionProfile::StrongLocal);
+    const auto ratioDb = [](RadioReceptionProfile reception) {
+      return radioReceptionCarrierToNoiseDensityDbHz(
+          radioReceptionConfigForProfile(reception), 1e6);
+    };
+    const double expected = ratioDb(RadioReceptionProfile::StrongLocal) -
+                            ratioDb(RadioReceptionProfile::Everyday1938);
+    if (std::fabs((strong - everyday) - expected) > 1.5)
+      fail("audio noise does not follow the antenna carrier-to-noise ratio");
+    // FCC 1939: at the primary-service field the usual noise is no longer
+    // objectionable, i.e. weaker than a co-channel programme 26 dB down.
+    // The probe tone is 42.5% modulation, not full programme, so this is
+    // conservative.
+    if (everyday < 26.0) fail("noise at the FCC primary-service field is objectionable");
   }
 }
 

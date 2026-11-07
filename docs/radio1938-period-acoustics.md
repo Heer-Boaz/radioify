@@ -273,6 +273,8 @@ by `sqrt(fs/48000)` preserves this density at other rates; the IF filter sets
 the integrated bandwidth. Tests cover gain invariance, bandwidth reduction,
 and 44.1/48/96 kHz with a fixed physical passband. The latter uses a 2 kHz service
 bandwidth to stay below the IF model's existing sample-rate cutoff cap.
+(The receiver-internal IF noise was later replaced by antenna noise set by
+the reception profile; see the realism audit.)
 
 `radio_receiver_profile_tests --noise-report` reports individual-source
 measurements through the current playback path. [The noise comparison CSV](data/radio1938-playback-noise.csv)
