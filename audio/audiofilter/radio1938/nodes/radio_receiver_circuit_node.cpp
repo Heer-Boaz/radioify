@@ -45,9 +45,16 @@ void RadioReceiverCircuitNode::init(Radio1938& radio, RadioInitContext&) {
   receiver.tubeQuiescentPlateCurrentAmps = op.plateCurrentAmps;
   receiver.tubePlateResistanceOhms = op.rpOhms;
   receiver.tubeTriodeModel = op.model;
+  // Size the table to the stage: a small-signal triode's working range is a
+  // few times its cutoff swing, supply / mu (2 V for the 38-12's mu-100 75,
+  // 12.5 V for the Philco's 6J5G). Spread over 36 V of grid, the 75's
+  // interpolated characteristic held its plate 3.2 V off the operating
+  // point; beyond the table the equation is used.
   configureRuntimeTriodeLut(receiver.tubeTriodeLut, receiver.tubeTriodeModel,
-                            receiver.tubeBiasVolts, receiver.tubePlateSupplyVolts, 36.0f,
-                            8.0f);
+                            receiver.tubeBiasVolts, receiver.tubePlateSupplyVolts,
+                            1.5f * receiver.tubePlateSupplyVolts /
+                                std::max(receiver.tubeMu, 1.0f),
+                            1.0f);
   assert((std::fabs(receiver.tubeQuiescentPlateVolts - receiver.tubePlateDcVolts) <=
           receiver.operatingPointToleranceVolts) &&
          "First-audio operating point diverged from the circuit prior");

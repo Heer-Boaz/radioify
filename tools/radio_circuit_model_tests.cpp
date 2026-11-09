@@ -681,6 +681,41 @@ void testModulationHum() {
   check(philco < typical - 20, "the Philco's screen filtering must suppress modulation hum");
 }
 
+// The first audio stage solves its operating point for a nominal supply.
+// That supply must be the voltage its plate load actually returns to, or the
+// stage runs off its solved point: the 38-12's 75 was solved for 200 V
+// (plate 89.6 V) while its load hung on the 190 V B+ (plate 85.9 V), a
+// fixed 3-4 V offset in operation.
+void testFirstAudioOperatingPoint() {
+  for (auto profile :
+       {RadioReceiverProfile::Typical1930s, RadioReceiverProfile::Philco37116}) {
+    Radio1938 radio;
+    radio.applyReceiverProfile(profile);
+    radio.init(1, 48000, 5000, .012f);
+    constexpr int rate = 48000;
+    double plate = 0, supply = 0;
+    for (int n = 0; n < rate; ++n) {
+      float input = 0, output = 0;
+      radio.processAmAudio(&input, &output, 1, .12f, .85f);
+      if (n >= rate / 2) {
+        plate += radio.receiverCircuit.tubePlateVoltage / (rate / 2);
+        supply += radio.receiverCircuit.tubeSupplyVolts / (rate / 2);
+      }
+    }
+    const auto& receiver = radio.receiverCircuit;
+    std::cout << "first audio at rest: plate " << plate << " V (solved "
+              << receiver.tubeQuiescentPlateVolts << " V, documented "
+              << receiver.tubePlateDcVolts << " V), supply " << supply
+              << " V (solved for " << receiver.tubeEffectiveSupplyVolts << " V)\n";
+    check(std::abs(supply - receiver.tubeEffectiveSupplyVolts) < 2,
+          "the first audio stage must be solved for the supply its load returns to");
+    check(std::abs(plate - receiver.tubeQuiescentPlateVolts) < 0.5,
+          "the first audio plate must rest at its solved operating point");
+    check(std::abs(plate - receiver.tubePlateDcVolts) < 0.1 * receiver.tubePlateDcVolts,
+          "the first audio plate must rest within tube tolerance of its documented voltage");
+  }
+}
+
 void reportDetectorSupply(const char* profile, const char* settings) {
   Radio1938 radio;
   check(radio.applyReceiverProfile(profile), "unknown profile");
@@ -743,6 +778,7 @@ int main(int argc, char** argv) {
           "physical AVC volts are being multiplied at the mixer grid");
   }
   testSupplyConservation();
+  testFirstAudioOperatingPoint();
   testTriodeBeyondTable();
   testModulationHum();
   testIfPlateSwingLimit();

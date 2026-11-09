@@ -527,9 +527,14 @@ void updateCalibrationSnapshot(Radio1938& radio) {
   radio.calibration.validationInterstageSecondary =
       radio.calibration.interstageSecondaryPeakVolts >
       4.0f * std::max(std::fabs(radio.power.outputTubeBiasVolts), 1.0f);
+  // The first audio output is its plate swing about the solved operating
+  // point. A fixed offset there means the stage runs off that point (the
+  // 38-12's 75 sat 3-4 V off when solved for the wrong supply). Supply
+  // regulation alone moves a ~90 V plate by a few tenths of a volt, and on
+  // silence any offset equals the RMS, so the floor is absolute: 0.5 V.
   radio.calibration.validationDcShift =
       (std::fabs(receiverPass.meanOut) >
-           std::max(0.02, 0.10 * receiverPass.rmsOut)) ||
+           std::max(0.5, 0.10 * receiverPass.rmsOut)) ||
       (std::fabs(powerPass.meanOut) >
            std::max(0.10, 0.05 * powerPass.peakOut));
   // The playback limiter is enabled by default and catches peaks of loud

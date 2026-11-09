@@ -834,11 +834,14 @@ float processResistorLoadedTriodeStage(float gridVolts,
       makeKorenTriodeLutRuntimeView(lut);
   float plateVoltage = solveLoadLinePlateVoltage(
       supply, safeLoadResistance, initialPlateVoltage, [&](float plateVolts) {
+        // Outside the table, use the equation rather than clamping (see
+        // evaluateKorenTriodePlateRuntime).
+        const bool inTable = lutView.valid && gridVolts >= lutView.vgkMin &&
+                             gridVolts <= lutView.vgkMax && plateVolts >= lutView.vpkMin &&
+                             plateVolts <= lutView.vpkMax;
         KorenTriodePlateEval eval =
-            lutView.valid
-                ? evaluateKorenTriodePlateLutRuntimeView(gridVolts, plateVolts,
-                                                         lutView)
-                : evaluateKorenTriodePlate(gridVolts, plateVolts, model);
+            inTable ? evaluateKorenTriodePlateLutRuntimeView(gridVolts, plateVolts, lutView)
+                    : evaluateKorenTriodePlate(gridVolts, plateVolts, model);
         return static_cast<float>(eval.currentAmps);
       });
   plateVoltageState = plateVoltage;
@@ -906,7 +909,7 @@ void configureRuntimeTriodeLut(KorenTriodeLut& lut,
                                float extraNegativeGridHeadroomVolts,
                                float positiveGridHeadroomVolts) {
   float vgkMin = std::max(-140.0f, biasVolts - extraNegativeGridHeadroomVolts);
-  float vgkMax = std::max(10.0f, positiveGridHeadroomVolts);
+  float vgkMax = positiveGridHeadroomVolts;
   float vpkMax =
       std::max(plateSupplyVolts + 80.0f, 1.25f * plateSupplyVolts);
   configureKorenTriodeLut(lut, model, vgkMin, vgkMax, 257, 0.0f, vpkMax, 385);

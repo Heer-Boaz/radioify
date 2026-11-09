@@ -516,7 +516,11 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.receiverCircuit.volumeControlLoudnessCapFarads = 0.0f;
   radio.receiverCircuit.couplingCapFarads = 0.01e-6f;
   radio.receiverCircuit.gridLeakResistanceOhms = 4000000.0f;
-  radio.receiverCircuit.tubePlateSupplyVolts = 200.0f;
+  // The 190 k load returns to the same B+ as the 41's plate (no separate
+  // audio decoupling in this set), so its supply is the 190 V node below. At
+  // the former 200 V the operating point was solved for a supply the stage
+  // never saw, and its plate sat at 86 V instead of 90 V in operation.
+  radio.receiverCircuit.tubePlateSupplyVolts = 190.0f;
   radio.receiverCircuit.tubePlateDcVolts = 90.0f;
   radio.receiverCircuit.tubeBiasVolts = -0.5f;
   radio.receiverCircuit.tubeMu = 100.0f;
