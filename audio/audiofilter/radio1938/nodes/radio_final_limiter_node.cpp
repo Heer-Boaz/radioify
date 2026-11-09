@@ -55,15 +55,17 @@ float RadioFinalLimiterNode::run(Radio1938& radio,
   float delayed = limitedIn;
   if (!limiter.delayBuf.empty()) {
     size_t writeIndex = static_cast<size_t>(limiter.delayWriteIndex);
+    // Take the minimum before overwriting: the outgoing (delayed) sample's
+    // own requirement must still bound the gain applied to it.
+    limiter.targetGain = requiredGain;
+    for (float gainCandidate : limiter.requiredGainBuf) {
+      limiter.targetGain = std::min(limiter.targetGain, gainCandidate);
+    }
     delayed = limiter.delayBuf[writeIndex];
     limiter.delayBuf[writeIndex] = limitedIn;
     limiter.requiredGainBuf[writeIndex] = requiredGain;
     limiter.delayWriteIndex =
         (limiter.delayWriteIndex + 1) % static_cast<int>(limiter.delayBuf.size());
-    limiter.targetGain = 1.0f;
-    for (float gainCandidate : limiter.requiredGainBuf) {
-      limiter.targetGain = std::min(limiter.targetGain, gainCandidate);
-    }
   } else {
     limiter.targetGain = requiredGain;
   }

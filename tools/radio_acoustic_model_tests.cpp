@@ -472,8 +472,9 @@ void testRoom(float fs) {
   hot.initialize(c, fs, .14f);
   for (int i = 0; i < fs; ++i) {
     const auto y = hot.process(i & 8 ? .94f : -.94f);
+    // The linked look-ahead protection holds the receiver limiter's 0.97.
     check(std::isfinite(y.left) && std::isfinite(y.right) &&
-              std::max(std::fabs(y.left), std::fabs(y.right)) <= .940001f,
+              std::max(std::fabs(y.left), std::fabs(y.right)) <= .970001f,
           "room summation exceeded the linked peak ceiling");
   }
   std::cout << "room," << fs << ",directivity_small_large," << smallRatio << ','

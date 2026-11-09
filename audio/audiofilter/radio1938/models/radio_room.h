@@ -73,6 +73,10 @@ class RadioRoomRenderer {
   std::array<ReverbLine, 8> late_;
   float lateLevel_ = 0.0f;
   float outputGain_ = 1.0f;
+  // Linked look-ahead peak protection at the very end of playback.
+  std::vector<std::array<float, 2>> protectionDelay_;
+  std::vector<float> protectionRequired_;
+  size_t protectionIndex_ = 0;
   float protectionGain_ = 1.0f;
   float protectionRelease_ = 0.0f;
 };

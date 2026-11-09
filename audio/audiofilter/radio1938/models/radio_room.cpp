@@ -204,12 +204,18 @@ void RadioRoomRenderer::initialize(const RadioRoomConfig& c, float fs, float rad
     line.injection = std::sqrt(1.0f - line.feedback * line.feedback) * kInvSqrt8;
   }
   protectionRelease_ = std::exp(-1.0f / (fs * .080f));
+  const size_t lookahead = std::max<size_t>(1, static_cast<size_t>(std::lround(.002 * fs)));
+  protectionDelay_.assign(lookahead, {0.0f, 0.0f});
+  protectionRequired_.assign(lookahead, 1.0f);
   reset();
 }
 
 void RadioRoomRenderer::reset() {
   writeIndex_ = 0;
   protectionGain_ = 1.0f;
+  protectionIndex_ = 0;
+  std::fill(protectionDelay_.begin(), protectionDelay_.end(), std::array<float, 2>{0.0f, 0.0f});
+  std::fill(protectionRequired_.begin(), protectionRequired_.end(), 1.0f);
   std::fill(history_.begin(), history_.end(), 0.0f);
   for (auto& ear : paths_)
     for (auto& path : ear) {
@@ -262,11 +268,24 @@ RadioRoomSample RadioRoomRenderer::process(float mono) {
   }
   out[0] = outputGain_ * (out[0] + lateLevel_ * tailLeft);
   out[1] = outputGain_ * (out[1] + lateLevel_ * (headphones_ ? tailRight : tailLeft));
-  // Summing acoustic paths can exceed the receiver's digital ceiling. Linked
-  // peak protection preserves interaural level differences without extra delay.
+  // Summing acoustic paths can exceed the receiver's limited output. Linked
+  // protection keeps interaural level differences; its 2 ms look-ahead lowers
+  // the gain before a peak instead of cutting the peak itself (an
+  // instantaneous clamp here acted as a clipper on loud programme).
+  constexpr float kCeiling = .97f;
   const float peak = std::max(std::fabs(out[0]), std::fabs(out[1]));
-  const float required = peak > .94f ? .94f / peak : 1.0f;
-  protectionGain_ = std::min(
-      required, protectionRelease_ * protectionGain_ + (1.0f - protectionRelease_));
-  return {out[0] * protectionGain_, out[1] * protectionGain_};
+  const float required = peak > kCeiling ? kCeiling / peak : 1.0f;
+  // The window includes the outgoing sample's own requirement, so the gain
+  // cannot release above it on the sample it applies to.
+  const float target = std::min(
+      required, *std::min_element(protectionRequired_.begin(), protectionRequired_.end()));
+  const std::array<float, 2> delayed = protectionDelay_[protectionIndex_];
+  protectionDelay_[protectionIndex_] = out;
+  protectionRequired_[protectionIndex_] = required;
+  if (++protectionIndex_ == protectionDelay_.size()) protectionIndex_ = 0;
+  protectionGain_ = target < protectionGain_
+                        ? target
+                        : protectionRelease_ * protectionGain_ +
+                              (1.0f - protectionRelease_) * target;
+  return {delayed[0] * protectionGain_, delayed[1] * protectionGain_};
 }
