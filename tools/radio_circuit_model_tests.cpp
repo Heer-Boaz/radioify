@@ -80,9 +80,9 @@ double measureStrip(RadioReceiverProfile profile, float offset, float frequency)
   radio.identity.driftDepth = 0;
   radio.tuning.magneticTuningEnabled = false;
   radio.tuning.tuneOffsetHz = offset;
+  radio.ifStrip.stagePlateSwingLimitVolts = 0;  // linear selectivity check
   radio.init(1, 48000, 5500, 0);
   radio.mixer.conversionGain = 1;
-  radio.ifStrip.stageGain = 1;
   double energy = 0;
   for (int n = -4800; n < 4800; ++n) {
     const auto in = std::polar(1., 2 * pi * frequency * n / 48000);
@@ -121,7 +121,7 @@ void testReceiverTuning() {
         return std::abs(rfTransfer(
             f, p.primaryInductanceHenries, p.secondaryInductanceHenries,
             p.primarySeriesResistanceOhms, p.secondarySeriesResistanceOhms,
-            p.secondaryLoadResistanceOhms, coupling, p.referenceTransimpedanceOhms));
+            p.secondaryLoadResistanceOhms, coupling, 1.0));
       };
       expectedDb += 20 * std::log10(reference(-500) / reference(-8500));
     }
@@ -190,7 +190,7 @@ double measureFrontEnd(RadioReceiverProfile profile, float tuneOffset, float off
     if (n >= 0)
       result += Complex{ctx.signal.i, ctx.signal.q} * std::conj(in) / 4800.;
   }
-  return std::abs(result) / radio.frontEnd.rfGain;
+  return std::abs(result) / (radio.frontEnd.antennaVoltageGain * radio.frontEnd.avcGain);
 }
 
 void testFrontEndTunedCircuits() {
@@ -392,12 +392,19 @@ void testRemoteCutoffAvc() {
     RadioIFStripNode::run(radio, 0, ctx);
     const auto& f = radio.frontEnd;
     const auto& s = radio.ifStrip;
+    // The RF stage gain is its gm at the AVC bias times its transformer load;
+    // the screens follow the present main B+.
+    const double screen = radioScreenSupplyScale(radio);
     const double expectedRf =
         f.secondTunedCircuitEnabled
-            ? remoteCutoffRelativeGain(f.rfStageBiasVolts, 5, f.rfStageScreenVolts)
+            ? remoteCutoffStageTransconductance(f.rfStageBiasVolts, 5,
+                                                f.rfStageScreenVolts * screen) *
+                  f.rfStageLoadOhms
             : 1.0;
     const double expectedIf = std::pow(
-        remoteCutoffRelativeGain(s.stageBiasVolts, 5, s.stageScreenVolts), s.avcStageCount);
+        remoteCutoffStageTransconductance(s.stageBiasVolts, 5, s.stageScreenVolts * screen) /
+            s.stageTransconductanceSiemens,
+        s.avcStageCount);
     check(std::abs(f.avcGain / expectedRf - 1) < 1e-5 &&
               std::abs(s.avcGain / expectedIf - 1) < 1e-5,
           "AVC does not act through each controlled stage's transconductance");
@@ -444,15 +451,9 @@ void testPhysicalNoiseSources() {
     RadioSampleContext a{}, b{};
     a.signal.setRealRf(0);
     b.signal.setRealRf(1);
-    // A strong carrier/programme must not suppress atmospheric events at source.
     loud.controlBus.controlVoltage = 1;
     RadioInterferenceDerivedNode::run(quiet, a);
     RadioInterferenceDerivedNode::run(loud, b);
-    a.derived.rfImpulseRate = b.derived.rfImpulseRate = 100;
-    const double q = RadioInputNode::run(quiet, 0, a);
-    const double l = RadioInputNode::run(loud, 1, b);
-    check(std::abs(l - q - 1) < 2e-7,
-          "RF impulses depend on programme or carrier strength");
     a.derived.noiseAmp = b.derived.noiseAmp = 0;
     a.derived.humAmp = b.derived.humAmp = .1f;
     loud.speakerStage.speaker.electricalCurrentAmps = 10;
@@ -464,12 +465,7 @@ void testPhysicalNoiseSources() {
       hum120 += hq * std::sin(2 * pi * 120 * n / 48000);
     }
   }
-  check(quiet.input.impulseEventCount > 50 &&
-            quiet.input.impulseEventCount == loud.input.impulseEventCount,
-        "RF impulse event process stopped or depends on reception");
   check(std::abs(hum120) > std::abs(hum60), "full-wave hum must dominate mains pickup");
-  quiet.reset();
-  check(quiet.input.impulseEventCount == 0, "reset left RF impulse diagnostics behind");
 }
 
 void testThermionicDiode() {
@@ -580,6 +576,86 @@ void testAfcWithRealCarrier() {
           "reset retained the previous station's AFC pull");
   }
 }
+// Modulation hum: the RF/IF screens follow the rippling B+, so an
+// unmodulated carrier picks up 120 Hz at the detector. The 38-12 feeds its
+// screens straight from the B+ after the field coil (Bulletin 284); the
+// Philco's pass two RC sections (Bulletin 258), which must leave far less.
+double detectorHumRatioDb(RadioReceiverProfile profile, bool screenRipple) {
+  Radio1938 radio;
+  radio.applyReceiverProfile(profile);
+  radio.init(1, 48000, 5000, 0);
+  if (!screenRipple) radio.powerSupply.mainReferenceVolts = 0;  // scale stays 1
+  constexpr int count = 48000;
+  double dc = 0;
+  Complex hum{};
+  for (int n = 0; n < 2 * count; ++n) {
+    float input = 0, output;
+    radio.processAmAudio(&input, &output, 1, .02f, .85f);
+    if (n >= count) {
+      dc += radio.demod.am.detectorNode / count;
+      hum += double(radio.demod.am.detectorNode) * std::polar(1., -2 * pi * 120 * n / count) /
+             double(count);
+    }
+  }
+  return 20 * std::log10(std::sqrt(2.) * std::abs(hum) / dc);
+}
+
+// A lightning crash far beyond any carrier must saturate the IF tubes at
+// their plate swing instead of passing through a linear strip, while the
+// normal working level stays linear.
+void testIfPlateSwingLimit() {
+  for (auto profile : {RadioReceiverProfile::Typical1930s, RadioReceiverProfile::Philco37116}) {
+    double peaks[2] = {};
+    for (int conduction = 0; conduction < 2; ++conduction) {
+      Radio1938 radio;
+      radio.applyReceiverProfile(profile);
+      if (conduction == 0) radio.ifStrip.stagePlateSwingLimitVolts = 0;
+      radio.init(1, 48000, 5500, 0);
+      radio.controlBus.controlVoltage = 0;
+      radio.mixer.conversionGain = 1e-3f;
+      double peak = 0;
+      for (int n = 0; n < 4800; ++n) {
+        RadioSampleContext ctx{};
+        ctx.signal.setComplexEnvelope(n == 100 ? 1000.0f : 0.0f, 0);
+        RadioIFStripNode::run(radio, 0, ctx);
+        peak = std::max(peak, std::hypot(double(ctx.signal.detectorInputI),
+                                         double(ctx.signal.detectorInputQ)));
+      }
+      peaks[conduction] = peak;
+    }
+    check(peaks[1] < .2 * peaks[0], "an IF crash is not limited by the plate swing");
+  }
+  for (auto profile : {RadioReceiverProfile::Typical1930s, RadioReceiverProfile::Philco37116}) {
+    double levels[2] = {};
+    for (int conduction = 0; conduction < 2; ++conduction) {
+      Radio1938 radio;
+      radio.applyReceiverProfile(profile);
+      if (conduction == 0) radio.ifStrip.stagePlateSwingLimitVolts = 0;
+      radio.init(1, 48000, 5000, 0);
+      std::vector<float> input(24000), output(24000);
+      for (size_t n = 0; n < input.size(); ++n)
+        input[n] = static_cast<float>(std::sin(2 * pi * 1000 * n / 48000.0));
+      radio.processAmAudio(input.data(), output.data(), 24000, .0087f, .85f);
+      double sum = 0;
+      for (size_t n = 12000; n < output.size(); ++n) sum += double(output[n]) * output[n];
+      levels[conduction] = std::sqrt(sum / 12000);
+    }
+    check(std::abs(20 * std::log10(levels[1] / levels[0])) < .1,
+          "the IF plate-swing limit compresses normal full-modulation reception");
+  }
+}
+
+void testModulationHum() {
+  const double typical = detectorHumRatioDb(RadioReceiverProfile::Typical1930s, true);
+  const double typicalQuiet = detectorHumRatioDb(RadioReceiverProfile::Typical1930s, false);
+  const double philco = detectorHumRatioDb(RadioReceiverProfile::Philco37116, true);
+  std::cout << "detector 120 Hz modulation hum dB: typical=" << typical
+            << " (no screen ripple " << typicalQuiet << "), philco=" << philco << '\n';
+  check(typical > typicalQuiet + 20 && typical > -65 && typical < -35,
+        "B+ ripple on the 38-12 screens must modulate the carrier");
+  check(philco < typical - 20, "the Philco's screen filtering must suppress modulation hum");
+}
+
 void reportDetectorSupply(const char* profile, const char* settings) {
   Radio1938 radio;
   check(radio.applyReceiverProfile(profile), "unknown profile");
@@ -620,8 +696,8 @@ void reportDetectorSupply(const char* profile, const char* settings) {
               << ",sinad," << 10 * std::log10(tonePower / std::max(residual, 1e-30))
               << ",hum120_rms," << std::sqrt(2.) * std::abs(hum[k]) << '\n';
   }
-  std::cout << "avc," << radio.demod.am.avcEnv << ",IF gain," << radio.ifStrip.stageGain
-            << '\n';
+  std::cout << "avc," << radio.demod.am.avcEnv << ",IF gm,"
+            << radio.ifStrip.stageTransconductanceSiemens << '\n';
 }
 
 }  // namespace
@@ -642,6 +718,8 @@ int main(int argc, char** argv) {
           "physical AVC volts are being multiplied at the mixer grid");
   }
   testSupplyConservation();
+  testModulationHum();
+  testIfPlateSwingLimit();
   testCircuitReference();
   testReceiverTuning();
   testFrontEndTunedCircuits();

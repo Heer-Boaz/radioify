@@ -36,8 +36,9 @@ struct RadioBroadcastSourceConfig {
   uint32_t noiseSeed = 0x1938110au;
 };
 
+// The received carrier level follows the reception field and antenna
+// (radioReceptionAntennaCarrierRmsVolts).
 struct RadioAmIngressConfig {
-  float receivedCarrierRmsVolts = 0.12f;
   float modulationIndex = 0.85f;
   RadioBroadcastSourceConfig broadcastSource;
   RadioReceptionConfig reception;

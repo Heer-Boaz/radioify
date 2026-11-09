@@ -181,7 +181,7 @@ void renderToFile(const Options& o, const std::filesystem::path& inputPath,
                             static_cast<float>(sampleRate));
   }
   if (calibrationRadio) {
-    calibrationRadio->warmInputCarrier(radioAmIngress.receivedCarrierRmsVolts);
+    calibrationRadio->warmInputCarrier(radioReceptionAntennaCarrierRmsVolts(radioAmIngress.reception));
   }
 
   std::vector<float> buffer(chunkFrames * channels);
@@ -242,7 +242,7 @@ void renderToFile(const Options& o, const std::filesystem::path& inputPath,
       calibrationRadio->processAmAudio(
           calibrationMono.data(), calibrationMono.data(),
           static_cast<uint32_t>(framesRead),
-          radioAmIngress.receivedCarrierRmsVolts,
+          radioReceptionAntennaCarrierRmsVolts(radioAmIngress.reception),
           radioAmIngress.modulationIndex);
     }
 

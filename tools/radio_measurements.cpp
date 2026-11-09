@@ -2,6 +2,7 @@
 #include "receiver_input_reference.h"
 #include "audiofilter/radio1938/audio_pipeline_execution.h"
 #include "audiofilter/radio1938/radio_am_ingress.h"
+#include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
 #include "audiofilter/math/signal_math.h"
 
 #include <algorithm>
@@ -25,7 +26,9 @@ namespace {
 
 constexpr float kDefaultSampleRate = 48000.0f;
 constexpr float kDefaultBandwidthHz = 5000.0f;
-constexpr float kDefaultCarrierRmsVolts = 0.12f;
+// The playback default: the everyday-1938 field on the IRE standard antenna.
+const float kDefaultCarrierRmsVolts = radioReceptionAntennaCarrierRmsVolts(
+    radioReceptionConfigForProfile(RadioReceptionProfile::Everyday1938));
 constexpr float kDefaultModulationIndex = 0.85f;
 constexpr float kDefaultNoiseWeight = 0.0f;
 constexpr float kDefaultNoiseOnlyWeight = 0.012f;
@@ -64,6 +67,13 @@ struct HarnessConfig {
   bool receiverProfileExplicit = false;
   std::string section = "all";
   bool observeTerminalVoltage = false;
+  // Negative keeps the receiver's own listening setting.
+  float volumeOverride = -1.0f;
+  float crashAreaVoltSeconds = 1e-6f;
+  RadioReceptionProfile reception = RadioReceptionProfile::Everyday1938;
+  // Without the loudness branch, keep the 1 kHz level of the listening
+  // setting rather than the knob position.
+  bool levelMatchedFlat = false;
   float speakerNaturalHzOverride = 0.0f;
   // Removes the volume-control loudness branch, leaving the receiver's own
   // bandwidth; the branch is then checked against an impedance reference.
@@ -93,13 +103,17 @@ struct ReceiverReferenceBands {
 // and harmonics; the former acoustically weighted SINAD cannot be reused here.
 // See docs/radio1938-period-acoustics.md for both measurements and their limits.
 constexpr ReceiverReferenceBands kPhilco37116ReferenceBands{
-    60.0f, 200.0f, 2500.0f, 5500.0f, -38.0f, 30.0f,
-    // The thermionic detector uses several volts of IF. The delayed 6J5G AVC
-    // regulates the nominal carrier, so playback uses 25..64% of rated
-    // electrical power (0.5..0.8 of the reference volts; 0.53 measured at the
-    // 54% listening setting, just above the loudness tap). Rated 12..18 W
-    // capacity and the existing distortion/headroom guards stay.
-    2500.0f, 5500.0f, -35.0f, 28.0f, 0.50f, 0.80f, 12.0f, 18.0f};
+    // IMD: the documented 28 V delay of the 6J5G AVC holds the detector near
+    // 30 V, and the AVC filter (a single 75 ms prior; the bus beyond parts
+    // 90-92 is untraced) leaves a little audio ripple on the controlled grids
+    // at that level: -37.7 dB at the terminals, -36.8 dB with ten times the
+    // filter capacitance. At the room-level setting the loudness tap also
+    // lifts 400 Hz into the output stage.
+    60.0f, 200.0f, 2500.0f, 5500.0f, -35.0f, 30.0f,
+    // Playback uses 25..64% of rated electrical power (0.5..0.8 of the
+    // reference volts; 0.53 at the room-level setting below the loudness
+    // tap). Rated 12..18 W capacity and the headroom guards stay.
+    2500.0f, 5500.0f, -28.0f, 28.0f, 0.50f, 0.80f, 12.0f, 18.0f};
 
 // The mass-market profile deliberately validates against its own 2 W,
 // single-ended receiver class. Reusing the 37-116's 15 W / high-fidelity
@@ -311,6 +325,10 @@ void printUsage() {
       << "  --bw <hz>\n"
       << "  --carrier-rms <volts>\n"
       << "  --mod-index <value>\n"
+      << "  --terminal  Speaker-terminal volts instead of acoustic output\n"
+      << "  --without-loudness  Remove the tapped-control loudness branch\n"
+      << "  --reception <profile>  Reception profile for preview_trace\n"
+      << "  --crash-area <volt-seconds>  Antenna impulse area for the crash section\n"
       << "  --noise <value>\n"
       << "  --noise-only <value>\n"
       << "  --detector-spc <value>\n"
@@ -319,7 +337,7 @@ void printUsage() {
       << "  --radio-settings <path>\n"
       << "  --receiver-profile <typical-1930s|philco-37-116>  Base receiver before settings\n"
       << "  --preset <name>  TOML preset; a built-in name also selects the receiver unless explicitly overridden\n"
-      << "  --section <all|config|sweep|envelope|levels|imd|overdrive|sinad|weak|avc|fading|transient|reference|noise|spectrum|am_validate|am_convergence|power_bench>\n";
+      << "  --section <all|config|sweep|envelope|levels|imd|overdrive|sinad|weak|avc|sensitivity|crash|preview_trace|fading|transient|reference|noise|spectrum|am_validate|am_convergence|power_bench>\n";
 }
 
 HarnessConfig parseArgs(int argc, char** argv) {
@@ -332,6 +350,16 @@ HarnessConfig parseArgs(int argc, char** argv) {
       config.bandwidthHz = parseFloatArg(argv, i, argc, "--bw");
     } else if (arg == "--carrier-rms") {
       config.carrierRmsVolts = parseFloatArg(argv, i, argc, "--carrier-rms");
+    } else if (arg == "--reception") {
+      if (i + 1 >= argc || !parseRadioReceptionProfile(argv[++i], config.reception))
+        fail("unknown reception profile");
+    } else if (arg == "--crash-area") {
+      config.crashAreaVoltSeconds = parseFloatArg(argv, i, argc, "--crash-area");
+    } else if (arg == "--terminal") {
+      config.observeTerminalVoltage = true;
+    } else if (arg == "--without-loudness") {
+      config.withoutLoudnessBranch = true;
+      config.levelMatchedFlat = true;
     } else if (arg == "--mod-index") {
       config.modulationIndex = parseFloatArg(argv, i, argc, "--mod-index");
     } else if (arg == "--noise") {
@@ -420,9 +448,28 @@ Radio1938 makeRadio(const HarnessConfig& config, float noiseWeight,
     }
   }
   applyHarnessDetectorWaveformSettings(config, radio);
+  if (config.volumeOverride >= 0.0f)
+    radio.receiverCircuit.volumeControlPosition = config.volumeOverride;
   if (config.withoutLoudnessBranch) {
-    radio.receiverCircuit.volumeControlLoudnessResistanceOhms = 0.0f;
-    radio.receiverCircuit.volumeControlLoudnessCapFarads = 0.0f;
+    auto& receiver = radio.receiverCircuit;
+    if (config.levelMatchedFlat && receiver.volumeControlTapResistanceOhms > 0.0f) {
+      // Below the tap the branch takes most of the mid-band signal, so the
+      // same knob position without it would overdrive the audio chain. Turn
+      // the plain control to the same 1 kHz grid level instead.
+      const std::complex<double> laplace{0, 2 * 3.14159265358979323846 * 1000};
+      const double target = std::abs(receiverInputReference(receiver, laplace).grid);
+      auto plain = receiver;
+      double low = 0, high = 1;
+      for (int step = 0; step < 40; ++step) {
+        plain.volumeControlPosition = static_cast<float>(.5 * (low + high));
+        (std::abs(receiverInputReference(plain, laplace, false).grid) < target ? low
+                                                                                 : high) =
+            plain.volumeControlPosition;
+      }
+      receiver.volumeControlPosition = static_cast<float>(.5 * (low + high));
+    }
+    receiver.volumeControlLoudnessResistanceOhms = 0.0f;
+    receiver.volumeControlLoudnessCapFarads = 0.0f;
   }
   if (config.speakerNaturalHzOverride > 0.0f) {
     radio.speakerStage.speaker.suspensionHz = config.speakerNaturalHzOverride;
@@ -1503,6 +1550,118 @@ void runAvcCharacteristic(const HarnessConfig& config) {
   std::cout << "\n";
 }
 
+// IRE/RMA sensitivity: the least carrier, 30% modulated at 400 Hz, that gives
+// the 50 mW standard output into the rated voice-coil load with the volume
+// control fully up and the AVC working (Radio News, April 1937; IRE 1948
+// standard 2.04 and 2.09.02). The carrier is the antenna EMF behind the
+// receiver's own antenna circuit. Only the 400 Hz component counts.
+double measureStandardOutputWatts(const HarnessConfig& config, float carrierRms) {
+  HarnessConfig levelConfig = config;
+  levelConfig.observeTerminalVoltage = true;
+  levelConfig.carrierRmsVolts = carrierRms;
+  levelConfig.volumeOverride = 1.0f;
+  const auto input = makeSine(config.sampleRate, kSteadyTestFrames, 400.0f, 1.0f);
+  RunResult run = runAmProgram(levelConfig, input, .3f, 0);
+  const size_t start = static_cast<size_t>(config.sampleRate * 0.25f);
+  std::vector<float> tail(run.output.begin() + start, run.output.end());
+  const auto spectrum = computeSpectrumPeakAmplitudes(tail, config.sampleRate);
+  const double peak = peakAmplitudeAtHz(spectrum, config.sampleRate, 400.0f);
+  const double load = run.radio.speakerStage.speaker.nominalLoadOhms;
+  if (!(load > 0)) fail("sensitivity needs the rated voice-coil load");
+  return .5 * peak * peak / load;
+}
+
+void runSensitivity(const HarnessConfig& config) {
+  std::cout << "[sensitivity]\n";
+  constexpr double kStandardOutputWatts = .05;
+  double low = 1e-7, high = 1.0;
+  if (measureStandardOutputWatts(config, static_cast<float>(high)) < kStandardOutputWatts)
+    fail("receiver cannot reach the 50 mW standard output");
+  for (int step = 0; step < 24; ++step) {
+    const double mid = std::sqrt(low * high);
+    (measureStandardOutputWatts(config, static_cast<float>(mid)) < kStandardOutputWatts
+         ? low : high) = mid;
+  }
+  const double sensitivity = std::sqrt(low * high);
+  // Gain chain without AVC: the converter's conversion transconductance and
+  // the IF tubes' gm, from the tube data at their operating points.
+  Radio1938 probe = makeRadio(config, 0, false);
+  probe.controlBus.controlVoltage = 0;
+  RadioSampleContext probeCtx{};
+  RadioMixerNode::run(probe, 0, probeCtx);
+  std::cout << "metric,value\n";
+  std::cout << "conversion_transconductance_siemens," << probe.mixer.conversionGain << "\n";
+  std::cout << "if_stage_transconductance_siemens,"
+            << probe.ifStrip.stageTransconductanceSiemens << "\n";
+  std::cout << "avc_rectifier_per_if_volt," << probe.demod.am.avcRectifierPerIfVolt << "\n";
+  std::cout << "standard_output_watts," << kStandardOutputWatts << "\n";
+  std::cout << "sensitivity_microvolts," << 1e6 * sensitivity << "\n";
+  std::cout << "sensitivity_dbv," << dbFromRatio(sensitivity) << "\n\n";
+}
+
+// Recovery from one lightning crash: an RF impulse of the given area (volt-
+// seconds at the antenna) on an unmodulated carrier. A receiver must return
+// to its working point once the AVC has recovered.
+void runCrashRecovery(const HarnessConfig& config) {
+  std::cout << "[crash]\n";
+  std::cout << "time_ms,avc_line_volts,detector_volts,terminal_volts\n";
+  HarnessConfig levelConfig = config;
+  Radio1938 radio = makeRadio(levelConfig, 0, true);
+  const uint32_t frames = static_cast<uint32_t>(config.sampleRate * 1.5f);
+  std::vector<float> input(frames, 0.0f), output(frames), terminal(frames);
+  std::vector<RadioAmReceptionSample> paths(frames);
+  const uint32_t at = static_cast<uint32_t>(config.sampleRate * 0.1f);
+  paths[at].additiveRf = config.crashAreaVoltSeconds * config.sampleRate;
+  const uint32_t step = static_cast<uint32_t>(config.sampleRate * 0.005f);
+  for (uint32_t i = 0; i < frames; i += step) {
+    const uint32_t n = std::min(step, frames - i);
+    radio.processAmAudio(input.data() + i, output.data() + i, n, config.carrierRmsVolts, .3f,
+                         paths.data() + i, terminal.data() + i);
+    double peak = 0;
+    for (uint32_t k = i; k < i + n; ++k) peak = std::max(peak, double(std::fabs(terminal[k])));
+    std::cout << 1000.0 * (i + n) / config.sampleRate << "," << radio.demod.am.avcEnv << ","
+              << radio.demod.am.detectorNode << "," << peak << "\n";
+  }
+  std::cout << "\n";
+}
+
+// Playback-chain trace on silence: the full preview pipeline (broadcast
+// source, reception, receiver) every 50 ms, to follow slow loops.
+void runPreviewTrace(const HarnessConfig& config) {
+  std::cout << "[preview_trace]\n";
+  std::cout << "time_ms,avc_line_volts,detector_volts,first_audio_grid,first_audio_plate,"
+               "terminal_peak,main_bplus,aux_bplus,audio_bplus,screen_scale\n";
+  Radio1938 radio;
+  radio.applyReceiverProfile(config.receiverProfile);
+  if (!config.settingsPath.empty()) {
+    std::string error;
+    if (!applyRadioSettingsIni(radio, config.settingsPath, config.presetName, &error))
+      fail("failed to apply radio settings: " + error);
+  }
+  radio.init(1, config.sampleRate, config.bandwidthHz, 0.012f);
+  RadioAmIngressConfig ingress;
+  ingress.reception = radioReceptionConfigForProfile(config.reception);
+  RadioPreviewPipeline preview;
+  preview.initialize(radio, ingress, RadioPreviewConfig{}, config.sampleRate);
+  const uint32_t step = static_cast<uint32_t>(config.sampleRate * 0.05f);
+  std::vector<float> block(step);
+  for (uint32_t t = 0; t < 200; ++t) {
+    std::fill(block.begin(), block.end(), 0.0f);
+    preview.runBlock(radio, block.data(), step, 1);
+    double peak = 0;
+    for (float v : block) peak = std::max(peak, double(std::fabs(v)));
+    const auto& supply = radio.powerSupply.circuit;
+    std::cout << 50 * (t + 1) << "," << radio.demod.am.avcEnv << ","
+              << radio.demod.am.detectorNode << "," << radio.receiverCircuit.gridVoltage << ","
+              << radio.receiverCircuit.tubePlateVoltage << "," << peak << ","
+              << supply.volts(RectifierSupply::Main) << ","
+              << supply.volts(RectifierSupply::Auxiliary) << ","
+              << supply.volts(RectifierSupply::Audio) << "," << radioScreenSupplyScale(radio)
+              << "\n";
+  }
+  std::cout << "\n";
+}
+
 // Selective fading snapshots: equal groundwave and skywave (night-skywave
 // gains), the skywave 0.3 ms late, its RF phase stepped around the circle.
 // Fades are minutes long, so each phase is held while the AVC settles.
@@ -1641,6 +1800,7 @@ bool runReference(const HarnessConfig& config) {
   // compensation, which is checked separately against the impedance reference.
   HarnessConfig flatConfig = config;
   flatConfig.withoutLoudnessBranch = true;
+  flatConfig.levelMatchedFlat = true;
   SweepSummary sweep = summarizeSweep(measureSweepPoints(flatConfig));
   // Keep receiver quality limits independent of the rising period speaker
   // response, and ALSO validate/report the complete acoustic output below.
@@ -1648,6 +1808,7 @@ bool runReference(const HarnessConfig& config) {
   electricalConfig.observeTerminalVoltage = true;
   HarnessConfig flatElectricalConfig = electricalConfig;
   flatElectricalConfig.withoutLoudnessBranch = true;
+  flatElectricalConfig.levelMatchedFlat = true;
   const auto flatElectricalPoints = measureSweepPoints(flatElectricalConfig);
   SweepSummary electricalSweep = summarizeSweep(flatElectricalPoints);
   double loudnessErrorDb = 0.0;
@@ -1896,6 +2057,9 @@ int main(int argc, char** argv) {
     if (wantsSection(config, "sinad")) runSinad(config);
     if (wantsSection(config, "weak")) runWeakSignal(config);
     if (wantsSection(config, "avc")) runAvcCharacteristic(config);
+    if (wantsSection(config, "sensitivity")) runSensitivity(config);
+    if (config.section == "crash") runCrashRecovery(config);
+    if (config.section == "preview_trace") runPreviewTrace(config);
     if (wantsSection(config, "fading")) runSelectiveFading(config);
     if (wantsSection(config, "transient")) runTransient(config);
     bool referencePassed = true;

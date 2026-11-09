@@ -17,6 +17,152 @@ remaining approximations and changed acceptance assumptions are recorded separat
 
 ## Verdict
 
+### Absolute gain, impulsive noise and modulation hum, 2026-11-09
+
+**The receivers have absolute gain.** The RF and IF chain was a calibration:
+`rfGain` (0.237 / 0.509), an IF `stageGain` (46 / 20) with a
+`referenceTransimpedanceOhms`, and the mixer's `rfGridDriveVolts` and
+`acLoadResistanceOhms`, chosen to keep the detector at 2.4 V on a 0.12 V
+"nominal" carrier. Measured as the IRE/RMA sensitivity (the carrier, 30%
+modulated at 400 Hz, that gives the 50 mW standard output into the rated
+voice-coil load with the volume control full up; `radio_measurements
+--section sensitivity`), the 38-12 needed 12,300 uV and the Philco 5,500 uV.
+Period sets needed microvolts: an eight-tube 1937 Wells-Gardner A1 is rated
+8 uV on the broadcast band ([Service, December 1937, p. 729](https://www.worldradiohistory.com/Archive-Service-Magazine/30s/Service-1937-12.pdf)),
+a ten-tube 1936 Montgomery Ward 7 uV ([Radio-Craft, April 1936](https://www.rfcafe.com/references/radio-craft/ward-10-tube-radio-april-1936-radio-craft.htm)),
+and the IRE's "distant-signal" test level is 50 uV
+([Standards on Radio Receivers, 2.02](https://www.worldradiohistory.com/Archive-Early-Radio-Assorted/IEE-Staandards-on-Broadcastand-Television-Receivers-1961.pdf)).
+Fades were therefore compensated far less than in a real set, whose AVC is
+deep in regulation on any usable station.
+
+Every stage now carries its physical gain and no calibration remains:
+
+- Antenna: the EMF is the field times 4 m, the effective height of the IRE
+  standard antenna (an open single-wire antenna with its lead-in, which the
+  standard dummy antenna represents; same standard, 2.12). `everyday-1938`
+  gives 8.7 mV at unit path gain, `strong-local` 40 mV, `night-skywave` 3.3
+  mV; the old 0.12 V is the IRE "local-signal" level. The antenna coil's
+  step-up to the first grid is a prior, 6 for both sets.
+- Philco RF stage: the 6K7's gm (RCA curve at its bias, AVC and screen
+  voltage) times the transfer impedance of its RF transformer, 10 kohms
+  (prior; a stage gain near 13).
+- Converter: its plate current, from the conversion transconductance of the
+  tube model (6A7 242 umho at the 38-12's -6 V bias; 6L7 391 umho, RCA rates
+  about 350), drives the first IF transformer.
+- IF: each later transformer is driven by the plate current of a 78/6K7
+  whose gm follows the RCA curve: 1,576 umho for the 38-12's 78 at -2.3 V /
+  90 V and 1,351 umho for the Philco's 6K7s at -3 V / 90 V. The cans'
+  transfer impedance follows from their existing L, loss and coupling
+  priors. Gain now also changes with the bandwidth control, as the cans' Q
+  does.
+
+| | 38-12 | Philco 37-116 |
+| --- | ---: | ---: |
+| IRE sensitivity, before | 12,300 uV | 5,500 uV |
+| IRE sensitivity, now | 67 uV | 0.66 uV |
+
+The 38-12, five tubes without an RF stage, sits near the IRE distant-signal
+level; the Philco, with an RF stage and two IF stages, is a premium set's
+figure, ten times more sensitive than the rated mid-range sets above. Both
+depend on the antenna and RF-transformer priors.
+
+**The Philco's AVC delay is the documented one.** With absolute IF volts
+the A.V.C. 6J5G's +25 V cathode against the -3 V return (Bulletin 258,
+Fig. 2) is used directly: its grid conducts once the last IF plate swings
+28 V peak. The plate envelope is the detector input times the last can's
+centre-frequency primary/secondary ratio (0.71). The detector now works near
+30 V instead of 2.4 V. Audio at the speaker terminals against the antenna
+carrier, relative to the everyday-1938 carrier (`--section avc`):
+
+| Antenna carrier | 38-12 | Philco |
+| --- | ---: | ---: |
+| 0.3 mV | -14.4 dB | -1.7 dB |
+| 3 mV | -3.2 dB | -0.5 dB |
+| 30 mV | +2.8 dB | +0.5 dB |
+| 0.3 V | +6.6 dB | +1.2 dB |
+| 3 V | +9.3 dB | +1.8 dB |
+
+Fades are now held as a real set holds them: the 38-12's simple AVC within
+about 24 dB over 80 dB of carrier, the Philco's delayed AVC within 3.5 dB.
+
+**Listening setting.** The volume control is a listener setting, kept at the
+former room level (0.29 and 0.53 of the rated reference volts): 0.032 on the
+38-12 (was 0.085) and 0.084 on the Philco (was 0.54). With the detector near
+30 V the Philco's control now sits below its 1 Mohm tap at room level, where
+the tap network adds the bass compensation it was designed for. The
+reference sweep therefore removes the loudness branch at the same 1 kHz grid
+level rather than the same knob position; at the same position the plain
+control would overdrive the audio chain.
+
+Two Philco guards changed. Terminal IMD is -37.7 dB (guard -38 to -35):
+at a 30 V detector the single 75 ms AVC filter prior leaves a little audio
+ripple on the controlled grids (-36.8 dB with ten times the capacitance),
+and the loudness tap lifts 400 Hz into the output stage at room level, so
+acoustic IMD is -30.5 dB (guard -35 to -28). The guards were engineering
+bounds, not Philco data.
+
+Each IF tube's plate is limited to the swing its supply allows (200 V for
+the Philco, 80 V for the 38-12's roughly 100 V IF supply; priors), with a
+rounded clip that leaves normal full-modulation reception unchanged (checked
+within 0.1 dB). It matters only for impulses far above the carrier.
+
+Playback against the unfiltered source, the same eleven clips as before:
+the 38-12 is 14-17.5 dB quieter (unchanged within 1 dB), the Philco 5.5-8 dB
+(was 7.6-9.9 dB), music peaks at most -8.7 and -3.9 dBFS. Programme loudness
+to the noise of a silent carrier: 38-12 32.7 / 44.2 / 26.5 dB and Philco
+31.7 / 43.8 / 27.4 dB for everyday / strong-local / night-skywave.
+
+**Crackle is now reception noise.** The former crackle was a programme-
+independent stream of RF impulses of fixed size in volts at the receiver
+input, scaled by the `noise` weight. With a physical antenna EMF it would
+have been 23 dB stronger against the carrier, and it was anchored to
+nothing. It is removed (`crackleAmpScale`, `crackleRateScale`, `noiseref`
+and `noiseWeightScaleMax` are gone). In its place, atmospheric noise from
+lightning (ITU-R P.372, section 7) can be added at the antenna with the
+man-made noise:
+
+- Level: the P.372 charts give Fam at 1 MHz per season, time block and
+  place. For 2000-2400 local time over the north-eastern United States
+  they read about 65-70 dB above kT0b in winter (Fig. 20a), 80-85 dB in
+  spring (Fig. 26a) and 80-90 dB in summer (Fig. 32a), against 72.5 dB for
+  residential and 67.2 dB for rural man-made noise. The default is the
+  spring value, 80 dB, falling 27 dB per decade (the 80 dB grade over
+  0.5-2 MHz, Fig. 26b). By day it is far below man-made noise at medium
+  frequencies, so only the night profile would carry it.
+- Character: a Poisson stream of sferics with log-normal amplitudes, plus a
+  Gaussian share of the power for unresolved distant strokes. 3,000 sferics
+  per second, a log-amplitude spread of 2 (about 17 dB) and a 10% Gaussian
+  share reproduce P.372's median voltage deviation for the same chart, Vdm
+  6.2 dB in 200 Hz (Fig. 26c), at 6.3 dB, and 9.2 dB in 10 kHz against the
+  9.4 dB of its bandwidth translation (Fig. 40). The receiver's own
+  selectivity then sets the impulsiveness it hears.
+
+Tests check the C/N0, the power split between the Gaussian and impulsive
+parts, and the sferic rate and amplitude statistics at 44.1 and 96 kHz.
+**It is off by default.** Its large crashes drive the Philco's push-pull
+output stage hard enough that its plate current pulls the main B+ through
+zero (to -155 V), and the output stage and supply model then stay in a
+~40 Hz oscillation instead of recovering; the 38-12 recovers normally. That
+overload-recovery fault in the push-pull/supply model has to be fixed before
+the night profile can carry atmospheric noise (`radio_measurements --section
+preview_trace --reception night-skywave` shows it when the profile enables
+it). Until then `night-skywave` remains a lower bound on night noise, and
+the receivers have no crackle at all.
+
+**Modulation hum.** The RF and IF screens take their voltage from the B+,
+so its ripple modulates their gm and puts hum on any carrier, even an
+unmodulated one. Each stage's gm now follows the supply's main node, scaled
+to its screen voltage, through the network that feeds it. In the 38-12 the
+6A7 and 78 screens and the IF plates take the B+ line after the field coil
+directly (Bulletin 284, schematic); the Philco feeds its RF and IF stages
+through the 4000-ohm half of resistor 128 with 2 uF, and its screen bus near
+the 6A8G has 20,000 ohms (61) and 8 uF (62) (Bulletin 258; that every RF/IF
+screen shares that bus is read from a dense schematic). On an unmodulated
+carrier the 120 Hz component at the detector is -52 dB in the 38-12 and
+negligible in the Philco (-139 dB). In the 38-12 it partly cancels the
+output stage's own ripple hum at the speaker terminals. The converter's own
+screen dependence is not modelled.
+
 ### AVC and selective fading, 2026-11-06
 
 **The AVC barely regulated.** The AVC line was charged by a separate diode
@@ -182,13 +328,9 @@ chain against an independent nodal impedance calculation of the tapped pot
 dB. At 85% modulation the difference reaches 1.1 dB because the detector is
 no longer linear, so the check is made at low modulation.
 
-**Remaining limit: sensitivity.** The receivers' absolute RF/IF gain is
-declared, so they are far less sensitive than real sets, which delivered
-full output from microvolts. A real set receiving 0.12 V is deep in AVC
-regulation; here the Philco's AVC is only just active at that level (0.18 V)
-and the 38-12's simple AVC at 1.2 V. Fades of the received carrier are
-therefore compensated less than in a real receiver. Correcting it needs
-documented sensitivity data and a rebalanced gain chain.
+**Remaining limit: sensitivity.** Resolved on 2026-11-09; see "Absolute
+gain, impulsive noise and modulation hum" above. The table and the 4 V
+delay in this section describe the calibrated gain chain of that date.
 
 **Listening level against the unfiltered source.** Rendered with
 `render-radio` (`everyday-1938`, room on), ten loudly mastered music tracks
@@ -248,9 +390,8 @@ objectionable when it is as disturbing as a co-channel programme 20:1
 (26 dB) down; at the residential primary-service limit both receivers stay
 above that, as they should. Caveats: the ITU coefficients are 1970s
 medians and 1938 man-made noise was probably higher; night-time
-atmospheric noise (CCIR Report 322 maps) is not included, so
-`night-skywave` is a lower bound on its noise; atmospheric crashes remain
-the separate impulse model. The receiver-internal IF noise is set to zero.
+atmospheric noise is modelled since 2026-11-09 but not yet enabled (see
+above), so `night-skywave` is a lower bound on its noise. The receiver-internal IF noise is set to zero.
 Tests check the generated density against the formula at 44.1, 48 and 96
 kHz, and that the audio noise follows the field ratio between
 `everyday-1938` and `strong-local` through the whole receiver (within 1.5
@@ -899,7 +1040,8 @@ It is not copied as an exact full-range 37-116 curve.
 - cone breakup, dip, top roll-off, and compliance asymmetry;
 - grille and listener-dependent open-back rear-radiation parameters;
 - seeded component drift;
-- procedural hiss, crackle, and hum levels;
+- procedural post-detector hiss and supplemental hum levels (crackle is
+  now antenna noise of the reception profile);
 - deterministic broadband transmitter noise inside the documented period
   output-noise range.
 - the representative groundwave/skywave ratio and the intermittent

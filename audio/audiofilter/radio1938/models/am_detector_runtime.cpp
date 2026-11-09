@@ -181,7 +181,9 @@ float AMDetector::run(float signalI, float signalQ, Radio1938& radio) {
   if (metricsEnabled) {
     detectorIslandTimeNs += am_detector_internal::monotonicNowNs() - islandStartNs;
   }
-  const float avcSource = avcFromIfEnvelope ? std::sqrt(ifI * ifI + ifQ * ifQ) : detectorNode;
+  const float avcSource = avcFromIfEnvelope
+                              ? avcRectifierPerIfVolt * std::sqrt(ifI * ifI + ifQ * ifQ)
+                              : detectorNode;
   avcEnv += avcTick * (std::max(avcSource - avcDelayBiasVolts, 0.0f) - avcEnv);
   assert(std::isfinite(detectorNode) && std::isfinite(avcEnv));
   if (radio.calibration.enabled) {

@@ -321,6 +321,9 @@ Radio1938 makeUninitializedFixture(const HarnessConfig& config, float noiseWeigh
       fail("unknown preset: " + config.presetName);
     }
   }
+  // Node checks drive the IF strip with unit-scale test signals and compare
+  // it against linear references; the plate-swing limit is checked elsewhere.
+  radio.ifStrip.stagePlateSwingLimitVolts = 0;
   radio.initialized = true;
   radio.setCalibrationEnabled(true);
   radio.resetCalibration();
@@ -430,7 +433,7 @@ double runFrontEndRms(Radio1938& radio,
 
 double runIfDetectorMagnitudeRms(Radio1938& radio, float detuneHz) {
   RadioIFStripNode::reset(radio);
-  radio.frontEnd.rfGain = 1.0f;
+  radio.frontEnd.antennaVoltageGain = 1.0f;
   radio.controlBus.controlVoltage = 0.0f;
   radio.mixer.conversionGain = 1.0f;
   radio.tuning.tuneAppliedHz = detuneHz;
@@ -769,7 +772,7 @@ DemodSidebandMetrics runIfDetectorSidebandResponse(Radio1938& radio,
   RadioAMDetectorNode::reset(radio);
   RadioDetectorAudioNode::reset(radio);
   radio.controlBus.controlVoltage = 0.0f;
-  radio.frontEnd.rfGain = 1.0f;
+  radio.frontEnd.antennaVoltageGain = 1.0f;
   radio.mixer.conversionGain = 1.0f;
   std::vector<float> detectorFeed;
   std::vector<float> detectorAudio;
@@ -836,7 +839,7 @@ DemodSidebandMetrics runIfStripRealRfDetectorSidebandResponse(Radio1938& radio,
   RadioAMDetectorNode::reset(radio);
   RadioDetectorAudioNode::reset(radio);
   radio.controlBus.controlVoltage = 0.0f;
-  radio.frontEnd.rfGain = 1.0f;
+  radio.frontEnd.antennaVoltageGain = 1.0f;
   radio.mixer.conversionGain = 1.0f;
   float carrierHz = radio.tuning.sourceCarrierHz;
   float carrierPeak = std::sqrt(2.0f) * std::max(carrierRmsVolts, 0.0f);
@@ -1078,26 +1081,6 @@ std::vector<TestRow> runControlPhysics(const HarnessConfig& config) {
              ctx.derived.noiseAmp, 0.0, 0.0, "noiseWeight=0");
   }
 
-  {
-    Radio1938 tuned = makeNodeFixture(config, 0.4f, {PassId::InterferenceDerived});
-    Radio1938 mistuned = makeNodeFixture(config, 0.4f, {PassId::InterferenceDerived});
-    tuned.controlBus.controlVoltage = 1.0f;
-    tuned.controlSense.tuningErrorSense = 0.0f;
-    mistuned.controlBus.controlVoltage = 1.0f;
-    mistuned.controlSense.tuningErrorSense = 1.0f;
-    tuned.tuning.tuneAppliedHz = 0.0f;
-    mistuned.tuning.tuneAppliedHz = mistuned.tuning.tunedBw;
-    RadioSampleContext tunedCtx{};
-    RadioSampleContext mistunedCtx{};
-    RadioInterferenceDerivedNode::run(tuned, tunedCtx);
-    RadioInterferenceDerivedNode::run(mistuned, mistunedCtx);
-    addPredicate(rows, "InterferenceDerived", "rf_impulse_source_independent_of_tuning",
-                 mistunedCtx.derived.rfImpulseAmp ==
-                     tunedCtx.derived.rfImpulseAmp,
-                 mistunedCtx.derived.rfImpulseAmp -
-                     tunedCtx.derived.rfImpulseAmp,
-                 "receiver filtering determines impulse audibility; source stays constant");
-  }
 
   {
     Radio1938 radio = makeNodeFixture(config, 0.4f, {PassId::InterferenceDerived});
@@ -1126,12 +1109,15 @@ struct IfNoiseStats {
   double noise = 0.0;
 };
 
+// The IF tubes' gain follows their bias; shifting it scales the gain after
+// the input noise.
 IfNoiseStats measureIfNoise(HarnessConfig config, float rate, float bw,
-                           float stageGain) {
+                           float stageBiasShiftVolts) {
   config.sampleRate = rate;
   config.bandwidthHz = bw;
   Radio1938 radio = makeNodeFixture(config, 0.0f, {PassId::IFStrip});
-  radio.ifStrip.stageGain = stageGain;
+  radio.ifStrip.stageBiasVolts += stageBiasShiftVolts;
+  radio.tuning.configRevision++;
   radio.mixer.conversionGain = 1.0f;
   radio.controlBus.controlVoltage = 0.0f;
   const auto frames = static_cast<uint32_t>(rate);
@@ -1157,19 +1143,21 @@ std::vector<TestRow> runRfPhysics(const HarnessConfig& config) {
   std::vector<TestRow> rows;
 
   {
-    const auto base = measureIfNoise(config, 48000.0f, 5000.0f, 1.0f);
-    const auto amplified = measureIfNoise(config, 48000.0f, 5000.0f, 4.6f);
+    const auto base = measureIfNoise(config, 48000.0f, 5000.0f, 0.0f);
+    const auto amplified = measureIfNoise(config, 48000.0f, 5000.0f, 1.0f);
     addRange(rows, "IFStrip", "gain_preserves_input_referred_snr",
              (amplified.carrier / amplified.noise) / (base.carrier / base.noise),
              0.995, 1.005, "carrier and noise traverse the same gain");
-    const auto narrow = measureIfNoise(config, 48000.0f, 2500.0f, 1.0f);
+    const auto narrow = measureIfNoise(config, 48000.0f, 2500.0f, 0.0f);
+    // The bandwidth control changes the cans' losses and so their gain too;
+    // compare noise against the carrier through the same strip.
     addRange(rows, "IFStrip", "bandwidth_filters_input_noise",
-             narrow.noise / base.noise, 0.60, 0.85,
+             (narrow.noise / narrow.carrier) / (base.noise / base.carrier), 0.60, 0.85,
              "halving bandwidth reduces integrated noise");
     // Fixed physical tank bandwidth at all envelope sample rates.
-    const auto densityRef = measureIfNoise(config, 48000.0f, 2000.0f, 1.0f);
+    const auto densityRef = measureIfNoise(config, 48000.0f, 2000.0f, 0.0f);
     for (float rate : {44100.0f, 96000.0f}) {
-      const auto other = measureIfNoise(config, rate, 2000.0f, 1.0f);
+      const auto other = measureIfNoise(config, rate, 2000.0f, 0.0f);
       addRange(rows, "IFStrip", "noise_density_at_" + std::to_string(int(rate)),
                other.noise / densityRef.noise, 0.90, 1.10,
                "same physical bandwidth and input noise density");
@@ -1239,7 +1227,7 @@ std::vector<TestRow> runRfPhysics(const HarnessConfig& config) {
                  highAvc / std::max(lowAvc, 1e-12), "high AVC / low AVC RMS");
 
     Radio1938 muted = makeNodeFixture(config, 0.0f, {PassId::FrontEnd});
-    muted.frontEnd.rfGain = 0.0f;
+    muted.frontEnd.antennaVoltageGain = 0.0f;
     RadioFrontEndNode::reset(muted);
     RadioSampleContext mutedCtx{};
     mutedCtx.signal.setRealRf(0.4f);
@@ -1494,8 +1482,12 @@ std::vector<TestRow> runDetectorPhysics(const HarnessConfig& config) {
     Radio1938 strong = makeNodeFixture(config, 0.0f, {PassId::Demod});
     RadioAMDetectorNode::reset(weak);
     RadioAMDetectorNode::reset(strong);
-    // A delayed AVC stays at zero below its delay; drive past it.
-    const float strongEnv = 0.90f + strong.demod.am.avcDelayBiasVolts;
+    // A delayed AVC stays at zero below its delay; drive past it. Its
+    // rectifier takes the IF plate, which the strip relates to this input.
+    const float strongEnv = (0.90f + strong.demod.am.avcDelayBiasVolts) /
+                            (strong.demod.am.avcFromIfEnvelope
+                                 ? strong.demod.am.avcRectifierPerIfVolt
+                                 : 1.0f);
     for (uint32_t i = 0; i < kNodeTestFrames; ++i) {
       RadioSampleContext weakCtx{};
       RadioSampleContext strongCtx{};

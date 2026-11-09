@@ -55,7 +55,7 @@ The historical anchors for the node semantics are:
 - Physics check: sag mapping stays bounded 0..1.
 
 `InterferenceDerived`
-- Represents pre-detector and post-detector noise/crackle exposure as a function of gain and mistune.
+- Represents pre-detector and post-detector noise exposure as a function of gain and mistune. Crackle is antenna noise of the reception profile, not a receiver source.
 - Physics check: zero configured noise produces zero derived interference.
 
 `FrontEnd`
@@ -95,7 +95,7 @@ The historical anchors for the node semantics are:
 - Physics check: derived nominal output reference is finite positive; zero drive produces near-zero secondary; output grids remain anti-phase.
 
 `Noise`
-- Represents additive hiss/crackle/hum injection only when the derived noise inputs request it.
+- Represents additive hiss/hum injection only when the derived noise inputs request it.
 - Physics check: zero derived noise is exact passthrough.
 
 `Speaker`

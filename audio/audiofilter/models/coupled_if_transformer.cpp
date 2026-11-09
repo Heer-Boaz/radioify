@@ -34,9 +34,10 @@ void CoupledIfTransformer::configure(double sampleRate, double centreHz, double 
   m01_ = 2 * r01;
   m10_ = 2 * r10;
   m11_ = 2 * r11 - 1;
-  // This reference converts the input envelope's units to current. It is a
-  // declared gain calibration, not an extra loading resistor or per-curve AGC.
+  // Plate current = input / drive resistance; not a loading resistor.
   const double drive = h / (2 * cp * reference);
+  // Steady state at the centre: b * secondary = g10 * primary.
+  primaryPerSecondary_ = g10 > 0 ? b / g10 : 0;
   b0_ = r00 * drive;
   b1_ = r10 * drive;
 }

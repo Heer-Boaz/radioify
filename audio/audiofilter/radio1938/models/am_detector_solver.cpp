@@ -53,7 +53,8 @@ void primeDetectorWarmStart(AMDetector& detector, float carrierPeak, DetectorLoa
           (dc.conductance * detector.filteredStorageNode + dc.historyCurrent);
   detector.detectorNode = detector.filteredStorageNode;
   detector.avcEnv = std::max(
-      (detector.avcFromIfEnvelope ? carrierPeak : detector.filteredStorageNode) -
+      (detector.avcFromIfEnvelope ? detector.avcRectifierPerIfVolt * carrierPeak
+                                  : detector.filteredStorageNode) -
           detector.avcDelayBiasVolts,
       0.0f);
   load.historyCurrent = dc.historyCurrent - load.avcConductance * detector.avcEnv;

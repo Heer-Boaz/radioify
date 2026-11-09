@@ -47,11 +47,9 @@ void RadioMixerNode::init(Radio1938& radio, RadioInitContext&) {
       mixer.modelCutoffVolts, mixer.plateQuiescentVolts, mixer.screenVolts,
       mixer.plateQuiescentCurrentAmps, mixer.mutualConductanceSiemens,
       mixer.plateKneeVolts, mixer.gridSoftnessVolts);
-  const float rfGridDrive =
-      mixer.rfGridDriveVolts * std::max(radio.identity.mixerDriveDrift, 0.65f);
+  mixer.conversionDrift = std::max(radio.identity.mixerDriveDrift, 0.65f);
   mixer.effectiveLoGridBiasVolts =
       mixer.loGridBiasVolts * std::max(radio.identity.mixerBiasDrift, 0.65f);
-  mixer.conversionGainScale = rfGridDrive * mixer.acLoadResistanceOhms;
   const float sampleRate = std::max(radio.sampleRate, 1.0f);
   mixer.inputDriveEnvCoeff = std::exp(-1.0f / (sampleRate * 0.0015f));
   assert((std::fabs(mixer.plateQuiescentVolts - mixer.plateDcVolts) <=
@@ -70,11 +68,12 @@ float RadioMixerNode::run(Radio1938& radio, float y, RadioSampleContext& ctx) {
   float avcT = clampf(radio.controlBus.controlVoltage / 1.25f, 0.0f, 1.0f);
   float baseGridVolts = mixer.biasVolts - mixer.avcGridDriveVolts * avcT;
   mixer.mixedBaseGridVolts = baseGridVolts + mixer.effectiveLoGridBiasVolts;
+  // The IF transformer is the plate load, so the converter delivers current.
   mixer.conversionGain =
       estimateMixerEnvelopeConversionGain(mixer.plateCurrentForGrid,
                                           mixer.mixedBaseGridVolts,
                                           mixer.loGridDriveVolts) *
-      mixer.conversionGainScale;
+      mixer.conversionDrift;
 
   float signalMagnitude = std::fabs(y);
   if (ctx.signal.mode == SourceInputMode::ComplexEnvelope) {

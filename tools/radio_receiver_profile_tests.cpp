@@ -283,7 +283,6 @@ NoiseProbe measurePlaybackNoise(RadioReceiverProfile profile,
   const bool all = source == NoiseSource::All;
   if (!all && source != NoiseSource::Post) radio.globals.postNoiseMix = 0.0f;
   if (!all && source != NoiseSource::Hum) radio.noiseConfig.enableHumTone = false;
-  if (!all) radio.noiseConfig.crackleAmpScale = 0.0f;
   radio.init(1, kRate, 5500.0f, 0.012f);
   RadioAmIngressConfig ingress;
   ingress.reception = radioReceptionConfigForProfile(reception);
@@ -367,7 +366,7 @@ void expectPlaybackNoiseBalance() {
     const double everyday = measure(RadioReceptionProfile::Everyday1938);
     const double strong = measure(RadioReceptionProfile::StrongLocal);
     const auto ratioDb = [](RadioReceptionProfile reception) {
-      return radioReceptionCarrierToNoiseDensityDbHz(
+      return radioReceptionCarrierToManMadeNoiseDbHz(
           radioReceptionConfigForProfile(reception), 1e6);
     };
     const double expected = ratioDb(RadioReceptionProfile::StrongLocal) -

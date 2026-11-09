@@ -55,8 +55,12 @@ RadioReceptionConfig radioReceptionConfigForProfile(
       config.skywaveAmplitudeVariationRms = 0.35f;
       // Rural listener at 0.5 mV/m, the FCC 1939 primary field for towns of
       // up to 2,500 and the upper limit for rural areas in winter. P.372
-      // rural man-made noise. Night-time atmospheric noise, which can
-      // exceed it, is not included, so this profile is a lower noise bound.
+      // rural man-made noise. The evening atmospheric noise that arrives by
+      // skywave after dark (spring, north-eastern United States, about 13 dB
+      // above it) is modelled but left off: its large crashes drive the
+      // Philco's push-pull output and supply model into a state it does not
+      // recover from, which must be fixed first. Until then this profile is
+      // a lower bound on night noise.
       config.groundwaveFieldVoltsPerMeter = 0.5e-3f;
       config.manMadeNoiseC = 67.2f;
       config.manMadeNoiseD = 27.7f;
@@ -65,21 +69,46 @@ RadioReceptionConfig radioReceptionConfigForProfile(
   throw std::invalid_argument("Unknown radio reception profile");
 }
 
-double radioReceptionCarrierToNoiseDensityDbHz(const RadioReceptionConfig& config,
-                                               double stationFrequencyHz) {
+float radioReceptionAntennaCarrierRmsVolts(const RadioReceptionConfig& config) {
+  if (!(config.groundwaveFieldVoltsPerMeter > 0.0f) || !(config.groundwaveGain > 0.0f) ||
+      !(config.antennaEffectiveHeightMeters > 0.0f) ||
+      !std::isfinite(config.groundwaveFieldVoltsPerMeter * config.antennaEffectiveHeightMeters))
+    throw std::invalid_argument("invalid antenna field configuration");
+  const float pathGain = config.enabled ? config.groundwaveGain : 1.0f;
+  return config.groundwaveFieldVoltsPerMeter * config.antennaEffectiveHeightMeters / pathGain;
+}
+
+namespace {
+
+// ITU-R P.372 eq. (7) per hertz: En = Fa + 20 log f(MHz) - 95.5 dB(uV/m),
+// with Fa = c - d log10(f MHz); returned as carrier field minus En.
+double carrierToNoiseDbHz(const RadioReceptionConfig& config, double stationFrequencyHz,
+                          double c, double d) {
   const double megahertz = stationFrequencyHz * 1e-6;
   if (!(megahertz >= 0.3 && megahertz <= 250.0) ||
       !(config.groundwaveFieldVoltsPerMeter > 0.0f) ||
-      !(config.groundwaveGain > 0.0f) || !std::isfinite(config.manMadeNoiseC) ||
-      !std::isfinite(config.manMadeNoiseD)) {
+      !(config.groundwaveGain > 0.0f) || !std::isfinite(c) || !std::isfinite(d)) {
     throw std::invalid_argument("invalid external radio noise configuration");
   }
-  const double faDb = config.manMadeNoiseC - config.manMadeNoiseD * std::log10(megahertz);
-  // ITU-R P.372 eq. (7) per hertz: En = Fa + 20 log f(MHz) - 95.5 dB(uV/m).
+  const double faDb = c - d * std::log10(megahertz);
   const double noiseFieldDensityDbUv = faDb + 20.0 * std::log10(megahertz) - 95.5;
   // Without propagation effects the carrier arrives at unit path gain.
   const double pathGain = config.enabled ? config.groundwaveGain : 1.0;
   const double carrierFieldDbUv = 20.0 * std::log10(
       1e6 * config.groundwaveFieldVoltsPerMeter / pathGain);
   return carrierFieldDbUv - noiseFieldDensityDbUv;
+}
+
+}  // namespace
+
+double radioReceptionCarrierToManMadeNoiseDbHz(const RadioReceptionConfig& config,
+                                              double stationFrequencyHz) {
+  return carrierToNoiseDbHz(config, stationFrequencyHz, config.manMadeNoiseC,
+                            config.manMadeNoiseD);
+}
+
+double radioReceptionCarrierToAtmosphericNoiseDbHz(const RadioReceptionConfig& config,
+                                                  double stationFrequencyHz) {
+  return carrierToNoiseDbHz(config, stationFrequencyHz, config.atmosphericNoiseFamDb,
+                            config.atmosphericNoiseD);
 }

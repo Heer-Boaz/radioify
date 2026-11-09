@@ -43,6 +43,14 @@ double remoteCutoffTransconductance(double gridVolts) {
   return 1e-6 * std::exp(logMicromhos(gridVolts));
 }
 
+double remoteCutoffStageTransconductance(double biasVolts, double avcVolts,
+                                         double screenVolts) {
+  if (!std::isfinite(biasVolts) || !std::isfinite(avcVolts) || !std::isfinite(screenVolts) ||
+      screenVolts <= 0)
+    throw std::invalid_argument("remote-cutoff stage needs finite bias/AVC and screen > 0");
+  return 1e-6 * std::exp(logMicromhos(100 / screenVolts * (biasVolts - std::max(avcVolts, 0.0))));
+}
+
 double remoteCutoffRelativeGain(double biasVolts, double avcVolts, double screenVolts) {
   if (!std::isfinite(biasVolts) || !std::isfinite(avcVolts) || !std::isfinite(screenVolts) ||
       screenVolts <= 0)

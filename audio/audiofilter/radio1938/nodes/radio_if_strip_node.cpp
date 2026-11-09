@@ -74,9 +74,11 @@ std::array<float, 2> runLoadedIfCanEquivalent(Radio1938& radio,
     ifEnvI += ifStrip.noiseDist(ifStrip.noiseRng) * scale;
     ifEnvQ += ifStrip.noiseDist(ifStrip.noiseRng) * scale;
   }
-  ifEnvI *= ifGain;
-  ifEnvQ *= ifGain;
+  (void)ifGain;  // applied per stage below
   std::array<float, 2> loadedCanEnv{};
+  // An IF tube's plate cannot swing further than its supply allows; beyond
+  // that a crash saturates the stage (rounded clip of order 12).
+  const float plateLimit = ifStrip.stagePlateSwingLimitVolts;
   // Four short envelope steps limit trapezoidal frequency warping. All cans
   // share this clock; there is no intermediate host-rate down/up sampling.
   for (int step = 1; step <= 4; ++step) {
@@ -84,8 +86,22 @@ std::array<float, 2> runLoadedIfCanEquivalent(Radio1938& radio,
     loadedCanEnv = {
         ifStrip.previousIfInput[0] + t * (ifEnvI - ifStrip.previousIfInput[0]),
         ifStrip.previousIfInput[1] + t * (ifEnvQ - ifStrip.previousIfInput[1])};
-    for (int can = 0; can < ifStrip.transformerCount; ++can)
+    for (int can = 0; can < ifStrip.transformerCount; ++can) {
+      if (can > 0) {
+        // IF tube: its grid is the previous can's secondary.
+        const float gain = ifStrip.stageAvcRatio;
+        loadedCanEnv = {gain * loadedCanEnv[0], gain * loadedCanEnv[1]};
+      }
       loadedCanEnv = ifStrip.transformers[can].process(loadedCanEnv[0], loadedCanEnv[1]);
+      if (can > 0 && plateLimit > 0.0f) {
+        const double ratio = ifStrip.transformers[can].primaryToSecondaryRatio();
+        const float x = static_cast<float>(
+            ratio * std::hypot(loadedCanEnv[0], loadedCanEnv[1]) / plateLimit);
+        const float x4 = x * x * x * x;
+        const float clip = 1.0f / std::pow(1.0f + x4 * x4 * x4, 1.0f / 12.0f);
+        loadedCanEnv = {clip * loadedCanEnv[0], clip * loadedCanEnv[1]};
+      }
+    }
   }
   ifStrip.previousIfInput = {ifEnvI, ifEnvQ};
 
@@ -118,6 +134,12 @@ void configureIfStrip(Radio1938& radio) {
   const float width = safeAudioBw / 5500.0f;
   if (ifStrip.transformerCount < 1 || ifStrip.transformerCount > 3)
     throw std::invalid_argument("IF transformer count must be between 1 and 3");
+  if (ifStrip.avcStageCount != ifStrip.transformerCount - 1)
+    throw std::invalid_argument("one IF tube drives each transformer after the first");
+  // Absolute gm of the IF tubes at their operating point; the AVC ratio is
+  // applied to the drive, which is equivalent in this linear cascade.
+  ifStrip.stageTransconductanceSiemens = static_cast<float>(
+      remoteCutoffStageTransconductance(ifStrip.stageBiasVolts, 0, ifStrip.stageScreenVolts));
   for (int can = 0; can < ifStrip.transformerCount; ++can) {
     const float k = can + 1 == ifStrip.transformerCount ? ifStrip.outputCouplingCoeff
                                                         : ifStrip.interstageCouplingCoeff;
@@ -129,8 +151,10 @@ void configureIfStrip(Radio1938& radio) {
         ifStrip.secondarySeriesResistanceOhms * width,
         ifStrip.secondaryLoadResistanceOhms / width,
         k * width * radio.identity.ifCouplingDrift,
-        ifStrip.referenceTransimpedanceOhms / width);
+        can == 0 ? 1.0 : 1.0 / ifStrip.stageTransconductanceSiemens);
   }
+  radio.demod.am.avcRectifierPerIfVolt = static_cast<float>(
+      ifStrip.transformers[ifStrip.transformerCount - 1].primaryToSecondaryRatio());
   ifStrip.senseLowHz = ifStrip.ifCenterHz - 0.5f * physicalChannelBw;
   ifStrip.senseHighHz = ifStrip.ifCenterHz + 0.5f * physicalChannelBw;
   ifStrip.demodBandwidthHz = safeAudioBw;
@@ -155,6 +179,7 @@ void RadioIFStripNode::reset(Radio1938& radio) {
   auto& ifStrip = radio.ifStrip;
   ifStrip.prevSourceMode = SourceInputMode::ComplexEnvelope;
   ifStrip.appliedAvcVolts = -1.0f;
+  ifStrip.appliedScreenScale = -1.0f;
   ifStrip.avcGain = 1.0f;
   resetIfStripRuntimeEnvelopeState(ifStrip);
 }
@@ -170,14 +195,21 @@ float RadioIFStripNode::run(Radio1938& radio, float y, RadioSampleContext& ctx) 
     return y;
   }
 
+  // The IF tubes' gm follows the AVC bias and their screen supply, whose
+  // ripple therefore modulates the carrier (modulation hum).
   const float avcVolts = radioAvcLineVolts(radio);
-  if (std::fabs(avcVolts - ifStrip.appliedAvcVolts) > 1e-4f) {
-    ifStrip.avcGain = static_cast<float>(std::pow(
-        remoteCutoffRelativeGain(ifStrip.stageBiasVolts, avcVolts, ifStrip.stageScreenVolts),
-        ifStrip.avcStageCount));
+  const float screenScale = radioScreenSupplyScale(radio);
+  if (std::fabs(avcVolts - ifStrip.appliedAvcVolts) > 1e-4f ||
+      std::fabs(screenScale - ifStrip.appliedScreenScale) > 1e-6f) {
+    ifStrip.stageAvcRatio = static_cast<float>(
+        remoteCutoffStageTransconductance(ifStrip.stageBiasVolts, avcVolts,
+                                          ifStrip.stageScreenVolts * screenScale) /
+        ifStrip.stageTransconductanceSiemens);
+    ifStrip.avcGain = std::pow(ifStrip.stageAvcRatio, float(ifStrip.avcStageCount));
     ifStrip.appliedAvcVolts = avcVolts;
+    ifStrip.appliedScreenScale = screenScale;
   }
-  float ifGain = ifStrip.stageGain * ifStrip.avcGain;
+  float ifGain = ifStrip.avcGain;
   if (ifStrip.prevSourceMode != mode) {
     resetIfStripRuntimeEnvelopeState(ifStrip);
   }

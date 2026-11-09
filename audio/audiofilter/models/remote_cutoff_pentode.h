@@ -15,6 +15,10 @@
 // Transconductance in siemens at Ec2 = 100 V (Eb 250 V).
 double remoteCutoffTransconductance(double gridVolts);
 
+// Absolute gm of a stage at its own screen voltage, by the same scaling.
+double remoteCutoffStageTransconductance(double biasVolts, double avcVolts,
+                                         double screenVolts);
+
 // gm(bias - avc) / gm(bias) for a stage at the given screen voltage.
 double remoteCutoffRelativeGain(double biasVolts, double avcVolts, double screenVolts);
 

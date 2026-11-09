@@ -121,10 +121,20 @@ struct RadioPreviewPipeline {
     float intermittentOscSin = 0.0f;
     float intermittentStepCos = 1.0f;
     float intermittentStepSin = 0.0f;
-    uint32_t externalNoiseState = 0;
+    struct GaussianStream {
+      uint32_t state = 0;
+      float spare = 0.0f;
+      bool spareValid = false;
+    };
+    // Man-made noise and the Gaussian share of atmospheric noise.
+    GaussianStream externalNoise;
     float externalNoiseSigma = 0.0f;
-    float externalNoiseSpare = 0.0f;
-    bool externalNoiseSpareValid = false;
+    // Sferics: a Bernoulli draw per sample (Poisson in the limit) and a
+    // log-normal amplitude of fixed impulse area at every host rate.
+    GaussianStream sferics;
+    float sfericProbability = 0.0f;
+    float sfericMedianVolts = 0.0f;
+    float sfericLogSigma = 0.0f;
   } receptionRuntime;
 
   Radio1938* radio = nullptr;

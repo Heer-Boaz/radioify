@@ -77,6 +77,12 @@ void validateReceptionConfig(const RadioReceptionConfig& config,
     requirePositiveFinite(config.groundwaveFieldVoltsPerMeter);
     requirePositiveFinite(config.groundwaveGain);
     assert(config.externalNoiseSeed != 0u);
+    if (config.atmosphericNoiseEnabled) {
+      requirePositiveFinite(config.sfericRatePerSecond);
+      requireNonNegativeFinite(config.sfericLogAmplitudeSigma);
+      assert(config.atmosphericGaussianPowerFraction >= 0.0f &&
+             config.atmosphericGaussianPowerFraction < 1.0f);
+    }
   }
 
   if (!config.intermittentCarrierEnabled) return;
@@ -108,7 +114,7 @@ void configureReceptionRuntime(RadioPreviewPipeline& preview) {
   runtime.sampleRate = preview.sampleRate;
   runtime.sourceCarrierHz = preview.radio->resolvedInputCarrierHz();
   runtime.carrierPeak = std::sqrt(2.0f) *
-                        preview.ingress->receivedCarrierRmsVolts;
+                        radioReceptionAntennaCarrierRmsVolts(preview.ingress->reception);
   validateReceptionConfig(config, runtime.sampleRate,
                           runtime.sourceCarrierHz);
   runtime.skyAmplitudePole = onePoleCoefficient(
@@ -126,32 +132,63 @@ void configureReceptionRuntime(RadioPreviewPipeline& preview) {
       -1.0f /
       (runtime.sampleRate * config.intermittentReleaseMs * 0.001f));
   runtime.externalNoiseSigma = 0.0f;
-  if (config.externalNoiseEnabled) {
-    // White RF noise of one-sided density N0 = 2 sigma^2 / fs against a
-    // carrier of power Vrms^2 at unit path gain. The receiver's own
-    // selectivity sets the bandwidth that reaches the detector.
-    const double cn0DbHz = radioReceptionCarrierToNoiseDensityDbHz(
-        config, preview.radio->tuning.stationFrequencyHz);
-    runtime.externalNoiseSigma = static_cast<float>(
-        preview.ingress->receivedCarrierRmsVolts *
-        std::sqrt(0.5 * runtime.sampleRate) * std::pow(10.0, -cn0DbHz / 20.0));
+  runtime.sfericProbability = 0.0f;
+  runtime.sfericMedianVolts = 0.0f;
+  runtime.sfericLogSigma = 0.0f;
+  if (!config.externalNoiseEnabled) return;
+  // White RF noise of one-sided density N0 = 2 sigma^2 / fs against a
+  // carrier of power Vrms^2 at unit path gain has sigma^2 = fs N0 / 2. The
+  // receiver's own selectivity sets the bandwidth that reaches the detector.
+  const double stationHz = preview.radio->tuning.stationFrequencyHz;
+  const double carrierRms = radioReceptionAntennaCarrierRmsVolts(config);
+  const auto variance = [&](double cn0DbHz) {
+    const double sigma =
+        carrierRms * std::sqrt(0.5 * runtime.sampleRate) * std::pow(10.0, -cn0DbHz / 20.0);
+    return sigma * sigma;
+  };
+  double gaussianVariance = variance(radioReceptionCarrierToManMadeNoiseDbHz(config, stationHz));
+  if (config.atmosphericNoiseEnabled) {
+    const double atmospheric =
+        variance(radioReceptionCarrierToAtmosphericNoiseDbHz(config, stationHz));
+    const double gaussianShare = config.atmosphericGaussianPowerFraction;
+    gaussianVariance += gaussianShare * atmospheric;
+    // Impulses of amplitude a at rate r carry density 2 r E[a^2] / fs^2, i.e.
+    // variance r E[a^2] / fs; log-normal E[a^2] = median^2 exp(2 sigma^2).
+    const double probability = -std::expm1(-config.sfericRatePerSecond / runtime.sampleRate);
+    const double rate = probability * runtime.sampleRate;
+    const double logSigma = config.sfericLogAmplitudeSigma;
+    runtime.sfericProbability = static_cast<float>(probability);
+    runtime.sfericLogSigma = static_cast<float>(logSigma);
+    runtime.sfericMedianVolts = static_cast<float>(
+        std::sqrt((1.0 - gaussianShare) * atmospheric * runtime.sampleRate / rate) *
+        std::exp(-logSigma * logSigma));
   }
+  runtime.externalNoiseSigma = static_cast<float>(std::sqrt(gaussianVariance));
 }
 
-float nextGaussian(RadioPreviewPipeline::RadioReceptionRuntime& runtime) {
-  if (runtime.externalNoiseSpareValid) {
-    runtime.externalNoiseSpareValid = false;
-    return runtime.externalNoiseSpare;
+float nextGaussian(RadioPreviewPipeline::RadioReceptionRuntime::GaussianStream& stream) {
+  if (stream.spareValid) {
+    stream.spareValid = false;
+    return stream.spare;
   }
   // Box-Muller; the 24-bit uniform is shifted off zero for the logarithm.
-  const double u1 = (static_cast<double>(nextRandom(runtime.externalNoiseState) >> 8u) + 0.5) /
-                    16777216.0;
-  const double u2 = static_cast<double>(nextUnit(runtime.externalNoiseState));
+  const double u1 = (static_cast<double>(nextRandom(stream.state) >> 8u) + 0.5) / 16777216.0;
+  const double u2 = static_cast<double>(nextUnit(stream.state));
   const double radius = std::sqrt(-2.0 * std::log(u1));
   const double angle = 6.28318530717958647692 * u2;
-  runtime.externalNoiseSpare = static_cast<float>(radius * std::sin(angle));
-  runtime.externalNoiseSpareValid = true;
+  stream.spare = static_cast<float>(radius * std::sin(angle));
+  stream.spareValid = true;
   return static_cast<float>(radius * std::cos(angle));
+}
+
+// One sample of the sferic stream: a signed log-normal impulse or nothing.
+float nextSferic(RadioPreviewPipeline::RadioReceptionRuntime& runtime) {
+  if (runtime.sfericProbability <= 0.0f ||
+      nextUnit(runtime.sferics.state) >= runtime.sfericProbability)
+    return 0.0f;
+  const float magnitude =
+      runtime.sfericMedianVolts * std::exp(runtime.sfericLogSigma * nextGaussian(runtime.sferics));
+  return nextUnit(runtime.sferics.state) < 0.5f ? -magnitude : magnitude;
 }
 
 void scheduleIntermittentWait(
@@ -298,8 +335,10 @@ void RadioPreviewReceptionNode::reset(RadioPreviewPipeline& preview) {
   }
   // The noise has its own stream so the fading realisation of a seed is
   // unchanged by it.
-  runtime.externalNoiseState = config.externalNoiseSeed;
-  runtime.externalNoiseSpareValid = false;
+  runtime.externalNoise = {config.externalNoiseSeed, 0.0f, false};
+  uint32_t sfericSeed = config.externalNoiseSeed ^ 0x5F3759DFu;
+  if (sfericSeed == 0u) sfericSeed = 1u;
+  runtime.sferics = {sfericSeed, 0.0f, false};
   if (!config.enabled) return;
   runtime.randomState = config.seed;
   runtime.skyAmplitudeState = 0.0;
@@ -351,6 +390,7 @@ float RadioPreviewReceptionNode::run(RadioPreviewPipeline& preview,
     reception = {};
   }
   if (config.externalNoiseEnabled)
-    reception.additiveRf += runtime.externalNoiseSigma * nextGaussian(runtime);
+    reception.additiveRf +=
+        runtime.externalNoiseSigma * nextGaussian(runtime.externalNoise) + nextSferic(runtime);
   return y;
 }

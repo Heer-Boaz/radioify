@@ -221,8 +221,6 @@ struct Radio1938 {
     float maxSpeakerReferenceRatio = 0.0f;
     float speakerReferenceRmsRatio = 0.0f;
     float maxDigitalOutput = 0.0f;
-    uint64_t rfImpulseEventCount = 0;
-    float rfImpulseMaxAmp = 0.0f;
     float detectorWaveformAverageSolveSteps = 0.0f;
     float detectorWaveformSplitFraction = 0.0f;
     float detectorStorageAverageIterations = 0.0f;
@@ -400,25 +398,23 @@ struct Radio1938 {
     float inputResistanceOhms = 1.0f;
     float couplingCapFarads = 0.0f;
     float sourceDivider = 1.0f;
-    std::mt19937 impulseRng{0x1938a1u};
-    std::uniform_real_distribution<float> impulseDraw{0.0f, 1.0f};
-    uint64_t impulseEventCount = 0;
-    float impulseMaxAmp = 0;
-    float impulseRate = -1;
-    float impulseProbability = 0;
     Biquad sourceCouplingHp;
   } input;
 
   struct FrontEndNodeState {
     bool secondTunedCircuitEnabled = true;
     uint32_t appliedConfigRevision = 0;
-    // Declared antenna-to-mixer-grid voltage gain at resonance and zero AVC.
-    float rfGain = 0.0f;
+    // Grid volts of the first tube per volt of standard-antenna EMF at
+    // resonance: the step-up of the antenna coupling coil.
+    float antennaVoltageGain = 0.0f;
     // Remote-cutoff RF amplifier between the two tuned circuits; present only
-    // with the second circuit. Its gm follows the full AVC line.
+    // with the second circuit. Its gain is gm, which follows the full AVC
+    // line, times the transfer impedance of its RF transformer at resonance.
+    float rfStageLoadOhms = 0.0f;
     float rfStageBiasVolts = -3.0f;
     float rfStageScreenVolts = 100.0f;
     float appliedAvcVolts = -1.0f;
+    float appliedScreenScale = -1.0f;
     float avcGain = 1.0f;
     // Ganged circuits aligned to the dial. Shunt loads are the reflected
     // antenna, RF-plate and grid damping, not physical resistors.
@@ -449,7 +445,6 @@ struct Radio1938 {
   } frontEnd;
 
   struct MixerNodeState {
-    float rfGridDriveVolts = 0.0f;
     float loGridDriveVolts = 0.0f;
     float loGridBiasVolts = 0.0f;
     float avcGridDriveVolts = 0.0f;
@@ -463,16 +458,18 @@ struct Radio1938 {
     float plateCurrentAmps = 0.0f;
     float plateQuiescentCurrentAmps = 0.0f;
     float mutualConductanceSiemens = 0.0f;
-    float acLoadResistanceOhms = 0.0f;
     float plateKneeVolts = 0.0f;
     float gridSoftnessVolts = 0.0f;
     float plateResistanceOhms = 0.0f;
     float operatingPointToleranceVolts = 35.0f;
     FixedPlatePentodeEvaluator plateCurrentForGrid;
     float effectiveLoGridBiasVolts = 0.0f;
-    float conversionGainScale = 0.0f;
+    // Specimen tolerance of the conversion transconductance.
+    float conversionDrift = 1.0f;
     float inputDriveEnvCoeff = 0.0f;
     float mixedBaseGridVolts = 0.0f;
+    // Conversion transconductance in siemens: IF plate current per signal-
+    // grid volt, at the present AVC bias.
     float conversionGain = 1.0f;
     float inputDriveEnv = 0.0f;
   } mixer;
@@ -481,13 +478,14 @@ struct Radio1938 {
     bool enabled = false;
     uint32_t appliedConfigRevision = 0;
     float ifMinBwHz = 0.0f;
-    // IF voltage gain at zero AVC. The AVC-controlled remote-cutoff stages
-    // each scale it by their gm ratio.
-    float stageGain = 0.0f;
+    // The converter's plate current drives the first transformer; each later
+    // transformer is driven by a remote-cutoff IF tube whose gm follows the
+    // AVC line (one tube per transformer after the first).
     int avcStageCount = 1;
     float stageBiasVolts = -3.0f;
     float stageScreenVolts = 100.0f;
     float appliedAvcVolts = -1.0f;
+    float appliedScreenScale = -1.0f;
     float avcGain = 1.0f;
     float ifCenterHz = 0.0f;
     float primaryInductanceHenries = 0.0f;
@@ -495,7 +493,14 @@ struct Radio1938 {
     float secondaryLoadResistanceOhms = 0.0f;
     float primarySeriesResistanceOhms = 0.0f;
     float secondarySeriesResistanceOhms = 0.0f;
-    float referenceTransimpedanceOhms = 0.0f;
+    // gm of the IF tubes at their operating point without AVC.
+    float stageTransconductanceSiemens = 0.0f;
+    // Peak plate swing an IF tube can deliver into its can (supply less the
+    // pentode knee); a lightning crash saturates there. Zero disables it,
+    // for linear checks.
+    float stagePlateSwingLimitVolts = 0.0f;
+    // gm(AVC) / gm(no AVC) of one IF tube.
+    float stageAvcRatio = 1.0f;
     int transformerCount = 2;
     float interstageCouplingCoeff = 0.0f;
     float outputCouplingCoeff = 0.0f;
@@ -601,6 +606,16 @@ struct Radio1938 {
     float otherLoadAmps = 0;
     float auxiliaryOtherLoadAmps = 0;
     float screenCurrentRatio = 0;
+    // Idle main B+ the supply is started at; the RF and IF screen dividers
+    // hang on the main node, through an RC branch where the set has one,
+    // and follow it in proportion.
+    float mainReferenceVolts = 0;
+    // Up to two cascaded RC sections from the main node; R = 0 is a wire.
+    std::array<float, 2> screenFilterResistanceOhms{};
+    std::array<float, 2> screenFilterFarads{};
+    std::array<float, 2> screenFilterCoeff{1, 1};
+    std::array<float, 2> screenFilterVolts{};
+    float screenSupplyVolts = 0;
   } powerSupply;
 
   struct PowerNodeState {
@@ -727,18 +742,12 @@ struct Radio1938 {
   struct NoiseConfig {
     bool enableHumTone = false;
     float humHzDefault = 0.0f;
-    float noiseWeightRef = 0.0f;
-    float noiseWeightScaleMax = 0.0f;
     float humAmpScale = 0.0f;
-    float crackleAmpScale = 0.0f;
-    float crackleRateScale = 0.0f;
   } noiseConfig;
 
   struct NoiseDerivedState {
     float baseNoiseAmp = 0.0f;
-    float baseCrackleAmp = 0.0f;
     float baseHumAmp = 0.0f;
-    float crackleRate = 0.0f;
   } noiseDerived;
 
   struct NoiseRuntimeState {

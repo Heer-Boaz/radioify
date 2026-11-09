@@ -65,19 +65,49 @@ struct RadioReceptionConfig {
   // primary service field for city residential areas (2-10 mV/m), the field
   // at which the usual noise of such areas is no longer objectionable.
   float groundwaveFieldVoltsPerMeter = 2e-3f;
+  // IRE standard antenna: an open single-wire antenna, lead-in included, of
+  // 4 m effective height (Standards on Radio Receivers, 2.12; the dummy
+  // antenna of sensitivity tests represents it). Its EMF is field x height.
+  float antennaEffectiveHeightMeters = 4.0f;
   // ITU-R P.372 Table 1 median man-made noise, Fam = c - d log10(f / 1 MHz)
   // dB above kT0b (valid 0.3-250 MHz, short vertical monopole). Default:
   // residential. The coefficients come from 1970s measurements.
   float manMadeNoiseC = 72.5f;
   float manMadeNoiseD = 27.7f;
+  // Atmospheric noise from lightning (ITU-R P.372 section 7). It reaches
+  // medium frequencies by skywave, so in practice only after dark; by day it
+  // is far below man-made noise. Fam at 1 MHz and its fall with frequency,
+  // Fa = Fam - D log10(f / 1 MHz), are read from the P.372 charts for a
+  // season, time block and place. Default: spring, 2000-2400 LT, north-
+  // eastern United States (Fig. 26a), slope of the 80 dB grade over 0.5-2
+  // MHz (Fig. 26b).
+  bool atmosphericNoiseEnabled = false;
+  float atmosphericNoiseFamDb = 80.0f;
+  float atmosphericNoiseD = 27.0f;
+  // Its impulsive character: a Poisson stream of sferics with log-normal
+  // amplitudes, plus a Gaussian share of the power from unresolved distant
+  // strokes. The defaults reproduce P.372's median voltage deviation for the
+  // same chart, Vdm = 6.2 dB in 200 Hz (Fig. 26c), and 9.4 dB in 10 kHz from
+  // its bandwidth translation (Fig. 40); the receiver's own selectivity then
+  // sets the impulsiveness it hears.
+  float sfericRatePerSecond = 3000.0f;
+  float sfericLogAmplitudeSigma = 2.0f;
+  float atmosphericGaussianPowerFraction = 0.1f;
   uint32_t externalNoiseSeed = 0x1938a7e5u;
 };
 
-// Carrier-to-noise density ratio (dB-Hz) of the carrier at unit path gain,
+// Carrier-to-noise density ratios (dB-Hz) of the carrier at unit path gain,
 // whose field is groundwaveFieldVoltsPerMeter / groundwaveGain (the
-// groundwave field itself when propagation effects are disabled).
-double radioReceptionCarrierToNoiseDensityDbHz(const RadioReceptionConfig& config,
-                                               double stationFrequencyHz);
+// groundwave field itself when propagation effects are disabled), against
+// the man-made and the atmospheric noise.
+double radioReceptionCarrierToManMadeNoiseDbHz(const RadioReceptionConfig& config,
+                                              double stationFrequencyHz);
+double radioReceptionCarrierToAtmosphericNoiseDbHz(const RadioReceptionConfig& config,
+                                                  double stationFrequencyHz);
+
+// RMS antenna EMF of that carrier at unit path gain: the received carrier
+// whose path gains the reception samples then apply.
+float radioReceptionAntennaCarrierRmsVolts(const RadioReceptionConfig& config);
 
 std::string_view radioReceptionProfileName(RadioReceptionProfile profile);
 bool parseRadioReceptionProfile(std::string_view name,

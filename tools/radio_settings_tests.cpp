@@ -167,7 +167,7 @@ void testFailuresLeavePlaybackUntouched() {
       "[audio-filter.test.ifstrip]\ntransformerCount = 4\n",
       "[audio-filter.test.ifstrip]\nprimaryInductanceHenries = 0\n",
       "[audio-filter.test.ifstrip]\nsecondarySeriesResistanceOhms = -1\n",
-      "[audio-filter.test.ifstrip]\nreferenceTransimpedanceOhms = 0\n",
+      "[audio-filter.test.ifstrip]\navcStageCount = 0\n",
       "[audio-filter.test.ifstrip]\noutputCouplingCoeff = -.1\n",
       "[audio-filter.test.ifstrip]\ninterstageCouplingCoeff = .5\n",
       "[audio-filter.test.tuning]\nafcSignalReferenceVolts = 0\n",

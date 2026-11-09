@@ -131,7 +131,7 @@ void RadioPreviewPipeline::runBlock(Radio1938& radioRef,
   }
 
   radioRef.processAmAudio(filteredScratch.data(), filteredScratch.data(), frames,
-                          ingress->receivedCarrierRmsVolts,
+                          radioReceptionAntennaCarrierRmsVolts(ingress->reception),
                           ingress->modulationIndex,
                           ingress->reception.enabled ||
                                   ingress->reception.externalNoiseEnabled

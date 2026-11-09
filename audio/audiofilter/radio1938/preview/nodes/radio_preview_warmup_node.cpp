@@ -22,7 +22,7 @@ void RadioPreviewWarmupNode::prepare(RadioPreviewPipeline& preview,
   if (preview.warmedUp || !preview.radio || !preview.ingress) return;
 
   const auto gain = radioPreviewInitialCarrierGain(preview);
-  preview.radio->warmInputCarrier(preview.ingress->receivedCarrierRmsVolts,
+  preview.radio->warmInputCarrier(radioReceptionAntennaCarrierRmsVolts(preview.ingress->reception),
                                   kPreviewWarmupFrames, gain[0], gain[1]);
   preview.warmedUp = true;
 }

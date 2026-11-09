@@ -54,6 +54,9 @@ struct AMDetector {
   // is subtracted from the source before filtering and requires the separate
   // rectifier. Simple AVC loads the detector through its filter resistor.
   bool avcFromIfEnvelope = false;
+  // The separate rectifier takes the last IF plate (primary), which the IF
+  // strip relates to the detector input at the centre frequency.
+  float avcRectifierPerIfVolt = 1.0f;
   float avcDelayBiasVolts = 0.0f;
   float avcFilterResistanceOhms = 0.0f;
   float avcTick = 0.0f;

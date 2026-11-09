@@ -96,6 +96,7 @@ void RadioFrontEndNode::reset(Radio1938& radio) {
   frontEnd.antennaTank.reset();
   frontEnd.rfTank.reset();
   frontEnd.appliedAvcVolts = -1.0f;
+  frontEnd.appliedScreenScale = -1.0f;
   frontEnd.avcGain = 1.0f;
 }
 
@@ -118,16 +119,22 @@ float RadioFrontEndNode::run(Radio1938& radio, float x, RadioSampleContext& ctx)
                               frontEnd.dialOscCos, frontEnd.dialOscSin);
 
   // A set without an RF amplifier has no AVC-controlled tube before the
-  // converter; its antenna circuit is passive.
+  // converter; its antenna circuit is passive. Otherwise the RF stage gain
+  // is gm at the AVC bias times its transformer's transfer impedance.
   if (frontEnd.secondTunedCircuitEnabled) {
     const float avcVolts = radioAvcLineVolts(radio);
-    if (std::fabs(avcVolts - frontEnd.appliedAvcVolts) > 1e-4f) {
-      frontEnd.avcGain = static_cast<float>(remoteCutoffRelativeGain(
-          frontEnd.rfStageBiasVolts, avcVolts, frontEnd.rfStageScreenVolts));
+    const float screenScale = radioScreenSupplyScale(radio);
+    if (std::fabs(avcVolts - frontEnd.appliedAvcVolts) > 1e-4f ||
+        std::fabs(screenScale - frontEnd.appliedScreenScale) > 1e-6f) {
+      frontEnd.avcGain = static_cast<float>(
+          remoteCutoffStageTransconductance(frontEnd.rfStageBiasVolts, avcVolts,
+                                            frontEnd.rfStageScreenVolts * screenScale) *
+          frontEnd.rfStageLoadOhms);
       frontEnd.appliedAvcVolts = avcVolts;
+      frontEnd.appliedScreenScale = screenScale;
     }
   }
-  const float gain = frontEnd.rfGain * frontEnd.avcGain;
+  const float gain = frontEnd.antennaVoltageGain * frontEnd.avcGain;
   ctx.signal.setComplexEnvelope(gain * envelope[0], gain * envelope[1]);
   return std::sqrt(ctx.signal.i * ctx.signal.i + ctx.signal.q * ctx.signal.q);
 }

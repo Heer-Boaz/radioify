@@ -51,17 +51,18 @@ bool validateIfStrip(const Radio1938& radio, std::string* error) {
   bool valid = s.transformerCount >= 1 && s.transformerCount <= 3;
   for (float v : {s.ifCenterHz, s.primaryInductanceHenries, s.secondaryInductanceHenries,
                   s.primarySeriesResistanceOhms, s.secondarySeriesResistanceOhms,
-                  s.secondaryLoadResistanceOhms, s.referenceTransimpedanceOhms})
+                  s.secondaryLoadResistanceOhms})
     valid = valid && std::isfinite(v) && v > 0;
   for (float k : {s.interstageCouplingCoeff, s.outputCouplingCoeff})
     valid = valid && std::isfinite(k) && k >= 0 && k < .5f;
-  valid = valid && s.avcStageCount >= 0 && s.avcStageCount <= 3 &&
+  valid = valid && s.avcStageCount == s.transformerCount - 1 &&
           std::isfinite(s.stageBiasVolts) && s.stageBiasVolts < 0 &&
           std::isfinite(s.stageScreenVolts) && s.stageScreenVolts > 0;
   if (!valid && error)
     *error =
-        "IF requires 1..3 transformers, positive L/R/reference values, coupling in "
-        "[0, .5), 0..3 AVC stages, a negative stage bias and a positive screen voltage.";
+        "IF requires 1..3 transformers, positive L/R values, coupling in [0, .5), one "
+        "AVC-controlled IF tube per transformer after the first, a negative stage bias "
+        "and a positive screen voltage.";
   return valid;
 }
 
@@ -124,17 +125,18 @@ bool validateFrontEnd(const Radio1938& radio, std::string* error) {
   const float station = radio.tuning.stationFrequencyHz;
   const bool valid =
       std::isfinite(station) && station >= 530000 && station <= 1710000 &&
-      std::isfinite(f.rfGain) && f.rfGain >= 0 && positive(f.antennaInductanceHenries) &&
+      std::isfinite(f.antennaVoltageGain) && f.antennaVoltageGain >= 0 &&
+      positive(f.antennaInductanceHenries) &&
       positive(f.antennaCoilQ) && positive(f.antennaShuntLoadOhms) &&
       positive(-f.rfStageBiasVolts) && positive(f.rfStageScreenVolts) &&
       (!f.secondTunedCircuitEnabled ||
        (positive(f.rfInductanceHenries) && positive(f.rfCoilQ) &&
-        positive(f.rfShuntLoadOhms)));
+        positive(f.rfShuntLoadOhms) && positive(f.rfStageLoadOhms)));
   if (!valid && error)
     *error =
         "Front end requires a 530-1710 kHz station, nonnegative gain, a negative RF "
         "stage bias, a positive screen voltage and positive inductance, coil Q and "
-        "shunt load for each tuned circuit.";
+        "shunt load for each tuned circuit, and a positive RF-stage load.";
   return valid;
 }
 
@@ -230,7 +232,10 @@ constexpr std::array kTuningSettings{
 };
 
 constexpr std::array kFrontEndSettings{
-    setting("rfGain", [](Radio1938& radio) -> auto& { return radio.frontEnd.rfGain; }),
+    setting("antennaVoltageGain",
+            [](Radio1938& radio) -> auto& { return radio.frontEnd.antennaVoltageGain; }),
+    setting("rfStageLoadOhms",
+            [](Radio1938& radio) -> auto& { return radio.frontEnd.rfStageLoadOhms; }),
     setting("rfStageBiasVolts",
             [](Radio1938& radio) -> auto& { return radio.frontEnd.rfStageBiasVolts; }),
     setting("rfStageScreenVolts",
@@ -251,8 +256,6 @@ constexpr std::array kFrontEndSettings{
 };
 
 constexpr std::array kMixerSettings{
-    setting("rfGridDriveVolts",
-            [](Radio1938& radio) -> auto& { return radio.mixer.rfGridDriveVolts; }),
     setting("loGridDriveVolts",
             [](Radio1938& radio) -> auto& { return radio.mixer.loGridDriveVolts; }),
     setting("loGridBiasVolts",
@@ -280,8 +283,6 @@ constexpr std::array kMixerSettings{
     setting(
         "mutualConductanceSiemens",
         [](Radio1938& radio) -> auto& { return radio.mixer.mutualConductanceSiemens; }),
-    setting("acLoadResistanceOhms",
-            [](Radio1938& radio) -> auto& { return radio.mixer.acLoadResistanceOhms; }),
     setting("plateKneeVolts",
             [](Radio1938& radio) -> auto& { return radio.mixer.plateKneeVolts; }),
     setting("gridSoftnessVolts",
@@ -300,15 +301,11 @@ constexpr std::array kIfStripSettings{
     setting(
         "secondarySeriesResistanceOhms",
         [](Radio1938& r) -> auto& { return r.ifStrip.secondarySeriesResistanceOhms; }),
-    setting("referenceTransimpedanceOhms",
-            [](Radio1938& r) -> auto& { return r.ifStrip.referenceTransimpedanceOhms; }),
     setting("transformerCount",
             [](Radio1938& r) -> auto& { return r.ifStrip.transformerCount; }),
     setting("enabled", [](Radio1938& radio) -> auto& { return radio.ifStrip.enabled; }),
     setting("ifMinBwHz",
             [](Radio1938& radio) -> auto& { return radio.ifStrip.ifMinBwHz; }),
-    setting("stageGain",
-            [](Radio1938& radio) -> auto& { return radio.ifStrip.stageGain; }),
     setting("avcStageCount",
             [](Radio1938& radio) -> auto& { return radio.ifStrip.avcStageCount; }),
     setting("stageBiasVolts",
@@ -773,17 +770,8 @@ constexpr std::array kNoiseSettings{
             [](Radio1938& radio) -> auto& { return radio.noiseConfig.enableHumTone; }),
     setting("humHzDefault",
             [](Radio1938& radio) -> auto& { return radio.noiseConfig.humHzDefault; }),
-    setting("noiseref",
-            [](Radio1938& radio) -> auto& { return radio.noiseConfig.noiseWeightRef; }),
-    setting(
-        "noiseWeightScaleMax",
-        [](Radio1938& radio) -> auto& { return radio.noiseConfig.noiseWeightScaleMax; }),
     setting("humAmpScale",
             [](Radio1938& radio) -> auto& { return radio.noiseConfig.humAmpScale; }),
-    setting("crackleAmpScale",
-            [](Radio1938& radio) -> auto& { return radio.noiseConfig.crackleAmpScale; }),
-    setting("crackleRateScale",
-            [](Radio1938& radio) -> auto& { return radio.noiseConfig.crackleRateScale; }),
     setting("noiseHpHz",
             [](Radio1938& radio) -> auto& { return radio.noiseRuntime.hum.noiseHpHz; }),
     setting("noiseLpHz",

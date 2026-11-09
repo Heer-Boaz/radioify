@@ -70,11 +70,6 @@ void printCalibrationReport(const Radio1938& radio1938,
             << " max_digital_output="
             << radio1938.calibration.maxDigitalOutput
             << "\n";
-  std::cout << "  rf_impulse_events="
-            << radio1938.calibration.rfImpulseEventCount
-            << " rf_impulse_max_amp="
-            << radio1938.calibration.rfImpulseMaxAmp
-            << "\n";
   std::cout << "  validation failed="
             << (radio1938.calibration.validationFailed ? 1 : 0)
             << " driver_grid_over="

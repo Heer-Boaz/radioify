@@ -48,8 +48,6 @@ struct RadioDerivedSampleParams {
   // IF input voltage noise, before IF gain and loaded-can filtering. The
   // amplitude convention is referenced to a 48 kHz complex-envelope rate.
   float ifInputNoiseAmp = 0.0f;
-  float rfImpulseAmp = 0.0f;
-  float rfImpulseRate = 0.0f;
   float noiseAmp = 0.0f;
   float humAmp = 0.0f;
   bool humToneEnabled = true;
@@ -129,6 +127,10 @@ std::array<float, 2> convertRealRfToSourceEnvelope(Radio1938& radio, float rf);
 // Negative AVC line voltage magnitude, in volts, applied to every controlled
 // grid return. The control bus is normalized to the detector's reference.
 float radioAvcLineVolts(const Radio1938& radio);
+// Present main B+ over its idle value: the RF and IF screen supplies follow
+// it, so its ripple modulates their gain (modulation hum). One when the
+// supply is not running.
+float radioScreenSupplyScale(const Radio1938& radio);
 
 struct RadioMixerNode {
   static void init(Radio1938& radio, RadioInitContext& initCtx);

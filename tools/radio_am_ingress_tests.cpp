@@ -369,7 +369,7 @@ void expectExternalNoiseFollowsFieldAndNoiseFigure() {
   };
   for (const auto& item : cases) {
     const RadioReceptionConfig reception = radioReceptionConfigForProfile(item.profile);
-    const double cn0 = radioReceptionCarrierToNoiseDensityDbHz(reception, 1e6);
+    const double cn0 = radioReceptionCarrierToManMadeNoiseDbHz(reception, 1e6);
     if (!reception.externalNoiseEnabled || std::fabs(cn0 - item.expectedDbHz) > 1e-3)
       fail("external noise C/N0 does not follow the FCC field and P.372 noise: " +
            std::to_string(cn0) + " vs " + std::to_string(item.expectedDbHz));
@@ -381,6 +381,8 @@ void expectExternalNoiseFollowsFieldAndNoiseFigure() {
       RadioAmIngressConfig ingress;
       ingress.reception = reception;
       ingress.reception.enabled = false;
+      // Atmospheric noise is checked separately below.
+      ingress.reception.atmosphericNoiseEnabled = false;
       RadioPreviewPipeline preview;
       preview.initialize(radio, ingress, RadioPreviewConfig{}, rate);
       RadioPreviewSampleContext ctx{};
@@ -394,15 +396,88 @@ void expectExternalNoiseFollowsFieldAndNoiseFigure() {
       }
       const double n0 = 2.0 * (sumSq / kSamples) / rate;
       const double measured =
-          10.0 * std::log10(double(ingress.receivedCarrierRmsVolts) *
-                            ingress.receivedCarrierRmsVolts / n0);
+          10.0 * std::log10(double(radioReceptionAntennaCarrierRmsVolts(ingress.reception)) *
+                            radioReceptionAntennaCarrierRmsVolts(ingress.reception) / n0);
       // Propagation disabled: the carrier arrives at unit path gain.
       const double generated =
-          radioReceptionCarrierToNoiseDensityDbHz(ingress.reception, 1e6);
+          radioReceptionCarrierToManMadeNoiseDbHz(ingress.reception, 1e6);
       if (std::fabs(measured - generated) > 0.05)
         fail("generated RF noise density is wrong: " + std::to_string(measured) +
              " dB-Hz, expected " + std::to_string(generated));
     }
+  }
+}
+
+// ITU-R P.372 evening atmospheric noise for night-skywave: Fam 80 dB at 1 MHz
+// (spring, 2000-2400 LT, north-eastern United States, Fig. 26a). Its power
+// is shared between a Gaussian part and log-normal sferics; the sferic mean
+// power is dominated by rare large strokes, so the generator is checked
+// through its rate and amplitude statistics and the closed-form power.
+void expectAtmosphericNoiseFollowsP372() {
+  // The model is off by default (see the night-skywave profile); it is
+  // checked here on that profile with it enabled.
+  RadioReceptionConfig night =
+      radioReceptionConfigForProfile(RadioReceptionProfile::NightSkywave);
+  night.atmosphericNoiseEnabled = true;
+  const double expected = 20.0 * std::log10(500.0 / 0.60) - (80.0 - 95.5);
+  if (std::fabs(radioReceptionCarrierToAtmosphericNoiseDbHz(night, 1e6) - expected) > 1e-3)
+    fail("night atmospheric noise does not follow P.372");
+  if (radioReceptionConfigForProfile(RadioReceptionProfile::Everyday1938)
+          .atmosphericNoiseEnabled ||
+      radioReceptionConfigForProfile(RadioReceptionProfile::StrongLocal)
+          .atmosphericNoiseEnabled)
+    fail("daytime profiles must not carry skywave atmospheric noise");
+  for (float rate : {44100.0f, 96000.0f}) {
+    Radio1938 radio;
+    radio.init(1, rate, kBandwidthHz, 0.0f);
+    RadioAmIngressConfig ingress;
+    ingress.reception = night;
+    ingress.reception.enabled = false;
+    ingress.reception.manMadeNoiseC = -200.0f;  // isolate the atmospheric part
+    RadioPreviewPipeline preview;
+    preview.initialize(radio, ingress, RadioPreviewConfig{}, rate);
+    const auto& runtime = preview.receptionRuntime;
+    const double carrier = radioReceptionAntennaCarrierRmsVolts(ingress.reception);
+    const double cn0 = radioReceptionCarrierToAtmosphericNoiseDbHz(ingress.reception, 1e6);
+    const double variance = carrier * carrier * 0.5 * rate * std::pow(10.0, -cn0 / 10.0);
+    const double g = night.atmosphericGaussianPowerFraction;
+    const double sigma = night.sfericLogAmplitudeSigma;
+    const double sfericVariance = runtime.sfericProbability * double(runtime.sfericMedianVolts) *
+                                  runtime.sfericMedianVolts * std::exp(2 * sigma * sigma);
+    if (std::fabs(runtime.externalNoiseSigma * double(runtime.externalNoiseSigma) /
+                      (g * variance) - 1) > 1e-3 ||
+        std::fabs(sfericVariance / ((1 - g) * variance) - 1) > 1e-3)
+      fail("atmospheric noise power is not shared as configured");
+    RadioPreviewSampleContext ctx{};
+    RadioAmReceptionSample sample;
+    ctx.reception = &sample;
+    constexpr uint32_t kSamples = 2000000u;
+    uint32_t impulses = 0;
+    double logSum = 0.0;
+    const double gaussianLimit = 8.0 * runtime.externalNoiseSigma;
+    for (uint32_t i = 0; i < kSamples; ++i) {
+      RadioPreviewReceptionNode::run(preview, 0.0f, ctx);
+      // Sferics far above the Gaussian part are counted; the smallest
+      // ones are hidden in it, so the fit uses the upper part only.
+      const double a = std::fabs(sample.additiveRf);
+      if (a > gaussianLimit) {
+        ++impulses;
+        const double l = std::log(a / runtime.sfericMedianVolts);
+        logSum += l;
+      }
+    }
+    // Fraction of log-normal impulses above the threshold, from the normal
+    // tail; with rate r the count follows.
+    const double z = std::log(gaussianLimit / runtime.sfericMedianVolts) / sigma;
+    const double above = 0.5 * std::erfc(z / std::sqrt(2.0));
+    const double expectedCount = runtime.sfericProbability * kSamples * above;
+    // Mean log amplitude of a normal tail above z: sigma phi(z) / Q(z).
+    const double tailMean =
+        sigma * std::exp(-0.5 * z * z) / std::sqrt(2 * 3.14159265358979323846) / above;
+    if (std::fabs(impulses / expectedCount - 1) > 0.05 ||
+        std::fabs(logSum / impulses - tailMean) > 0.05 * sigma)
+      fail("sferic rate or amplitude spread is wrong: " + std::to_string(impulses) +
+           " vs " + std::to_string(expectedCount));
   }
 }
 
@@ -914,6 +989,7 @@ int main() {
   expectReceptionSidecarShapesRf();
   expectStrongLocalReceptionIsTransparent();
   expectExternalNoiseFollowsFieldAndNoiseFigure();
+  expectAtmosphericNoiseFollowsP372();
   expectEverydayReceptionProducesSlowCoherentFading();
   expectDelayedSkywaveFadesSelectively();
   expectIntermittentCarrierIsRareRfInsteadOfPermanentWhistle();

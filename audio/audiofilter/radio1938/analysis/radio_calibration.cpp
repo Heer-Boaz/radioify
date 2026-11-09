@@ -171,8 +171,6 @@ void Radio1938::CalibrationState::reset() {
   maxSpeakerReferenceRatio = 0.0f;
   speakerReferenceRmsRatio = 0.0f;
   maxDigitalOutput = 0.0f;
-  rfImpulseEventCount = 0;
-  rfImpulseMaxAmp = 0.0f;
   detectorWaveformAverageSolveSteps = 0.0f;
   detectorWaveformSplitFraction = 0.0f;
   detectorStorageAverageIterations = 0.0f;
@@ -424,8 +422,6 @@ void updateCalibrationSnapshot(Radio1938& radio) {
       radio.calibration.passes[static_cast<size_t>(PassId::ReceiverCircuit)];
   const auto& powerPass =
       radio.calibration.passes[static_cast<size_t>(PassId::Power)];
-  radio.calibration.rfImpulseEventCount = radio.input.impulseEventCount;
-  radio.calibration.rfImpulseMaxAmp = radio.input.impulseMaxAmp;
   if (radio.demod.am.waveformSampleCount > 0) {
     radio.calibration.detectorWaveformAverageSolveSteps =
         static_cast<float>(radio.demod.am.waveformSolveStepCount) /

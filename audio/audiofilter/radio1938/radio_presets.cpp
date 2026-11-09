@@ -34,10 +34,14 @@ void applyPhilco37116Preset(Radio1938& radio) {
   // Antenna circuit, 6K7 RF stage and second tuned circuit before the 6L7.
   // Coil Q and the reflected antenna/plate loads are priors for a good 1937
   // broadcast coil, not measured Philco windings. At 1 MHz they give loaded
-  // Q near 51 and 63. The resonance gain keeps the former effective level at
-  // the default 5.5 kHz control position; it is not a measured antenna step-up.
+  // Q near 51 and 63. The antenna-coil step-up from the IRE standard antenna
+  // and the RF transformer's transfer impedance (an RF stage gain near 13)
+  // are priors. With the tube data and the IF cans below they give an IRE
+  // sensitivity near 0.7 uV for 50 mW, a premium set's figure (1936-37
+  // eight- and ten-tube sets were rated 7-8 uV).
   radio.frontEnd.secondTunedCircuitEnabled = true;
-  radio.frontEnd.rfGain = 0.237f;
+  radio.frontEnd.antennaVoltageGain = 6.0f;
+  radio.frontEnd.rfStageLoadOhms = 10000.0f;
   // Bulletin 258, Fig. 2: RF 6K7G screen 84 V, grid return -3 V. The 6K7 has
   // the 78's remote-cutoff characteristic; it takes the full AVC line.
   radio.frontEnd.rfStageBiasVolts = -3.0f;
@@ -49,7 +53,6 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.frontEnd.rfCoilQ = 100.0f;
   radio.frontEnd.rfShuntLoadOhms = 250000.0f;
 
-  radio.mixer.rfGridDriveVolts = 1.0f;
   radio.mixer.loGridDriveVolts = 18.0f;
   radio.mixer.loGridBiasVolts = -15.0f;
   radio.mixer.avcGridDriveVolts = 24.0f;
@@ -60,7 +63,6 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.mixer.cutoffVolts = -45.0f;
   radio.mixer.plateCurrentAmps = 0.0035f;
   radio.mixer.mutualConductanceSiemens = 0.0011f;
-  radio.mixer.acLoadResistanceOhms = 10000.0f;
   radio.mixer.plateKneeVolts = 22.0f;
   radio.mixer.gridSoftnessVolts = 2.0f;
 
@@ -74,17 +76,17 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.ifStrip.transformerCount = 3;
   radio.ifStrip.primarySeriesResistanceOhms = 15.0f;
   radio.ifStrip.secondarySeriesResistanceOhms = 15.0f;
-  radio.ifStrip.referenceTransimpedanceOhms = 17000.0f;
   radio.ifStrip.secondaryLoadResistanceOhms = 200000.0f;
-  // IF voltage calibration: a hot-cathode detector needs volts of carrier,
-  // followed by the physical volume control. The former sub-volt calibration
-  // relied on an almost ideal diode. This remains an unmeasured gain prior.
-  radio.ifStrip.stageGain = 46.0f;
+  // The converter's plate current drives the first can and each 6K7G the
+  // next, so the stage gains follow from the tubes' gm and these cans'
+  // transfer impedances; there is no separate gain calibration.
   // Bulletin 258: 1st and 2nd IF 6K7G, both on the AVC line, screen 90 V,
   // grid return -3 V.
   radio.ifStrip.avcStageCount = 2;
   radio.ifStrip.stageBiasVolts = -3.0f;
   radio.ifStrip.stageScreenVolts = 90.0f;
+  // About 250 V B+ less the 6K7's knee (prior).
+  radio.ifStrip.stagePlateSwingLimitVolts = 200.0f;
   radio.ifStrip.ifCenterHz = 470000.0f;
   radio.ifStrip.interstageCouplingCoeff = 0.032f;
   radio.ifStrip.outputCouplingCoeff = 0.032f;
@@ -102,12 +104,12 @@ void applyPhilco37116Preset(Radio1938& radio) {
   // cathode diode works. It takes the last IF plate through 110 pF (80) and
   // returns through 20 k / 1 M with .01 uF (90-92); its cathode sits at +25 V
   // (Fig. 2). It is a delayed AVC rectifier, separate from the audio detector.
-  // The documented ~28 V threshold is in real IF plate volts, which the
-  // calibrated IF scale does not reproduce; 4 V keeps the detector at its
-  // former 2.4 V working point at the nominal 0.12 V carrier. The 75 ms filter
-  // is a prior: the AVC bus beyond 90-92 was not traced unambiguously.
+  // Against the -3 V AVC return its grid conducts once the plate swings
+  // 28 V peak; the IF strip is in absolute volts, so that is the delay. The
+  // 75 ms filter is a prior: the AVC bus beyond 90-92 was not traced
+  // unambiguously.
   radio.demod.am.avcFromIfEnvelope = true;
-  radio.demod.am.avcDelayBiasVolts = 4.0f;
+  radio.demod.am.avcDelayBiasVolts = 28.0f;
   radio.demod.am.avcFilterResistanceOhms = 500000.0f;
   radio.demod.am.avcFilterCapFarads = 0.15e-6f;
   // Keep the normalized control bus, but make one physical AVC volt
@@ -120,10 +122,11 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.receiverCircuit.enabled = true;
   radio.receiverCircuit.volumeControlResistanceOhms = 2000000.0f;
   radio.receiverCircuit.volumeControlTapResistanceOhms = 1000000.0f;
-  // Listener setting, not circuit data: just above the 1 M tap, where the
-  // nominal carrier gives the former playback level. The tap network still
-  // shapes the response here; lower settings add more bass compensation.
-  radio.receiverCircuit.volumeControlPosition = 0.54f;
+  // Listener setting, not circuit data. The delayed AVC holds the detector
+  // near 30 V, so a room level (the former 0.53 of the rated reference
+  // volts) needs the control well below its 1 M tap, where the tap network
+  // adds the bass compensation Philco designed it for.
+  radio.receiverCircuit.volumeControlPosition = 0.084f;
   // Bulletin 258, 102-105: the 1 M tap returns through 70 k (103) to the tone
   // switch capacitors .008 uF (104) and .006 uF (105) in series. The switch
   // grounds the 70 k end (plain 70 k), the junction (70 k + 8 nF), or neither
@@ -165,6 +168,12 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.powerSupply.otherLoadAmps = 0.010f;
   radio.powerSupply.auxiliaryOtherLoadAmps = 0.030f;
   radio.powerSupply.screenCurrentRatio = 0;
+  // Bulletin 258: the 4000-ohm half of the 1000/4000-ohm resistor (128) and
+  // its 2 uF bypass feed the RF/IF stages, and the screen bus near the 6A8G
+  // has 20,000 ohms (61) and 8 uF (62). That every RF/IF screen shares that
+  // bus is read from a dense schematic, not certain.
+  radio.powerSupply.screenFilterResistanceOhms = {4000, 20000};
+  radio.powerSupply.screenFilterFarads = {2e-6f, 8e-6f};
   radio.power.postLpHz = 0.0f;
   // Bulletin 258: .05 uF (96) from the first-audio plate to the 6F6G driver,
   // 240 k (108) grid return. The 500 k expander potentiometer (106), ganged
@@ -258,11 +267,7 @@ void applyPhilco37116Preset(Radio1938& radio) {
 
   radio.noiseConfig.enableHumTone = false;
   radio.noiseConfig.humHzDefault = 60.0f;
-  radio.noiseConfig.noiseWeightRef = 0.15f;
-  radio.noiseConfig.noiseWeightScaleMax = 2.0f;
   radio.noiseConfig.humAmpScale = 0.008f;
-  radio.noiseConfig.crackleAmpScale = 0.025f;
-  radio.noiseConfig.crackleRateScale = 1.2f;
 
   radio.noiseRuntime.hum.noiseHpHz = 500.0f;
   radio.noiseRuntime.hum.noiseLpHz = 5500.0f;
@@ -408,10 +413,13 @@ void applyTypical1930sPreset(Radio1938& radio) {
   // feeds the 6A7 converter directly, so the second RF tank used by the
   // high-end receiver is explicitly absent. A plainer coil and the heavier
   // coupling of a short household antenna give loaded Q near 37 at 1 MHz
-  // (priors, not measured 38-12 windings). The resonance gain keeps the
-  // former effective level at the default 5.5 kHz control position.
+  // (priors, not measured 38-12 windings). The antenna-coil step-up is the
+  // same prior as the console's; with the 6A7 and 78 data and the IF cans it
+  // gives an IRE sensitivity near 70 uV for 50 mW, the class of a five-tube
+  // set without an RF stage.
   radio.frontEnd.secondTunedCircuitEnabled = false;
-  radio.frontEnd.rfGain = 0.509f;
+  radio.frontEnd.antennaVoltageGain = 6.0f;
+  radio.frontEnd.rfStageLoadOhms = 0.0f;
   // No RF amplifier, so no AVC-controlled tube before the 6A7 converter.
   // Its operating point is unused; reset it to the neutral defaults.
   radio.frontEnd.rfStageBiasVolts = -3.0f;
@@ -423,7 +431,6 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.frontEnd.rfCoilQ = 0.0f;
   radio.frontEnd.rfShuntLoadOhms = 0.0f;
 
-  radio.mixer.rfGridDriveVolts = 0.82f;
   radio.mixer.loGridDriveVolts = 16.0f;
   radio.mixer.loGridBiasVolts = -14.0f;
   radio.mixer.avcGridDriveVolts = 22.0f;
@@ -434,7 +441,6 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.mixer.cutoffVolts = -42.0f;
   radio.mixer.plateCurrentAmps = 0.0025f;
   radio.mixer.mutualConductanceSiemens = 0.00085f;
-  radio.mixer.acLoadResistanceOhms = 12000.0f;
   radio.mixer.plateKneeVolts = 20.0f;
   radio.mixer.gridSoftnessVolts = 2.0f;
 
@@ -445,13 +451,14 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.ifStrip.transformerCount = 2;
   radio.ifStrip.primarySeriesResistanceOhms = 5.0f;
   radio.ifStrip.secondarySeriesResistanceOhms = 5.0f;
-  radio.ifStrip.referenceTransimpedanceOhms = 40000.0f;
   radio.ifStrip.secondaryLoadResistanceOhms = 200000.0f;
-  radio.ifStrip.stageGain = 20.0f;
   // Bulletin 284, Fig. 1: one 78 IF stage, screen 90 V, grid -2.3 V.
   radio.ifStrip.avcStageCount = 1;
   radio.ifStrip.stageBiasVolts = -2.3f;
   radio.ifStrip.stageScreenVolts = 90.0f;
+  // Bulletin 284: the IF plates take the roughly 100 V B+ line; less the
+  // 78's knee (prior).
+  radio.ifStrip.stagePlateSwingLimitVolts = 80.0f;
   radio.ifStrip.ifCenterHz = 470000.0f;
   radio.ifStrip.interstageCouplingCoeff = 0.012f;
   radio.ifStrip.outputCouplingCoeff = 0.012f;
@@ -483,10 +490,9 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.receiverCircuit.enabled = true;
   radio.receiverCircuit.volumeControlResistanceOhms = 500000.0f;
   radio.receiverCircuit.volumeControlTapResistanceOhms = 0.0f;
-  // Listener setting, not circuit data. The 38-12's simple AVC holds the
-  // detector lower than the former weak AVC did; this untapped 500 k control
-  // is turned up to keep the former playback level at the nominal carrier.
-  radio.receiverCircuit.volumeControlPosition = 0.085f;
+  // Listener setting, not circuit data: the former room level (0.29 of the
+  // rated reference volts) at the everyday-1938 carrier.
+  radio.receiverCircuit.volumeControlPosition = 0.032f;
   radio.receiverCircuit.volumeControlLoudnessResistanceOhms = 0.0f;
   radio.receiverCircuit.volumeControlLoudnessCapFarads = 0.0f;
   radio.receiverCircuit.couplingCapFarads = 0.01e-6f;
@@ -521,6 +527,10 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.powerSupply.config.filterFarads = 4e-6f;
   radio.powerSupply.config.filterReturnsToCentreTap = false;
   radio.powerSupply.config.filterHenries = 10;  // field inductance prior
+  // Bulletin 284: the 6A7 and 78 screens and IF plates take the B+ line
+  // after the field coil directly.
+  radio.powerSupply.screenFilterResistanceOhms = {};
+  radio.powerSupply.screenFilterFarads = {};
   radio.powerSupply.config.filterResistanceOhms = 1500;
   radio.powerSupply.config.returnFarads = 0;
   radio.powerSupply.config.returnHenries = 0;
@@ -617,11 +627,7 @@ void applyTypical1930sPreset(Radio1938& radio) {
 
   radio.noiseConfig.enableHumTone = false;
   radio.noiseConfig.humHzDefault = 60.0f;
-  radio.noiseConfig.noiseWeightRef = 0.15f;
-  radio.noiseConfig.noiseWeightScaleMax = 2.0f;
   radio.noiseConfig.humAmpScale = 0.010f;
-  radio.noiseConfig.crackleAmpScale = 0.025f;
-  radio.noiseConfig.crackleRateScale = 1.2f;
 
   radio.noiseRuntime.hum.noiseHpHz = 500.0f;
   radio.noiseRuntime.hum.noiseLpHz = 5000.0f;
