@@ -264,12 +264,13 @@ void applyPhilco37116Preset(Radio1938& radio) {
                        (0.5f * radio.power.outputTransformerPrimaryResistanceOhms) -
                    radio.power.outputTubePlateDcVolts) < 1.0f);
   // Downstream playback level, not electrical drive: programme loudness
-  // matches the unfiltered (mono) path, so one system volume serves both.
+  // matches the unfiltered stereo path, so one system volume serves both.
   // Over ten dynamic orchestral, piano and battle tracks and two 1930s
-  // broadcasts at everyday-1938 the median EBU R128 difference is 0 dB
-  // (-2.2 to +1.8 dB per track). The output limiter below catches the few
+  // broadcasts at everyday-1938 the median EBU R128 difference is -0.3 dB
+  // (-3.8 to +2.3 dB per track; wide stereo mixes lose most in the mono
+  // sum the transmitter carries). The output limiter below catches the
   // peaks of hot masters that this level pushes past full scale.
-  radio.output.digitalMakeupGain = 2.41f;
+  radio.output.digitalMakeupGain = 2.98f;
 
   radio.globals.oversampleFactor = 2.0f;
   radio.globals.oversampleCutoffFraction = 0.45f;
@@ -390,9 +391,9 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.cabinet.clarifier3AttenuationDb = 3.0f;
 
   // Playback safety, not part of the receiver: a look-ahead true-peak
-  // limiter just below full scale. On the hottest master tested it reduces
-  // gain 0.02-0.07 dB on average and at most 3-3.6 dB; on typical programme
-  // it does not act.
+  // limiter just below full scale. On the hottest master tested (-7.4 LUFS)
+  // it reduces gain 0.1-0.4 dB on average and at most about 5 dB; on
+  // ordinary programme it catches single peaks of 1-3 dB or does not act.
   radio.finalLimiter.enabled = true;
   radio.finalLimiter.threshold = 0.97f;
   radio.finalLimiter.lookaheadMs = 2.0f;
@@ -631,12 +632,13 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.power.outputLoadResistanceOhms = 3.5f;
   radio.power.nominalOutputPowerWatts = 0.0f;
   // Downstream playback level, not electrical drive: programme loudness
-  // matches the unfiltered (mono) path, so one system volume serves both.
+  // matches the unfiltered stereo path, so one system volume serves both.
   // Over ten dynamic orchestral, piano and battle tracks and two 1930s
   // broadcasts at everyday-1938 the median EBU R128 difference is 0 dB
-  // (-1.3 to +0.7 dB per track). The output limiter below catches the few
+  // (-2.3 to +2.2 dB per track; wide stereo mixes lose most in the mono
+  // sum the transmitter carries). The output limiter below catches the
   // peaks of hot masters that this level pushes past full scale.
-  radio.output.digitalMakeupGain = 2.30f;
+  radio.output.digitalMakeupGain = 2.78f;
 
   radio.globals.oversampleFactor = 2.0f;
   radio.globals.oversampleCutoffFraction = 0.45f;
@@ -738,9 +740,9 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.cabinet.clarifier3AttenuationDb = 0.0f;
 
   // Playback safety, not part of the receiver: a look-ahead true-peak
-  // limiter just below full scale. On the hottest master tested it reduces
-  // gain 0.02-0.07 dB on average and at most 3-3.6 dB; on typical programme
-  // it does not act.
+  // limiter just below full scale. On the hottest master tested (-7.4 LUFS)
+  // it reduces gain 0.1-0.4 dB on average and at most about 5 dB; on
+  // ordinary programme it catches single peaks of 1-3 dB or does not act.
   radio.finalLimiter.enabled = true;
   radio.finalLimiter.threshold = 0.97f;
   radio.finalLimiter.lookaheadMs = 2.0f;

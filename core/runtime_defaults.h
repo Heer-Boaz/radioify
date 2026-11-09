@@ -2,7 +2,7 @@
 
 inline constexpr bool kDefaultAudioPlaybackEnabled = true;
 inline constexpr bool kDefaultAsciiPlaybackEnabled = true;
-inline constexpr bool kDefaultMonoAudioEnabled = true;
+inline constexpr bool kDefaultMonoAudioEnabled = false;
 inline constexpr bool kDefaultDryAudioEnabled = false;
 inline constexpr bool kDefaultRadioFilterEnabled = false;
 inline constexpr int kDefaultRadioBandwidthHz = 5500;

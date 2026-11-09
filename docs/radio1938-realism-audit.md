@@ -92,6 +92,20 @@ design, so the bench reports the limiter instead of requiring it idle. At
 unfiltered level; the 38-12's simple AVC lets it rise 4 dB and fall 6 dB,
 as such a set did.
 
+**Stereo playback.** Playback, export and `render-radio` were mono since
+the first version (`kDefaultMonoAudioEnabled`); they are now stereo. The
+unfiltered path passes the source unchanged. The receivers still take the
+mono sum, as the transmitter did, and the existing room renderer turns the
+one speaker into left and right (a headphone scene by default). Against
+stereo the radio was about 1.7 dB quieter than against the mono downmix, so
+the makeup is refitted the same way: 2.78 (38-12) and 2.98 (Philco), median
+R128 difference 0.0 and -0.3 dB, -2.3 to +2.3 dB per track except -3.8 dB
+for a very wide stereo mix (Octopath II "Main Theme - Night", whose mono
+sum is 7 dB below its stereo loudness). The limiter now acts more on the
+hottest master (-7.4 LUFS): 0.1-0.4 dB average, at most about 5 dB; on the
+other tracks it catches single peaks of 1-3 dB or does not act. The
+figures above for the mono path are kept as measured.
+
 **Remaining.** Sub-bass at 30-50 Hz in modern recordings still drives the
 Philco's cone and transformers into harmonics that land at 63-100 Hz
 (terminal h2 about -10 to -13 dBc at 40 Hz), so those bands stay only
