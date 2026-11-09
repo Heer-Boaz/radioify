@@ -105,13 +105,20 @@ void applyPhilco37116Preset(Radio1938& radio) {
   // returns through 20 k / 1 M with .01 uF (90-92); its cathode sits at +25 V
   // (Fig. 2). It is a delayed AVC rectifier, separate from the audio detector.
   // Against the -3 V AVC return its grid conducts once the plate swings
-  // 28 V peak; the IF strip is in absolute volts, so that is the delay. The
-  // 75 ms filter is a prior: the AVC bus beyond 90-92 was not traced
-  // unambiguously.
+  // 28 V peak; the IF strip is in absolute volts, so that is the delay.
+  // The bus charges through 92 (1.0 M); 91 (20 k) is negligible in series.
+  // Its capacitance is 90 and 90A (.01 uF each) plus the .05 uF bypass at
+  // each controlled grid return: 63 (1st IF), 66 (2nd IF), and the RF and
+  // mixer returns, 0.22 uF in all, so tau = 0.22 s. The grid leak 95
+  // (490 k) adds to the discharge path, so release is about 1.5 times
+  // slower than this single symmetric pole. That every controlled return
+  // carries its own .05 uF is read from a dense schematic. The former 75 ms
+  // prior put the closed AVC loop near 50 Hz, where it chased bass
+  // modulation and produced its second harmonic at the detector.
   radio.demod.am.avcFromIfEnvelope = true;
   radio.demod.am.avcDelayBiasVolts = 28.0f;
-  radio.demod.am.avcFilterResistanceOhms = 500000.0f;
-  radio.demod.am.avcFilterCapFarads = 0.15e-6f;
+  radio.demod.am.avcFilterResistanceOhms = 1000000.0f;
+  radio.demod.am.avcFilterCapFarads = 0.22e-6f;
   // Keep the normalized control bus, but make one physical AVC volt
   // impose one volt of mixer grid bias (avcT divides by 1.25).
   radio.demod.am.controlVoltageRef = radio.mixer.avcGridDriveVolts / 1.25f;
@@ -122,11 +129,16 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.receiverCircuit.enabled = true;
   radio.receiverCircuit.volumeControlResistanceOhms = 2000000.0f;
   radio.receiverCircuit.volumeControlTapResistanceOhms = 1000000.0f;
-  // Listener setting, not circuit data. The delayed AVC holds the detector
-  // near 30 V, so a room level (the former 0.53 of the rated reference
-  // volts) needs the control well below its 1 M tap, where the tap network
-  // adds the bass compensation Philco designed it for.
-  radio.receiverCircuit.volumeControlPosition = 0.084f;
+  // Listener setting, not circuit data: the same living-room level as the
+  // typical set, 0.18 W into the voice coil on the 1 kHz, 85% reference tone
+  // (0.84 V at 3.9 ohms). The two speakers' efficiencies are unknown, so
+  // equal electrical power is the neutral choice. The former 0.084 drove 4 W
+  // there, a third of the rated output, and the tap network's bass lift then
+  // pushed the cone and output stage into heavy distortion on music. The
+  // delayed AVC holds the detector near 30 V, so this level sits well below
+  // the 1 M tap, where the tap network adds the bass compensation Philco
+  // designed it for.
+  radio.receiverCircuit.volumeControlPosition = 0.0146f;
   // Bulletin 258, 102-105: the 1 M tap returns through 70 k (103) to the tone
   // switch capacitors .008 uF (104) and .006 uF (105) in series. The switch
   // grounds the 70 k end (plain 70 k), the junction (70 k + 8 nF), or neither
@@ -251,13 +263,13 @@ void applyPhilco37116Preset(Radio1938& radio) {
                    radio.power.outputTubePlateCurrentAmps *
                        (0.5f * radio.power.outputTransformerPrimaryResistanceOhms) -
                    radio.power.outputTubePlateDcVolts) < 1.0f);
-  // Downstream listening level, not electrical drive: the largest programme
-  // peak over a set of loudly mastered music tracks (all three reception
-  // profiles, room on) reaches about -1 dBFS; the steady full-modulation
-  // reference tone stays at 0.49 of full scale. Programme loudness then stays
-  // about 8.5 dB below the unfiltered source; closing that gap would need
-  // limiting.
-  radio.output.digitalMakeupGain = 0.35f;
+  // Downstream playback level, not electrical drive: programme loudness
+  // matches the unfiltered (mono) path, so one system volume serves both.
+  // Over ten dynamic orchestral, piano and battle tracks and two 1930s
+  // broadcasts at everyday-1938 the median EBU R128 difference is 0 dB
+  // (-2.2 to +1.8 dB per track). The output limiter below catches the few
+  // peaks of hot masters that this level pushes past full scale.
+  radio.output.digitalMakeupGain = 2.41f;
 
   radio.globals.oversampleFactor = 2.0f;
   radio.globals.oversampleCutoffFraction = 0.45f;
@@ -377,8 +389,12 @@ void applyPhilco37116Preset(Radio1938& radio) {
   radio.cabinet.clarifier3Q = 1.50f;
   radio.cabinet.clarifier3AttenuationDb = 3.0f;
 
-  radio.finalLimiter.enabled = false;
-  radio.finalLimiter.threshold = 1.0f;
+  // Playback safety, not part of the receiver: a look-ahead true-peak
+  // limiter just below full scale. On the hottest master tested it reduces
+  // gain 0.02-0.07 dB on average and at most 3-3.6 dB; on typical programme
+  // it does not act.
+  radio.finalLimiter.enabled = true;
+  radio.finalLimiter.threshold = 0.97f;
   radio.finalLimiter.lookaheadMs = 2.0f;
   radio.finalLimiter.attackMs = 0.5f;
   radio.finalLimiter.releaseMs = 80.0f;
@@ -490,8 +506,10 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.receiverCircuit.enabled = true;
   radio.receiverCircuit.volumeControlResistanceOhms = 500000.0f;
   radio.receiverCircuit.volumeControlTapResistanceOhms = 0.0f;
-  // Listener setting, not circuit data: the former room level (0.29 of the
-  // rated reference volts) at the everyday-1938 carrier.
+  // Listener setting, not circuit data: a living-room level, 0.18 W into
+  // the voice coil on the 1 kHz, 85% reference tone at the everyday-1938
+  // carrier (0.29 of the rated reference volts). The Philco is set to the
+  // same electrical power.
   radio.receiverCircuit.volumeControlPosition = 0.032f;
   radio.receiverCircuit.volumeControlLoudnessResistanceOhms = 0.0f;
   radio.receiverCircuit.volumeControlLoudnessCapFarads = 0.0f;
@@ -612,12 +630,13 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.power.outputTransformerIntegrationSubsteps = 4;
   radio.power.outputLoadResistanceOhms = 3.5f;
   radio.power.nominalOutputPowerWatts = 0.0f;
-  // Normal programme listening is below the 41's 2 W / roughly 10% distortion
-  // rating. Listening level after the physical speaker reference, bounded by
-  // the steady 1 kHz full-modulation reference tone (0.94 of full scale, no
-  // clipping). Music peaks stay about 4 dB lower; programme loudness stays
-  // about 14.5 dB below the unfiltered source.
-  radio.output.digitalMakeupGain = 0.73f;
+  // Downstream playback level, not electrical drive: programme loudness
+  // matches the unfiltered (mono) path, so one system volume serves both.
+  // Over ten dynamic orchestral, piano and battle tracks and two 1930s
+  // broadcasts at everyday-1938 the median EBU R128 difference is 0 dB
+  // (-1.3 to +0.7 dB per track). The output limiter below catches the few
+  // peaks of hot masters that this level pushes past full scale.
+  radio.output.digitalMakeupGain = 2.30f;
 
   radio.globals.oversampleFactor = 2.0f;
   radio.globals.oversampleCutoffFraction = 0.45f;
@@ -718,8 +737,12 @@ void applyTypical1930sPreset(Radio1938& radio) {
   radio.cabinet.clarifier3Q = 0.0f;
   radio.cabinet.clarifier3AttenuationDb = 0.0f;
 
-  radio.finalLimiter.enabled = false;
-  radio.finalLimiter.threshold = 1.0f;
+  // Playback safety, not part of the receiver: a look-ahead true-peak
+  // limiter just below full scale. On the hottest master tested it reduces
+  // gain 0.02-0.07 dB on average and at most 3-3.6 dB; on typical programme
+  // it does not act.
+  radio.finalLimiter.enabled = true;
+  radio.finalLimiter.threshold = 0.97f;
   radio.finalLimiter.lookaheadMs = 2.0f;
   radio.finalLimiter.attackMs = 0.5f;
   radio.finalLimiter.releaseMs = 80.0f;

@@ -69,6 +69,7 @@ struct HarnessConfig {
   bool observeTerminalVoltage = false;
   // Negative keeps the receiver's own listening setting.
   float volumeOverride = -1.0f;
+  float toneHz = 1000.0f;
   float crashAreaVoltSeconds = 1e-6f;
   RadioReceptionProfile reception = RadioReceptionProfile::Everyday1938;
   bool atmosphericNoise = false;
@@ -106,17 +107,13 @@ struct ReceiverReferenceBands {
 // and harmonics; the former acoustically weighted SINAD cannot be reused here.
 // See docs/radio1938-period-acoustics.md for both measurements and their limits.
 constexpr ReceiverReferenceBands kPhilco37116ReferenceBands{
-    // IMD: the documented 28 V delay of the 6J5G AVC holds the detector near
-    // 30 V, and the AVC filter (a single 75 ms prior; the bus beyond parts
-    // 90-92 is untraced) leaves a little audio ripple on the controlled grids
-    // at that level: -37.7 dB at the terminals, -36.8 dB with ten times the
-    // filter capacitance. At the room-level setting the loudness tap also
-    // lifts 400 Hz into the output stage.
-    60.0f, 200.0f, 2500.0f, 5500.0f, -35.0f, 30.0f,
-    // Playback uses 25..64% of rated electrical power (0.5..0.8 of the
-    // reference volts; 0.53 at the room-level setting below the loudness
-    // tap). Rated 12..18 W capacity and the headroom guards stay.
-    2500.0f, 5500.0f, -28.0f, 28.0f, 0.50f, 0.80f, 12.0f, 18.0f};
+    // IMD at the living-room setting with the schematic's 0.22 s AVC bus:
+    // -46.3 dB at the terminals and -39.1 dB acoustic.
+    60.0f, 200.0f, 2500.0f, 5500.0f, -38.0f, 30.0f,
+    // Living-room level: 0.18 W on the reference tone, the same electrical
+    // power as the typical set (0.11 of the reference volts, below the
+    // loudness tap). Rated 12..18 W capacity and the headroom guards stay.
+    2500.0f, 5500.0f, -35.0f, 28.0f, 0.09f, 0.14f, 12.0f, 18.0f};
 
 // The mass-market profile deliberately validates against its own 2 W,
 // single-ended receiver class. Reusing the 37-116's 15 W / high-fidelity
@@ -142,11 +139,13 @@ constexpr float kPhilcoDetectorTauUsMin = 30, kPhilcoDetectorTauUsMax = 45;
 constexpr float kTypicalDetectorTauUsMin = 90, kTypicalDetectorTauUsMax = 120;
 // The 38-12's documented 2 M / 0.03 uF AVC network is 60 ms; leave room for
 // its single-precision product.
-constexpr float kTargetAvcTauMsMin = 55.0f;
-constexpr float kTargetAvcTauMsMax = 90.0f;
-// Prefer max digital output < ~0.95
+constexpr float kTypicalAvcTauMsMin = 55.0f, kTypicalAvcTauMsMax = 90.0f;
+// The 37-116's bus charges through 92 (1 M) into 90, 90A and the four
+// .05 uF grid-return bypasses, 0.22 uF in all (Bulletin 258).
+constexpr float kPhilcoAvcTauMsMin = 200.0f, kPhilcoAvcTauMsMax = 240.0f;
+// The playback limiter holds true peaks below its 0.97 threshold.
 constexpr float kTargetMaxDigitalOutputMin = 0.0f;
-constexpr float kTargetMaxDigitalOutputMax = 0.95f;
+constexpr float kTargetMaxDigitalOutputMax = 0.975f;
 // IF center and nominal output power
 constexpr float kTargetIfCenterMinHz = 469000.0f;
 constexpr float kTargetIfCenterMaxHz = 471000.0f;
@@ -334,6 +333,7 @@ void printUsage() {
       << "  --crash-area <volt-seconds>  Antenna impulse area for the crash section\n"
       << "  --atmospheric  Enable atmospheric noise in preview_trace\n"
       << "  --trace-seconds <s>  Length of preview_trace (default 10)\n"
+      << "  --tone-hz <hz>  Test-tone frequency for the overdrive section (default 1000)\n"
       << "  --noise <value>\n"
       << "  --noise-only <value>\n"
       << "  --detector-spc <value>\n"
@@ -383,6 +383,8 @@ HarnessConfig parseArgs(int argc, char** argv) {
     } else if (arg == "--detector-max-substeps") {
       config.detectorWaveformMaxSubsteps =
           parseIntArg(argv, i, argc, "--detector-max-substeps");
+    } else if (arg == "--tone-hz") {
+      config.toneHz = parseFloatArg(argv, i, argc, "--tone-hz");
     } else if (arg == "--speaker-natural-hz") {
       config.speakerNaturalHzOverride =
           parseFloatArg(argv, i, argc, "--speaker-natural-hz");
@@ -1496,7 +1498,8 @@ void runOverdrive(const HarnessConfig& config) {
                "h2_dbc,h3_dbc,h4_dbc,h5_dbc,thd_db,speaker_ref_ratio,"
                "power_clip,speaker_clip,output_clip,final_limiter_active,"
                "validation_digital_clip,validation_failed\n";
-  auto input = makeSine(config.sampleRate, kSteadyTestFrames, 1000.0f,
+  const float f = config.toneHz;
+  auto input = makeSine(config.sampleRate, kSteadyTestFrames, f,
                         kOverdriveProgramPeak);
   constexpr std::array<float, 8> kModIndices = {0.10f, 0.25f, 0.50f, 0.75f,
                                                 0.90f, 1.00f, 1.10f, 1.20f};
@@ -1506,11 +1509,11 @@ void runOverdrive(const HarnessConfig& config) {
         measureSignalStats(run.output, static_cast<size_t>(config.sampleRate * 0.20f));
     std::vector<double> spectrum =
         computeSpectrumPeakAmplitudes(run.output, config.sampleRate);
-    double h1 = peakAmplitudeAtHz(spectrum, config.sampleRate, 1000.0f);
-    double h2 = peakAmplitudeAtHz(spectrum, config.sampleRate, 2000.0f);
-    double h3 = peakAmplitudeAtHz(spectrum, config.sampleRate, 3000.0f);
-    double h4 = peakAmplitudeAtHz(spectrum, config.sampleRate, 4000.0f);
-    double h5 = peakAmplitudeAtHz(spectrum, config.sampleRate, 5000.0f);
+    double h1 = peakAmplitudeAtHz(spectrum, config.sampleRate, f);
+    double h2 = peakAmplitudeAtHz(spectrum, config.sampleRate, 2 * f);
+    double h3 = peakAmplitudeAtHz(spectrum, config.sampleRate, 3 * f);
+    double h4 = peakAmplitudeAtHz(spectrum, config.sampleRate, 4 * f);
+    double h5 = peakAmplitudeAtHz(spectrum, config.sampleRate, 5 * f);
     double harmonicRms = std::sqrt(h2 * h2 + h3 * h3 + h4 * h4 + h5 * h5);
     double thd = harmonicRms / std::max(h1, 1e-20);
     double asymmetry =
@@ -1933,8 +1936,10 @@ bool runReference(const HarnessConfig& config) {
   allInBand &= printReferenceRow("detector_tau_us", detectorTauUs,
                                  config.receiverProfile == RadioReceiverProfile::Philco37116 ? kPhilcoDetectorTauUsMin : kTypicalDetectorTauUsMin,
                                  config.receiverProfile == RadioReceiverProfile::Philco37116 ? kPhilcoDetectorTauUsMax : kTypicalDetectorTauUsMax);
+  const bool philco = config.receiverProfile == RadioReceiverProfile::Philco37116;
   allInBand &= printReferenceRow("avc_tau_ms", avcTauMs,
-                                 kTargetAvcTauMsMin, kTargetAvcTauMsMax);
+                                 philco ? kPhilcoAvcTauMsMin : kTypicalAvcTauMsMin,
+                                 philco ? kPhilcoAvcTauMsMax : kTypicalAvcTauMsMax);
   allInBand &= printReferenceRow(
       "avc_to_detector_tau_ratio",
       avcTauMs / std::max(detectorTauUs * 1e-3, 1e-9), 50.0, 1e9);
@@ -1961,10 +1966,10 @@ bool runReference(const HarnessConfig& config) {
   allInBand &= printReferenceRow(
       "output_clip", nominalRun.radio.diagnostics.outputClip ? 1 : 0,
       kTargetFlagZero, kTargetFlagZero);
-  allInBand &= printReferenceRow(
-      "final_limiter_active",
-      nominalRun.radio.diagnostics.finalLimiterActive ? 1 : 0, kTargetFlagZero,
-      kTargetFlagZero);
+  // Programme loudness matches the unfiltered path, so a steady 85% tone is
+  // limited by design; reported only. The physical clip flags above stay zero.
+  printReferenceRow("final_limiter_active",
+                    nominalRun.radio.diagnostics.finalLimiterActive ? 1 : 0, 0, 1);
   // IF center and nominal output power anchor
   allInBand &= printReferenceRow("if_center_hz", radio.ifStrip.ifCenterHz,
                                  kTargetIfCenterMinHz,

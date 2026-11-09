@@ -17,6 +17,92 @@ remaining approximations and changed acceptance assumptions are recorded separat
 
 ## Verdict
 
+### Whole-output analysis, listening level and the Philco AVC bus, 2026-11-09
+
+**Method.** The checks above test one stage at a time. This one tests the
+whole output against its source: ten dynamic Square Enix tracks (live
+orchestra, choir, piano/jazz, battle, quiet themes; 75 s each), two 1930s
+broadcasts (Lux Radio Theatre 1936, The Thin Man) and silence, rendered
+through the unfiltered (mono) path, the 38-12 and the Philco at
+`everyday-1938`. Per third-octave band it measures the effective transfer
+function on music and the coherence between input and output, the share of
+the output that is a linear image of the input as opposed to distortion and
+noise. It also measures the tonal balance, EBU R128 loudness and loudness
+range, the slope of short-term output against input loudness, the
+silence spectrum, and an envelope-regression speech transmission index.
+The `overdrive` section's new `--tone-hz` option localises distortion at
+bass frequencies, at the speaker terminals (`--terminal`) or acoustically.
+
+**Finding.** The unfiltered path is transparent (79 dB linear, the 16-bit
+floor), and the 38-12 behaves as a whole: about 200 Hz to 3.6 kHz at -6 dB,
+a 3 dB rise near 2.5 kHz, 15 dB linear-to-residual on music, an STI of
+0.88 on the 1936 broadcast. The Philco did not: 7.8 dB linear-to-residual,
+39% of its output below 150 Hz against 24% in the source, and a lower STI
+(0.72) than the cheap set. Two faults caused it.
+
+- **It played at a third of its rated power.** At the room-level knob
+  (0.084) the 1 kHz, 85% reference tone put 4 W into the voice coil (0.53 of
+  the rated reference volts, peaks 0.93), against 0.18 W in the 38-12. The
+  digital scale follows each set's rated power, so matching programme
+  loudness had pushed the knob up. With the tap network's bass lift, a full
+  80 Hz modulation then drove the cone (suspension prior: restoring force
+  doubles at 3 mm) and the output stage so far that the acoustic third
+  harmonic equalled the fundamental (-15 dBc at the terminals). The knob is
+  now 0.0146, the same 0.18 W as the 38-12; the speakers' efficiencies are
+  unknown, so equal electrical power is the neutral choice.
+- **The AVC loop reached into the bass.** The delayed, amplified AVC holds
+  the Philco within 3.5 dB over 80 dB of carrier, a loop gain of about 23.
+  With the 75 ms prior that put the closed loop near 50 Hz, so the AVC chased
+  bass modulation: an 80 Hz tone at 50% modulation carried -22 dBc of second
+  harmonic at the terminals regardless of the volume control. Bulletin 258
+  gives the bus: the A.V.C. 6J5G charges it through 92 (1.0 M; 91, 20 k, in
+  series), into 90 and 90A (.01 uF each) and the .05 uF bypass at each
+  controlled grid return (63, 1st IF; 66, 2nd IF; and the RF and mixer
+  returns), 0.22 uF, tau 0.22 s. The grid leak 95 (490 k) lengthens the
+  discharge by about 1.5 times, which the single symmetric pole omits. That
+  every controlled return has its own .05 uF is read from a dense schematic.
+  The same harmonic is now -47 dBc.
+
+| Philco 37-116 | before | after |
+| --- | ---: | ---: |
+| 80 Hz, 50% modulation, terminal h2 / h3 | -20 / -23 dBc | -47 / -20 dBc |
+| Terminal IMD (400 + 2000 Hz) | -37.7 dB | -46.3 dB |
+| Acoustic IMD | -30.5 dB | -39.1 dB |
+| Music coherence 400-1000 Hz | 15-16 dB | 19-22 dB |
+| Music linear-to-residual, whole band | 7.8 dB | 11.3 dB |
+
+The 80 Hz third harmonic above is the knob-independent part at full drive.
+The Philco IMD guards return to their former -38 dB (terminal) and -35 dB
+(acoustic) bounds, and the reference bands now hold a per-profile AVC tau
+(Philco 200-240 ms) and the Philco's living-room speaker ratio (0.09-0.14).
+
+**Loudness matches the unfiltered path.** One system volume should serve
+the radio and the unfiltered path. The digital makeup is set so that the
+median R128 loudness over the tracks and broadcasts equals the unfiltered
+mono path: 2.30 (38-12, was 0.73) and 2.41 (Philco, was 0.35). Medians are
+now -18.6 (unfiltered), -18.5 (38-12) and -18.1 LUFS (Philco), within
+-2.2 to +1.8 dB per track. The receivers' crest factor is a little higher
+than the source's, so this level pushes a few peaks of hot masters past
+full scale. The final limiter (2 ms look-ahead, true-peak, 0.97) is
+therefore enabled as playback safety, not as part of the receiver. On the
+hottest track it reduces gain 0.02-0.07 dB on average and at most 3-3.6 dB;
+on typical programme it does not act. A steady 85% tone is limited by
+design, so the bench reports the limiter instead of requiring it idle. At
+`strong-local` and `night-skywave` the Philco stays within 1.5 dB of the
+unfiltered level; the 38-12's simple AVC lets it rise 4 dB and fall 6 dB,
+as such a set did.
+
+**Remaining.** Sub-bass at 30-50 Hz in modern recordings still drives the
+Philco's cone and transformers into harmonics that land at 63-100 Hz
+(terminal h2 about -10 to -13 dBc at 40 Hz), so those bands stay only
+5-7 dB coherent; 1930s programme carried little such content. With the AVC
+no longer cutting bass, half of the Philco's output lies below 150 Hz: the
+tap network, the 95 Hz cabinet resonance, the speaker's high-Q 80 Hz
+resonance (Qts about 1.7, a prior) and the tone-switch position (undocumented)
+all add there. The 38-12's bass falls steeply (-36 dB at 100 Hz against
+1 kHz). At the lower Philco knob the output stage's 120 Hz hum is
+relatively 12 dB stronger against programme, as on a real set turned down.
+
 ### Absolute gain, impulsive noise and modulation hum, 2026-11-09
 
 **The receivers have absolute gain.** The RF and IF chain was a calibration:
@@ -85,7 +171,8 @@ carrier, relative to the everyday-1938 carrier (`--section avc`):
 Fades are now held as a real set holds them: the 38-12's simple AVC within
 about 24 dB over 80 dB of carrier, the Philco's delayed AVC within 3.5 dB.
 
-**Listening setting.** The volume control is a listener setting, kept at the
+**Listening setting** (superseded the same day; see "Whole-output analysis"
+above). The volume control is a listener setting, kept at the
 former room level (0.29 and 0.53 of the rated reference volts): 0.032 on the
 38-12 (was 0.085) and 0.084 on the Philco (was 0.54). With the detector near
 30 V the Philco's control now sits below its 1 Mohm tap at room level, where
