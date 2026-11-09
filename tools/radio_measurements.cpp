@@ -4,6 +4,7 @@
 #include "audiofilter/radio1938/radio_am_ingress.h"
 #include "audiofilter/radio1938/preview/radio_preview_pipeline.h"
 #include "audiofilter/math/signal_math.h"
+#include "core/runtime_defaults.h"
 
 #include <algorithm>
 #include <array>
@@ -143,6 +144,13 @@ constexpr float kTypicalAvcTauMsMin = 55.0f, kTypicalAvcTauMsMax = 90.0f;
 // The 37-116's bus charges through 92 (1 M) into 90, 90A and the four
 // .05 uF grid-return bypasses, 0.22 uF in all (Bulletin 258).
 constexpr float kPhilcoAvcTauMsMin = 200.0f, kPhilcoAvcTauMsMax = 240.0f;
+// Second harmonic of an 80 Hz tone at 50% modulation, speaker terminals.
+// Philco: the schematic's 0.22 s AVC bus leaves -31.5 dBc (-54.6 dBc with
+// ten times the capacitance); the former 75 ms prior gave -21 dBc. 38-12:
+// -18 dBc from its single-ended output stage and small output transformer,
+// within 1 dB with ten times its AVC capacitance; regression bound only.
+constexpr double kPhilcoTerminal80HzH2DbcMax = -28.0;
+constexpr double kTypicalTerminal80HzH2DbcMax = -15.0;
 // The playback limiter holds true peaks below its 0.97 threshold.
 constexpr float kTargetMaxDigitalOutputMin = 0.0f;
 constexpr float kTargetMaxDigitalOutputMax = 0.975f;
@@ -342,7 +350,7 @@ void printUsage() {
       << "  --radio-settings <path>\n"
       << "  --receiver-profile <typical-1930s|philco-37-116>  Base receiver before settings\n"
       << "  --preset <name>  TOML preset; a built-in name also selects the receiver unless explicitly overridden\n"
-      << "  --section <all|config|sweep|envelope|levels|imd|overdrive|sinad|weak|avc|sensitivity|crash|preview_trace|fading|transient|reference|noise|spectrum|am_validate|am_convergence|power_bench>\n";
+      << "  --section <all|config|sweep|envelope|levels|imd|overdrive|sinad|weak|avc|sensitivity|crash|preview_trace|fading|transient|reference|noise|spectrum|am_validate|am_convergence|power_bench|programme>\n";
 }
 
 HarnessConfig parseArgs(int argc, char** argv) {
@@ -1970,6 +1978,35 @@ bool runReference(const HarnessConfig& config) {
   // limited by design; reported only. The physical clip flags above stay zero.
   printReferenceRow("final_limiter_active",
                     nominalRun.radio.diagnostics.finalLimiterActive ? 1 : 0, 0, 1);
+  // The AVC loop must not reach into the audio band. With the Philco's
+  // former 75 ms prior the loop closed near 50 Hz and chased bass
+  // modulation: -22 dBc of second harmonic at the terminals for an 80 Hz
+  // tone at 50% modulation, independent of the volume control.
+  {
+    HarnessConfig toneConfig = config;
+    toneConfig.observeTerminalVoltage = true;
+    const auto tone = makeSine(config.sampleRate, kSteadyTestFrames, 80.0f,
+                               kOverdriveProgramPeak);
+    RunResult run = runAmProgram(toneConfig, tone, 0.5f, config.noiseWeight);
+    // Exact DFT over the last 0.25 s: whole periods of 80, 120 and 160 Hz,
+    // so supply hum at 120 Hz cannot leak into the harmonic.
+    const auto amplitudeAt = [&](double hz) {
+      const size_t n = static_cast<size_t>(0.25 * config.sampleRate);
+      const size_t start = run.output.size() - n;
+      std::complex<double> sum{};
+      for (size_t i = 0; i < n; ++i) {
+        const double phase = kRadioTwoPi * hz * double(i) / config.sampleRate;
+        sum += double(run.output[start + i]) * std::complex<double>(std::cos(phase), -std::sin(phase));
+      }
+      return 2.0 * std::abs(sum) / double(n);
+    };
+    const double h1 = amplitudeAt(80.0);
+    const double h2 = amplitudeAt(160.0);
+    allInBand &= printReferenceRow("terminal_80hz_h2_dbc",
+                                   dbFromRatio(h2 / std::max(h1, 1e-20)), -100.0,
+                                   philco ? kPhilcoTerminal80HzH2DbcMax
+                                          : kTypicalTerminal80HzH2DbcMax);
+  }
   // IF center and nominal output power anchor
   allInBand &= printReferenceRow("if_center_hz", radio.ifStrip.ifCenterHz,
                                  kTargetIfCenterMinHz,
@@ -2087,6 +2124,454 @@ void runAmConvergence(const HarnessConfig& config) {
 
 void runPowerBench(const HarnessConfig& config);
 
+// ---------------------------------------------------------------------------
+// Whole-output programme test.
+//
+// The other sections test one stage at a time. This one runs the complete
+// playback path (broadcast source, reception, receiver, room, makeup and
+// limiter) in stereo on a deterministic synthetic programme and compares it
+// with the unfiltered source it replaces: loudness, the share of each band
+// that is a linear image of the source, peaks and limiter load. Stage tests
+// passed while the Philco played at a third of its rated power and its AVC
+// loop chased the bass; this test fails on both.
+
+class ProgrammeRng {
+ public:
+  explicit ProgrammeRng(uint64_t seed) : state_(seed) {}
+  double uniform() {
+    state_ = state_ * 6364136223846793005ULL + 1442695040888963407ULL;
+    return static_cast<double>(state_ >> 11) * (1.0 / 9007199254740992.0);
+  }
+  double gauss() {
+    const double u1 = std::max(uniform(), 1e-12);
+    return std::sqrt(-2.0 * std::log(u1)) * std::cos(kRadioTwoPi * uniform());
+  }
+
+ private:
+  uint64_t state_;
+};
+
+// Direct-form biquad with RBJ band-pass coefficients, local to the generator.
+struct ProgrammeBiquad {
+  double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
+  void bandpass(double fs, double hz, double q) {
+    const double w = kRadioTwoPi * hz / fs, alpha = std::sin(w) / (2 * q);
+    const double a0 = 1 + alpha;
+    b0 = alpha / a0;
+    b1 = 0;
+    b2 = -alpha / a0;
+    a1 = -2 * std::cos(w) / a0;
+    a2 = (1 - alpha) / a0;
+  }
+  double process(double x) {
+    const double y = b0 * x + z1;
+    z1 = b1 * x - a1 * y + z2;
+    z2 = b2 * x - a2 * y;
+    return y;
+  }
+};
+
+struct StereoProgramme {
+  std::vector<float> left, right;
+  size_t musicStart = 0, musicEnd = 0, speechStart = 0, speechEnd = 0;
+};
+
+constexpr double kProgrammeLeadSeconds = 1.5;
+constexpr double kProgrammeMusicSeconds = 12.0;
+constexpr double kProgrammeGapSeconds = 0.5;
+constexpr double kProgrammeSpeechSeconds = 8.0;
+
+void addPanned(StereoProgramme& p, size_t i, double x, double pan) {
+  const double angle = (pan + 1.0) * kRadioPi / 4.0;
+  p.left[i] += static_cast<float>(x * std::cos(angle) * std::sqrt(2.0));
+  p.right[i] += static_cast<float>(x * std::sin(angle) * std::sqrt(2.0));
+}
+
+// Twelve seconds of music: a four-chord progression of decaying piano-like
+// voices across the stereo field, a melody line, a bass line down to 55 Hz,
+// kick, snare and hi-hat, swelling from -9 dB to full level and back. Then eight seconds of
+// speech-like sound: voiced syllables at 100-150 Hz through vowel formants,
+// with unvoiced onsets, in syllable and phrase rhythm.
+StereoProgramme makeProgramme(double fs) {
+  StereoProgramme p;
+  const auto at = [fs](double seconds) { return static_cast<size_t>(seconds * fs); };
+  p.musicStart = at(kProgrammeLeadSeconds);
+  p.musicEnd = p.musicStart + at(kProgrammeMusicSeconds);
+  p.speechStart = p.musicEnd + at(kProgrammeGapSeconds);
+  p.speechEnd = p.speechStart + at(kProgrammeSpeechSeconds);
+  p.left.assign(p.speechEnd + at(0.5), 0.0f);
+  p.right.assign(p.left.size(), 0.0f);
+  ProgrammeRng rng(0x5ADD1938u);
+
+  const std::array<std::array<double, 3>, 4> chords{{{261.63, 329.63, 392.00},
+                                                     {220.00, 261.63, 329.63},
+                                                     {174.61, 220.00, 261.63},
+                                                     {196.00, 246.94, 293.66}}};
+  const std::array<double, 4> bass{65.41, 55.00, 87.31, 98.00};
+  const std::array<double, 3> voicePan{-0.6, 0.0, 0.6};
+  ProgrammeBiquad snareBand;
+  snareBand.bandpass(fs, 1800.0, 0.8);
+  double previousNoise = 0.0;
+  const std::array<double, 6> melodyNotes{523.25, 587.33, 659.25, 783.99, 880.00, 1046.50};
+  // Levels give the long-term spectrum of the ten real tracks used for the
+  // loudness match: 23 / 29 / 44 / 3.2 / 0.7% of the power below 150 Hz,
+  // 150-500 Hz, 0.5-2 kHz, 2-5 kHz and above (tracks: 24 / 29 / 44 / 3.4 /
+  // 0.5%).
+  constexpr double aVoice = 0.22, aBass = 0.30, aKick = 0.50, aSnare = 0.25, aHat = 0.05,
+                   aMelody = 0.30;
+  double melodyPhase = 0.0;
+  size_t melodyNote = 0, lastMelodyStep = SIZE_MAX;
+  for (size_t i = p.musicStart; i < p.musicEnd; ++i) {
+    const double t = static_cast<double>(i - p.musicStart) / fs;
+    const double swell = std::sin(kRadioPi * t / kProgrammeMusicSeconds);
+    const double gain = std::pow(10.0, (-9.0 + 9.0 * swell * swell) / 20.0);
+    const size_t bar = static_cast<size_t>(t / 2.0) % chords.size();
+    const double inBar = std::fmod(t, 2.0);
+    for (size_t v = 0; v < 3; ++v) {
+      // Struck at the bar and again half way, slightly arpeggiated.
+      const double onset = 0.12 * static_cast<double>(v);
+      double since = inBar - onset;
+      if (since >= 1.0) since -= 1.0;
+      if (since < 0.0) continue;
+      const double f = chords[bar][v];
+      double tone = 0.0;
+      for (int n = 1; n <= 12 && n * f < 9000.0; ++n) {
+        tone += std::pow(n, -1.3) * std::exp(-since * (1.2 + 0.4 * n)) *
+                std::sin(kRadioTwoPi * n * f * since);
+      }
+      addPanned(p, i, aVoice * gain * tone, voicePan[v]);
+    }
+    const double fb = bass[bar];
+    double bassTone = 0.0;
+    for (int n = 1; n <= 4; ++n)
+      bassTone += std::sin(kRadioTwoPi * n * fb * inBar) / n;
+    bassTone *= std::min(1.0, inBar / 0.02) * std::exp(-0.8 * inBar);
+    addPanned(p, i, aBass * gain * bassTone, 0.0);
+    // A sustained melody line over the chords, eighth notes with vibrato.
+    const size_t melodyStep = static_cast<size_t>(t / 0.25);
+    if (melodyStep != lastMelodyStep) {
+      lastMelodyStep = melodyStep;
+      melodyNote = static_cast<size_t>(rng.uniform() * melodyNotes.size()) % melodyNotes.size();
+    }
+    const double inNote = t - 0.25 * static_cast<double>(melodyStep);
+    const double fm = melodyNotes[melodyNote] * (1.0 + 0.005 * std::sin(kRadioTwoPi * 5.0 * t));
+    melodyPhase += fm / fs;
+    melodyPhase -= std::floor(melodyPhase);
+    double lead = 0.0;
+    for (int n = 1; n <= 6; ++n) lead += std::pow(n, -1.5) * std::sin(kRadioTwoPi * n * melodyPhase);
+    lead *= std::min({1.0, inNote / 0.02, (0.25 - inNote) / 0.03});
+    addPanned(p, i, aMelody * gain * lead, 0.3);
+
+    const double beat = std::fmod(t, 1.0);
+    const double kickPhase = kRadioTwoPi * (50.0 * beat + 70.0 * 0.05 * (1.0 - std::exp(-beat / 0.05)));
+    addPanned(p, i, aKick * gain * std::exp(-beat / 0.15) * std::sin(kickPhase), 0.0);
+
+    const double noise = rng.gauss();
+    const double snareSince = std::fmod(t + 0.5, 1.0);
+    const double snare = snareBand.process(noise) * 3.0 +
+                         0.5 * std::sin(kRadioTwoPi * 180.0 * snareSince);
+    addPanned(p, i, aSnare * gain * std::exp(-snareSince / 0.08) * snare, -0.2);
+    const double hatSince = std::fmod(t, 0.25);
+    addPanned(p, i, aHat * gain * std::exp(-hatSince / 0.025) * (noise - previousNoise), 0.5);
+    previousNoise = noise;
+  }
+
+  const std::array<std::array<double, 3>, 5> vowels{{{730, 1090, 2440},
+                                                     {270, 2290, 3010},
+                                                     {530, 1840, 2480},
+                                                     {570, 840, 2410},
+                                                     {300, 870, 2240}}};
+  std::vector<float> speech(p.speechEnd - p.speechStart, 0.0f);
+  size_t cursor = 0;
+  int syllable = 0;
+  double phase = 0.0;
+  while (cursor < speech.size()) {
+    const size_t length = at(0.12 + 0.18 * rng.uniform());
+    const auto& vowel = vowels[static_cast<size_t>(rng.uniform() * vowels.size()) % vowels.size()];
+    const double f0 = 100.0 + 50.0 * rng.uniform();
+    std::array<ProgrammeBiquad, 3> formant;
+    for (size_t k = 0; k < 3; ++k) formant[k].bandpass(fs, vowel[k], 6.0);
+    for (size_t k = 0; k < length && cursor + k < speech.size(); ++k) {
+      const double s = static_cast<double>(k) / fs;
+      const double total = static_cast<double>(length) / fs;
+      const double envelope = std::min({1.0, s / 0.03, (total - s) / 0.03});
+      const double f = f0 * (1.0 + 0.08 * std::sin(kRadioPi * s / total));
+      phase += f / fs;
+      phase -= std::floor(phase);
+      double source = 0.0;
+      for (int n = 1; n * f < 4000.0; ++n) source += std::sin(kRadioTwoPi * n * phase) / n;
+      const double voiced = formant[0].process(source) + 0.5 * formant[1].process(source) +
+                            0.25 * formant[2].process(source);
+      const double unvoiced = s < 0.04 ? 0.3 * rng.gauss() * (1.0 - s / 0.04) : 0.0;
+      speech[cursor + k] = static_cast<float>(envelope * (voiced + unvoiced));
+    }
+    cursor += length + at(0.03 + 0.09 * rng.uniform());
+    if (++syllable % 5 == 0) cursor += at(0.35);
+  }
+
+  double musicPeak = 0.0, speechPeak = 0.0;
+  for (size_t i = p.musicStart; i < p.musicEnd; ++i)
+    musicPeak = std::max({musicPeak, double(std::fabs(p.left[i])), double(std::fabs(p.right[i]))});
+  for (float s : speech) speechPeak = std::max(speechPeak, double(std::fabs(s)));
+  const float musicScale = static_cast<float>(0.89 / std::max(musicPeak, 1e-9));
+  for (size_t i = p.musicStart; i < p.musicEnd; ++i) {
+    p.left[i] *= musicScale;
+    p.right[i] *= musicScale;
+  }
+  const float speechScale = static_cast<float>(0.7 / std::max(speechPeak, 1e-9));
+  for (size_t k = 0; k < speech.size(); ++k) {
+    p.left[p.speechStart + k] = speech[k] * speechScale;
+    p.right[p.speechStart + k] = speech[k] * speechScale;
+  }
+  return p;
+}
+
+// EBU R128 / ITU-R BS.1770-4 integrated loudness of a stereo segment: the
+// K-weighting pre-filter and RLB high-pass, 400 ms blocks at 75% overlap,
+// the -70 LUFS absolute and -10 LU relative gates.
+double integratedLoudnessLufs(const std::vector<float>& left,
+                              const std::vector<float>& right, size_t begin,
+                              size_t end, double fs) {
+  struct Stage {
+    double b0, b1, b2, a1, a2;
+  };
+  double k = std::tan(kRadioPi * 1681.974450955533 / fs);
+  const double vh = std::pow(10.0, 3.999843853973347 / 20.0);
+  const double vb = std::pow(vh, 0.4996667741545416);
+  double q = 0.7071752369554196;
+  double a0 = 1.0 + k / q + k * k;
+  const Stage shelf{(vh + vb * k / q + k * k) / a0, 2.0 * (k * k - vh) / a0,
+                    (vh - vb * k / q + k * k) / a0, 2.0 * (k * k - 1.0) / a0,
+                    (1.0 - k / q + k * k) / a0};
+  k = std::tan(kRadioPi * 38.13547087602444 / fs);
+  q = 0.5003270373238773;
+  a0 = 1.0 + k / q + k * k;
+  const Stage highpass{1.0, -2.0, 1.0, 2.0 * (k * k - 1.0) / a0, (1.0 - k / q + k * k) / a0};
+  const auto weigh = [&](const std::vector<float>& x) {
+    std::vector<double> y(end - begin);
+    double s1[2] = {0, 0}, s2[2] = {0, 0};
+    for (size_t i = begin; i < end; ++i) {
+      double v = x[i];
+      const double w1 = shelf.b0 * v + s1[0];
+      s1[0] = shelf.b1 * v - shelf.a1 * w1 + s1[1];
+      s1[1] = shelf.b2 * v - shelf.a2 * w1;
+      const double w2 = highpass.b0 * w1 + s2[0];
+      s2[0] = highpass.b1 * w1 - highpass.a1 * w2 + s2[1];
+      s2[1] = highpass.b2 * w1 - highpass.a2 * w2;
+      y[i - begin] = w2;
+    }
+    return y;
+  };
+  const std::vector<double> l = weigh(left), r = weigh(right);
+  const size_t block = static_cast<size_t>(0.4 * fs), hop = block / 4;
+  std::vector<double> power;
+  for (size_t s = 0; s + block <= l.size(); s += hop) {
+    double sum = 0.0;
+    for (size_t i = s; i < s + block; ++i) sum += l[i] * l[i] + r[i] * r[i];
+    power.push_back(sum / static_cast<double>(block));
+  }
+  const auto loudness = [](double z) { return -0.691 + 10.0 * std::log10(std::max(z, 1e-30)); };
+  const auto gatedMean = [&](double thresholdLufs) {
+    double sum = 0.0;
+    size_t count = 0;
+    for (double z : power) {
+      if (loudness(z) > thresholdLufs) {
+        sum += z;
+        ++count;
+      }
+    }
+    return count ? sum / static_cast<double>(count) : 0.0;
+  };
+  const double relativeGate = loudness(gatedMean(-70.0)) - 10.0;
+  return loudness(gatedMean(std::max(relativeGate, -70.0)));
+}
+
+// Delay of y against x, from the 300-3000 Hz cross-correlation of their mono
+// sums over one window, searched over 0..100 ms (the receivers only delay).
+// The band limit keeps the periodic bass line from making the peak ambiguous.
+size_t programmeDelay(const std::vector<float>& x, const std::vector<float>& y, size_t start,
+                      double fs) {
+  constexpr size_t kWindow = 1u << 17;
+  std::vector<std::complex<double>> a(kWindow * 2), b(kWindow * 2);
+  for (size_t i = 0; i < kWindow && start + i < x.size(); ++i) {
+    a[i] = x[start + i];
+    b[i] = y[start + i];
+  }
+  fftInPlace(a);
+  fftInPlace(b);
+  for (size_t i = 0; i < a.size(); ++i) {
+    const size_t bin = std::min(i, a.size() - i);
+    const double hz = double(bin) * fs / double(a.size());
+    a[i] = hz >= 300.0 && hz <= 3000.0 ? std::conj(b[i] * std::conj(a[i]))
+                                       : std::complex<double>{};
+  }
+  fftInPlace(a);  // conj(FFT(conj(.))) is the inverse up to scale
+  size_t best = 0;
+  double bestValue = -1.0;
+  for (size_t lag = 0; lag < 4800; ++lag) {
+    const double v = std::abs(a[lag]);
+    if (v > bestValue) {
+      bestValue = v;
+      best = lag;
+    }
+  }
+  return best;
+}
+
+struct ProgrammeSpectra {
+  std::vector<double> sxx, syy;
+  std::vector<std::complex<double>> sxy;
+};
+
+constexpr size_t kProgrammeFft = 8192;
+
+ProgrammeSpectra programmeSpectra(const std::vector<float>& x, const std::vector<float>& y,
+                                  size_t begin, size_t end, size_t delay) {
+  ProgrammeSpectra s{std::vector<double>(kProgrammeFft / 2 + 1, 0.0),
+                     std::vector<double>(kProgrammeFft / 2 + 1, 0.0),
+                     std::vector<std::complex<double>>(kProgrammeFft / 2 + 1)};
+  std::vector<std::complex<double>> fx(kProgrammeFft), fy(kProgrammeFft);
+  for (size_t at = begin; at + kProgrammeFft <= end && at + delay + kProgrammeFft <= y.size();
+       at += kProgrammeFft / 2) {
+    for (size_t i = 0; i < kProgrammeFft; ++i) {
+      const double w = 0.5 - 0.5 * std::cos(kRadioTwoPi * double(i) / double(kProgrammeFft));
+      fx[i] = w * x[at + i];
+      fy[i] = w * y[at + delay + i];
+    }
+    fftInPlace(fx);
+    fftInPlace(fy);
+    for (size_t i = 0; i <= kProgrammeFft / 2; ++i) {
+      s.sxx[i] += std::norm(fx[i]);
+      s.syy[i] += std::norm(fy[i]);
+      s.sxy[i] += fy[i] * std::conj(fx[i]);
+    }
+  }
+  return s;
+}
+
+// Linear-to-residual ratio in a band: the power-weighted coherence between
+// source and output, as dB of linear image over distortion, noise and
+// time-varying gain.
+double programmeLinearDb(const ProgrammeSpectra& s, double fs, double lowHz, double highHz) {
+  double linear = 0.0, total = 0.0;
+  for (size_t i = 1; i < s.sxx.size(); ++i) {
+    const double hz = double(i) * fs / double(kProgrammeFft);
+    if (hz < lowHz || hz >= highHz || s.sxx[i] <= 0.0) continue;
+    linear += std::norm(s.sxy[i]) / s.sxx[i];
+    total += s.syy[i];
+  }
+  const double coherence = std::clamp(linear / std::max(total, 1e-30), 0.0, 1.0 - 1e-9);
+  return 10.0 * std::log10(std::max(coherence, 1e-12) / (1.0 - coherence));
+}
+
+struct ProgrammeBands {
+  double loudnessMusicDb, loudnessSpeechDb, bassLinearDb, midLinearDb, presenceLinearDb;
+};
+
+// Bounds. Loudness: one system volume must serve both paths; real tracks
+// spread -3.8..+2.3 dB around a 0 dB median, so +/-3 dB on this programme.
+// Linear-to-residual floors (dB, 100-250 / 400-1000 / 1000-3000 Hz) are
+// regression bounds about 5 dB below the receivers on this programme:
+// Philco 16.7 / 22.8 / 20.4, 38-12 25.1 / 26.1 / 22.7. The Philco at its
+// former 0.084 knob (4 W on the reference tone) measured 7.9 / 13.8 / 13.5.
+constexpr ProgrammeBands kPhilcoProgrammeFloor{3.0, 3.0, 12.0, 18.0, 15.0};
+constexpr ProgrammeBands kTypicalProgrammeFloor{3.0, 3.0, 20.0, 21.0, 18.0};
+
+bool runProgramme(const HarnessConfig& config) {
+  std::cout << "[programme]\n";
+  const double fs = config.sampleRate;
+  const StereoProgramme programme = makeProgramme(fs);
+
+  Radio1938 radio;
+  radio.applyReceiverProfile(config.receiverProfile);
+  radio.init(1, config.sampleRate, static_cast<float>(kDefaultRadioBandwidthHz),
+             static_cast<float>(kDefaultRadioNoiseAmount));
+  if (!config.settingsPath.empty()) {
+    std::string error;
+    if (!applyRadioSettingsIni(radio, config.settingsPath, config.presetName, &error))
+      fail("failed to apply radio settings: " + error);
+  }
+  RadioAmIngressConfig ingress;
+  ingress.reception = radioReceptionConfigForProfile(config.reception);
+  RadioPreviewPipeline preview;
+  preview.initialize(radio, ingress, RadioPreviewConfig{}, config.sampleRate);
+
+  const size_t frames = programme.left.size();
+  std::vector<float> interleaved(frames * 2);
+  for (size_t i = 0; i < frames; ++i) {
+    interleaved[2 * i] = programme.left[i];
+    interleaved[2 * i + 1] = programme.right[i];
+  }
+  constexpr size_t kBlock = 1024;
+  for (size_t at = 0; at < frames; at += kBlock) {
+    const auto n = static_cast<uint32_t>(std::min(kBlock, frames - at));
+    preview.runBlock(radio, interleaved.data() + 2 * at, n, 2);
+  }
+  std::vector<float> outLeft(frames), outRight(frames), inMono(frames), outMono(frames);
+  double peak = 0.0;
+  for (size_t i = 0; i < frames; ++i) {
+    outLeft[i] = interleaved[2 * i];
+    outRight[i] = interleaved[2 * i + 1];
+    inMono[i] = 0.5f * (programme.left[i] + programme.right[i]);
+    outMono[i] = 0.5f * (outLeft[i] + outRight[i]);
+    peak = std::max({peak, double(std::fabs(outLeft[i])), double(std::fabs(outRight[i]))});
+  }
+
+  const size_t delay = programmeDelay(inMono, outMono, programme.musicStart, fs);
+  const auto loudnessDifference = [&](size_t begin, size_t end) {
+    return integratedLoudnessLufs(outLeft, outRight, begin + delay,
+                                  std::min(end + delay, frames), fs) -
+           integratedLoudnessLufs(programme.left, programme.right, begin, end, fs);
+  };
+  const ProgrammeSpectra music =
+      programmeSpectra(inMono, outMono, programme.musicStart, programme.musicEnd, delay);
+  const ProgrammeBands measured{
+      loudnessDifference(programme.musicStart, programme.musicEnd),
+      loudnessDifference(programme.speechStart, programme.speechEnd),
+      programmeLinearDb(music, fs, 100.0, 250.0), programmeLinearDb(music, fs, 400.0, 1000.0),
+      programmeLinearDb(music, fs, 1000.0, 3000.0)};
+  const bool philco = config.receiverProfile == RadioReceiverProfile::Philco37116;
+  const ProgrammeBands& floor = philco ? kPhilcoProgrammeFloor : kTypicalProgrammeFloor;
+  const auto& d = radio.diagnostics;
+  const double limiterAverageDb =
+      d.processedSamples ? d.finalLimiterGainReductionDbSum / d.processedSamples : 0.0;
+
+  {
+    double total = 0.0;
+    std::array<double, 5> share{};
+    const std::array<double, 6> edges{0, 150, 500, 2000, 5000, 24000};
+    for (size_t i = 1; i < music.sxx.size(); ++i) {
+      const double hz = double(i) * fs / double(kProgrammeFft);
+      total += music.sxx[i];
+      for (size_t b = 0; b < share.size(); ++b)
+        if (hz >= edges[b] && hz < edges[b + 1]) share[b] += music.sxx[i];
+    }
+    std::cout << "source_music_share_pct";
+    for (double v : share) std::cout << "," << 100.0 * v / std::max(total, 1e-30);
+    std::cout << "\n";
+  }
+  std::cout << "metric,measured,low,high,in_band\n";
+  bool pass = true;
+  pass &= printReferenceRow("delay_ms", 1e3 * double(delay) / fs, 0.0, 100.0);
+  pass &= printReferenceRow("music_loudness_vs_source_db", measured.loudnessMusicDb,
+                            -floor.loudnessMusicDb, floor.loudnessMusicDb);
+  pass &= printReferenceRow("speech_loudness_vs_source_db", measured.loudnessSpeechDb,
+                            -floor.loudnessSpeechDb, floor.loudnessSpeechDb);
+  pass &= printReferenceRow("music_linear_100_250_db", measured.bassLinearDb,
+                            floor.bassLinearDb, 100.0);
+  pass &= printReferenceRow("music_linear_400_1000_db", measured.midLinearDb,
+                            floor.midLinearDb, 100.0);
+  pass &= printReferenceRow("music_linear_1000_3000_db", measured.presenceLinearDb,
+                            floor.presenceLinearDb, 100.0);
+  pass &= printReferenceRow("output_peak", peak, 0.0, 0.975);
+  pass &= printReferenceRow("limiter_average_reduction_db", limiterAverageDb, 0.0, 0.5);
+  pass &= printReferenceRow("power_clip", d.powerClip ? 1 : 0, 0, 0);
+  pass &= printReferenceRow("speaker_clip", d.speakerClip ? 1 : 0, 0, 0);
+  pass &= printReferenceRow("output_clip", d.outputClip ? 1 : 0, 0, 0);
+  std::cout << "\n";
+  return pass;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -2116,7 +2601,9 @@ int main(int argc, char** argv) {
     if (wantsSection(config, "am_validate")) runAmValidate(config);
     if (wantsSection(config, "am_convergence")) runAmConvergence(config);
     if (wantsSection(config, "power_bench")) runPowerBench(config);
-    return referencePassed ? 0 : 2;
+    bool programmePassed = true;
+    if (wantsSection(config, "programme")) programmePassed = runProgramme(config);
+    return referencePassed && programmePassed ? 0 : 2;
   } catch (const std::exception& ex) {
     std::cerr << "radio_measurements: " << ex.what() << "\n";
     return 1;

@@ -106,6 +106,27 @@ hottest master (-7.4 LUFS): 0.1-0.4 dB average, at most about 5 dB; on the
 other tracks it catches single peaks of 1-3 dB or does not act. The
 figures above for the mono path are kept as measured.
 
+**The whole-output check is a test.** `radio_measurements --section
+programme` (ctest `radio_measurements_*_programme`) runs the complete stereo
+playback path at `everyday-1938` on a deterministic synthetic programme:
+twelve seconds of music (chords across the stereo field, a melody, a bass
+line to 55 Hz, drums, a 9 dB swell) whose long-term spectrum matches the
+ten tracks above within 1.5 percentage points per band, then eight seconds
+of formant-filtered syllables. Against the source it checks the R128
+loudness of music and speech (+/-3 dB), the linear-to-residual ratio at
+100-250, 400-1000 and 1000-3000 Hz, the output peak, the limiter's average
+gain reduction and the physical clip flags. The receivers measure 16.7 /
+22.8 / 20.4 dB (Philco) and 25.1 / 26.1 / 22.7 dB (38-12); the floors sit
+about 5 dB lower, and the Philco at its former 0.084 knob (7.9 / 13.8 /
+13.5 dB) fails all three. The programme does not reach the AVC fault, which
+lived below 80 Hz, so the reference section adds the second harmonic of an
+80 Hz tone at 50% modulation at the terminals, from an exact DFT over whole
+periods so supply hum cannot leak in: -31.5 dBc for the Philco (bound -28;
+-21 dBc with the 75 ms prior, -54.6 dBc with ten times the schematic
+capacitance) and -18 dBc for the 38-12, from its single-ended output stage
+(bound -15, regression only). `--calibration-report` no longer counts the
+playback limiter's activity as digital clipping.
+
 **Remaining.** Sub-bass at 30-50 Hz in modern recordings still drives the
 Philco's cone and transformers into harmonics that land at 63-100 Hz
 (terminal h2 about -10 to -13 dBc at 40 Hz), so those bands stay only

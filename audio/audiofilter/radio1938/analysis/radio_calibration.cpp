@@ -532,9 +532,11 @@ void updateCalibrationSnapshot(Radio1938& radio) {
            std::max(0.02, 0.10 * receiverPass.rmsOut)) ||
       (std::fabs(powerPass.meanOut) >
            std::max(0.10, 0.05 * powerPass.peakOut));
+  // The playback limiter is enabled by default and catches peaks of loud
+  // programme by design; its activity is reported separately, not a failure.
   radio.calibration.validationDigitalClip =
       radio.calibration.maxDigitalOutput > 1.0f ||
-      radio.diagnostics.outputClip || radio.diagnostics.finalLimiterActive;
+      radio.diagnostics.outputClip;
   radio.calibration.validationFailed =
       radio.calibration.validationDriverGridPositive ||
       radio.calibration.validationOutputGridPositive ||

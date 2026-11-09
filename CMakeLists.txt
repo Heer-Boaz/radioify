@@ -548,6 +548,12 @@ add_test(NAME radio_measurements_philco_reference
 add_test(NAME radio_measurements_typical_reference
          COMMAND $<TARGET_FILE:radio_measurements>
                  --preset typical-1930s --section reference)
+add_test(NAME radio_measurements_philco_programme
+         COMMAND $<TARGET_FILE:radio_measurements>
+                 --preset philco-37-116 --section programme)
+add_test(NAME radio_measurements_typical_programme
+         COMMAND $<TARGET_FILE:radio_measurements>
+                 --preset typical-1930s --section programme)
 foreach(_measurement_profile IN ITEMS philco-37-116 typical-1930s)
   add_test(NAME radio_measurements_settings_${_measurement_profile}
     COMMAND $<TARGET_FILE:radio_measurements>
