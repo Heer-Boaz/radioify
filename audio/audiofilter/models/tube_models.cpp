@@ -888,7 +888,12 @@ KorenTriodePlateEval evaluateKorenTriodePlateRuntime(
     double vpk,
     const KorenTriodeModel& model,
     const KorenTriodeLut& lut) {
-  if (lut.valid()) {
+  // The table covers the normal working range. Outside it (a transformer
+  // flyback far above B+, or a grid far beyond its bias) clamping would turn
+  // the tube into a current source with no plate resistance; use the
+  // equation, which holds at any voltage.
+  if (lut.valid() && vgk >= lut.vgkMin && vgk <= lut.vgkMax && vpk >= lut.vpkMin &&
+      vpk <= lut.vpkMax) {
     return evaluateKorenTriodePlateLut(vgk, vpk, lut);
   }
   return evaluateKorenTriodePlate(vgk, vpk, model);

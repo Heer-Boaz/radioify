@@ -139,15 +139,23 @@ man-made noise:
 
 Tests check the C/N0, the power split between the Gaussian and impulsive
 parts, and the sferic rate and amplitude statistics at 44.1 and 96 kHz.
-**It is off by default.** Its large crashes drive the Philco's push-pull
-output stage hard enough that its plate current pulls the main B+ through
-zero (to -155 V), and the output stage and supply model then stay in a
-~40 Hz oscillation instead of recovering; the 38-12 recovers normally. That
-overload-recovery fault in the push-pull/supply model has to be fixed before
-the night profile can carry atmospheric noise (`radio_measurements --section
-preview_trace --reception night-skywave` shows it when the profile enables
-it). Until then `night-skywave` remains a lower bound on night noise, and
-the receivers have no crackle at all.
+`night-skywave` carries it. Programme loudness to the noise of a silent
+carrier there falls from 26.5 to 13.5 dB (38-12) and from 27.4 to 17.5 dB
+(Philco), as the 13 dB lower C/N0 predicts; the largest crashes in a minute
+peak at -0.5 and -1.7 dBFS. Daytime profiles carry none.
+
+**Overload recovery of the push-pull output.** The first crashes drove the
+Philco's output-transformer primary to about 7,700 V and held it there:
+the output triodes were evaluated from a table clamped at about 490 V of
+plate voltage, so beyond it they became current sources with no plate
+resistance. With nothing to damp the transformer, their current drained
+the main B+ to -230 V and the stage stayed in a ~40 Hz oscillation. Outside
+its table range a triode now uses the Koren equation itself, which holds at
+any voltage; the same crash peaks at 433 V on the primary, the B+ dips to
+321 V and recovers within milliseconds. Tests check that a triode beyond
+its table keeps rising current and conductance, and that both receivers
+keep their B+ through eight seconds of night-time crashes (the Philco's
+lowest point in a minute is 277 V).
 
 **Modulation hum.** The RF and IF screens take their voltage from the B+,
 so its ripple modulates their gm and puts hum on any carrier, even an
@@ -390,8 +398,7 @@ objectionable when it is as disturbing as a co-channel programme 20:1
 (26 dB) down; at the residential primary-service limit both receivers stay
 above that, as they should. Caveats: the ITU coefficients are 1970s
 medians and 1938 man-made noise was probably higher; night-time
-atmospheric noise is modelled since 2026-11-09 but not yet enabled (see
-above), so `night-skywave` is a lower bound on its noise. The receiver-internal IF noise is set to zero.
+atmospheric noise is included since 2026-11-09 (see above). The receiver-internal IF noise is set to zero.
 Tests check the generated density against the formula at 44.1, 48 and 96
 kHz, and that the audio noise follows the field ratio between
 `everyday-1938` and `strong-local` through the whole receiver (within 1.5

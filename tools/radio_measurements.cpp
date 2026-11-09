@@ -71,6 +71,9 @@ struct HarnessConfig {
   float volumeOverride = -1.0f;
   float crashAreaVoltSeconds = 1e-6f;
   RadioReceptionProfile reception = RadioReceptionProfile::Everyday1938;
+  bool atmosphericNoise = false;
+  float traceDetailMs = -1.0f;
+  float traceSeconds = 10.0f;
   // Without the loudness branch, keep the 1 kHz level of the listening
   // setting rather than the knob position.
   bool levelMatchedFlat = false;
@@ -329,6 +332,8 @@ void printUsage() {
       << "  --without-loudness  Remove the tapped-control loudness branch\n"
       << "  --reception <profile>  Reception profile for preview_trace\n"
       << "  --crash-area <volt-seconds>  Antenna impulse area for the crash section\n"
+      << "  --atmospheric  Enable atmospheric noise in preview_trace\n"
+      << "  --trace-seconds <s>  Length of preview_trace (default 10)\n"
       << "  --noise <value>\n"
       << "  --noise-only <value>\n"
       << "  --detector-spc <value>\n"
@@ -353,6 +358,12 @@ HarnessConfig parseArgs(int argc, char** argv) {
     } else if (arg == "--reception") {
       if (i + 1 >= argc || !parseRadioReceptionProfile(argv[++i], config.reception))
         fail("unknown reception profile");
+    } else if (arg == "--trace-detail-ms") {
+      config.traceDetailMs = parseFloatArg(argv, i, argc, "--trace-detail-ms");
+    } else if (arg == "--atmospheric") {
+      config.atmosphericNoise = true;
+    } else if (arg == "--trace-seconds") {
+      config.traceSeconds = parseFloatArg(argv, i, argc, "--trace-seconds");
     } else if (arg == "--crash-area") {
       config.crashAreaVoltSeconds = parseFloatArg(argv, i, argc, "--crash-area");
     } else if (arg == "--terminal") {
@@ -1641,11 +1652,40 @@ void runPreviewTrace(const HarnessConfig& config) {
   radio.init(1, config.sampleRate, config.bandwidthHz, 0.012f);
   RadioAmIngressConfig ingress;
   ingress.reception = radioReceptionConfigForProfile(config.reception);
+  if (config.atmosphericNoise) ingress.reception.atmosphericNoiseEnabled = true;
   RadioPreviewPipeline preview;
   preview.initialize(radio, ingress, RadioPreviewConfig{}, config.sampleRate);
   const uint32_t step = static_cast<uint32_t>(config.sampleRate * 0.05f);
   std::vector<float> block(step);
-  for (uint32_t t = 0; t < 200; ++t) {
+  const uint32_t blocks = static_cast<uint32_t>(config.traceSeconds / 0.05f);
+  if (config.traceDetailMs >= 0) {
+    // Per-sample detail over 60 ms from the given time, every fourth sample.
+    const uint32_t startFrame =
+        static_cast<uint32_t>(config.traceDetailMs * 1e-3f * config.sampleRate);
+    const uint32_t endFrame = startFrame + static_cast<uint32_t>(0.06f * config.sampleRate);
+    std::vector<float> one(1);
+    std::cout << "frame,detector,first_grid,first_plate,driver_grid,interstage_primary,"
+                 "out_grid_a,out_grid_b,out_primary_v,out_primary_a,inter_primary_a,main,aux,speaker\n";
+    for (uint32_t frame = 0; frame < endFrame; ++frame) {
+      one[0] = 0.0f;
+      preview.runBlock(radio, one.data(), 1, 1);
+      if (frame < startFrame || frame % 4) continue;
+      const auto& supply = radio.powerSupply.circuit;
+      std::cout << frame << "," << radio.demod.am.detectorNode << ","
+                << radio.receiverCircuit.gridVoltage << ","
+                << radio.receiverCircuit.tubePlateVoltage << "," << radio.power.gridVoltage
+                << "," << radio.power.interstageCt.primaryVoltage << ","
+                << radio.power.outputGridAVolts << "," << radio.power.outputGridBVolts << ","
+                << radio.power.outputTransformer.primaryVoltage << ","
+                << radio.power.outputTransformer.primaryCurrent << ","
+                << radio.power.interstageCt.primaryCurrent << ","
+                << supply.volts(RectifierSupply::Main) << ","
+                << supply.volts(RectifierSupply::Auxiliary) << ","
+                << radio.speakerStage.physicalDriveVolts << "\n";
+    }
+    return;
+  }
+  for (uint32_t t = 0; t < blocks; ++t) {
     std::fill(block.begin(), block.end(), 0.0f);
     preview.runBlock(radio, block.data(), step, 1);
     double peak = 0;

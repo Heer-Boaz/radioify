@@ -48,7 +48,8 @@ KorenTriodePlateEval evaluateTriodePlateFast(double vgk, double vpk,
                                              const KorenTriodeModel& model,
                                              const KorenTriodeLut& lut,
                                              const TriodeLutView& view) {
-  if (!view.valid) {
+  if (!view.valid || vgk < view.vgkMin || vgk > view.vgkMax || vpk < view.vpkMin ||
+      vpk > view.vpkMax) {
     return evaluateKorenTriodePlateRuntime(vgk, vpk, model, lut);
   }
 

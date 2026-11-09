@@ -55,15 +55,13 @@ RadioReceptionConfig radioReceptionConfigForProfile(
       config.skywaveAmplitudeVariationRms = 0.35f;
       // Rural listener at 0.5 mV/m, the FCC 1939 primary field for towns of
       // up to 2,500 and the upper limit for rural areas in winter. P.372
-      // rural man-made noise. The evening atmospheric noise that arrives by
-      // skywave after dark (spring, north-eastern United States, about 13 dB
-      // above it) is modelled but left off: its large crashes drive the
-      // Philco's push-pull output and supply model into a state it does not
-      // recover from, which must be fixed first. Until then this profile is
-      // a lower bound on night noise.
+      // rural man-made noise, and the evening atmospheric noise that arrives
+      // by skywave after dark (spring, north-eastern United States; summer
+      // evenings run 5-10 dB higher, winter evenings 10-15 dB lower).
       config.groundwaveFieldVoltsPerMeter = 0.5e-3f;
       config.manMadeNoiseC = 67.2f;
       config.manMadeNoiseD = 27.7f;
+      config.atmosphericNoiseEnabled = true;
       return config;
   }
   throw std::invalid_argument("Unknown radio reception profile");

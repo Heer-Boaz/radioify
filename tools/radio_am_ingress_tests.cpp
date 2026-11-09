@@ -414,13 +414,11 @@ void expectExternalNoiseFollowsFieldAndNoiseFigure() {
 // power is dominated by rare large strokes, so the generator is checked
 // through its rate and amplitude statistics and the closed-form power.
 void expectAtmosphericNoiseFollowsP372() {
-  // The model is off by default (see the night-skywave profile); it is
-  // checked here on that profile with it enabled.
-  RadioReceptionConfig night =
+  const RadioReceptionConfig night =
       radioReceptionConfigForProfile(RadioReceptionProfile::NightSkywave);
-  night.atmosphericNoiseEnabled = true;
   const double expected = 20.0 * std::log10(500.0 / 0.60) - (80.0 - 95.5);
-  if (std::fabs(radioReceptionCarrierToAtmosphericNoiseDbHz(night, 1e6) - expected) > 1e-3)
+  if (!night.atmosphericNoiseEnabled ||
+      std::fabs(radioReceptionCarrierToAtmosphericNoiseDbHz(night, 1e6) - expected) > 1e-3)
     fail("night atmospheric noise does not follow P.372");
   if (radioReceptionConfigForProfile(RadioReceptionProfile::Everyday1938)
           .atmosphericNoiseEnabled ||
@@ -478,6 +476,38 @@ void expectAtmosphericNoiseFollowsP372() {
         std::fabs(logSum / impulses - tailMean) > 0.05 * sigma)
       fail("sferic rate or amplitude spread is wrong: " + std::to_string(impulses) +
            " vs " + std::to_string(expectedCount));
+  }
+}
+
+// Lightning crashes at night overdrive the receiver; it must recover. A
+// crash once drove the Philco's output-transformer primary to thousands of
+// volts because its triode table clamped the plate voltage, turning the
+// tubes into current sources that then drained the B+ below zero.
+void expectReceiversRecoverFromLightningCrashes() {
+  constexpr float kRate = 48000.0f;
+  for (auto profile : {RadioReceiverProfile::Typical1930s, RadioReceiverProfile::Philco37116}) {
+    Radio1938 radio;
+    radio.applyReceiverProfile(profile);
+    radio.init(1, kRate, kBandwidthHz, 0.012f);
+    RadioAmIngressConfig ingress;
+    ingress.reception = radioReceptionConfigForProfile(RadioReceptionProfile::NightSkywave);
+    RadioPreviewPipeline preview;
+    preview.initialize(radio, ingress, RadioPreviewConfig{}, kRate);
+    const double idle = radio.powerSupply.mainReferenceVolts;
+    std::vector<float> block(2400);
+    double lowest = idle;
+    for (int n = 0; n < 160; ++n) {  // 8 s
+      std::fill(block.begin(), block.end(), 0.0f);
+      preview.runBlock(radio, block.data(), static_cast<uint32_t>(block.size()), 1);
+      lowest = std::min(lowest, radio.powerSupply.circuit.volts(RectifierSupply::Main));
+      for (float v : block)
+        if (!std::isfinite(v)) fail("non-finite output after a lightning crash");
+    }
+    if (lowest < 0.6 * idle)
+      fail(std::string(radioReceiverProfileName(profile)) +
+           " B+ collapsed after a lightning crash: " + std::to_string(lowest) + " V");
+    if (std::fabs(radio.powerSupply.circuit.volts(RectifierSupply::Main) / idle - 1) > 0.05)
+      fail("B+ did not recover after lightning crashes");
   }
 }
 
@@ -990,6 +1020,7 @@ int main() {
   expectStrongLocalReceptionIsTransparent();
   expectExternalNoiseFollowsFieldAndNoiseFigure();
   expectAtmosphericNoiseFollowsP372();
+  expectReceiversRecoverFromLightningCrashes();
   expectEverydayReceptionProducesSlowCoherentFading();
   expectDelayedSkywaveFadesSelectively();
   expectIntermittentCarrierIsRareRfInsteadOfPermanentWhistle();

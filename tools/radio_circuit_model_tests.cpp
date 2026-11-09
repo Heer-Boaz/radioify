@@ -576,6 +576,31 @@ void testAfcWithRealCarrier() {
           "reset retained the previous station's AFC pull");
   }
 }
+// A triode far outside its table (a transformer flyback above B+, or a
+// grid far past its bias) must keep its plate resistance, not freeze into a
+// current source.
+void testTriodeBeyondTable() {
+  Radio1938 radio;
+  radio.applyReceiverProfile(RadioReceiverProfile::Philco37116);
+  radio.init(1, 48000, 5000, 0);
+  const auto& p = radio.power;
+  check(p.outputTubeTriodeLut.valid(), "output triode table missing");
+  const double top = p.outputTubeTriodeLut.vpkMax;
+  for (double vgk : {double(p.outputTubeBiasVolts), 0.5 * p.outputTubeBiasVolts}) {
+    const auto edge = evaluateKorenTriodePlateRuntime(vgk, top, p.outputTubeTriodeModel,
+                                                      p.outputTubeTriodeLut);
+    const auto beyond = evaluateKorenTriodePlateRuntime(vgk, 3 * top, p.outputTubeTriodeModel,
+                                                        p.outputTubeTriodeLut);
+    // Space-charge current grows about as the 1.5 power of plate voltage.
+    check(beyond.currentAmps > 2 * edge.currentAmps &&
+              beyond.conductanceSiemens > edge.conductanceSiemens,
+          "triode beyond its table lost its plate resistance");
+  }
+  const auto negative = evaluateKorenTriodePlateRuntime(
+      0, -50, p.outputTubeTriodeModel, p.outputTubeTriodeLut);
+  check(negative.currentAmps == 0, "a triode conducts with a negative plate");
+}
+
 // Modulation hum: the RF/IF screens follow the rippling B+, so an
 // unmodulated carrier picks up 120 Hz at the detector. The 38-12 feeds its
 // screens straight from the B+ after the field coil (Bulletin 284); the
@@ -718,6 +743,7 @@ int main(int argc, char** argv) {
           "physical AVC volts are being multiplied at the mixer grid");
   }
   testSupplyConservation();
+  testTriodeBeyondTable();
   testModulationHum();
   testIfPlateSwingLimit();
   testCircuitReference();
