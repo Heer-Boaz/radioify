@@ -2471,11 +2471,13 @@ struct ProgrammeBands {
 // Bounds. Loudness: one system volume must serve both paths; real tracks
 // spread -3.8..+2.3 dB around a 0 dB median, so +/-3 dB on this programme.
 // Linear-to-residual floors (dB, 100-250 / 400-1000 / 1000-3000 Hz) are
-// regression bounds about 5 dB below the receivers on this programme:
-// Philco 16.7 / 22.8 / 20.4, 38-12 25.1 / 26.1 / 22.7. The Philco at its
-// former 0.084 knob (4 W on the reference tone) measured 7.9 / 13.8 / 13.5.
-constexpr ProgrammeBands kPhilcoProgrammeFloor{3.0, 3.0, 12.0, 18.0, 15.0};
-constexpr ProgrammeBands kTypicalProgrammeFloor{3.0, 3.0, 20.0, 21.0, 18.0};
+// regression bounds 4-5 dB below the receivers on this programme, which the
+// studio operator rides to the limiter: Philco 13.2 / 18.0 / 19.1, 38-12
+// 19.8 / 19.3 / 19.1. The Philco at its former 0.084 knob (4 W on the
+// reference tone) measures 4.9 / 7.9 / 8.1. The ratio is taken against the
+// ridden programme, so slow riding does not count as distortion.
+constexpr ProgrammeBands kPhilcoProgrammeFloor{3.0, 3.0, 9.0, 13.0, 14.0};
+constexpr ProgrammeBands kTypicalProgrammeFloor{3.0, 3.0, 15.0, 15.0, 14.0};
 
 bool runProgramme(const HarnessConfig& config) {
   std::cout << "[programme]\n";
@@ -2502,17 +2504,25 @@ bool runProgramme(const HarnessConfig& config) {
     interleaved[2 * i] = programme.left[i];
     interleaved[2 * i + 1] = programme.right[i];
   }
+  // The operator's gain, sampled per block: the receivers are compared with
+  // what the studio sent, so slow riding does not count as distortion.
   constexpr size_t kBlock = 1024;
+  std::vector<float> ridingGain(frames, 1.0f);
+  float previousGain = preview.levelRidingGain;
   for (size_t at = 0; at < frames; at += kBlock) {
     const auto n = static_cast<uint32_t>(std::min(kBlock, frames - at));
     preview.runBlock(radio, interleaved.data() + 2 * at, n, 2);
+    for (uint32_t k = 0; k < n; ++k)
+      ridingGain[at + k] =
+          previousGain + (preview.levelRidingGain - previousGain) * float(k + 1) / float(n);
+    previousGain = preview.levelRidingGain;
   }
   std::vector<float> outLeft(frames), outRight(frames), inMono(frames), outMono(frames);
   double peak = 0.0;
   for (size_t i = 0; i < frames; ++i) {
     outLeft[i] = interleaved[2 * i];
     outRight[i] = interleaved[2 * i + 1];
-    inMono[i] = 0.5f * (programme.left[i] + programme.right[i]);
+    inMono[i] = 0.5f * (programme.left[i] + programme.right[i]) * ridingGain[i];
     outMono[i] = 0.5f * (outLeft[i] + outRight[i]);
     peak = std::max({peak, double(std::fabs(outLeft[i])), double(std::fabs(outRight[i]))});
   }

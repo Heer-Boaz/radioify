@@ -22,6 +22,29 @@ struct RadioAmReceptionSample {
 struct RadioBroadcastSourceConfig {
   bool enabled = true;
 
+  // The studio operator rode gain on the volume indicator so programme peaks
+  // reached the limiter, whatever the level of the material. A slow peak
+  // follower (instant rise, 1.5 s fall) is brought to the limiter threshold:
+  // the gain falls within about a second and rises over about four, and
+  // holds in pauses and dying tails (a 50 ms meter below -40 dB of full
+  // scale or 20 dB under the recent peaks). The first half second of
+  // programme sets it quickly, as the level was set at rehearsal.
+  bool levelRidingEnabled = true;
+  float levelRidingPeakReleaseSeconds = 1.5f;
+  float levelRidingRaiseSeconds = 4.0f;
+  float levelRidingLowerSeconds = 1.0f;
+  float levelRidingMaxBoostDb = 20.0f;
+  float levelRidingMaxCutDb = 12.0f;
+  float levelRidingGateDbfs = -40.0f;
+
+  // Network programme line to the station. The Bell System wide-band
+  // open-wire program system (Hamilton, BSTJ, July 1934) carried about
+  // 50-8000 cycles; network lines stayed at 8 kHz until the post-war cut to
+  // 5 kHz. A high edge of 0 disables the line: a local studio feeding its
+  // transmitter directly.
+  float programLineLowHz = 50.0f;
+  float programLineHighHz = 8000.0f;
+
   bool compressionEnabled = true;
   float compressionThresholdModulation = 0.80f;
   float compressionRatio = 2.5f;

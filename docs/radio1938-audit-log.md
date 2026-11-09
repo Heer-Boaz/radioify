@@ -5,6 +5,55 @@ model, newest first. The model as it stands is described in the
 [realism audit](radio1938-realism-audit.md). Statements in older entries
 describe the model of their date; later entries say what they supersede.
 
+## Studio operator, network line and room protection, 2026-11-09
+
+**The transmitter was modulated by the file's level.** Full digital scale
+was 85% modulation, so a quiet recording modulated the transmitter 16 dB
+less than a loud one and a wide stereo mix lost up to 7 dB in the mono sum.
+The receivers then saw shallow modulation (the synthetic programme of the
+programme test peaked near 47%), worse signal-to-noise than a station
+delivered, and programme loudness that varied as the recordings did. In 1938
+the studio operator rode gain on the volume indicator so peaks reached the
+limiter. A level rider now does that before the 110A: a peak follower
+(instant rise, 1.5 s fall) is brought to the limiter threshold, the gain
+falling in about a second and rising over about four, within +20/-12 dB,
+and holding in pauses and dying tails (a 50 ms meter below -40 dBFS or 20 dB
+under the recent peaks). The first half second of programme sets it quickly.
+
+**Network programme line.** Network programmes reached stations over Bell
+System lines; the wide-band open-wire program system (H. S. Hamilton, BSTJ,
+July 1934) carried about 50-8000 cycles, tried between Chicago and San
+Francisco, and network lines stayed at 8 kHz until the post-war cut to 5 kHz
+(F. Krock, Radio World, 2005). The source now passes such a line (2nd-order
+50 Hz high-pass, 8th-order Butterworth 8 kHz low-pass) before the
+transmitter; a high edge of 0 models a local studio. The transmitter's own
+45 Hz-9.6 kHz programme filter, independent of the receiver, is unchanged.
+Overmodulation was already modelled (the carrier is cut off beyond 100%
+negative modulation) and the 110A keeps programme below it.
+
+**Room protection clipped.** The room renderer guarded the summed acoustic
+paths with an instantaneous linked clamp at 0.94, after the receiver's
+look-ahead limiter at 0.97. Since the loudness match it acted on loud
+programme as a clipper. It is now a linked 2 ms look-ahead limiter at 0.97.
+
+**Results.** Makeup is refitted to the median: 1.16 (38-12) and 1.34
+(Philco). Ten tracks and two broadcasts spanning -22.7 to -7.4 LUFS come out
+within 1.7 dB (38-12) and 4.8 dB (Philco); loudness range falls from 7.5 to
+5.1 and 3.7 LU; the limiters act on single peaks (at most 0.1 dB). On the
+real tracks programme-to-silence rose from 29 to 36 and 35 dB and the speech
+transmission index of the 1936 broadcast from 0.83 to 0.94 (38-12) and 0.73
+to 0.87 (Philco); the linear-to-residual ratio at 400-1000 Hz fell from
+16-21 to 14-17 dB and from 19-22 to 17-19 dB, the detector and AVC being
+less linear at the deeper modulation. The programme test compares the
+receivers with the ridden programme, so slow riding does not count as
+distortion; its floors moved with the deeper modulation (Philco 9 / 13 /
+14 dB, 38-12 15 / 15 / 14 dB) and the Philco at its former knob still fails
+them (4.9 / 7.9 / 8.1 dB). The 110A unit tests run the station alone; the
+playback-noise test keeps its tone at 42.5% modulation, since a 38-12 on a
+strong local carrier overloads at the ridden level. New tests check the line
+response and that the operator brings quiet and loud programme to the
+limiter and holds in pauses.
+
 ## First-audio operating point and triode tables, 2026-11-09
 
 `--calibration-report` flagged a DC shift on ordinary music. The 38-12's

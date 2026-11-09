@@ -660,8 +660,16 @@ void expectPreviewUsesRequestedAudioBandwidthOnce() {
     fail("Transmitter bandwidth still follows receiver selectivity");
 }
 
-RadioAmIngressConfig makeIsolatedBroadcastSourceConfig() {
+// The 110A and the transmitter alone: no operator riding, no network line.
+RadioAmIngressConfig makeStationOnlyConfig() {
   RadioAmIngressConfig ingress;
+  ingress.broadcastSource.levelRidingEnabled = false;
+  ingress.broadcastSource.programLineHighHz = 0.0f;
+  return ingress;
+}
+
+RadioAmIngressConfig makeIsolatedBroadcastSourceConfig() {
+  RadioAmIngressConfig ingress = makeStationOnlyConfig();
   ingress.broadcastSource.noiseEnabled = false;
   ingress.broadcastSource.nonlinearityEnabled = false;
   return ingress;
@@ -773,7 +781,7 @@ void expectBroadcastCompressionSlope() {
 void expectBroadcastNonlinearityNearOnePercentThd() {
   Radio1938 radio;
   radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
-  RadioAmIngressConfig ingress;
+  RadioAmIngressConfig ingress = makeStationOnlyConfig();
   ingress.broadcastSource.compressionEnabled = false;
   ingress.broadcastSource.noiseEnabled = false;
   RadioPreviewConfig config;
@@ -805,6 +813,82 @@ void expectBroadcastNonlinearityNearOnePercentThd() {
          "THD=" +
          std::to_string(thd));
   }
+}
+
+// Steady sine through the broadcast source alone (no 110A, transmitter
+// term or noise); returns the output amplitude over the last half second.
+float broadcastSourceSineAmplitude(const RadioAmIngressConfig& ingress, float hz,
+                                   float amplitude, float seconds) {
+  Radio1938 radio;
+  radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
+  RadioPreviewPipeline preview;
+  preview.initialize(radio, ingress, RadioPreviewConfig{}, kSampleRate);
+  RadioPreviewSampleContext ctx{};
+  const auto frames = static_cast<uint32_t>(seconds * kSampleRate);
+  const auto tail = static_cast<uint32_t>(0.5f * kSampleRate);
+  double re = 0, im = 0;
+  for (uint32_t i = 0; i < frames; ++i) {
+    const double phase = 2.0 * 3.14159265358979323846 * hz * i / kSampleRate;
+    const float output = RadioPreviewBroadcastSourceNode::run(
+        preview, amplitude * static_cast<float>(std::sin(phase)), ctx);
+    if (i >= frames - tail) {
+      re += output * std::cos(phase);
+      im += output * std::sin(phase);
+    }
+  }
+  return static_cast<float>(2.0 * std::hypot(re, im) / tail);
+}
+
+RadioAmIngressConfig makeSourceStageConfig(bool riding, bool line) {
+  RadioAmIngressConfig ingress = makeIsolatedBroadcastSourceConfig();
+  ingress.broadcastSource.compressionEnabled = false;
+  ingress.broadcastSource.levelRidingEnabled = riding;
+  if (line) ingress.broadcastSource.programLineHighHz = 8000.0f;
+  return ingress;
+}
+
+void expectNetworkProgramLine() {
+  const auto ingress = makeSourceStageConfig(false, true);
+  const auto db = [&](float hz) {
+    return 20.0f * std::log10(broadcastSourceSineAmplitude(ingress, hz, 0.5f, 1.5f) / 0.5f);
+  };
+  const float mid = db(1000.0f), edge = db(8000.0f), above = db(10000.0f),
+              low = db(50.0f);
+  std::cout << "network line dB: 1 kHz " << mid << ", 50 Hz " << low << ", 8 kHz "
+            << edge << ", 10 kHz " << above << "\n";
+  if (std::fabs(mid) > 0.1f || std::fabs(edge + 3.0f) > 0.5f || above > -15.0f ||
+      std::fabs(low + 3.0f) > 0.5f)
+    fail("Network programme line is not the 50-8000 cycle wide-band circuit");
+}
+
+void expectOperatorRidesToTheLimiter() {
+  const auto ingress = makeSourceStageConfig(true, false);
+  const float threshold = ingress.broadcastSource.compressionThresholdModulation /
+                          ingress.modulationIndex;
+  // A quiet and a loud programme both reach the limiter threshold, within the
+  // operator's 20 dB of boost and 12 dB of cut.
+  for (float amplitude : {0.2f, 0.94f, 2.0f}) {
+    const float output = broadcastSourceSineAmplitude(ingress, 1000.0f, amplitude, 6.0f);
+    if (std::fabs(output - threshold) > 0.02f * threshold)
+      fail("Operator did not ride a " + std::to_string(amplitude) +
+           " programme to the limiter; output=" + std::to_string(output));
+  }
+  // Below the gate (a pause) the gain holds.
+  Radio1938 radio;
+  radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
+  RadioPreviewPipeline preview;
+  preview.initialize(radio, ingress, RadioPreviewConfig{}, kSampleRate);
+  RadioPreviewSampleContext ctx{};
+  for (uint32_t i = 0; i < 3u * 48000u; ++i)
+    RadioPreviewBroadcastSourceNode::run(
+        preview, 0.3f * std::sin(0.13f * static_cast<float>(i)), ctx);
+  const float held = preview.levelRidingGain;
+  for (uint32_t i = 0; i < 5u * 48000u; ++i)
+    RadioPreviewBroadcastSourceNode::run(preview, 0.0f, ctx);
+  // Within 0.1 dB: the 50 ms meter needs about 0.1 s to recognise the pause.
+  if (std::fabs(preview.levelRidingGain / held - 1.0f) > 0.012f)
+    fail("Operator raised the gain during a pause; " + std::to_string(held) + " -> " +
+         std::to_string(preview.levelRidingGain));
 }
 
 void expectBroadcastNoiseIsBroadbandWithoutWhistle() {
@@ -1029,6 +1113,8 @@ int main() {
   expectBroadcastSourceBypassIsTransparent();
   expectBroadcastCompressionTiming();
   expectBroadcastCompressionSlope();
+  expectNetworkProgramLine();
+  expectOperatorRidesToTheLimiter();
   expectBroadcastNonlinearityNearOnePercentThd();
   expectBroadcastNoiseIsBroadbandWithoutWhistle();
   expectPreviewSourceAndReceptionAreBlockInvariant();

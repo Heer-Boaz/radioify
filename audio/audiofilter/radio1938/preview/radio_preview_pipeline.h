@@ -149,6 +149,18 @@ struct RadioPreviewPipeline {
   Biquad programHp;
   Biquad programLp;
   IQFirLowpass programImageReject;
+  float levelRidingEnvelope = 0.0f;
+  float levelRidingFastEnvelope = 0.0f;
+  float levelRidingFastCoefficient = 0.0f;
+  float levelRidingGain = 1.0f;
+  uint32_t levelRidingSettingFrames = 0;
+  float levelRidingEnvelopeCoefficient = 0.0f;
+  float levelRidingRaiseCoefficient = 0.0f;
+  float levelRidingLowerCoefficient = 0.0f;
+  float levelRidingSettingCoefficient = 0.0f;
+  bool programLineEnabled = false;
+  Biquad programLineHp;
+  std::array<Biquad, 4> programLineLp;
   float broadcastCompressionThreshold = 0.0f;
   float broadcastEnvelope = 0.0f;
   float broadcastGain = 1.0f;

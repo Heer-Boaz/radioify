@@ -288,6 +288,10 @@ NoiseProbe measurePlaybackNoise(RadioReceiverProfile profile,
   ingress.reception = radioReceptionConfigForProfile(reception);
   ingress.reception.externalNoiseEnabled = all || source == NoiseSource::External;
   ingress.broadcastSource.noiseEnabled = all || source == NoiseSource::Broadcast;
+  // Keep the tone at its 42.5% modulation. The operator would ride it to the
+  // limiter, where the 38-12 on a strong local carrier overloads and the tone
+  // no longer measures the noise ratio.
+  ingress.broadcastSource.levelRidingEnabled = false;
   RadioPreviewPipeline preview;
   preview.initialize(radio, ingress, RadioPreviewConfig{}, kRate);
   std::vector<float> samples(kFrames, 0.0f);
