@@ -1,3 +1,8 @@
+# Text is stored with LF and checked out with LF on every platform, whatever
+# core.autocrlf says; cmd.exe scripts need CRLF.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
 *.sh text eol=lf
 *.diff whitespace=-blank-at-eol
 models/audio_separation/*.onnx filter=lfs diff=lfs merge=lfs -text
