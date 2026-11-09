@@ -2536,7 +2536,7 @@ find_package(FFMPEG QUIET)
 if (NOT FFMPEG_FOUND)
   find_package(PkgConfig QUIET)
   if (PkgConfig_FOUND)
-    pkg_check_modules(FFMPEG QUIET libavformat libavcodec libavutil libswscale libswresample)
+    pkg_check_modules(FFMPEG QUIET libavformat libavcodec libavfilter libavutil libswscale libswresample)
   endif()
 endif()
 
@@ -2561,6 +2561,10 @@ if (NOT FFMPEG_FOUND)
     HINTS ${_radioify_ffmpeg_hint_dirs} ENV FFMPEG_DIR ENV FFMPEG_ROOT
     PATH_SUFFIXES lib
   )
+  find_library(AVFILTER_LIBRARY NAMES avfilter
+    HINTS ${_radioify_ffmpeg_hint_dirs} ENV FFMPEG_DIR ENV FFMPEG_ROOT
+    PATH_SUFFIXES lib
+  )
   find_library(AVUTIL_LIBRARY NAMES avutil
     HINTS ${_radioify_ffmpeg_hint_dirs} ENV FFMPEG_DIR ENV FFMPEG_ROOT
     PATH_SUFFIXES lib
@@ -2574,12 +2578,13 @@ if (NOT FFMPEG_FOUND)
     PATH_SUFFIXES lib
   )
   if (FFMPEG_INCLUDE_DIR AND AVFORMAT_LIBRARY AND AVCODEC_LIBRARY AND
-      AVUTIL_LIBRARY AND SWSCALE_LIBRARY AND SWRESAMPLE_LIBRARY)
+      AVFILTER_LIBRARY AND AVUTIL_LIBRARY AND SWSCALE_LIBRARY AND SWRESAMPLE_LIBRARY)
     set(FFMPEG_FOUND TRUE)
     set(FFMPEG_INCLUDE_DIRS "${FFMPEG_INCLUDE_DIR}")
     set(FFMPEG_LIBRARIES
       "${AVFORMAT_LIBRARY}"
       "${AVCODEC_LIBRARY}"
+      "${AVFILTER_LIBRARY}"
       "${AVUTIL_LIBRARY}"
       "${SWSCALE_LIBRARY}"
       "${SWRESAMPLE_LIBRARY}"
@@ -2602,6 +2607,8 @@ if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(audio_device_recovery_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(analysis_inference_probe PRIVATE ${FFMPEG_LIBRARY_DIRS})
+  target_link_directories(analysis_inference_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
+  target_link_directories(subtitle_presentation_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_edit_export_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_edit_timeline_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(indexed_transcript_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
