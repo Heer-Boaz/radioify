@@ -120,6 +120,7 @@ models/**/*.verified
 !README.md
 !BUILD_WINDOWS.md
 !docs/radio1938-realism-audit.md
+!docs/radio1938-audit-log.md
 !docs/radio1938-period-acoustics.md
 !docs/radio1938-detector-supply.md
 !docs/radio_node_physics.md

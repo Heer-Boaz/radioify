@@ -1,6 +1,6 @@
 # Thermionic detector and loaded power supply
 
-Revision: 2026-11-06, after the IF/circuit revision in `radio1938-realism-audit.md`.
+Revision: 2026-11-06, after the IF/circuit revision in `radio1938-audit-log.md`.
 
 This replaces the rounded-resistance detector and the programme-envelope supply
 modulation. It does not establish an exact measured Philco response. The UI and
@@ -53,7 +53,7 @@ Nominal IF gain is now 20 / 46, with physical volume positions .05 / .25.
 These remain gain-staging priors. The normalized AVC reference is
 `mixer.avcGridDriveVolts / 1.25`, so one measured AVC volt imposes one volt of
 additional mixer-grid bias. Previously the normalization multiplied it by
-roughly six. Downstream Philco digital makeup (now 2.98, see the realism audit) sets listening level;
+roughly six. Downstream Philco digital makeup (now 2.98, see the audit log) sets listening level;
 this does not increase electrical tube drive.
 
 ## Supply

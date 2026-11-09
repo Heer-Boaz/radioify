@@ -6,12 +6,12 @@ fits in this document remain unchanged; older complete-chain measurements
 below should not be read as measurements of the latest circuit.
 
 2026-11-05. This revision supersedes the acoustic estimates and acoustic
-acceptance bands in the [July realism audit](radio1938-realism-audit.md).
+acceptance bands in the [July realism audit](radio1938-audit-log.md#initial-audit-2026-07-15).
 Both receivers are source-anchored reconstructions, not measurements of the
 Philco BO-1 or Type-W. No exact-part acoustic, impedance, phase, or polar data
 has been established. `typical-1930s` does not mean a population average.
 
-The [November 6 circuit revision](radio1938-realism-audit.md#circuit-corrections-and-remaining-limits-2026-11-06)
+The [November 6 circuit revision](radio1938-audit-log.md#circuit-corrections-and-remaining-limits-2026-11-06)
 changes IF selectivity, first-audio characteristics and noise routing. The
 measurements below describe the dated acoustic/oversampling revisions; use
 that audit's new CSVs for current whole-receiver comparisons. The period
@@ -274,7 +274,7 @@ the integrated bandwidth. Tests cover gain invariance, bandwidth reduction,
 and 44.1/48/96 kHz with a fixed physical passband. The latter uses a 2 kHz service
 bandwidth to stay below the IF model's existing sample-rate cutoff cap.
 (The receiver-internal IF noise was later replaced by antenna noise set by
-the reception profile; see the realism audit.)
+the reception profile; see the audit log.)
 
 `radio_receiver_profile_tests --noise-report` reports individual-source
 measurements through the current playback path. [The noise comparison CSV](data/radio1938-playback-noise.csv)
@@ -536,7 +536,7 @@ Both stages use the same port relation. DC startup primes the capacitors at
 their operating point. Component values and the existing loudness-branch
 weighting remain unchanged; this is a correction of the circuit numerics,
 not new historical evidence for that weighting. (The branch values and the
-weighting were later replaced from Bulletin 258; see the realism audit.)
+weighting were later replaced from Bulletin 258; see the audit log.)
 
 The finer reference comparison also exposed excessive numerical damping in
 the former backward-Euler integration of the small loudness capacitor.
