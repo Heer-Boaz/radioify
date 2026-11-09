@@ -121,15 +121,15 @@ tests remain active.
 
 Three old acceptance assumptions are explicitly superseded:
 
-- A shared 35–55 us detector time constant described the old single capacitor.
-  The two-capacitor dominant release poles now have separate 30–45 us (Philco)
-  and 90–120 us (typical) guards.
+- A shared 35â€“55 us detector time constant described the old single capacitor.
+  The two-capacitor dominant release poles now have separate 30â€“45 us (Philco)
+  and 90â€“120 us (typical) guards.
 - The small receiver's complete electrical bandwidth includes its real detector
   filter. Its coarse-grid high -3 dB guard now starts at 1.8 kHz, rather than
   demanding at least 2.5 kHz regardless of the detector load.
 - Nominal Philco playback uses a lower volume setting and approximately
-  36–64% of the rated electrical power. The voltage-reference-ratio guard is
-  .60–.80. The independently derived 12–18 W capacity, SINAD, IMD and clipping
+  36â€“64% of the rated electrical power. The voltage-reference-ratio guard is
+  .60â€“.80. The independently derived 12â€“18 W capacity, SINAD, IMD and clipping
   limits remain unchanged. Output-driver capability and normal listening drive
   are distinct tests.
 
@@ -183,5 +183,5 @@ remains `receivercircuit.tubeDcFeedResistanceOhms`.
 - [Philco Service Bulletin 258, 37-116](https://philcoradio.com/library/download/service%20info/service%20bulletins/Philco%20Service%20Bulletin%20258.pdf),
   [Rider 1937, Philco 7-31/32 and 7-36](https://www.worldradiohistory.com/Archive-Rider/37/Rider-1937-PQR.pdf).
 - [Philco Parts Catalog 1938](https://philcoradio.com/library/download/parts/catalogs/1938/Philco%20Parts%20Catalog%201938.pdf), choke 32-7056.
-- [US Army TM 11-662, Basic Theory and Application of Electron Tubes](https://www.schematicsforfree.com/files/Theory%2C%20Education%20%26%20Reference/Components/Basic%20Theory%20and%20Application%20of%20Vacuum%20Tubes.pdf), printed pp. 31–33, Fig. 33.
+- [US Army TM 11-662, Basic Theory and Application of Electron Tubes](https://www.schematicsforfree.com/files/Theory%2C%20Education%20%26%20Reference/Components/Basic%20Theory%20and%20Application%20of%20Vacuum%20Tubes.pdf), printed pp. 31â€“33, Fig. 33.
 - [J. B. Tuttle, Electronics 27: Vacuum Tubes](https://mysite.du.edu/~etuttle/electron/elect27.htm), measured diode characteristics and cathode-temperature discussion.
