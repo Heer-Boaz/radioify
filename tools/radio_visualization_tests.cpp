@@ -57,6 +57,52 @@ void timelineFollowsOutputAndReset() {
           "reopening the view reused an old observation");
 }
 
+void playbackCursorDrainsDeviceTail() {
+  RadioVisualTimeline timeline;
+  const auto generation = timeline.generation();
+  RadioPlaybackObservation quiet, loud, found;
+  quiet.circuit.readings[0].rms = .2f;
+  loud.circuit.readings[0].rms = .8f;
+  timeline.publish(generation, 5199, 7599, quiet);
+  timeline.publish(generation, 7599, 10000, loud);
+
+  const auto playing = radioPlaybackCursor(10000, 4800, 48000, false,
+                                           1000000, 9000000);
+  require(playing.frame && *playing.frame == 5199 && !playing.outputFinished,
+          "normal playback must retain the existing device-delay position");
+  const auto tailStart = radioPlaybackCursor(10000, 4800, 48000, true,
+                                             1000000, 1000000);
+  require(tailStart.frame &&
+              timeline.at(generation, *tailStart.frame, found) &&
+              found.circuit.readings[0].rms == .2f,
+          "EOF must retain the portion of audio still in the device");
+  const auto tailMiddle = radioPlaybackCursor(10000, 4800, 48000, true,
+                                              1000000, 1050000);
+  require(tailMiddle.frame && *tailMiddle.frame == 7599 &&
+              timeline.at(generation, *tailMiddle.frame, found) &&
+              found.circuit.readings[0].rms == .8f,
+          "the visual cursor must advance through the queued device tail");
+  const auto tailEnd = radioPlaybackCursor(10000, 4800, 48000, true,
+                                           1000000, 1100000);
+  require(tailEnd.outputFinished && !tailEnd.frame,
+          "a drained device must not repeat its final observation");
+
+  const auto shortWaiting = radioPlaybackCursor(500, 4800, 48000, true,
+                                                1000000, 1000000);
+  const auto shortAudible = radioPlaybackCursor(500, 4800, 48000, true,
+                                                1000000, 1090000);
+  require(!shortWaiting.outputFinished && !shortWaiting.frame &&
+              shortAudible.frame && *shortAudible.frame == 19,
+          "a source shorter than device latency must wait for its first frame");
+  require(radioPlaybackCursor(10000, 4800, 48000, true, 0, 1000000)
+              .outputFinished &&
+              radioPlaybackCursor(10000, 0, 48000, true, 1000000, 1000000)
+                  .outputFinished &&
+              radioPlaybackCursor(10000, 4800, 0, true, 1000000, 1000000)
+                  .outputFinished,
+          "EOF without a usable device clock must not present stale data");
+}
+
 void observationsRetainSmallModulation() {
   RadioCircuitAccumulator accumulator;
   const float low = 100.0f;
@@ -185,22 +231,35 @@ void presentationFollowsTheAudibleReceiver() {
   Levels typical;
   typical.mode = RadioFilterMode::Typical1930s;
   typical.observed = radioCircuitProbeBit(RadioCircuitProbe::DetectorVolts);
-  const Presentation switching = present(&typical, RadioFilterMode::Philco37116, false);
+  const Presentation switching = present(&typical, RadioFilterMode::Philco37116,
+                                         PlaybackPhase::Playing);
   require(switching.status == Status::Switching && switching.showCircuit,
           "a requested filter change hid the receiver still in the audio buffer");
-  const Presentation switchingOff = present(&typical, RadioFilterMode::Off, true);
+  const Presentation switchingOff = present(&typical, RadioFilterMode::Off,
+                                            PlaybackPhase::Paused);
   require(switchingOff.status == Status::Switching && switchingOff.showCircuit,
           "a paused filter change discarded the last audible receiver");
-  const Presentation paused = present(&typical, RadioFilterMode::Typical1930s, true);
+  const Presentation paused = present(&typical, RadioFilterMode::Typical1930s,
+                                      PlaybackPhase::Paused);
   require(paused.status == Status::Paused && paused.showCircuit,
           "pause did not hold the observed receiver");
+  const Presentation ended = present(&typical, RadioFilterMode::Typical1930s,
+                                     PlaybackPhase::Finished);
+  require(ended.status == Status::Finished && !ended.showCircuit &&
+              present(nullptr, RadioFilterMode::Typical1930s,
+                      PlaybackPhase::Finished).status == Status::Finished,
+          "a finished track must not display its last reading as live activity");
+  const Presentation replayed = present(&typical, RadioFilterMode::Typical1930s,
+                                        PlaybackPhase::Playing);
+  require(replayed.status == Status::Playing && replayed.showCircuit,
+          "playback after EOF must show live circuit data again");
   Levels philco;
   philco.mode = RadioFilterMode::Philco37116;
-  require(present(&philco, RadioFilterMode::Philco37116, false).status ==
+  require(present(&philco, RadioFilterMode::Philco37116, PlaybackPhase::Playing).status ==
               Status::UnsupportedReceiver,
           "the audible Philco did not show its unsupported-view status");
   typical.observed = 0;
-  require(present(&typical, RadioFilterMode::Typical1930s, false).status ==
+  require(present(&typical, RadioFilterMode::Typical1930s, PlaybackPhase::Playing).status ==
               Status::NoCircuitObservation,
           "a bypassed graph was displayed as a measured receiver");
 }
@@ -495,6 +554,7 @@ void independentSurfacesRenderAtTheirOwnSizes() {
 
 int main() {
   timelineFollowsOutputAndReset();
+  playbackCursorDrainsDeviceTail();
   observationsRetainSmallModulation();
   timelineAggregatesSmallAudioBlocks();
   timelineDoesNotMixConcurrentObservations();

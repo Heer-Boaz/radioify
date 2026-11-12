@@ -149,6 +149,7 @@ struct AudioPlaybackState {
 void appendAudioTimingLogLine(const char* line);
 void drainPlaybackPipelineForReplacement(AudioPlaybackState& audio);
 bool audioPlaybackFinishSeekPipelineTransition(AudioState& state);
+void audioPlaybackRequestSeekFrame(AudioPlaybackState& audio, int64_t target);
 void dataCallback(ma_device* device, void* output, const void* input,
                   ma_uint32 frameCount);
 void stopAndUninitActiveDecoder(AudioPlaybackState& audio);

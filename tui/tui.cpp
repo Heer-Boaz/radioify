@@ -2013,10 +2013,15 @@ int runTui(Options o, ApplicationRuntime &runtime) {
       if (radioVisualizationActive ||
           audioPictureInPicture.radioVisualizationVisible()) {
         radioSnapshot.requestedMode = audio.radioFilterMode;
-        radioSnapshot.paused = audio.paused || audio.holding;
-        RadioPlaybackObservation observation;
-        if (audioPlayback.radioVisualization(observation)) {
-          radioSnapshot.levels = tui_radio_visualization::project(observation);
+        radioSnapshot.playback = audio.paused || audio.holding
+            ? tui_radio_visualization::PlaybackPhase::Paused
+            : tui_radio_visualization::PlaybackPhase::Playing;
+        const RadioPlaybackReading reading = audioPlayback.radioVisualization();
+        if (reading.outputFinished) {
+          radioSnapshot.playback = tui_radio_visualization::PlaybackPhase::Finished;
+        } else if (reading.observation) {
+          radioSnapshot.levels =
+              tui_radio_visualization::project(*reading.observation);
         }
       }
       bool optionsMode = optionsBrowserIsActive(browser);

@@ -114,7 +114,7 @@ class AudioPlaybackRuntime final : public audio_playback::Session {
   void adjustVolume(float delta);
   RadioFilterMode radioFilterMode() const;
   void setRadioVisualizationEnabled(bool enabled);
-  bool radioVisualization(RadioPlaybackObservation& observation) const;
+  RadioPlaybackReading radioVisualization() const;
   bool radioEnabled() const;
   bool supports50HzToggle() const;
   std::string warning() const;

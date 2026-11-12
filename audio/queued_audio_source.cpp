@@ -179,14 +179,18 @@ void finishProcessingCommitWhenPrimed(AudioState* state,
   }
 
   bool finished = false;
-  if (*processingCommit == ProcessingCommit::SourceSeek) {
-    finished = audioPlaybackFinishSeekPipelineTransition(*state);
-  } else {
-    finished =
-        audioPipelineTransitionFinishCommit(state->pipelineTransition);
-  }
-  if (finished || !transitionCommitIsCurrent(state->pipelineTransition)) {
-    *processingCommit = ProcessingCommit::None;
+  {
+    // The decoder may be waiting at EOF for this commit to finish.
+    std::lock_guard<std::mutex> lock(state->audioQueueMutex);
+    if (*processingCommit == ProcessingCommit::SourceSeek) {
+      finished = audioPlaybackFinishSeekPipelineTransition(*state);
+    } else {
+      finished =
+          audioPipelineTransitionFinishCommit(state->pipelineTransition);
+    }
+    if (finished || !transitionCommitIsCurrent(state->pipelineTransition)) {
+      *processingCommit = ProcessingCommit::None;
+    }
   }
   state->audioQueueCv.notify_all();
 }
@@ -538,8 +542,11 @@ void queuedAudioSourceStartProcessing(AudioState* state,
 
 void queuedAudioSourceStopProcessing(AudioState* state) {
   if (!state) return;
-  state->streamQueueEnabled.store(false, std::memory_order_release);
-  state->radioDspStop.store(true, std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(state->audioQueueMutex);
+    state->streamQueueEnabled.store(false, std::memory_order_release);
+    state->radioDspStop.store(true, std::memory_order_relaxed);
+  }
   state->radioDspCv.notify_all();
   state->audioQueueCv.notify_all();
   if (state->radioDspThread.joinable()) {
@@ -557,7 +564,10 @@ void queuedAudioSourceStopProcessing(AudioState* state) {
 
 void queuedAudioSourceStopDecoderWorker(AudioState* state) {
   if (!state) return;
-  state->decodeStop.store(true, std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(state->audioQueueMutex);
+    state->decodeStop.store(true, std::memory_order_relaxed);
+  }
   state->audioQueueCv.notify_all();
   if (state->decodeThread.joinable()) {
     state->decodeThread.join();
@@ -721,8 +731,10 @@ bool queuedAudioSourceStartDecoderWorker(
         uint64_t framePos = startFrame;
         uint32_t consecutiveEmptyReads = 0;
         bool seekCommitPending = false;
+        bool decoderAtEnd = false;
 
-        while (!audio.state.decodeStop.load(std::memory_order_relaxed)) {
+        while (!audio.state.decodeStop.load(std::memory_order_relaxed) &&
+               audio.state.streamQueueEnabled.load(std::memory_order_acquire)) {
           if (seekCommitPending &&
               !audioPipelineTransitionCommitInProgress(
                   audio.state.pipelineTransition)) {
@@ -748,6 +760,7 @@ bool queuedAudioSourceStartDecoderWorker(
             }
             framePos = targetFrame;
             consecutiveEmptyReads = 0;
+            decoderAtEnd = false;
             const uint64_t resetGeneration =
                 queuedAudioSourceRequestSourceReset(&audio.state,
                                                     targetFrame);
@@ -781,6 +794,22 @@ bool queuedAudioSourceStartDecoderWorker(
             continue;
           }
 
+          if (decoderAtEnd) {
+            std::unique_lock<std::mutex> lock(audio.state.audioQueueMutex);
+            audio.state.audioQueueCv.wait(lock, [&]() {
+              return audio.state.decodeStop.load(std::memory_order_relaxed) ||
+                     !audio.state.streamQueueEnabled.load(
+                         std::memory_order_relaxed) ||
+                     (!seekCommitPending &&
+                      audio.state.seekRequested.load(
+                          std::memory_order_relaxed)) ||
+                     (seekCommitPending &&
+                      !audioPipelineTransitionCommitInProgress(
+                          audio.state.pipelineTransition));
+            });
+            continue;
+          }
+
           const uint64_t writable =
               audio.state.decodedAudio.writableFrames();
           if (writable == 0) {
@@ -801,16 +830,12 @@ bool queuedAudioSourceStartDecoderWorker(
           const uint32_t framesToRead = static_cast<uint32_t>(
               std::min<uint64_t>(writable, kRadioDspChunkFrames));
           uint64_t framesRead = 0;
-          if (!backend->read(audio, buffer.data(), framesToRead,
-                             &framesRead)) {
-            audio.state.sourceAtEnd.store(true,
-                                           std::memory_order_relaxed);
-            audio.state.radioDspCv.notify_all();
-            break;
-          }
+          const bool readSucceeded =
+              backend->read(audio, buffer.data(), framesToRead, &framesRead);
+          if (!readSucceeded) framesRead = 0;
 
-          bool reachedEnd = false;
-          if (framesRead == 0) {
+          bool reachedEnd = !readSucceeded;
+          if (readSucceeded && framesRead == 0) {
             if (queuedDecodeReachedKnownEnd(&audio.state, framePos)) {
               reachedEnd = true;
             } else if (++consecutiveEmptyReads >=
@@ -819,7 +844,8 @@ bool queuedAudioSourceStartDecoderWorker(
             } else {
               waitForQueuedDecodeRetry(&audio.state);
             }
-          } else if (finishOnShortRead && framesRead < framesToRead &&
+          } else if (readSucceeded && finishOnShortRead &&
+                     framesRead < framesToRead &&
                      queuedDecodeReachedKnownEnd(&audio.state,
                                                 framePos + framesRead)) {
             reachedEnd = true;
@@ -854,10 +880,22 @@ bool queuedAudioSourceStartDecoderWorker(
           }
 
           if (reachedEnd) {
-            audio.state.sourceAtEnd.store(true,
-                                           std::memory_order_relaxed);
+            {
+              std::lock_guard<std::mutex> lock(audio.state.audioQueueMutex);
+              // A new seek may have arrived while the decoder was reading.
+              if (audioPipelineTransitionActive(
+                      audio.state.pipelineTransition) &&
+                  (!seekCommitPending ||
+                   !transitionCommitIsCurrent(
+                       audio.state.pipelineTransition))) {
+                continue;
+              }
+              audio.state.sourceAtEnd.store(true,
+                                             std::memory_order_relaxed);
+              decoderAtEnd = true;
+            }
             audio.state.radioDspCv.notify_all();
-            break;
+            if (!backend->seek) break;
           }
         }
 

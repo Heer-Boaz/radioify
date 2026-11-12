@@ -182,7 +182,8 @@ void dataCallback(ma_device* device, void* output, const void*,
   if (starved &&
       state->processedAtEnd.load(std::memory_order_relaxed) &&
       !state->seekRequested.load(std::memory_order_acquire)) {
-    state->finished.store(true, std::memory_order_relaxed);
+    // Publish the final clock update and read position with the EOF state.
+    state->finished.store(true, std::memory_order_release);
     const uint64_t total = state->totalFrames.load(std::memory_order_relaxed);
     if (total > 0) {
       state->framesPlayed.store(total, std::memory_order_relaxed);

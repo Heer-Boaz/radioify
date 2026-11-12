@@ -43,7 +43,9 @@ Levels project(const RadioPlaybackObservation& observation) {
 }
 
 Presentation present(const Levels* levels, RadioFilterMode requestedMode,
-                     bool paused) {
+                     PlaybackPhase playback) {
+  if (playback == PlaybackPhase::Finished) return {Status::Finished, false};
+  const bool paused = playback == PlaybackPhase::Paused;
   if (levels) {
     const bool showCircuit = levels->mode == RadioFilterMode::Typical1930s &&
                              levels->observed != 0;

@@ -23,6 +23,7 @@ const char* statusText(Status status) {
     case Status::NoCircuitObservation: return " No receiver circuit activity is available.";
     case Status::Playing: return " Signal activity  |  independent stage scales";
     case Status::Paused: return " Paused  |  circuit activity held";
+    case Status::Finished: return " Playback ended  |  circuit activity unavailable";
   }
   return "";
 }
@@ -35,6 +36,7 @@ const char* compactStatusText(Status status) {
     case Status::ResumeToObserve: return " Resume to see activity.";
     case Status::Switching: return " Switching receivers...";
     case Status::NoCircuitObservation: return " No circuit data available.";
+    case Status::Finished: return " Playback ended.";
     case Status::Playing:
     case Status::Paused: return "";
   }
@@ -53,7 +55,7 @@ void Renderer::draw(ConsoleScreen& screen, int top, int height, int width,
   screen.writeText(0, top, fitLine(" Inside radio  /  typical 1930s", width), title);
   const Levels* levels = snapshot.levels ? &*snapshot.levels : nullptr;
   const Presentation presentation =
-      present(levels, snapshot.requestedMode, snapshot.paused);
+      present(levels, snapshot.requestedMode, snapshot.playback);
   if (height > 1) screen.writeText(0, top+1, fitLine(statusText(presentation.status), width), dim);
   const double cellW = screen.cellPixelWidth() > 0 ? screen.cellPixelWidth() : 8.0;
   const double cellH = screen.cellPixelHeight() > 0 ? screen.cellPixelHeight() : 16.0;
@@ -72,7 +74,7 @@ void Renderer::drawCompact(ConsoleScreen& screen, int top, int height, int width
   if (height <= 0 || width <= 0) return;
   const Levels* levels = snapshot.levels ? &*snapshot.levels : nullptr;
   const Presentation presentation =
-      present(levels, snapshot.requestedMode, snapshot.paused);
+      present(levels, snapshot.requestedMode, snapshot.playback);
   if (presentation.status != Status::Playing &&
       presentation.status != Status::Paused) {
     const Style dim{{151,145,128},{0,0,0}};

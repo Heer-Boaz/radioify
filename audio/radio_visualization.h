@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include "audiofilter/radio1938/radio_circuit_observation.h"
@@ -19,6 +20,39 @@ struct RadioPlaybackObservation {
   RadioCircuitObservation circuit;
   uint64_t generation = 0;
 };
+
+struct RadioPlaybackReading {
+  std::optional<RadioPlaybackObservation> observation;
+  bool outputFinished = false;
+};
+
+struct RadioPlaybackCursor {
+  std::optional<uint64_t> frame;
+  bool outputFinished = false;
+};
+
+// The device still plays buffered frames after the source reports EOF. Advance
+// the visual cursor through that tail, then stop presenting its last reading.
+inline RadioPlaybackCursor radioPlaybackCursor(
+    uint64_t read, uint64_t delayFrames, uint32_t sampleRate, bool sourceFinished,
+    int64_t lastClockUpdateUs, int64_t nowUs) {
+  uint64_t remainingDelay = delayFrames;
+  if (sourceFinished) {
+    if (sampleRate == 0 || lastClockUpdateUs <= 0) return {{}, true};
+    const uint64_t elapsedUs = nowUs > lastClockUpdateUs
+                                   ? static_cast<uint64_t>(nowUs - lastClockUpdateUs)
+                                   : 0;
+    const uint64_t seconds = elapsedUs / 1000000ULL;
+    if (seconds > delayFrames / sampleRate) return {{}, true};
+    const uint64_t wholeFrames = seconds * sampleRate;
+    const uint64_t fractionalFrames =
+        (elapsedUs % 1000000ULL) * sampleRate / 1000000ULL;
+    if (fractionalFrames >= delayFrames - wholeFrames) return {{}, true};
+    remainingDelay -= wholeFrames + fractionalFrames;
+  }
+  if (read <= remainingDelay) return {};
+  return {read - remainingDelay - 1, false};
+}
 
 struct RadioVisualSegment {
   uint32_t offset = 0;

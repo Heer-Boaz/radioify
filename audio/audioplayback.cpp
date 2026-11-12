@@ -522,19 +522,38 @@ void AudioPlaybackRuntime::setRadioVisualizationEnabled(bool enabled) {
   state_->state.radioVisualization.setEnabled(enabled);
 }
 
-bool AudioPlaybackRuntime::radioVisualization(
-    RadioPlaybackObservation& observation) const {
+RadioPlaybackReading AudioPlaybackRuntime::radioVisualization() const {
   const AudioState& audio = state_->state;
   if (!audio.radioVisualization.enabled() ||
       !audio.streamQueueEnabled.load(std::memory_order_acquire) ||
-      audio.seekRequested.load(std::memory_order_acquire)) return false;
+      audio.seekRequested.load(std::memory_order_acquire)) return {};
   const uint64_t generation = audio.radioVisualization.generation();
+  const bool sourceFinished = audio.finished.load(std::memory_order_acquire);
   const uint64_t read = audio.processedAudio.readPosition();
   const uint64_t delay = audio.deviceDelayFrames.load(std::memory_order_relaxed);
-  if (read <= delay) return false;
-  const bool found = audio.radioVisualization.at(generation, read - delay - 1,
-                                                  observation);
-  return found && generation == audio.radioVisualization.generation();
+  const bool held = audio.paused.load(std::memory_order_relaxed) ||
+                    audio.hold.load(std::memory_order_relaxed);
+  const int64_t lastUpdateUs = sourceFinished && !held
+      ? audio.audioClock.last_updated_us.load(std::memory_order_relaxed) : 0;
+  const RadioPlaybackCursor cursor = radioPlaybackCursor(
+      read, delay, audio.sampleRate, sourceFinished, lastUpdateUs,
+      sourceFinished ? nowUs() : 0);
+  if (cursor.outputFinished) {
+    if (!audio.seekRequested.load(std::memory_order_acquire) &&
+        audio.finished.load(std::memory_order_acquire) &&
+        generation == audio.radioVisualization.generation()) {
+      return {{}, true};
+    }
+    return {};
+  }
+  if (!cursor.frame) return {};
+  RadioPlaybackObservation observation;
+  if (audio.radioVisualization.at(generation, *cursor.frame, observation) &&
+      !audio.seekRequested.load(std::memory_order_acquire) &&
+      generation == audio.radioVisualization.generation()) {
+    return {observation, false};
+  }
+  return {};
 }
 
 bool AudioPlaybackRuntime::radioEnabled() const {
@@ -643,21 +662,26 @@ static void audioStop(AudioPlaybackState& audio) {
   stopPlayback(audio);
 }
 
-static void requestAudioSeekFrame(AudioPlaybackState& audio, int64_t target) {
+void audioPlaybackRequestSeekFrame(AudioPlaybackState& audio, int64_t target) {
   if (target < 0) target = 0;
   const uint64_t total = audio.state.totalFrames.load();
   if (total > 0 && target > static_cast<int64_t>(total)) {
     target = static_cast<int64_t>(total);
   }
-  audio.state.pendingSeekFrames.store(target);
-  audio.state.seekRequested.store(true, std::memory_order_release);
-  audio.state.seekPresentation.request();
-  audio.state.finished.store(false);
-  audio.state.sourceAtEnd.store(false, std::memory_order_relaxed);
-  audio.state.processedAtEnd.store(false, std::memory_order_relaxed);
-  audio.state.audioPrimed.store(false);
-  audioPipelineTransitionRequestDiscontinuity(audio.state.pipelineTransition,
-                                              audio.state.sampleRate);
+  {
+    // The decoder can be parked at EOF. Publish its wake-up condition under
+    // the same mutex it uses to wait, so a seek cannot miss the wake-up.
+    std::lock_guard<std::mutex> lock(audio.state.audioQueueMutex);
+    audio.state.pendingSeekFrames.store(target);
+    audio.state.seekRequested.store(true, std::memory_order_release);
+    audio.state.seekPresentation.request();
+    audio.state.finished.store(false);
+    audio.state.sourceAtEnd.store(false, std::memory_order_relaxed);
+    audio.state.processedAtEnd.store(false, std::memory_order_relaxed);
+    audio.state.audioPrimed.store(false);
+    audioPipelineTransitionRequestDiscontinuity(audio.state.pipelineTransition,
+                                                audio.state.sampleRate);
+  }
   audio.state.audioQueueCv.notify_all();
   audio.state.radioDspCv.notify_all();
 }
@@ -827,13 +851,13 @@ static void audioPlay(AudioPlaybackState& audio) {
   const bool externalStream =
       audio.state.externalStream.load(std::memory_order_relaxed);
   if (wasFinished && !externalStream) {
-    requestAudioSeekFrame(audio, 0);
+    audioPlaybackRequestSeekFrame(audio, 0);
     return;
   }
 
   audio.state.finished.store(false, std::memory_order_relaxed);
-  audio.state.sourceAtEnd.store(false, std::memory_order_relaxed);
   if (externalStream) {
+    audio.state.sourceAtEnd.store(false, std::memory_order_relaxed);
     audio.state.streamClockReady.store(false, std::memory_order_relaxed);
     audio.state.streamStarved.store(false, std::memory_order_relaxed);
     audio.state.audioClock.reset(
@@ -860,7 +884,7 @@ static void audioSeekBy(AudioPlaybackState& audio, int direction) {
   if (audio.state.seekRequested.load()) {
     current = audio.state.pendingSeekFrames.load();
   }
-  requestAudioSeekFrame(audio, current + deltaFrames);
+  audioPlaybackRequestSeekFrame(audio, current + deltaFrames);
 }
 
 static void audioSeekToRatio(AudioPlaybackState& audio, double ratio) {
@@ -869,7 +893,7 @@ static void audioSeekToRatio(AudioPlaybackState& audio, double ratio) {
   if (total == 0) return;
   ratio = std::clamp(ratio, 0.0, 1.0);
   int64_t target = static_cast<int64_t>(ratio * static_cast<double>(total));
-  requestAudioSeekFrame(audio, target);
+  audioPlaybackRequestSeekFrame(audio, target);
 }
 
 static void audioCycleRadioFilter(AudioPlaybackState& audio) {

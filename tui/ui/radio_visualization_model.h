@@ -19,10 +19,16 @@ struct Levels {
   }
 };
 
+enum class PlaybackPhase {
+  Playing,
+  Paused,
+  Finished,
+};
+
 // One presentation update shared by every visible receiver surface.
 struct Snapshot {
   RadioFilterMode requestedMode = RadioFilterMode::Off;
-  bool paused = false;
+  PlaybackPhase playback = PlaybackPhase::Playing;
   std::optional<Levels> levels;
 };
 
@@ -39,6 +45,7 @@ enum class Status {
   NoCircuitObservation,
   Playing,
   Paused,
+  Finished,
 };
 
 struct Presentation {
@@ -47,6 +54,6 @@ struct Presentation {
 };
 
 Presentation present(const Levels* levels, RadioFilterMode requestedMode,
-                     bool paused);
+                     PlaybackPhase playback);
 
 }  // namespace tui_radio_visualization

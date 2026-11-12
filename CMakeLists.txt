@@ -704,20 +704,25 @@ radioify_link_repo_target(audio_playback_pipeline_tests)
 add_test(NAME audio_playback_pipeline_tests
          COMMAND $<TARGET_FILE:audio_playback_pipeline_tests>)
 
-add_executable(audio_device_recovery_tests)
-target_sources(audio_device_recovery_tests PRIVATE
-  $<TARGET_OBJECTS:radioify_tool_audio_device_recovery_tests>
-  $<TARGET_OBJECTS:radioify_audio>
-  $<TARGET_OBJECTS:radioify_analysis>
-  $<TARGET_OBJECTS:radioify_audiofilter>
-  $<TARGET_OBJECTS:radioify_config>
-  $<TARGET_OBJECTS:radioify_core_runtime>
-  ${CMAKE_SOURCE_DIR}/core/file_output.cpp
-)
-radioify_configure_repo_target(audio_device_recovery_tests)
-target_link_libraries(audio_device_recovery_tests PRIVATE miniaudio::miniaudio)
-add_test(NAME audio_device_recovery_tests
-         COMMAND $<TARGET_FILE:audio_device_recovery_tests>)
+add_executable(audio_device_recovery_tests
+  $<TARGET_OBJECTS:radioify_tool_audio_device_recovery_tests>)
+add_executable(audio_queued_replay_tests tools/audio_queued_replay_tests.cpp)
+set(RADIOIFY_AUDIO_RUNTIME_TEST_TARGETS
+  audio_device_recovery_tests audio_queued_replay_tests)
+foreach(_audio_test IN LISTS RADIOIFY_AUDIO_RUNTIME_TEST_TARGETS)
+  target_sources(${_audio_test} PRIVATE
+    $<TARGET_OBJECTS:radioify_audio>
+    $<TARGET_OBJECTS:radioify_analysis>
+    $<TARGET_OBJECTS:radioify_audiofilter>
+    $<TARGET_OBJECTS:radioify_config>
+    $<TARGET_OBJECTS:radioify_core_runtime>
+    ${CMAKE_SOURCE_DIR}/core/file_output.cpp
+  )
+  radioify_configure_repo_target(${_audio_test})
+  target_link_libraries(${_audio_test} PRIVATE miniaudio::miniaudio)
+  add_test(NAME ${_audio_test} COMMAND $<TARGET_FILE:${_audio_test}>)
+endforeach()
+set_tests_properties(audio_queued_replay_tests PROPERTIES TIMEOUT 20)
 
 add_executable(audio_media_format_tests)
 target_sources(audio_media_format_tests PRIVATE
@@ -2644,7 +2649,9 @@ if (FFMPEG_LIBRARY_DIRS)
   target_link_directories(audio_export_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARY_DIRS})
-  target_link_directories(audio_device_recovery_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
+  foreach(_audio_test IN LISTS RADIOIFY_AUDIO_RUNTIME_TEST_TARGETS)
+    target_link_directories(${_audio_test} PRIVATE ${FFMPEG_LIBRARY_DIRS})
+  endforeach()
   target_link_directories(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(analysis_inference_probe PRIVATE ${FFMPEG_LIBRARY_DIRS})
   target_link_directories(analysis_inference_tests PRIVATE ${FFMPEG_LIBRARY_DIRS})
@@ -2671,7 +2678,9 @@ target_link_libraries(media_export_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(audio_export_smoke PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(shortcut_match_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(video_frame_step_smoke PRIVATE ${FFMPEG_LIBRARIES})
-target_link_libraries(audio_device_recovery_tests PRIVATE ${FFMPEG_LIBRARIES})
+foreach(_audio_test IN LISTS RADIOIFY_AUDIO_RUNTIME_TEST_TARGETS)
+  target_link_libraries(${_audio_test} PRIVATE ${FFMPEG_LIBRARIES})
+endforeach()
 target_link_libraries(timeline_preview_tests PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(analysis_inference_probe PRIVATE ${FFMPEG_LIBRARIES})
 target_link_libraries(analysis_inference_tests PRIVATE ${FFMPEG_LIBRARIES})
@@ -2949,7 +2958,9 @@ target_link_libraries(radioify_audio PRIVATE psfcore)
 target_link_libraries(radioify PRIVATE psfcore)
 target_link_libraries(radioify PRIVATE sexypsf)
 target_link_libraries(video_frame_step_smoke PRIVATE psfcore sexypsf)
-target_link_libraries(audio_device_recovery_tests PRIVATE psfcore sexypsf)
+foreach(_audio_test IN LISTS RADIOIFY_AUDIO_RUNTIME_TEST_TARGETS)
+  target_link_libraries(${_audio_test} PRIVATE psfcore sexypsf)
+endforeach()
 
 set(_radioify_warn_deprecated_defined OFF)
 if (DEFINED CMAKE_WARN_DEPRECATED)
@@ -3010,7 +3021,9 @@ radioify_add_external_include_dirs(
 )
 target_link_libraries(radioify PRIVATE kss)
 target_link_libraries(video_frame_step_smoke PRIVATE kss)
-target_link_libraries(audio_device_recovery_tests PRIVATE kss)
+foreach(_audio_test IN LISTS RADIOIFY_AUDIO_RUNTIME_TEST_TARGETS)
+  target_link_libraries(${_audio_test} PRIVATE kss)
+endforeach()
 
 set(_radioify_disable_sdl2_defined OFF)
 if (DEFINED CMAKE_DISABLE_FIND_PACKAGE_SDL2)
@@ -3044,7 +3057,9 @@ endforeach()
 radioify_add_external_include_dirs(${gme_SOURCE_DIR})
 target_link_libraries(radioify PRIVATE gme)
 target_link_libraries(video_frame_step_smoke PRIVATE gme)
-target_link_libraries(audio_device_recovery_tests PRIVATE gme)
+foreach(_audio_test IN LISTS RADIOIFY_AUDIO_RUNTIME_TEST_TARGETS)
+  target_link_libraries(${_audio_test} PRIVATE gme)
+endforeach()
 if (_radioify_disable_sdl2_defined)
   set(CMAKE_DISABLE_FIND_PACKAGE_SDL2 ${_radioify_disable_sdl2_value})
 else()
@@ -3097,7 +3112,9 @@ if (NOT RADIOIFY_DISABLE_GSF_GPL)
   radioify_configure_external_target(playgsf)
   target_link_libraries(radioify PRIVATE playgsf)
   target_link_libraries(video_frame_step_smoke PRIVATE playgsf)
-  target_link_libraries(audio_device_recovery_tests PRIVATE playgsf)
+  foreach(_audio_test IN LISTS RADIOIFY_AUDIO_RUNTIME_TEST_TARGETS)
+    target_link_libraries(${_audio_test} PRIVATE playgsf)
+  endforeach()
 endif()
 
 set(LIBVGM_BUILD_PLAYER OFF CACHE BOOL "Build libvgm player app" FORCE)
@@ -3141,7 +3158,9 @@ if (NOT _radioify_libvgm_target)
 endif()
 target_link_libraries(radioify PRIVATE ${_radioify_libvgm_target})
 target_link_libraries(video_frame_step_smoke PRIVATE ${_radioify_libvgm_target})
-target_link_libraries(audio_device_recovery_tests PRIVATE ${_radioify_libvgm_target})
+foreach(_audio_test IN LISTS RADIOIFY_AUDIO_RUNTIME_TEST_TARGETS)
+  target_link_libraries(${_audio_test} PRIVATE ${_radioify_libvgm_target})
+endforeach()
 
 set_target_properties(radioify PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${RADIOIFY_BUILD_RUNTIME_OUTPUT_DIRECTORY}"
@@ -3158,7 +3177,9 @@ endforeach()
 if (WIN32)
   target_link_libraries(radioify PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys comctl32 bcrypt winhttp)
   target_link_libraries(video_frame_step_smoke PRIVATE dbghelp winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi d3dcompiler user32 shell32 propsys)
-  target_link_libraries(audio_device_recovery_tests PRIVATE winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi user32 shell32 propsys)
+  foreach(_audio_test IN LISTS RADIOIFY_AUDIO_RUNTIME_TEST_TARGETS)
+    target_link_libraries(${_audio_test} PRIVATE winmm mfplat mfreadwrite mfuuid ole32 windowscodecs runtimeobject d3d11 dxgi user32 shell32 propsys)
+  endforeach()
   target_link_libraries(timeline_preview_tests PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
   target_link_libraries(analysis_inference_probe PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
   target_link_libraries(analysis_inference_tests PRIVATE mfplat mfreadwrite mfuuid ole32 d3d11 dxgi user32 windowscodecs)
