@@ -684,6 +684,7 @@ void audioPlaybackRequestSeekFrame(AudioPlaybackState& audio, int64_t target) {
   }
   audio.state.audioQueueCv.notify_all();
   audio.state.radioDspCv.notify_all();
+  audio.state.decoderWake.signal();
 }
 
 static std::optional<AudioPlaybackSource> audioGetPlaybackSource(

@@ -55,22 +55,31 @@ void audioPipelineTransitionRequestDiscontinuity(
   transition.outputFadeInRequestFrames.store(0, std::memory_order_relaxed);
   transition.requestSerial.fetch_add(1, std::memory_order_relaxed);
   transition.phase.store(AudioPipelineTransitionPhase::FadeOutRequested,
-                         std::memory_order_relaxed);
+                         std::memory_order_release);
   (void)sampleRate;
 }
 
 bool audioPipelineTransitionBeginFadeOut(AudioPipelineTransition& transition) {
   AudioPipelineTransitionPhase expected =
       AudioPipelineTransitionPhase::FadeOutRequested;
-  const bool started = transition.phase.compare_exchange_strong(
-      expected, AudioPipelineTransitionPhase::CommitReady,
-      std::memory_order_relaxed, std::memory_order_relaxed);
-  if (started) {
-    transition.commitSerial.store(
-        transition.requestSerial.load(std::memory_order_relaxed),
-        std::memory_order_relaxed);
+  if (!transition.phase.compare_exchange_strong(
+          expected, AudioPipelineTransitionPhase::PublishingCommit,
+          std::memory_order_acquire, std::memory_order_relaxed)) {
+    return false;
   }
-  return started;
+
+  // A consumer may start committing as soon as CommitReady is visible.
+  // Publish its serial first, then release the completed state. If a newer
+  // request superseded this fade, leave that request pending for the next
+  // callback rather than overwriting it.
+  transition.commitSerial.store(
+      transition.requestSerial.load(std::memory_order_relaxed),
+      std::memory_order_relaxed);
+  expected = AudioPipelineTransitionPhase::PublishingCommit;
+  transition.phase.compare_exchange_strong(
+      expected, AudioPipelineTransitionPhase::CommitReady,
+      std::memory_order_release, std::memory_order_relaxed);
+  return true;
 }
 
 bool audioPipelineTransitionBeginCommit(AudioPipelineTransition& transition) {
@@ -78,25 +87,25 @@ bool audioPipelineTransitionBeginCommit(AudioPipelineTransition& transition) {
       AudioPipelineTransitionPhase::CommitReady;
   return transition.phase.compare_exchange_strong(
       expected, AudioPipelineTransitionPhase::CommitInProgress,
-      std::memory_order_relaxed, std::memory_order_relaxed);
+      std::memory_order_acq_rel, std::memory_order_relaxed);
 }
 
 bool audioPipelineTransitionWaitingForCommit(
     const AudioPipelineTransition& transition) {
   const AudioPipelineTransitionPhase phase =
-      transition.phase.load(std::memory_order_relaxed);
+      transition.phase.load(std::memory_order_acquire);
   return phase == AudioPipelineTransitionPhase::CommitReady ||
          phase == AudioPipelineTransitionPhase::CommitInProgress;
 }
 
 bool audioPipelineTransitionCommitInProgress(
     const AudioPipelineTransition& transition) {
-  return transition.phase.load(std::memory_order_relaxed) ==
+  return transition.phase.load(std::memory_order_acquire) ==
          AudioPipelineTransitionPhase::CommitInProgress;
 }
 
 bool audioPipelineTransitionActive(const AudioPipelineTransition& transition) {
-  return transition.phase.load(std::memory_order_relaxed) !=
+  return transition.phase.load(std::memory_order_acquire) !=
          AudioPipelineTransitionPhase::Idle;
 }
 
@@ -113,16 +122,15 @@ bool audioPipelineTransitionFinishCommit(AudioPipelineTransition& transition) {
       AudioPipelineTransitionPhase::CommitInProgress;
   if (!transition.phase.compare_exchange_strong(
           expected, AudioPipelineTransitionPhase::Idle,
-          std::memory_order_relaxed, std::memory_order_relaxed)) {
+          std::memory_order_release, std::memory_order_relaxed)) {
     expected = AudioPipelineTransitionPhase::CommitReady;
     if (!transition.phase.compare_exchange_strong(
             expected, AudioPipelineTransitionPhase::Idle,
-            std::memory_order_relaxed, std::memory_order_relaxed)) {
+            std::memory_order_release, std::memory_order_relaxed)) {
       return false;
     }
   }
 
-  transition.commitSerial.store(0, std::memory_order_relaxed);
   return true;
 }
 

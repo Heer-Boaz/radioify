@@ -170,9 +170,12 @@ void audioStreamSetEnd(AudioPlaybackState& audio, bool atEnd) {
   if (!audio.decoderReady || !audio.state.externalStream.load()) {
     return;
   }
-  audio.state.sourceAtEnd.store(atEnd);
-  if (!atEnd) {
-    audio.state.processedAtEnd.store(false, std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(audio.state.audioQueueMutex);
+    audio.state.sourceAtEnd.store(atEnd);
+    if (!atEnd) {
+      audio.state.processedAtEnd.store(false, std::memory_order_relaxed);
+    }
   }
   audio.state.radioDspCv.notify_all();
 }

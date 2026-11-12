@@ -3,10 +3,13 @@
 #include "audio/queued_audio_source.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -15,6 +18,38 @@ namespace {
 
 void expect(bool condition, const char* message) {
   if (!condition) throw std::runtime_error(message);
+}
+
+struct SeekGate {
+  std::mutex mutex;
+  std::condition_variable changed;
+  std::atomic<bool> entered{false};
+  bool armed = false;
+  bool released = false;
+  BackendSeekProc seek = nullptr;
+};
+
+SeekGate seekGate;
+
+bool seekWithGate(AudioPlaybackState& audio, uint64_t frame) {
+  {
+    std::unique_lock<std::mutex> lock(seekGate.mutex);
+    if (seekGate.armed) {
+      seekGate.armed = false;
+      seekGate.entered.store(true, std::memory_order_release);
+      seekGate.changed.notify_all();
+      seekGate.changed.wait(lock, [] { return seekGate.released; });
+    }
+  }
+  return seekGate.seek(audio, frame);
+}
+
+void releaseSeekGate() {
+  {
+    std::lock_guard<std::mutex> lock(seekGate.mutex);
+    seekGate.released = true;
+  }
+  seekGate.changed.notify_all();
 }
 
 void put16(std::vector<uint8_t>& bytes, uint16_t value) {
@@ -56,7 +91,7 @@ std::vector<uint8_t> makeWave(uint32_t frames) {
 // without depending on a physical playback device or a wall-clock audio rate.
 class PlaybackFixture {
  public:
-  explicit PlaybackFixture(uint32_t frames)
+  explicit PlaybackFixture(uint32_t frames, bool blockFirstSeek = false)
       : wave_(makeWave(frames)), audio_(std::make_unique<AudioPlaybackState>()) {
     auto& state = audio_->state;
     state.dry = true;
@@ -72,6 +107,18 @@ class PlaybackFixture {
     const AudioBackendHandlers* backend = selectAudioBackend("test.wav");
     expect(backend && backend->mode == AudioMode::Miniaudio,
            "WAV must use the queued miniaudio backend");
+    if (blockFirstSeek) {
+      backend_ = *backend;
+      {
+        std::lock_guard<std::mutex> lock(seekGate.mutex);
+        seekGate.seek = backend->seek;
+        seekGate.armed = true;
+        seekGate.released = false;
+        seekGate.entered.store(false, std::memory_order_relaxed);
+      }
+      backend_.seek = seekWithGate;
+      backend = &backend_;
+    }
     queuedAudioSourceStartProcessing(&state, 8192, 8192, 1000, 0, 0);
     expect(queuedAudioSourceStartDecoderWorker(*audio_, backend, 0),
            "Decoder worker must start");
@@ -79,6 +126,7 @@ class PlaybackFixture {
   }
 
   ~PlaybackFixture() {
+    releaseSeekGate();
     auto& state = audio_->state;
     queuedAudioSourceStopDecoderWorker(&state);
     queuedAudioSourceStopProcessing(&state);
@@ -92,7 +140,23 @@ class PlaybackFixture {
     const auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::seconds(3);
     while (!predicate()) {
-      expect(std::chrono::steady_clock::now() < deadline, message);
+      if (std::chrono::steady_clock::now() >= deadline) {
+        const auto& state = audio_->state;
+        std::cerr << "phase=" << static_cast<int>(state.pipelineTransition.phase.load())
+                  << " request=" << state.pipelineTransition.requestSerial.load()
+                  << " commit=" << state.pipelineTransition.commitSerial.load()
+                  << " seeking=" << state.seekRequested.load()
+                  << " source_reset=" << state.sourceResetRequestGeneration.load()
+                  << "/" << state.sourceResetAppliedGeneration.load()
+                  << " decoded=" << state.decodedAudio.bufferedFrames()
+                  << " processed=" << state.processedAudio.bufferedFrames()
+                  << " source_end=" << state.sourceAtEnd.load()
+                  << " processed_end=" << state.processedAtEnd.load()
+                  << " decoder_running=" << state.decodeThreadRunning.load()
+                  << " dsp_running=" << state.radioDspThreadRunning.load()
+                  << '\n';
+        throw std::runtime_error(message);
+      }
       if (pump) callback();
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
@@ -126,7 +190,44 @@ class PlaybackFixture {
   std::unique_ptr<AudioPlaybackState> audio_;
   ma_device device_{};
   std::vector<float> output_;
+  AudioBackendHandlers backend_{};
   bool decoderReady_ = false;
+};
+
+class StreamFixture {
+ public:
+  StreamFixture() : audio_(std::make_unique<AudioPlaybackState>()) {
+    auto& state = audio_->state;
+    state.dry = true;
+    state.externalStream.store(true);
+    RadioPlaybackFilterConfig filter;
+    filter.initialMode = RadioFilterMode::Off;
+    state.radioFilter.initialize(filter);
+    queuedAudioSourceStartProcessing(&state, 8192, 8192, 1000, 0, 0);
+    device_.pUserData = &state;
+  }
+
+  ~StreamFixture() { queuedAudioSourceStopProcessing(&audio_->state); }
+
+  AudioState& state() { return audio_->state; }
+
+  template <typename Predicate>
+  bool pumpUntil(Predicate predicate) {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(3);
+    std::vector<float> output(128);
+    while (!predicate()) {
+      if (std::chrono::steady_clock::now() >= deadline) return false;
+      dataCallback(&device_, output.data(), nullptr,
+                   static_cast<ma_uint32>(output.size()));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+  }
+
+ private:
+  std::unique_ptr<AudioPlaybackState> audio_;
+  ma_device device_{};
 };
 
 void seekAndReplay() {
@@ -175,13 +276,109 @@ void replayShorterThanPrimeBuffer() {
          "A short replay must leave the decoder parked at EOF");
 }
 
+void supersededSeekUsesLatestTarget() {
+  constexpr uint32_t frames = 4800;
+  PlaybackFixture fixture(frames, true);
+  auto& state = fixture.audio().state;
+  fixture.wait([&] { return state.processedAtEnd.load(); },
+               "Source must finish decoding before the interrupted seek");
+  audioPlaybackRequestSeekFrame(fixture.audio(), 0);
+  fixture.wait([&] { return seekGate.entered.load(std::memory_order_acquire); },
+               "The first seek must reach the decoder", true);
+  // The first decoder seek is still in progress when the second arrives.
+  audioPlaybackRequestSeekFrame(fixture.audio(), frames / 2);
+  releaseSeekGate();
+  fixture.wait([&] { return !state.seekRequested.load(); },
+               "A superseding seek must finish", true);
+  fixture.expectAudioSign(false);
+  expect(state.audioClockFrames.load() >= frames / 2,
+         "Playback must continue from the latest seek target");
+}
+
+void repeatedSeeksResumeFromTheRequestedPosition() {
+  constexpr uint32_t frames = 4800;
+  PlaybackFixture fixture(frames);
+  auto& state = fixture.audio().state;
+  fixture.wait([&] { return state.processedAtEnd.load(); },
+               "Source must finish decoding before repeated seeks");
+  for (int i = 0; i < 100; ++i) {
+    const bool seekToStart = i % 2 == 0;
+    fixture.seek(seekToStart ? 0 : frames / 2);
+    fixture.expectAudioSign(seekToStart);
+  }
+}
+
+void streamResetsKeepAudioClockInTheNewTimeline() {
+  StreamFixture fixture;
+  auto& state = fixture.state();
+  const std::vector<float> samples(1500, .5f);
+  for (int serial = 1; serial <= 10; ++serial) {
+    const uint64_t frame = static_cast<uint64_t>(serial) * 48000;
+    const int64_t ptsUs = static_cast<int64_t>(serial) * 1000000;
+    const uint64_t generation = queuedAudioSourceRequestStreamReset(
+        &state, serial, ptsUs, frame, true);
+    std::atomic<bool> done{false};
+    bool applied = false;
+    std::thread waiter([&] {
+      applied = queuedAudioSourceWaitForStreamReset(&state, generation);
+      done.store(true, std::memory_order_release);
+    });
+    const bool completed = fixture.pumpUntil(
+        [&] { return done.load(std::memory_order_acquire); });
+    if (!completed) queuedAudioSourceStopProcessing(&state);
+    waiter.join();
+    expect(completed && applied, "Stream reset must wake its waiting owner");
+    const AudioStreamReset reset = queuedAudioSourceLastAppliedStreamReset(&state);
+    expect(reset.generation == generation && reset.serial == serial &&
+               reset.framePosition == frame && reset.discardUntilUs == ptsUs,
+           "Stream reset must apply the requested timeline");
+
+    const uint64_t previousFramesRead = state.framesReadTotal.load();
+    uint64_t written = 0;
+    expect(queuedAudioSourceWrite(&state, samples.data(), samples.size(), ptsUs,
+                                  serial, false, false, &written) &&
+               written == samples.size(),
+           "New stream audio must enter the reset timeline");
+    expect(fixture.pumpUntil([&] {
+             return !audioPipelineTransitionActive(state.pipelineTransition) &&
+                    state.framesReadTotal.load() > previousFramesRead;
+           }), "New stream audio must resume after the reset");
+    expect(state.audioClock.serial.load() == serial &&
+               state.audioClockFrames.load() >= frame,
+           "Output audio clock must follow the new stream serial and position");
+  }
+}
+
+void decoderWakeRetainsAnEarlySignal() {
+  AudioDecoderWake wake;
+  wake.signal();
+  wake.wait();
+}
+
+void stopWithSeekAwaitingOutputCallback() {
+  PlaybackFixture fixture(4800);
+  auto& state = fixture.audio().state;
+  fixture.wait([&] { return state.processedAtEnd.load(); },
+               "Source must finish decoding before cancellation");
+  audioPlaybackRequestSeekFrame(fixture.audio(), 0);
+  // Do not pump the callback: shutdown must wake a decoder waiting for it.
+  queuedAudioSourceStopDecoderWorker(&state);
+  expect(!state.decodeThreadRunning.load(),
+         "Stopping must release a decoder waiting for the output callback");
+}
+
 }  // namespace
 
 int main() try {
   seekAndReplay();
   replayShorterThanPrimeBuffer();
+  supersededSeekUsesLatestTarget();
+  repeatedSeeksResumeFromTheRequestedPosition();
+  streamResetsKeepAudioClockInTheNewTimeline();
+  decoderWakeRetainsAnEarlySignal();
+  stopWithSeekAwaitingOutputCallback();
   std::cout << "audio_queued_replay_tests: buffered seek, repeated replay, "
-               "short source and shutdown passed\n";
+               "superseded seeks, stream resets and shutdown passed\n";
   return 0;
 } catch (const std::exception& error) {
   std::cerr << "audio_queued_replay_tests: " << error.what() << '\n';

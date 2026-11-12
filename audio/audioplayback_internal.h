@@ -15,6 +15,7 @@
 #include "core/runtime_defaults.h"
 #include "audition_worker.h"
 #include "clock.h"
+#include "decoder_wake.h"
 #include "ffmpegaudio.h"
 #include "gmeaudio.h"
 #include "gsfaudio.h"
@@ -62,6 +63,7 @@ struct AudioState {
   std::mutex audioQueueMutex;
   std::condition_variable audioQueueCv;
   std::condition_variable radioDspCv;
+  AudioDecoderWake decoderWake;
   std::atomic<bool> externalStream{false};
   std::atomic<bool> paused{false};
   std::atomic<bool> hold{false};

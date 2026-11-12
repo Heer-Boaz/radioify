@@ -7,6 +7,7 @@
 enum class AudioPipelineTransitionPhase : uint8_t {
   Idle,
   FadeOutRequested,
+  PublishingCommit,
   CommitReady,
   CommitInProgress,
 };

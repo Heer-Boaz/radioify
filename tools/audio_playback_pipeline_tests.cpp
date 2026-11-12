@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <iterator>
+#include <thread>
 #include <type_traits>
 #include <vector>
 
@@ -220,6 +221,64 @@ void expectSupersededDiscontinuityLeavesCommitInProgress() {
   audioPipelineTransitionRequestDiscontinuity(transition, 48000);
   if (audioPipelineTransitionCommitInProgress(transition)) {
     fail("Superseded discontinuity left the old commit writable.");
+  }
+}
+
+void expectCommitSeesPublishedRequest() {
+  constexpr uint32_t kIterations = 100000;
+  AudioPipelineTransition transition;
+  std::atomic<uint32_t> start{0}, fadeDone{0}, commitDone{0}, mismatches{0};
+  std::thread callback([&] {
+    for (uint32_t i = 1; i <= kIterations; ++i) {
+      while (start.load(std::memory_order_acquire) < i) {
+        std::this_thread::yield();
+      }
+      if (!audioPipelineTransitionBeginFadeOut(transition)) {
+        mismatches.fetch_add(1, std::memory_order_relaxed);
+      }
+      fadeDone.store(i, std::memory_order_release);
+    }
+  });
+  std::thread worker([&] {
+    for (uint32_t i = 1; i <= kIterations; ++i) {
+      while (start.load(std::memory_order_acquire) < i) {
+        std::this_thread::yield();
+      }
+      unsigned spins = 0;
+      while (!audioPipelineTransitionBeginCommit(transition)) {
+        if (fadeDone.load(std::memory_order_acquire) >= i &&
+            transition.phase.load(std::memory_order_acquire) !=
+                AudioPipelineTransitionPhase::CommitReady) {
+          mismatches.fetch_add(1, std::memory_order_relaxed);
+          break;
+        }
+        if (++spins == 256) {
+          spins = 0;
+          std::this_thread::yield();
+        }
+      }
+      if (transition.commitSerial.load(std::memory_order_acquire) !=
+          transition.requestSerial.load(std::memory_order_acquire)) {
+        mismatches.fetch_add(1, std::memory_order_relaxed);
+      }
+      commitDone.store(i, std::memory_order_release);
+    }
+  });
+  for (uint32_t i = 1; i <= kIterations; ++i) {
+    audioPipelineTransitionRequestDiscontinuity(transition, 48000);
+    start.store(i, std::memory_order_release);
+    while (fadeDone.load(std::memory_order_acquire) < i ||
+           commitDone.load(std::memory_order_acquire) < i) {
+      std::this_thread::yield();
+    }
+    if (!audioPipelineTransitionFinishCommit(transition)) {
+      mismatches.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+  callback.join();
+  worker.join();
+  if (mismatches.load(std::memory_order_relaxed) != 0) {
+    fail("Commit observed an unpublished discontinuity request.");
   }
 }
 
@@ -545,6 +604,7 @@ int main() {
   expectTailFadeBoundsStopStep();
   expectDiscontinuityTransitionPhases();
   expectSupersededDiscontinuityLeavesCommitInProgress();
+  expectCommitSeesPublishedRequest();
   expectSupersededDiscontinuityDoesNotClearNewRequest();
   expectDryWorkerClearsPendingInputFade();
   expectPlaybackSourcePrimingBudget();

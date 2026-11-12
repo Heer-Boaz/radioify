@@ -15,8 +15,12 @@ namespace {
 
 void stopM4aWorker(AudioPlaybackState& audio) {
   AudioState& state = audio.state;
-  state.m4aStop.store(true, std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(state.audioQueueMutex);
+    state.m4aStop.store(true, std::memory_order_release);
+  }
   state.audioQueueCv.notify_all();
+  state.decoderWake.signal();
   if (state.m4aThread.joinable()) {
     state.m4aThread.join();
   }
@@ -141,7 +145,8 @@ bool startM4aWorker(AudioPlaybackState& audio,
         bool seekCommitPending = false;
         uint64_t framePosition = localStart;
 
-        while (!state.m4aStop.load(std::memory_order_relaxed)) {
+        while (!state.m4aStop.load(std::memory_order_acquire) &&
+               state.streamQueueEnabled.load(std::memory_order_acquire)) {
           if (seekCommitPending &&
               !audioPipelineTransitionCommitInProgress(
                   state.pipelineTransition)) {
@@ -181,18 +186,15 @@ bool startM4aWorker(AudioPlaybackState& audio,
 
           if (!seekCommitPending &&
               audioPipelineTransitionActive(state.pipelineTransition)) {
-            std::unique_lock<std::mutex> lock(state.audioQueueMutex);
-            state.audioQueueCv.wait(lock, [&]() {
-              return state.m4aStop.load(std::memory_order_relaxed) ||
-                     !state.streamQueueEnabled.load(
-                         std::memory_order_relaxed) ||
-                     !audioPipelineTransitionActive(
-                         state.pipelineTransition) ||
-                     (state.seekRequested.load(std::memory_order_relaxed) &&
-                      state.pipelineTransition.phase.load(
-                          std::memory_order_acquire) ==
-                          AudioPipelineTransitionPhase::CommitReady);
-            });
+            while (!state.m4aStop.load(std::memory_order_acquire) &&
+                   state.streamQueueEnabled.load(std::memory_order_acquire) &&
+                   audioPipelineTransitionActive(state.pipelineTransition) &&
+                   !(state.seekRequested.load(std::memory_order_acquire) &&
+                     state.pipelineTransition.phase.load(
+                         std::memory_order_acquire) ==
+                         AudioPipelineTransitionPhase::CommitReady)) {
+              state.decoderWake.wait();
+            }
             continue;
           }
 
@@ -202,7 +204,11 @@ bool startM4aWorker(AudioPlaybackState& audio,
               return state.m4aStop.load(std::memory_order_relaxed) ||
                      !state.streamQueueEnabled.load(
                          std::memory_order_relaxed) ||
-                     state.seekRequested.load(std::memory_order_relaxed) ||
+                     (!seekCommitPending &&
+                      state.seekRequested.load(std::memory_order_relaxed)) ||
+                     (seekCommitPending &&
+                      !audioPipelineTransitionCommitInProgress(
+                          state.pipelineTransition)) ||
                      !state.sourceAtEnd.load(std::memory_order_relaxed);
             });
             continue;
@@ -228,7 +234,20 @@ bool startM4aWorker(AudioPlaybackState& audio,
           if (!decoder.readFrames(buffer.data(), framesToRead,
                                   &framesRead) ||
               framesRead == 0) {
-            state.sourceAtEnd.store(true, std::memory_order_relaxed);
+            {
+              std::lock_guard<std::mutex> lock(state.audioQueueMutex);
+              if (audioPipelineTransitionActive(state.pipelineTransition) &&
+                  (!seekCommitPending ||
+                   !audioPipelineTransitionCommitInProgress(
+                       state.pipelineTransition) ||
+                   state.pipelineTransition.commitSerial.load(
+                       std::memory_order_acquire) !=
+                       state.pipelineTransition.requestSerial.load(
+                           std::memory_order_acquire))) {
+                continue;
+              }
+              state.sourceAtEnd.store(true, std::memory_order_relaxed);
+            }
             state.radioDspCv.notify_all();
             continue;
           }

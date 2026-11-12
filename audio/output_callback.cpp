@@ -103,6 +103,7 @@ void dataCallback(ma_device* device, void* output, const void*,
     if (audioPipelineTransitionBeginFadeOut(state->pipelineTransition)) {
       state->audioQueueCv.notify_all();
       state->radioDspCv.notify_all();
+      state->decoderWake.signal();
     }
     state->pausedCallbacks.fetch_add(1, std::memory_order_relaxed);
     outputSilence(state, out, frameCount);
@@ -204,6 +205,7 @@ void dataCallback(ma_device* device, void* output, const void*,
     state->lastFramesRead.store(0, std::memory_order_relaxed);
     state->audioQueueCv.notify_all();
     state->radioDspCv.notify_all();
+    state->decoderWake.signal();
   } else if (framesRead > 0) {
     if (wasStarved) {
       audioPipelineTransitionRequestOutputFadeIn(state->pipelineTransition,
