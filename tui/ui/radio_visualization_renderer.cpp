@@ -59,13 +59,8 @@ void Renderer::draw(ConsoleScreen& screen, int top, int height, int width,
   if (height > 1) screen.writeText(0, top+1, fitLine(statusText(presentation.status), width), dim);
   const double cellW = screen.cellPixelWidth() > 0 ? screen.cellPixelWidth() : 8.0;
   const double cellH = screen.cellPixelHeight() > 0 ? screen.cellPixelHeight() : 16.0;
-  drawCircuit(screen, top + 2, height - 3, width, cellW, cellH, levels,
+  drawCircuit(screen, top + 2, height - 2, width, cellW, cellH, levels,
               presentation.showCircuit);
-  if (height > 2) {
-    screen.writeText(0, top+height-1,
-        fitLine(" Antenna > converter > IF > detector/audio > output > speaker  |  supply below", width),
-        dim);
-  }
 }
 
 void Renderer::drawCompact(ConsoleScreen& screen, int top, int height, int width,
