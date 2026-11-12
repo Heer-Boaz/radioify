@@ -864,7 +864,8 @@ struct Radio1938 {
                       float receivedCarrierRmsVolts,
                       float modulationIndex,
                       const RadioAmReceptionSample* receptionSamples = nullptr,
-                      float* terminalVolts = nullptr);
+                      float* terminalVolts = nullptr,
+                      RadioCircuitAccumulator* observation = nullptr);
   void processIqBaseband(const float* iqInterleaved,
                          float* outSamples,
                          uint32_t frames);

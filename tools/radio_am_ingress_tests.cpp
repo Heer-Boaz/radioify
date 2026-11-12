@@ -660,10 +660,9 @@ void expectPreviewUsesRequestedAudioBandwidthOnce() {
     fail("Transmitter bandwidth still follows receiver selectivity");
 }
 
-// The 110A and the transmitter alone: no operator riding, no network line.
+// The 110A and the transmitter alone, without the network line.
 RadioAmIngressConfig makeStationOnlyConfig() {
   RadioAmIngressConfig ingress;
-  ingress.broadcastSource.levelRidingEnabled = false;
   ingress.broadcastSource.programLineHighHz = 0.0f;
   return ingress;
 }
@@ -839,16 +838,15 @@ float broadcastSourceSineAmplitude(const RadioAmIngressConfig& ingress, float hz
   return static_cast<float>(2.0 * std::hypot(re, im) / tail);
 }
 
-RadioAmIngressConfig makeSourceStageConfig(bool riding, bool line) {
+RadioAmIngressConfig makeSourceStageConfig(bool line) {
   RadioAmIngressConfig ingress = makeIsolatedBroadcastSourceConfig();
   ingress.broadcastSource.compressionEnabled = false;
-  ingress.broadcastSource.levelRidingEnabled = riding;
   if (line) ingress.broadcastSource.programLineHighHz = 8000.0f;
   return ingress;
 }
 
 void expectNetworkProgramLine() {
-  const auto ingress = makeSourceStageConfig(false, true);
+  const auto ingress = makeSourceStageConfig(true);
   const auto db = [&](float hz) {
     return 20.0f * std::log10(broadcastSourceSineAmplitude(ingress, hz, 0.5f, 1.5f) / 0.5f);
   };
@@ -859,36 +857,6 @@ void expectNetworkProgramLine() {
   if (std::fabs(mid) > 0.1f || std::fabs(edge + 3.0f) > 0.5f || above > -15.0f ||
       std::fabs(low + 3.0f) > 0.5f)
     fail("Network programme line is not the 50-8000 cycle wide-band circuit");
-}
-
-void expectOperatorRidesToTheLimiter() {
-  const auto ingress = makeSourceStageConfig(true, false);
-  const float threshold = ingress.broadcastSource.compressionThresholdModulation /
-                          ingress.modulationIndex;
-  // A quiet and a loud programme both reach the limiter threshold, within the
-  // operator's 20 dB of boost and 12 dB of cut.
-  for (float amplitude : {0.2f, 0.94f, 2.0f}) {
-    const float output = broadcastSourceSineAmplitude(ingress, 1000.0f, amplitude, 6.0f);
-    if (std::fabs(output - threshold) > 0.02f * threshold)
-      fail("Operator did not ride a " + std::to_string(amplitude) +
-           " programme to the limiter; output=" + std::to_string(output));
-  }
-  // Below the gate (a pause) the gain holds.
-  Radio1938 radio;
-  radio.init(1, kSampleRate, kBandwidthHz, 0.0f);
-  RadioPreviewPipeline preview;
-  preview.initialize(radio, ingress, RadioPreviewConfig{}, kSampleRate);
-  RadioPreviewSampleContext ctx{};
-  for (uint32_t i = 0; i < 3u * 48000u; ++i)
-    RadioPreviewBroadcastSourceNode::run(
-        preview, 0.3f * std::sin(0.13f * static_cast<float>(i)), ctx);
-  const float held = preview.levelRidingGain;
-  for (uint32_t i = 0; i < 5u * 48000u; ++i)
-    RadioPreviewBroadcastSourceNode::run(preview, 0.0f, ctx);
-  // Within 0.1 dB: the 50 ms meter needs about 0.1 s to recognise the pause.
-  if (std::fabs(preview.levelRidingGain / held - 1.0f) > 0.012f)
-    fail("Operator raised the gain during a pause; " + std::to_string(held) + " -> " +
-         std::to_string(preview.levelRidingGain));
 }
 
 void expectBroadcastNoiseIsBroadbandWithoutWhistle() {
@@ -1114,7 +1082,6 @@ int main() {
   expectBroadcastCompressionTiming();
   expectBroadcastCompressionSlope();
   expectNetworkProgramLine();
-  expectOperatorRidesToTheLimiter();
   expectBroadcastNonlinearityNearOnePercentThd();
   expectBroadcastNoiseIsBroadbandWithoutWhistle();
   expectPreviewSourceAndReceptionAreBlockInvariant();

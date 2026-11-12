@@ -16,6 +16,7 @@
 #include "kssoptions.h"
 #include "nsfoptions.h"
 #include "radio_filter_mode.h"
+#include "radio_visualization.h"
 #include "stream_reset.h"
 #include "vgmoptions.h"
 
@@ -112,6 +113,8 @@ class AudioPlaybackRuntime final : public audio_playback::Session {
   void toggle50Hz();
   void adjustVolume(float delta);
   RadioFilterMode radioFilterMode() const;
+  void setRadioVisualizationEnabled(bool enabled);
+  bool radioVisualization(RadioPlaybackObservation& observation) const;
   bool radioEnabled() const;
   bool supports50HzToggle() const;
   std::string warning() const;

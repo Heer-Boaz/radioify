@@ -21,6 +21,7 @@ struct Input {
   bool playbackTargetAvailable = false;
   bool audioPictureInPictureOpen = false;
   bool melodyVisualizationActive = false;
+  bool radioVisualizationActive = false;
   bool transportUiEnabled = false;
   bool optionsModeActive = false;
   bool selectedEntryHasOptions = false;

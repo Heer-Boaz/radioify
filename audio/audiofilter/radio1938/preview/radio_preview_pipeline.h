@@ -15,6 +15,7 @@
 #include <vector>
 
 struct Radio1938;
+class RadioCircuitAccumulator;
 
 enum class RadioPreviewPassId : uint8_t {
   Warmup,
@@ -149,15 +150,6 @@ struct RadioPreviewPipeline {
   Biquad programHp;
   Biquad programLp;
   IQFirLowpass programImageReject;
-  float levelRidingEnvelope = 0.0f;
-  float levelRidingFastEnvelope = 0.0f;
-  float levelRidingFastCoefficient = 0.0f;
-  float levelRidingGain = 1.0f;
-  uint32_t levelRidingSettingFrames = 0;
-  float levelRidingEnvelopeCoefficient = 0.0f;
-  float levelRidingRaiseCoefficient = 0.0f;
-  float levelRidingLowerCoefficient = 0.0f;
-  float levelRidingSettingCoefficient = 0.0f;
   bool programLineEnabled = false;
   Biquad programLineHp;
   std::array<Biquad, 4> programLineLp;
@@ -184,7 +176,8 @@ struct RadioPreviewPipeline {
   void runBlock(Radio1938& radioRef,
                 float* samples,
                 uint32_t frames,
-                uint32_t channels);
+                uint32_t channels,
+                RadioCircuitAccumulator* observation = nullptr);
 };
 
 #endif  // RADIOIFY_AUDIOFILTER_RADIO1938_PREVIEW_RADIO_PREVIEW_PIPELINE_H

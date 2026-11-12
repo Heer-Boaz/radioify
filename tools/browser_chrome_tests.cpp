@@ -61,6 +61,7 @@ int main() {
                "an open audio picture-in-picture must be visible as active");
   ok &= expect(findItem(audio, ActionStripItem::Hz50) &&
                    findItem(audio, ActionStripItem::PitchMonitor) &&
+                   findItem(audio, ActionStripItem::RadioVisualization) &&
                    findItem(audio, ActionStripItem::Options),
                "audio capabilities and browser state must project to actions");
 
@@ -90,6 +91,8 @@ int main() {
                "video PiP presentation state must drive the shared action");
   ok &= expect(!findItem(video, ActionStripItem::PitchMonitor),
                "pitch monitoring must not be offered for video playback");
+  ok &= expect(!findItem(video, ActionStripItem::RadioVisualization),
+               "radio visualization must not be offered for video playback");
   ok &= expect(video.footer.actionStripLines > 1 &&
                    video.footer.reservedLines > 3,
                "narrow chrome must reserve every wrapped action row");
@@ -104,6 +107,13 @@ int main() {
                    !findItem(melody, ActionStripItem::View) &&
                    !findItem(melody, ActionStripItem::Options),
                "full-screen melody visualization must suppress browser chrome");
+
+  audioInput.radioVisualizationActive = true;
+  const browser_chrome::Model radio = browser_chrome::build(audioInput);
+  const auto* radioAction = findItem(radio, ActionStripItem::RadioVisualization);
+  ok &= expect(radioAction && radioAction->active && !radio.footer.showMeta &&
+                   !findItem(radio, ActionStripItem::View),
+               "radio visualization must retain its close action and hide browser controls");
 
   return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

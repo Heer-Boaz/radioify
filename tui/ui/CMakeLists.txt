@@ -30,6 +30,10 @@ radioify_add_module_object_library(radioify_ui
   ${CMAKE_CURRENT_SOURCE_DIR}/media_task_presentation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/melody_visualization.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/melody_visualization_renderer.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio_visualization_renderer.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio_visualization_frame_renderer.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio_visualization_model.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/radio_visualization_scene.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/optionsbrowser.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/optionsbrowser_target.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/playback_presentation.cpp

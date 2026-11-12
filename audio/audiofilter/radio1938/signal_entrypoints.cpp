@@ -3,6 +3,7 @@
 #include "audio_pipeline_execution.h"
 #include "radio_am_ingress.h"
 #include "radio_buffer_io.h"
+#include "radio_circuit_observation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -29,7 +30,9 @@ void Radio1938::processAmAudio(const float* audioSamples,
                                float receivedCarrierRmsVolts,
                                float modulationIndex,
                                const RadioAmReceptionSample* receptionSamples,
-                               float* terminalVolts) {
+                               float* terminalVolts,
+                               RadioCircuitAccumulator* observation) {
+  if (observation) observation->reset();
   if (!audioSamples || !outSamples || frames == 0 || graph.bypass) return;
 
   auto& rfScratch = iqInput.rfScratch;
@@ -76,6 +79,7 @@ void Radio1938::processAmAudio(const float* audioSamples,
   for (uint32_t frame = 0; frame < frames; ++frame) {
     RadioSampleContext ctx{};
     ctx.block = &block;
+    ctx.observation = observation;
     float x = rf[frame];
     ctx.signal.setRealRf(x);
     float y = runRadioPipelineSample(*this, x, ctx, PassId::Input);

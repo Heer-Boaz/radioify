@@ -42,7 +42,7 @@ static void showUsage(const char *exe) {
   logLine("               Select the physical receiver, amplifier, speaker and "
           "cabinet");
   logLine("  --radio-reception <everyday-1938|strong-local|night-skywave>");
-  logLine("               Select the AM reception environment");
+  logLine("               Select the AM reception environment (default everyday-1938)"); // Stomme instelling!! Moet configurabel izjn in de app!
   logLine("  --dry        Bypass radio processing for render/playback");
   logLine("  --no-ascii   Disable ASCII video rendering");
   logLine("  --no-audio   Disable audio playback");

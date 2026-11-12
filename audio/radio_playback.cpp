@@ -104,14 +104,17 @@ void RadioPlaybackFilter::process(
     float* samples,
     uint32_t frames,
     uint32_t channels,
-    AudioPipelineTransition& pipelineTransition) {
+    AudioPipelineTransition& pipelineTransition,
+    RadioVisualBatch* visualBatch) {
   assert(sampleRate_ > 0 && samples && frames > 0 && channels > 0);
+  if (visualBatch) visualBatch->segments.clear();
   bool receiverChanged = transition_.retarget(mode());
   receiverChanged = transition_.commitAtDryBoundary() || receiverChanged;
 
   const uint64_t resetGeneration =
       resetGeneration_.load(std::memory_order_acquire);
   if (!transition_.needsWetSignal()) {
+    if (visualBatch) visualBatch->append(0, frames, {});
     appliedResetGeneration_ = resetGeneration;
     audioPipelineTransitionClearInputFadeIn(pipelineTransition);
     return;
@@ -127,6 +130,7 @@ void RadioPlaybackFilter::process(
       resetReceiver(transition_.activeMode());
     }
     if (!transition_.needsWetSignal()) {
+      if (visualBatch) visualBatch->append(frameOffset, frames - frameOffset, {});
       audioPipelineTransitionClearInputFadeIn(pipelineTransition);
       break;
     }
@@ -152,7 +156,20 @@ void RadioPlaybackFilter::process(
     }
 
     Receiver& receiver = receiverFor(transition_.activeMode());
-    receiver.preview.runBlock(receiver.radio, block, blockFrames, channels);
+    const bool observe = visualBatch &&
+        transition_.activeMode() == RadioFilterMode::Typical1930s;
+    RadioCircuitAccumulator observation;
+    receiver.preview.runBlock(receiver.radio, block, blockFrames, channels,
+                              observe ? &observation : nullptr);
+    if (visualBatch) {
+      RadioPlaybackObservation captured;
+      captured.mode = transition_.activeMode();
+      if (observe) {
+        captured.circuit = observation.result(
+            receiver.radio.powerSupply.mainReferenceVolts);
+      }
+      visualBatch->append(frameOffset, blockFrames, captured);
+    }
     if (blending) {
       transition_.blend(block, dryScratch_.data(), blockFrames, channels,
                         sampleRate_);

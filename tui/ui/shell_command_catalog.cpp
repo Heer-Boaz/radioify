@@ -68,7 +68,16 @@ Catalog build(const Context& context) {
                 PlaybackAction::TogglePitchMonitor);
   }
 
-  if (!context.pitchMonitorActive) {
+  if (!context.videoActive &&
+      (context.radioVisualizationActive || context.audioAvailable)) {
+    catalog.add(context.radioVisualizationActive ? "Hide Inside Radio"
+                                                 : "Show Inside Radio",
+                browserShortcutLabel(
+                    browser_input::KeyAction::ToggleRadioVisualization),
+                PlaybackAction::ToggleRadioVisualization);
+  }
+
+  if (!context.pitchMonitorActive && !context.radioVisualizationActive) {
     const std::string viewShortcut =
         browserShortcutLabel(browser_input::KeyAction::CycleView);
     catalog.add("View: Grid", viewShortcut,

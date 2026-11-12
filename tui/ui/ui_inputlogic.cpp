@@ -271,6 +271,11 @@ class BrowserInputController {
                                PlaybackAction::TogglePitchMonitor);
         result.dirty = true;
         return;
+      case KeyAction::ToggleRadioVisualization:
+        publishPlaybackCommand(result.commands,
+                               PlaybackAction::ToggleRadioVisualization);
+        result.dirty = true;
+        return;
       case KeyAction::ToggleSortDirection:
         browser.sortDescending = !browser.sortDescending;
         navigator.reload();
@@ -620,6 +625,10 @@ class BrowserInputController {
       case ActionStripItem::PitchMonitor:
         publishPlaybackCommand(result.commands,
                                PlaybackAction::TogglePitchMonitor);
+        break;
+      case ActionStripItem::RadioVisualization:
+        publishPlaybackCommand(result.commands,
+                               PlaybackAction::ToggleRadioVisualization);
         break;
       case ActionStripItem::View:
         browser.viewMode = nextViewMode(browser.viewMode);

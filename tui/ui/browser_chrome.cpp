@@ -54,7 +54,7 @@ Model build(const Input& input) {
   const bool videoActive = input.playback && input.playback->isVideo;
   const bool audioTargetAvailable = input.audio.source.has_value();
   const bool browserInteractionEnabled =
-      !input.melodyVisualizationActive;
+      !input.melodyVisualizationActive && !input.radioVisualizationActive;
 
   browser_action_strip::Input actionInput;
   actionInput.playback = playbackStateFor(input);
@@ -62,6 +62,10 @@ Model build(const Input& input) {
       !videoActive && (input.melodyVisualizationActive || input.audio.ready ||
                        audioTargetAvailable);
   actionInput.pitchMonitorActive = input.melodyVisualizationActive;
+  actionInput.radioVisualizationAvailable =
+      !videoActive && (input.radioVisualizationActive || input.audio.ready ||
+                       audioTargetAvailable);
+  actionInput.radioVisualizationActive = input.radioVisualizationActive;
   actionInput.browserControlsAvailable = browserInteractionEnabled;
   actionInput.viewMode = input.viewMode;
   actionInput.optionsAvailable =

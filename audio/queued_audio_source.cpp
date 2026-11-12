@@ -67,6 +67,7 @@ void resetQueuedTransport(AudioState* state,
                           int serial,
                           int64_t discardUntilUs,
                           bool resetPlaybackPosition) {
+  state->radioVisualization.reset();
   {
     std::lock_guard<std::mutex> queueLock(state->audioQueueMutex);
     state->decodedAudio.discardBufferedFrames();
@@ -236,6 +237,8 @@ void radioDspMain(AudioState* state,
                   uint32_t primeFrames) {
   std::vector<float> scratch(
       static_cast<size_t>(kRadioDspChunkFrames) * state->channels);
+  RadioVisualBatch visualBatch;
+  visualBatch.segments.reserve(4);
   ProcessingCommit processingCommit = ProcessingCommit::None;
 
   while (!state->radioDspStop.load(std::memory_order_relaxed)) {
@@ -318,17 +321,33 @@ void radioDspMain(AudioState* state,
       continue;
     }
 
+    const bool observe = state->radioVisualization.enabled();
+    const uint64_t observationGeneration = state->radioVisualization.generation();
+    visualBatch.segments.clear();
     if (!state->dry) {
       state->radioFilter.process(scratch.data(),
                                  static_cast<uint32_t>(read),
                                  state->channels,
-                                 state->pipelineTransition);
+                                 state->pipelineTransition,
+                                 observe ? &visualBatch : nullptr);
+    } else if (observe) {
+      visualBatch.append(0, static_cast<uint32_t>(read), {});
     }
     if (sourceResetIsPending(state) || streamResetCanBegin(state) ||
         state->radioDspStop.load(std::memory_order_relaxed)) {
       continue;
     }
 
+    if (observe && state->radioVisualization.enabled() &&
+        observationGeneration == state->radioVisualization.generation()) {
+      const uint64_t outputPosition = state->processedAudio.writePosition();
+      for (const auto& segment : visualBatch.segments) {
+        const uint64_t start = outputPosition + segment.offset;
+        state->radioVisualization.publish(observationGeneration, start,
+                                          start + segment.frames, segment.observation,
+                                          std::max(1u, state->sampleRate / 100u));
+      }
+    }
     publishProcessedAudio(state, scratch.data(), inputPosition, read);
     state->processedAtEnd.store(false, std::memory_order_relaxed);
     state->audioQueueCv.notify_all();

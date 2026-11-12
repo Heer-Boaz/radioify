@@ -76,6 +76,7 @@ enum class PlaybackAction : uint8_t {
   ToggleAudioTrack,
   ToggleOptions,
   TogglePitchMonitor,
+  ToggleRadioVisualization,
   SeekBackward,
   SeekForward,
   PreviousFrame,

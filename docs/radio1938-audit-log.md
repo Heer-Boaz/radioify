@@ -5,6 +5,30 @@ model, newest first. The model as it stands is described in the
 [realism audit](radio1938-realism-audit.md). Statements in older entries
 describe the model of their date; later entries say what they supersede.
 
+## Studio operator removed, 2026-11-09
+
+The level rider of the next entry is removed. It had been added so quiet
+recordings would modulate the transmitter as deeply as a station operator
+made them, but it worked as an automatic gain control: reacting after the
+fact with a 1.5 s peak follower and a 4 s rise, it flattened the dynamics
+inside each piece (a 9 dB crescendo lost about 8 dB; loudness range fell
+from 7.5 to 5.1 and 3.7 LU), which an operator who knew the score did not
+do. Loudness itself is the listener's volume knob, not a realism
+requirement; what matters is modulation depth, and for the modern masters
+this is mostly played with, peaking near full scale, the fixed mapping (full
+scale is 85% modulation) is already right. A per-programme level set from
+the whole track remains possible if quiet recordings prove too noisy.
+
+The network line and the room protection stay. Makeup returns to a match
+with the unfiltered path: 2.88 (38-12) and 3.14 (Philco), median difference
+0 dB, -2.3..+2.2 and -3.5..+2.5 dB per track; loudness range 8.7 and
+7.7 LU against the source's 7.5. On the hottest master the limiter reduces
+gain 0.1-0.5 dB on average. The programme test's floors return to Philco
+12 / 18 / 15 dB and 38-12 20 / 21 / 18 dB (measured 16.1 / 21.7 / 19.7 and
+24.8 / 25.8 / 22.5; the former Philco knob 7.7 / 13.8 / 13.6). On the real
+tracks: linear-to-residual 15 and 10 dB, programme to silence 29 dB, speech
+transmission index 0.88 and 0.75.
+
 ## Studio operator, network line and room protection, 2026-11-09
 
 **The transmitter was modulated by the file's level.** Full digital scale

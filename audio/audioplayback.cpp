@@ -520,6 +520,25 @@ RadioFilterMode AudioPlaybackRuntime::radioFilterMode() const {
   return audioGetRadioFilterMode(*state_);
 }
 
+void AudioPlaybackRuntime::setRadioVisualizationEnabled(bool enabled) {
+  state_->state.radioVisualization.setEnabled(enabled);
+}
+
+bool AudioPlaybackRuntime::radioVisualization(
+    RadioPlaybackObservation& observation) const {
+  const AudioState& audio = state_->state;
+  if (!audio.radioVisualization.enabled() ||
+      !audio.streamQueueEnabled.load(std::memory_order_acquire) ||
+      audio.seekRequested.load(std::memory_order_acquire)) return false;
+  const uint64_t generation = audio.radioVisualization.generation();
+  const uint64_t read = audio.processedAudio.readPosition();
+  const uint64_t delay = audio.deviceDelayFrames.load(std::memory_order_relaxed);
+  if (read <= delay) return false;
+  const bool found = audio.radioVisualization.at(generation, read - delay - 1,
+                                                  observation);
+  return found && generation == audio.radioVisualization.generation();
+}
+
 bool AudioPlaybackRuntime::radioEnabled() const {
   return audioIsRadioEnabled(*state_);
 }

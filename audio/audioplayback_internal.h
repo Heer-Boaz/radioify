@@ -46,6 +46,7 @@ struct AudioState {
   MidiAudioDecoder midi{};
   ma_device device{};
   RadioPlaybackFilter radioFilter;
+  RadioVisualTimeline radioVisualization;
   std::thread m4aThread;
   bool m4aInitDone = false;
   bool m4aInitOk = false;

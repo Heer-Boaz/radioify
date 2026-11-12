@@ -10,6 +10,10 @@
 #include <utility>
 #include <vector>
 
+// Ceiling of the playback look-ahead limiters (receiver and room), with a
+// margin for float rounding.
+constexpr float kPlaybackCeiling = 0.975f;
+
 namespace {
 
 void fail(const char* message) {
@@ -202,7 +206,9 @@ void expectProgramHeadroom(const char* name, std::vector<float> program,
   const float peak = runPlaybackPeak(std::move(program), mode);
   std::cout << "playback_headroom," << static_cast<int>(mode) << ',' << name
             << ',' << peak << '\n';
-  if (peak > 0.95f) {
+  // The playback limiters hold true peaks at 0.97 of full scale; a steady
+  // full-scale tone may sit at that ceiling but not beyond it.
+  if (peak > kPlaybackCeiling) {
     std::cerr << "radio_receiver_profile_tests: " << name
               << " exhausted digital headroom; peak=" << peak << '\n';
     std::exit(1);
@@ -242,7 +248,7 @@ void expectPlaybackKeepsAcousticPeakHeadroom() {
       const float peak = runPlaybackPeak(std::move(sine), mode);
       std::cout << "playback_headroom," << static_cast<int>(mode) << ','
                 << hz << ',' << peak << '\n';
-      if (peak > 0.95f) fail("acoustic response peak exhausted digital headroom");
+      if (peak > kPlaybackCeiling) fail("acoustic response peak exhausted digital headroom");
       strongestPeak = std::max(strongestPeak, peak);
     }
     // Steady-state peak: the receiver starts settled on the carrier, so no
@@ -288,10 +294,6 @@ NoiseProbe measurePlaybackNoise(RadioReceiverProfile profile,
   ingress.reception = radioReceptionConfigForProfile(reception);
   ingress.reception.externalNoiseEnabled = all || source == NoiseSource::External;
   ingress.broadcastSource.noiseEnabled = all || source == NoiseSource::Broadcast;
-  // Keep the tone at its 42.5% modulation. The operator would ride it to the
-  // limiter, where the 38-12 on a strong local carrier overloads and the tone
-  // no longer measures the noise ratio.
-  ingress.broadcastSource.levelRidingEnabled = false;
   RadioPreviewPipeline preview;
   preview.initialize(radio, ingress, RadioPreviewConfig{}, kRate);
   std::vector<float> samples(kFrames, 0.0f);

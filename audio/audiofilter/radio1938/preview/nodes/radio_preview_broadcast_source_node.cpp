@@ -95,44 +95,6 @@ float applyCompression(RadioPreviewPipeline& preview,
   return sample * preview.broadcastGain;
 }
 
-// While the operator first sets the level (the first half second of audible
-// programme) the gain rises in 0.1 s rather than over seconds.
-constexpr float kLevelSettingSeconds = 0.5f;
-constexpr float kLevelSettingRaiseSeconds = 0.1f;
-
-float rideLevel(RadioPreviewPipeline& preview,
-                const RadioBroadcastSourceConfig& config, float sample) {
-  preview.levelRidingEnvelope =
-      std::max(std::fabs(sample),
-               preview.levelRidingEnvelopeCoefficient * preview.levelRidingEnvelope);
-  preview.levelRidingFastEnvelope =
-      std::max(std::fabs(sample),
-               preview.levelRidingFastCoefficient * preview.levelRidingFastEnvelope);
-  // A pause or a dying tail (the meter far below the recent peaks, or below
-  // the gate) leaves the operator's hand still.
-  const bool programme =
-      preview.levelRidingFastEnvelope > db2lin(config.levelRidingGateDbfs) &&
-      preview.levelRidingFastEnvelope > db2lin(-20.0f) * preview.levelRidingEnvelope;
-  if (programme) {
-    const float target =
-        config.compressionThresholdModulation / preview.ingress->modulationIndex;
-    const float desired =
-        std::clamp(target / preview.levelRidingEnvelope,
-                   db2lin(-config.levelRidingMaxCutDb),
-                   db2lin(config.levelRidingMaxBoostDb));
-    float coefficient = preview.levelRidingLowerCoefficient;
-    if (desired > preview.levelRidingGain) {
-      coefficient = preview.levelRidingSettingFrames > 0
-                        ? preview.levelRidingSettingCoefficient
-                        : preview.levelRidingRaiseCoefficient;
-    }
-    if (preview.levelRidingSettingFrames > 0) --preview.levelRidingSettingFrames;
-    preview.levelRidingGain =
-        desired + coefficient * (preview.levelRidingGain - desired);
-  }
-  return sample * preview.levelRidingGain;
-}
-
 float runProgramLine(RadioPreviewPipeline& preview, float sample) {
   sample = preview.programLineHp.process(sample);
   for (auto& section : preview.programLineLp) sample = section.process(sample);
@@ -146,17 +108,6 @@ void RadioPreviewBroadcastSourceNode::init(RadioPreviewPipeline& preview,
   assert(preview.ingress);
   const auto& config = preview.ingress->broadcastSource;
   const float sampleRate = requirePositiveFinite(preview.sampleRate);
-  if (config.levelRidingEnabled) {
-    preview.levelRidingEnvelopeCoefficient =
-        envelopeCoefficient(sampleRate, 1000.0f * config.levelRidingPeakReleaseSeconds);
-    preview.levelRidingFastCoefficient = envelopeCoefficient(sampleRate, 50.0f);
-    preview.levelRidingRaiseCoefficient =
-        envelopeCoefficient(sampleRate, 1000.0f * config.levelRidingRaiseSeconds);
-    preview.levelRidingLowerCoefficient =
-        envelopeCoefficient(sampleRate, 1000.0f * config.levelRidingLowerSeconds);
-    preview.levelRidingSettingCoefficient =
-        envelopeCoefficient(sampleRate, 1000.0f * kLevelSettingRaiseSeconds);
-  }
   // Eighth-order Butterworth top edge: the line's loading and the filters
   // separating it from carrier channels above cut off sharply.
   preview.programLineEnabled = config.programLineHighHz > 0.0f &&
@@ -208,11 +159,6 @@ void RadioPreviewBroadcastSourceNode::reset(RadioPreviewPipeline& preview) {
   assert(preview.ingress);
   preview.broadcastEnvelope = 0.0f;
   preview.broadcastGain = 1.0f;
-  preview.levelRidingEnvelope = 0.0f;
-  preview.levelRidingFastEnvelope = 0.0f;
-  preview.levelRidingGain = 1.0f;
-  preview.levelRidingSettingFrames = static_cast<uint32_t>(
-      kLevelSettingSeconds * std::max(preview.sampleRate, 1.0f));
   preview.programLineHp.reset();
   for (auto& section : preview.programLineLp) section.reset();
   preview.broadcastNoiseState = preview.ingress->broadcastSource.noiseSeed;
@@ -225,9 +171,6 @@ float RadioPreviewBroadcastSourceNode::run(RadioPreviewPipeline& preview,
   const auto& config = preview.ingress->broadcastSource;
   if (!config.enabled) return y;
 
-  if (config.levelRidingEnabled) {
-    y = rideLevel(preview, config, y);
-  }
   if (preview.programLineEnabled) {
     y = runProgramLine(preview, y);
   }

@@ -72,6 +72,7 @@
 #include "media_task_presentation.h"
 #include "melody_visualization.h"
 #include "melody_visualization_renderer.h"
+#include "radio_visualization_renderer.h"
 #include "miniaudio.h"
 #include "mouse_double_click_tracker.h"
 #include "optionsbrowser.h"
@@ -518,6 +519,8 @@ int runTui(Options o, ApplicationRuntime &runtime) {
   BreadcrumbLine breadcrumbLine;
   bool didRender = false;
   tui_melody_visualization::Model melodyVisualization;
+  bool radioVisualizationActive = false;
+  tui_radio_visualization::Renderer radioVisualizationRenderer(gpu);
   const tui_melody_visualization::Styles melodyVisualizationStyles =
       theme.pitchMonitorStyles();
   std::vector<ScreenCell> windowCells;
@@ -804,6 +807,7 @@ int runTui(Options o, ApplicationRuntime &runtime) {
         presentation.currentTarget.has_value();
     chromeInput.audioPictureInPictureOpen = audioPictureInPicture.isOpen();
     chromeInput.melodyVisualizationActive = melodyVisualization.active();
+    chromeInput.radioVisualizationActive = radioVisualizationActive;
     chromeInput.transportUiEnabled = o.play;
     chromeInput.optionsModeActive = optionsBrowserIsActive(browser);
     chromeInput.selectedEntryHasOptions = selectedOptionsSubject().has_value();
@@ -829,7 +833,8 @@ int runTui(Options o, ApplicationRuntime &runtime) {
       screenSizeDirty = false;
     }
     browserChrome = buildBrowserChrome();
-    const bool browserInteractionEnabled = !melodyVisualization.active();
+    const bool browserInteractionEnabled =
+        !melodyVisualization.active() && !radioVisualizationActive;
     const bool showHeaderLabel =
         browserInteractionEnabled &&
         (optionsBrowserIsActive(browser) || isTrackBrowserActive(browser));
@@ -922,6 +927,25 @@ int runTui(Options o, ApplicationRuntime &runtime) {
     }
     const bool active = melodyVisualization.toggle();
     if (active) {
+      radioVisualizationActive = false;
+      audioPlayback.setRadioVisualizationEnabled(false);
+      dirty = setBrowserSearchFocus(browser, BrowserSearchFocus::None) || dirty;
+      browserInteraction.breadcrumbHover = -1;
+      browserInteraction.actionHover = -1;
+    }
+    shellDialogs.dismissOverlays();
+    markLayoutDirty();
+  };
+  auto toggleRadioVisualization = [&]() {
+    const PlaybackPresentationModel presentation = playbackPresenter.model();
+    const AudioPlaybackSnapshot &audio = presentation.audio;
+    if (!radioVisualizationActive &&
+        ((presentation.control && presentation.control->isVideo) ||
+         (!audio.source && !audio.ready))) return;
+    radioVisualizationActive = !radioVisualizationActive;
+    audioPlayback.setRadioVisualizationEnabled(radioVisualizationActive);
+    if (radioVisualizationActive) {
+      melodyVisualization.setActive(false);
       dirty = setBrowserSearchFocus(browser, BrowserSearchFocus::None) || dirty;
       browserInteraction.breadcrumbHover = -1;
       browserInteraction.actionHover = -1;
@@ -1010,6 +1034,9 @@ int runTui(Options o, ApplicationRuntime &runtime) {
       break;
     case PlaybackAction::TogglePitchMonitor:
       togglePitchMonitor();
+      break;
+    case PlaybackAction::ToggleRadioVisualization:
+      toggleRadioVisualization();
       break;
     case PlaybackAction::SeekBackward:
       audioPlayback.seekBy(-1);
@@ -1214,6 +1241,7 @@ int runTui(Options o, ApplicationRuntime &runtime) {
     context.pictureInPictureOpen = audioPictureInPicture.isOpen();
     context.supports50Hz = audio.supports50HzToggle;
     context.pitchMonitorActive = melodyVisualization.active();
+    context.radioVisualizationActive = radioVisualizationActive;
     context.optionsAvailable =
         optionsBrowserIsActive(browser) || selectedOptionsSubject().has_value();
     context.currentTargetAvailable = presentation.currentTarget.has_value();
@@ -1477,6 +1505,14 @@ int runTui(Options o, ApplicationRuntime &runtime) {
     TuiMediaCoordinator::PollResult mediaUpdate = mediaCoordinator.poll();
     for (TuiMediaCoordinator::Event &event : mediaUpdate.events) {
       handleMediaCoordinatorEvent(std::move(event));
+    }
+    if (radioVisualizationActive) {
+      const PlaybackPresentationModel presentation = playbackPresenter.model();
+      if (presentation.control && presentation.control->isVideo) {
+        radioVisualizationActive = false;
+        audioPlayback.setRadioVisualizationEnabled(false);
+        markLayoutDirty();
+      }
     }
     tui_media_tasks::Update taskUpdate = mediaTasks.poll();
     const tui_media_tasks::Snapshot &taskSnapshot = mediaTasks.snapshot();
@@ -1782,7 +1818,8 @@ int runTui(Options o, ApplicationRuntime &runtime) {
           return;
         }
       }
-      const bool browserInteractionEnabled = !melodyVisualization.active();
+      const bool browserInteractionEnabled =
+          !melodyVisualization.active() && !radioVisualizationActive;
       const bool isLeftClick = ev.type == InputEvent::Type::Mouse &&
                                isMouseButtonDown(ev.mouse, MouseButton::Left);
       bool clearBtnHover = false;
@@ -1869,6 +1906,7 @@ int runTui(Options o, ApplicationRuntime &runtime) {
 
     const BrowserState::ViewMode preInputViewMode = browser.viewMode;
     const bool preInputMelodyVisualization = melodyVisualization.active();
+    const bool preInputRadioVisualization = radioVisualizationActive;
     const bool preInputOptionsMode = optionsBrowserIsActive(browser);
     const bool preInputTrackMode = isTrackBrowserActive(browser);
     InputEvent ev{};
@@ -1913,6 +1951,7 @@ int runTui(Options o, ApplicationRuntime &runtime) {
 
     if (browser.viewMode != preInputViewMode ||
         melodyVisualization.active() != preInputMelodyVisualization ||
+        radioVisualizationActive != preInputRadioVisualization ||
         optionsBrowserIsActive(browser) != preInputOptionsMode ||
         isTrackBrowserActive(browser) != preInputTrackMode) {
       markLayoutDirty();
@@ -1924,7 +1963,8 @@ int runTui(Options o, ApplicationRuntime &runtime) {
       browser_wake_schedule::Activity activity;
       activity.searchCaretVisible =
           viewport.browserInteractionEnabled && browserSearchFocused(browser);
-      activity.melodyMonitorVisible = melodyVisualization.active();
+      activity.melodyMonitorVisible =
+          melodyVisualization.active() || radioVisualizationActive;
       activity.transportProgressVisible =
           o.play &&
           (presentation.audio.ready || presentation.currentTarget.has_value());
@@ -1961,7 +2001,8 @@ int runTui(Options o, ApplicationRuntime &runtime) {
       const AudioPlaybackSnapshot &audio = presentation.audio;
       bool optionsMode = optionsBrowserIsActive(browser);
       bool trackMode = isTrackBrowserActive(browser);
-      bool browserInteractionEnabled = !melodyVisualization.active();
+      bool browserInteractionEnabled =
+          !melodyVisualization.active() && !radioVisualizationActive;
 
       screen.clear(theme.normal);
       screen.setAlwaysFullRedraw(forceFullRedraw);
@@ -2104,13 +2145,23 @@ int runTui(Options o, ApplicationRuntime &runtime) {
             theme.normal, theme.normal, theme.directory, theme.highlight,
             theme.browserHover, theme.dim, theme.accent, playingEntryIndex,
             isSupportedImageExt, isVideoExt, isSupportedAudioExt);
-      } else {
+      } else if (melodyVisualization.active()) {
         tui_melody_visualization::Bounds melodyBounds;
         melodyBounds.top = listTop;
         melodyBounds.height = listHeight;
         melodyBounds.width = width;
         tui_melody_visualization::draw(screen, melodyVisualization,
                                        melodyBounds, melodyVisualizationStyles);
+      } else {
+        RadioPlaybackObservation observation;
+        const bool haveObservation =
+            audioPlayback.radioVisualization(observation);
+        const tui_radio_visualization::Levels levels =
+            tui_radio_visualization::project(observation);
+        radioVisualizationRenderer.draw(screen, listTop, listHeight, width,
+                                         haveObservation ? &levels : nullptr,
+                                         audioPlayback.radioFilterMode(),
+                                         audio.paused || audio.holding);
       }
 
       int footerStart = listTop + listHeight;

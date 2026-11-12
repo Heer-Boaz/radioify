@@ -17,7 +17,7 @@ struct Options {
   std::string radioSettingsPath;
   std::string radioPresetName;
   RadioReceiverProfile radioReceiverProfile = kDefaultRadioReceiverProfile;
-  RadioReceptionProfile radioReceptionProfile = kDefaultRadioReceptionProfile;
+  RadioReceptionProfile radioReceptionProfile = RadioReceptionProfile::Everyday1938;
   int trackIndex = 0;
   bool splitLoop = false;
   bool extractSheet = false;

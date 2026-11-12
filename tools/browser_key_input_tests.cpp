@@ -70,6 +70,11 @@ int main() {
                    !resolve(key('M', 'm', LEFT_CTRL_PRESSED),
                             ShortcutContext::Application),
                "application bindings must not steal modified text keys");
+  ok &= expect(resolve(key('V', 'v'), ShortcutContext::Application) ==
+                   KeyAction::ToggleRadioVisualization &&
+                   !resolve(key('V', 'v', LEFT_CTRL_PRESSED),
+                            ShortcutContext::Application),
+               "radio visualization shortcut must not steal Ctrl+V");
   ok &= expect(resolve(key('S', 's', LEFT_ALT_PRESSED),
                        ShortcutContext::Navigation) ==
                    KeyAction::ToggleSortDirection &&

@@ -610,6 +610,29 @@ radioify_link_repo_target(radio_receiver_profile_tests)
 add_test(NAME radio_receiver_profile_tests
          COMMAND $<TARGET_FILE:radio_receiver_profile_tests>)
 
+add_executable(radio_visualization_tests)
+target_sources(radio_visualization_tests PRIVATE
+  $<TARGET_OBJECTS:radioify_tool_radio_visualization_tests>
+  $<TARGET_OBJECTS:radioify_config>
+  $<TARGET_OBJECTS:radioify_audiofilter>
+  $<TARGET_OBJECTS:radioify_ascii_cpu>
+  $<TARGET_OBJECTS:radioify_ascii_gpu>
+  $<TARGET_OBJECTS:radioify_image_codec>
+  ${CMAKE_SOURCE_DIR}/tui/ui/radio_visualization_scene.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/radio_visualization_model.cpp
+  ${CMAKE_SOURCE_DIR}/tui/ui/radio_visualization_frame_renderer.cpp
+  ${CMAKE_SOURCE_DIR}/audio/pipeline_transition.cpp
+  ${CMAKE_SOURCE_DIR}/audio/radio_filter_mode.cpp
+  ${CMAKE_SOURCE_DIR}/audio/radio_filter_transition.cpp
+  ${CMAKE_SOURCE_DIR}/audio/radio_playback.cpp
+)
+radioify_link_repo_target(radio_visualization_tests)
+if (WIN32)
+  target_link_libraries(radio_visualization_tests PRIVATE d3d10 d3d11 dxgi
+                        ole32 user32 windowscodecs)
+endif()
+add_test(NAME radio_visualization_tests COMMAND $<TARGET_FILE:radio_visualization_tests>)
+
 add_executable(radio_am_ingress_tests)
 target_sources(radio_am_ingress_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_radio_am_ingress_tests>

@@ -1,6 +1,7 @@
 #include "audio_pipeline_execution.h"
 
 #include "analysis/radio_calibration_runtime.h"
+#include "radio_circuit_observation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -42,6 +43,45 @@ size_t resolveFirstProgramIndex(Radio1938& radio,
   return orderIndex;
 }
 
+void observeProgramPass(Radio1938& radio, const RadioSampleContext& ctx,
+                        PassId pass, float output) {
+  auto& observation = *ctx.observation;
+  switch (pass) {
+    case PassId::FrontEnd:
+      observation.add(RadioCircuitProbe::AntennaEnvelopeVolts, output);
+      break;
+    case PassId::Mixer: {
+      const float envelope = ctx.signal.mode == SourceInputMode::ComplexEnvelope
+          ? std::hypot(ctx.signal.i, ctx.signal.q) : std::fabs(output);
+      observation.add(RadioCircuitProbe::ConverterEnvelopeAmps,
+                      envelope * std::fabs(radio.mixer.conversionGain));
+      break;
+    }
+    case PassId::IFStrip:
+      if (radio.ifStrip.enabled)
+        observation.add(RadioCircuitProbe::IfEnvelopeVolts, output);
+      break;
+    case PassId::Demod:
+      observation.add(RadioCircuitProbe::DetectorVolts, radio.demod.am.detectorNode);
+      break;
+    case PassId::ReceiverCircuit:
+      if (radio.receiverCircuit.enabled)
+        observation.add(RadioCircuitProbe::AudioPlateSwingVolts, output);
+      break;
+    case PassId::Power:
+      observation.add(RadioCircuitProbe::SpeakerTerminalVolts,
+                      radio.speakerStage.physicalDriveVolts);
+      observation.add(RadioCircuitProbe::SpeakerCoilAmps,
+                      radio.speakerStage.speaker.electricalCurrentAmps);
+      observation.add(RadioCircuitProbe::SupplyVolts,
+          static_cast<float>(radio.powerSupply.circuit.volts(RectifierSupply::Main)));
+      break;
+    default:
+      break;
+  }
+}
+
+template <bool Observe>
 float runProgramPasses(Radio1938& radio,
                        float y,
                        RadioSampleContext& ctx,
@@ -56,6 +96,7 @@ float runProgramPasses(Radio1938& radio,
     if (!pass.runSample) continue;
     const float in = y;
     y = pass.runSample(radio, y, ctx);
+    if constexpr (Observe) observeProgramPass(radio, ctx, pass.id, y);
     if (clickTraceEnabled) {
       recordClickTracePassOutput(radio, pass.id, y);
     }
@@ -87,7 +128,9 @@ float runRadioPipelineSample(Radio1938& radio,
   runControlPasses(radio, ctx);
   const size_t firstProgramIndex =
       resolveFirstProgramIndex(radio, ctx, firstProgramPass);
-  const float y = runProgramPasses(radio, x, ctx, firstProgramIndex);
+  const float y = ctx.observation
+      ? runProgramPasses<true>(radio, x, ctx, firstProgramIndex)
+      : runProgramPasses<false>(radio, x, ctx, firstProgramIndex);
   if (radio.calibration.enabled) {
     radio.calibration.maxDigitalOutput =
         std::max(radio.calibration.maxDigitalOutput, std::fabs(y));

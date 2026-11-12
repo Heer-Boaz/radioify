@@ -109,7 +109,8 @@ void RadioPreviewPipeline::reserveBlockFrames(uint32_t frames) {
 void RadioPreviewPipeline::runBlock(Radio1938& radioRef,
                                     float* samples,
                                     uint32_t frames,
-                                    uint32_t channels) {
+                                    uint32_t channels,
+                                    RadioCircuitAccumulator* observation) {
   if (!samples || frames == 0 || channels == 0 || !ingress) return;
 
   radio = &radioRef;
@@ -136,7 +137,8 @@ void RadioPreviewPipeline::runBlock(Radio1938& radioRef,
                           ingress->reception.enabled ||
                                   ingress->reception.externalNoiseEnabled
                               ? receptionScratch.data()
-                              : nullptr);
+                              : nullptr,
+                          nullptr, observation);
 
   for (uint32_t frame = 0; frame < frames; ++frame) {
     const auto spatial = roomRenderer.process(filteredScratch[frame]);

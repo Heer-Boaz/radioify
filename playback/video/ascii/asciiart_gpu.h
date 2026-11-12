@@ -72,7 +72,8 @@ private:
     bool CreateComputeShaders(std::string* error);
     bool CreateBuffers(int width, int height, int outW, int outH);
     bool CreateStatsBuffer();
-    bool ReadOutputBuffer(AsciiArt& out, int outW, int outH);
+    bool ReadOutputBuffer(AsciiArt& out, int outW, int outH,
+                          std::string* error = nullptr);
     void BuildDotGrid(ID3D11ComputeShader* prefilterShader,
                       ID3D11ShaderResourceView* source0,
                       ID3D11ShaderResourceView* source1,

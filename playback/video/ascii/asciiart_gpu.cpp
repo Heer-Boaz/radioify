@@ -54,7 +54,8 @@ namespace {
 
 }
 
-bool GpuAsciiRenderer::ReadOutputBuffer(AsciiArt& out, int outW, int outH) {
+bool GpuAsciiRenderer::ReadOutputBuffer(AsciiArt& out, int outW, int outH,
+                                        std::string* error) {
     bool readbackReady = false;
 
     if (m_outputStagingPendingCount > 0) {
@@ -110,6 +111,11 @@ bool GpuAsciiRenderer::ReadOutputBuffer(AsciiArt& out, int outW, int outH) {
             m_outputStagingReadIndex =
                 (readIndex + 1) % kOutputStagingBufferCount;
             --m_outputStagingPendingCount;
+            if (error) {
+                *error = "GPU ASCII readback failed (HRESULT " +
+                         std::to_string(static_cast<uint32_t>(hr)) + ")";
+                return false;
+            }
         }
     }
 
@@ -882,7 +888,7 @@ bool GpuAsciiRenderer::Render(const uint8_t* rgba, int width, int height, AsciiA
 
     m_frameCache.MarkFrameInFlight(m_context.Get());
 
-    return ReadOutputBuffer(out, outW, outH);
+    return ReadOutputBuffer(out, outW, outH, error);
 }
 
 bool GpuAsciiRenderer::RenderNV12Texture(ID3D11Texture2D* texture, int arrayIndex,

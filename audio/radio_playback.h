@@ -10,6 +10,7 @@
 #include "radio.h"
 #include "radio_filter_mode.h"
 #include "radio_filter_transition.h"
+#include "radio_visualization.h"
 
 struct AudioPipelineTransition;
 
@@ -36,7 +37,8 @@ class RadioPlaybackFilter {
   void process(float* samples,
                uint32_t frames,
                uint32_t channels,
-               AudioPipelineTransition& pipelineTransition);
+               AudioPipelineTransition& pipelineTransition,
+               RadioVisualBatch* visualBatch = nullptr);
 
  private:
   struct Receiver {

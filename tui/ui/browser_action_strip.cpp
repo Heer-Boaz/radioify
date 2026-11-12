@@ -113,6 +113,10 @@ std::vector<Item> build(const Input& input) {
     items.push_back(textItem(ActionStripItem::PitchMonitor, "Pitch",
                              input.pitchMonitorActive));
   }
+  if (input.radioVisualizationAvailable) {
+    items.push_back(textItem(ActionStripItem::RadioVisualization, "Inside radio",
+                             input.radioVisualizationActive));
+  }
 
   if (input.browserControlsAvailable) {
     items.push_back(

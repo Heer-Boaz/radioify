@@ -540,6 +540,7 @@ resolveLiveBrowserVideoShortcut(const InputEvent& event) {
                  : std::nullopt;
     case PlaybackAction::ToggleOptions:
     case PlaybackAction::TogglePitchMonitor:
+    case PlaybackAction::ToggleRadioVisualization:
     case PlaybackAction::RequestCloseVideoEditor:
     case PlaybackAction::NavigateBackInVideoEditor:
     case PlaybackAction::ConfirmVideoEditPrompt:

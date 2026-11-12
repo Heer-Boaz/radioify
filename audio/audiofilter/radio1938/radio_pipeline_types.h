@@ -8,6 +8,7 @@
 #include <cstdint>
 
 struct Radio1938;
+class RadioCircuitAccumulator;
 
 enum class SourceInputMode : uint8_t {
   ComplexEnvelope,
@@ -77,6 +78,7 @@ struct RadioSampleContext {
   const RadioBlockControl* block = nullptr;
   RadioDerivedSampleParams derived{};
   RadioSignalFrame signal{};
+  RadioCircuitAccumulator* observation = nullptr;
 };
 
 struct RadioInitContext {

@@ -378,7 +378,14 @@ to the browser.
 - R: cycle dry -> typical 1930s radio -> Philco 37-116 -> dry
 - H: toggle 50Hz mode
 - O: options (KSS/NSF only)
-- V: toggle window vsync
+- V or `Inside radio`: show or hide the receiver view during audio playback.
+  Select `Radio: Typical` with R to see the simplified 1930s chassis. Its
+  brightness follows measured circuit signals on separate display scales;
+  it is not a comparison of electrical power, and the component layout is
+  illustrative. During a silent programme the AM carrier, supply and faint
+  tube heaters remain present, while the audio-dependent stages dim. The view
+  follows the audio buffer and holds its last state when paused. The Philco
+  37-116 does not yet have its own view.
 - Shift+Up/Down: volume +/-10%
 - Ctrl+Up/Down: radio makeup gain (RG)
 - Ctrl+Q or Ctrl+C: quit

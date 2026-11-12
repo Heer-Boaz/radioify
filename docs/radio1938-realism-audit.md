@@ -15,14 +15,12 @@ Playback and export are stereo. The unfiltered path passes the source
 unchanged. With a receiver selected, the source's mono sum (what the
 transmitter carried) runs through:
 
-- **Broadcast source.** The studio operator rides the level so programme
-  peaks reach the limiter (a slow peak follower, holding in pauses); a
-  network programme line of 50-8000 Hz (the Bell System wide-band program
-  circuit, 1934; `programLineHighHz = 0` for a local studio); a
-  peak-envelope compressor after the Western Electric 110A (20 ms attack,
-  250 ms recovery, 2.5:1); a transmitter cubic term and noise inside the
-  period 62-66 dB range. Full digital level is 85% modulation; beyond 100%
-  negative modulation the carrier is cut off.
+- **Broadcast source.** A network programme line of 50-8000 Hz (the Bell
+  System wide-band program circuit, 1934; `programLineHighHz = 0` for a
+  local studio); a peak-envelope compressor after the Western Electric 110A
+  (20 ms attack, 250 ms recovery, 2.5:1); a transmitter cubic term and noise
+  inside the period 62-66 dB range. Full digital level is 85% modulation;
+  beyond 100% negative modulation the carrier is cut off.
 - **Reception.** A groundwave path and a slowly rotating, delayed skywave path
   (selective fading), on the IRE standard antenna (4 m effective height).
   Man-made noise after ITU-R P.372; atmospheric noise
@@ -54,30 +52,29 @@ transmitter carried) runs through:
 
 Both receivers run at the same living-room power, 0.18 W into the voice coil
 on the 1 kHz, 85% reference tone (38-12 knob 0.032, Philco 0.0146, below its
-loudness tap). The makeup matches the median programme loudness of the
-unfiltered stereo path, so one system volume serves both. Because the
-operator rides every programme to the limiter, the radio is level where the
-recordings are not: ten dynamic tracks and two 1930s broadcasts spanning
--22.7 to -7.4 LUFS unfiltered come out within -15.9..-14.2 LUFS (38-12) and
--17.8..-13.0 LUFS (Philco). Loudness range falls from 7.5 LU to 5.1 and
-3.7 LU. The limiters act on single peaks only.
+loudness tap). The makeup matches programme loudness to the unfiltered
+stereo path, so one system volume serves both: over ten dynamic tracks and
+two 1930s broadcasts the median EBU R128 difference is 0 dB (-2.3..+2.2 dB
+per track for the 38-12, -3.5..+2.5 dB for the Philco), and the loudness
+range stays near the source's. The limiters act noticeably only on very
+loud masters.
 
 ### The whole output
 
 Measured on the same tracks and broadcasts at `everyday-1938` (mono sums; the
 per-band ratio is the share of the output that is a linear image of the
 source, against distortion, noise and time-varying gain, after removing the
-slow gain of the operator and AVC per half second):
+slow gain of the AVC per half second):
 
 | | 38-12 | Philco 37-116 |
 | --- | ---: | ---: |
 | Response, -6 dB | ~200 Hz - 3.4 kHz | ~55 Hz - 5 kHz |
 | Colour | +3 dB near 2.5 kHz | +8..9 dB at 80-100 Hz, +5 dB at 2.5-3 kHz |
-| Linear-to-residual, whole band | 14 dB | 10 dB |
-| Linear-to-residual, 400-1000 Hz | 14-17 dB | 17-19 dB |
-| Output power below 150 Hz (source 24%) | 0% | 50% |
-| Programme to silence | 36 dB | 35 dB |
-| Speech transmission index, 1936 broadcast | 0.94 | 0.87 |
+| Linear-to-residual, whole band | 15 dB | 10 dB |
+| Linear-to-residual, 400-1000 Hz | 15-18 dB | 16-19 dB |
+| Output power below 150 Hz (source 24%) | 0% | 48% |
+| Programme to silence | 29 dB | 29 dB |
+| Speech transmission index, 1936 broadcast | 0.88 | 0.75 |
 
 ### What guards it
 
@@ -107,9 +104,11 @@ log records why each moved.
 - **AVC.** One symmetric pole; in the Philco the grid leak (95) makes release
   about 1.5 times slower than charge. That every controlled grid return has its
   own .05 uF is read from a dense schematic.
-- **Operator.** The level rider is a rule (peaks to the limiter, slow,
-  holding in pauses), not a person anticipating a score; it also flattens
-  slow crescendos, as riding gain did.
+- **Modulation depth follows the file.** Full digital level is 85%
+  modulation and no studio operator sets each programme's level, so quiet
+  recordings and wide stereo mixes (which lose up to 7 dB in the mono sum)
+  modulate less deeply and sound noisier than a station would have made
+  them. Most modern masters peak near full scale, where this is correct.
 - **Listener settings** (reception profile, tone switch, room as headphones or
   speakers, the receiver's own volume) are presets or command-line options;
   the app has no settings window yet.

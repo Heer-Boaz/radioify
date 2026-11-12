@@ -32,6 +32,7 @@ struct Context {
   bool pictureInPictureOpen = false;
   bool supports50Hz = false;
   bool pitchMonitorActive = false;
+  bool radioVisualizationActive = false;
   bool optionsAvailable = false;
   bool currentTargetAvailable = false;
   bool activeMediaTaskCancellable = false;

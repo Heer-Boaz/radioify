@@ -14,6 +14,7 @@ enum class KeyAction : std::uint8_t {
   BeginPathSearch,
   BeginFilter,
   TogglePitchMonitor,
+  ToggleRadioVisualization,
   CycleSort,
   ToggleSortDirection,
   Stop,
@@ -69,7 +70,7 @@ struct KeyBinding {
       ShortcutRepeatPolicy::InitialPressOnly;
 };
 
-inline constexpr std::array<KeyBinding, 17> kKeyBindings = {{
+inline constexpr std::array<KeyBinding, 18> kKeyBindings = {{
     {KeyAction::BeginPathSearch, 'G', 'g', 'G', kShortcutCtrlMask,
      kShortcutChordForbiddenMask,
      shortcutContext(ShortcutContext::SearchActivation)},
@@ -82,6 +83,9 @@ inline constexpr std::array<KeyBinding, 17> kKeyBindings = {{
     {KeyAction::TogglePitchMonitor, 'M', 'm', 'M', 0,
      kShortcutTextForbiddenMask,
      shortcutContext(ShortcutContext::Application), "M"},
+    {KeyAction::ToggleRadioVisualization, 'V', 'v', 'V', 0,
+     kShortcutTextForbiddenMask,
+     shortcutContext(ShortcutContext::Application), "V"},
     {KeyAction::ToggleSortDirection, 'S', 's', 'S', kShortcutAltMask,
      kShortcutCtrlMask | kShortcutShiftMask,
      shortcutContext(ShortcutContext::Navigation)},

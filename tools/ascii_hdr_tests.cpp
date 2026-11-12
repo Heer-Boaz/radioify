@@ -79,6 +79,29 @@ AsciiArt renderCache(ID3D11Device* device, ID3D11DeviceContext* context,
   throw std::runtime_error("ASCII staging ring produced no frame");
 }
 
+void checkRgbaAsyncReadback(ID3D11Device* device, ID3D11DeviceContext* context) {
+  std::recursive_mutex mutex;
+  GpuAsciiRenderer renderer(mutex);
+  std::string error;
+  check(renderer.InitializeWithDevice(device, context, &error), error.c_str());
+  std::vector<uint8_t> rgba(8 * 8 * 4, 255);
+  AsciiArt art;
+  art.width = art.height = 2;
+  check(!renderer.Render(rgba.data(), 8, 8, art, &error) && error.empty(),
+        "the first RGBA readback must report pending, not failure");
+  waitForGpu(device, context);
+  check(renderer.Render(rgba.data(), 8, 8, art, &error) && art.cells.size() == 4,
+        "completed RGBA readback did not produce its cells");
+  renderer.ResetSessionState();
+  art.cells.clear();
+  check(!renderer.Render(rgba.data(), 8, 8, art, &error) && error.empty() &&
+            art.cells.empty(),
+        "reset must discard pending frames rather than reuse an old one");
+  waitForGpu(device, context);
+  check(renderer.Render(rgba.data(), 8, 8, art, &error) && art.cells.size() == 4,
+        "RGBA readback did not recover after reset");
+}
+
 AsciiArt p010Fixture(ID3D11Device* device, ID3D11DeviceContext* context,
                      float nits, bool alternateBlack = false,
                      bool splitDots = false) {
@@ -230,6 +253,7 @@ int main(int argc, char** argv) try {
                             nullptr, 0, nullptr,
                             0, D3D11_SDK_VERSION, &device, nullptr, &context),
           "headless WARP device");
+  checkRgbaAsyncReadback(device.Get(), context.Get());
   for (float nits : {0.0f, 10.0f, 100.0f, 203.0f, 400.0f, 1000.0f, 4000.0f}) {
     const AsciiArt art = p010Fixture(device.Get(), context.Get(), nits);
     checkArt(art, {nits, nits, nits}, YuvTransfer::Pq);
