@@ -173,5 +173,22 @@ void drawRadio(std::vector<uint8_t>& pixels, const Levels* levels) {
   }
 }
 
+bool SceneRaster::update(const Levels* levels) {
+  const bool hasLevels = levels != nullptr;
+  if (initialized_ && hasLevels_ == hasLevels &&
+      (!levels || (observed_ == levels->observed && values_ == levels->values))) {
+    return false;
+  }
+
+  drawRadio(pixels_, levels);
+  if (levels) {
+    observed_ = levels->observed;
+    values_ = levels->values;
+  }
+  initialized_ = true;
+  hasLevels_ = hasLevels;
+  return true;
+}
+
 
 }  // namespace tui_radio_visualization

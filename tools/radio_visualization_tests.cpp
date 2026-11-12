@@ -371,6 +371,44 @@ void sceneReflectsTheObservedStages() {
           "the existing ASCII renderer could not render the chassis");
 }
 
+void sceneRasterReusesOnlyUnchangedInputs() {
+  tui_radio_visualization::SceneRaster raster;
+  std::vector<uint8_t> expected;
+  require(raster.update(nullptr), "an unobserved chassis must be rasterized once");
+  tui_radio_visualization::drawRadio(expected, nullptr);
+  require(raster.pixels() == expected && !raster.update(nullptr),
+          "an unchanged unobserved chassis must reuse the exact raster");
+
+  tui_radio_visualization::Levels levels;
+  levels.mode = RadioFilterMode::Typical1930s;
+  levels.generation = 1;
+  levels.observed = (1u << kRadioCircuitProbeCount) - 1;
+  levels.values.fill(.2f);
+  require(raster.update(&levels), "new circuit readings must redraw the chassis");
+  tui_radio_visualization::drawRadio(expected, &levels);
+  require(raster.pixels() == expected && !raster.update(&levels),
+          "unchanged readings must reuse the exact raster");
+
+  levels.generation = 2;
+  require(!raster.update(&levels),
+          "a new timeline generation with the same scene must reuse pixels");
+  levels.values[static_cast<std::size_t>(
+      RadioCircuitProbe::SpeakerTerminalVolts)] = .9f;
+  require(raster.update(&levels), "changed stage activity must redraw the chassis");
+  tui_radio_visualization::drawRadio(expected, &levels);
+  require(raster.pixels() == expected,
+          "the cached raster must reflect the changed stage exactly");
+
+  levels.observed &= ~radioCircuitProbeBit(RadioCircuitProbe::SpeakerTerminalVolts);
+  require(raster.update(&levels), "losing a probe must redraw the affected stage");
+  tui_radio_visualization::drawRadio(expected, &levels);
+  require(raster.pixels() == expected, "probe availability must affect the raster");
+  require(raster.update(nullptr), "losing the observation must clear the circuit");
+  tui_radio_visualization::drawRadio(expected, nullptr);
+  require(raster.pixels() == expected && !raster.update(nullptr),
+          "returning to an unobserved chassis must not retain stale activity");
+}
+
 void rendererEventuallyPresentsVisibleCells() {
   GpuRuntime gpu;
   const bool hasGpu = gpu.device() != nullptr;
@@ -397,6 +435,20 @@ void rendererEventuallyPresentsVisibleCells() {
     }
     require(visible, "inside-radio view remained blank after its readback");
   }
+  bool unobservedVisible = false;
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::seconds(5);
+  while (std::chrono::steady_clock::now() < deadline && !unobservedVisible) {
+    const AsciiArt* art = renderer.render(nullptr, 3, 36, 11);
+    unobservedVisible = art && std::any_of(art->cells.begin(), art->cells.end(),
+        [](const AsciiArt::AsciiCell& cell) {
+          return cell.ch > 0x2800 && cell.ch <= 0x28ff;
+        });
+    if (!unobservedVisible)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  require(unobservedVisible,
+          "the unchanged chassis must still complete asynchronous readback");
   std::cout << (hasGpu ? "GPU" : "CPU")
             << " receiver rendering produced visible cells\n";
 }
@@ -451,6 +503,7 @@ int main() {
   observationTracksEnabledStages();
   observationPreservesAudioAndTracksSignal();
   sceneReflectsTheObservedStages();
+  sceneRasterReusesOnlyUnchangedInputs();
   rendererEventuallyPresentsVisibleCells();
   independentSurfacesRenderAtTheirOwnSizes();
 }

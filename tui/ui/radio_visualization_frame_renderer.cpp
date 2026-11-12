@@ -4,8 +4,6 @@
 #include <utility>
 
 #include "playback/video/gpu/gpu_runtime.h"
-#include "radio_visualization_scene.h"
-
 namespace tui_radio_visualization {
 
 FrameRenderer::FrameRenderer(GpuRuntime& runtime)
@@ -30,7 +28,8 @@ const AsciiArt* FrameRenderer::render(const Levels* levels, uint64_t generation,
     layoutHeight_ = height;
   }
 
-  drawRadio(pixels_, levels);
+  scene_.update(levels);
+  const auto& pixels = scene_.pixels();
   if (!shaderAttempted_) {
     shaderAttempted_ = true;
     if (auto* device = runtime_.device()) {
@@ -42,7 +41,7 @@ const AsciiArt* FrameRenderer::render(const Levels* levels, uint64_t generation,
   if (shaderInitialized_) {
     gpuArt_.width = width;
     gpuArt_.height = height;
-    if (shader_.Render(pixels_.data(), kWidth, kHeight, gpuArt_, &error)) {
+    if (shader_.Render(pixels.data(), kWidth, kHeight, gpuArt_, &error)) {
       std::swap(art_, gpuArt_);
       haveFrame_ = true;
     } else if (!error.empty()) {
@@ -53,7 +52,7 @@ const AsciiArt* FrameRenderer::render(const Levels* levels, uint64_t generation,
     }
   }
   if (!shaderInitialized_) {
-    haveFrame_ = cpu_.renderRgbaExact(pixels_.data(), kWidth, kHeight,
+    haveFrame_ = cpu_.renderRgbaExact(pixels.data(), kWidth, kHeight,
                                       width, height, art_, true);
   }
   return haveFrame_ ? &art_ : nullptr;

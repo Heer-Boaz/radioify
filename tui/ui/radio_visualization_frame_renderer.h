@@ -1,11 +1,9 @@
 #pragma once
 
 #include <cstdint>
-#include <vector>
-
 #include "playback/video/ascii/asciiart.h"
 #include "playback/video/ascii/asciiart_gpu.h"
-#include "radio_visualization_model.h"
+#include "radio_visualization_scene.h"
 
 class GpuRuntime;
 
@@ -24,7 +22,7 @@ class FrameRenderer {
   AsciiArtRenderer cpu_;
   AsciiArt art_;
   AsciiArt gpuArt_;
-  std::vector<uint8_t> pixels_;
+  SceneRaster scene_;
   bool shaderInitialized_ = false;
   bool shaderAttempted_ = false;
   bool haveFrame_ = false;
