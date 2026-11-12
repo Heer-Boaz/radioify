@@ -45,12 +45,20 @@ int main() {
                "visible transport progress must own a named 100 ms cadence");
 
   browser_wake_schedule::Activity combined = transport;
-  combined.melodyMonitorVisible = true;
+  combined.visualizationVisible = true;
   combined.audioPictureInPictureVisible = true;
   ok &= expect(browser_wake_schedule::nextDeadline(now, lastPresented,
                                                     combined) ==
                    wake_schedule::TimePoint{1250ms},
                "the earliest active presentation cadence must win");
+
+  browser_wake_schedule::Activity pipVisualization;
+  pipVisualization.audioPictureInPictureVisible = true;
+  pipVisualization.visualizationVisible = true;
+  ok &= expect(browser_wake_schedule::nextDeadline(now, lastPresented,
+                                                    pipVisualization) ==
+                   wake_schedule::TimePoint{1250ms},
+               "a PiP visualization must animate at the visualization cadence");
 
   return ok ? 0 : 1;
 }

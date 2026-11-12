@@ -16,6 +16,7 @@ enum class OverlayControlId {
   PlayPause,
   Next,
   Radio,
+  RadioVisualization,
   Hz50,
   AudioTrack,
   Subtitles,

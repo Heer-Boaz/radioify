@@ -24,6 +24,7 @@ std::optional<ActionStripItem> actionForControl(
       return ActionStripItem::Hz50;
     case playback_overlay::OverlayControlId::PictureInPicture:
       return ActionStripItem::PictureInPicture;
+    case playback_overlay::OverlayControlId::RadioVisualization:
     case playback_overlay::OverlayControlId::AudioTrack:
     case playback_overlay::OverlayControlId::Subtitles:
     case playback_overlay::OverlayControlId::EditMarkIn:

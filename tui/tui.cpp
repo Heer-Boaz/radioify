@@ -538,6 +538,11 @@ int runTui(Options o, ApplicationRuntime &runtime) {
     }
   };
   AudioPictureInPictureWindow audioPictureInPicture(gpu);
+  const auto synchronizeRadioVisualization = [&]() {
+    audioPlayback.setRadioVisualizationEnabled(
+        radioVisualizationActive ||
+        audioPictureInPicture.radioVisualizationVisible());
+  };
   ApplicationInputPump applicationInputPump;
   pointer_input::MouseDoubleClickTracker browserDoubleClickTracker;
   BrowserViewport viewport;
@@ -550,6 +555,7 @@ int runTui(Options o, ApplicationRuntime &runtime) {
         case playback_route::AudioPictureInPicturePlan::Close:
           if (audioPictureInPicture.isOpen()) {
             audioPictureInPicture.close();
+            synchronizeRadioVisualization();
             markDirty(UiDirtyFlags::Async);
           }
           break;
@@ -928,7 +934,7 @@ int runTui(Options o, ApplicationRuntime &runtime) {
     const bool active = melodyVisualization.toggle();
     if (active) {
       radioVisualizationActive = false;
-      audioPlayback.setRadioVisualizationEnabled(false);
+      synchronizeRadioVisualization();
       dirty = setBrowserSearchFocus(browser, BrowserSearchFocus::None) || dirty;
       browserInteraction.breadcrumbHover = -1;
       browserInteraction.actionHover = -1;
@@ -943,7 +949,7 @@ int runTui(Options o, ApplicationRuntime &runtime) {
         ((presentation.control && presentation.control->isVideo) ||
          (!audio.source && !audio.ready))) return;
     radioVisualizationActive = !radioVisualizationActive;
-    audioPlayback.setRadioVisualizationEnabled(radioVisualizationActive);
+    synchronizeRadioVisualization();
     if (radioVisualizationActive) {
       melodyVisualization.setActive(false);
       dirty = setBrowserSearchFocus(browser, BrowserSearchFocus::None) || dirty;
@@ -974,6 +980,7 @@ int runTui(Options o, ApplicationRuntime &runtime) {
       return;
     }
     if (audioPictureInPicture.toggle()) {
+      synchronizeRadioVisualization();
       markDirty(UiDirtyFlags::Async);
       return;
     }
@@ -1115,6 +1122,13 @@ int runTui(Options o, ApplicationRuntime &runtime) {
     context.nowPlayingTarget = presentation.audioTarget;
     context.nowPlayingLabel = buildPlaybackLabel(context.nowPlayingTarget);
     context.playback = presentation.audio;
+    if (audioPictureInPicture.radioVisualizationVisible()) {
+      context.radioMode = audioPlayback.radioFilterMode();
+      RadioPlaybackObservation observation;
+      if (audioPlayback.radioVisualization(observation)) {
+        context.radioLevels = tui_radio_visualization::project(observation);
+      }
+    }
     return context;
   };
   auto renderAudioPictureInPicture = [&]() {
@@ -1145,7 +1159,11 @@ int runTui(Options o, ApplicationRuntime &runtime) {
             pendingAudioPictureInPictureOpens.push_back(std::move(value));
           } else if constexpr (std::is_same_v<
                                    Event,
-                                   AudioPictureInPictureWindow::Closed>) {
+                                   AudioPictureInPictureWindow::Closed> ||
+                               std::is_same_v<
+                                   Event,
+                                   AudioPictureInPictureWindow::VisualizationChanged>) {
+            synchronizeRadioVisualization();
             markDirty(UiDirtyFlags::Async);
           }
         },
@@ -1510,7 +1528,7 @@ int runTui(Options o, ApplicationRuntime &runtime) {
       const PlaybackPresentationModel presentation = playbackPresenter.model();
       if (presentation.control && presentation.control->isVideo) {
         radioVisualizationActive = false;
-        audioPlayback.setRadioVisualizationEnabled(false);
+        synchronizeRadioVisualization();
         markLayoutDirty();
       }
     }
@@ -1963,8 +1981,9 @@ int runTui(Options o, ApplicationRuntime &runtime) {
       browser_wake_schedule::Activity activity;
       activity.searchCaretVisible =
           viewport.browserInteractionEnabled && browserSearchFocused(browser);
-      activity.melodyMonitorVisible =
-          melodyVisualization.active() || radioVisualizationActive;
+      activity.visualizationVisible =
+          melodyVisualization.active() || radioVisualizationActive ||
+          audioPictureInPicture.radioVisualizationVisible();
       activity.transportProgressVisible =
           o.play &&
           (presentation.audio.ready || presentation.currentTarget.has_value());

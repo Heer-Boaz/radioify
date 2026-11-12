@@ -385,7 +385,9 @@ to the browser.
   illustrative. During a silent programme the AM carrier, supply and faint
   tube heaters remain present, while the audio-dependent stages dim. The view
   follows the audio buffer and holds its last state when paused. The Philco
-  37-116 does not yet have its own view.
+  37-116 does not yet have its own view. In the audio picture-in-picture window,
+  use `Inside radio` or V while that window has focus to switch independently
+  between the receiver view and the artwork.
 - Shift+Up/Down: volume +/-10%
 - Ctrl+Up/Down: radio makeup gain (RG)
 - Ctrl+Q or Ctrl+C: quit

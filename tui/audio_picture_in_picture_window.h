@@ -16,6 +16,7 @@
 #include "playback/overlay/overlay.h"
 #include "playback/target.h"
 #include "playback/video/framebuffer/window/window.h"
+#include "tui/ui/radio_visualization_renderer.h"
 
 class AudioPictureInPictureWindow {
  public:
@@ -37,6 +38,8 @@ class AudioPictureInPictureWindow {
     std::string nowPlayingLabel;
     std::optional<PlaybackTarget> nowPlayingTarget;
     AudioPlaybackSnapshot playback;
+    RadioFilterMode radioMode = RadioFilterMode::Off;
+    std::optional<tui_radio_visualization::Levels> radioLevels;
   };
 
   struct PlaybackCommand {
@@ -47,7 +50,9 @@ class AudioPictureInPictureWindow {
     WindowPlacementState sourcePlacement;
   };
   struct Closed {};
-  using Event = std::variant<PlaybackCommand, OpenFiles, Closed>;
+  struct VisualizationChanged {};
+  using Event = std::variant<PlaybackCommand, OpenFiles, Closed,
+                             VisualizationChanged>;
 
   struct PollResult {
     bool windowChanged = false;
@@ -55,6 +60,7 @@ class AudioPictureInPictureWindow {
   };
 
   bool isOpen() const;
+  bool radioVisualizationVisible() const;
   const std::string& lastError() const { return lastError_; }
   bool open();
   void close();
@@ -74,9 +80,11 @@ class AudioPictureInPictureWindow {
   void drawArtworkBackground(const Styles& styles, int width, int height);
   void handleInput(const InputEvent& ev);
   bool clickControl(playback_overlay::OverlayControlId control);
+  void toggleRadioVisualization();
   void publish(Event event);
 
   VideoWindow window_;
+  tui_radio_visualization::Renderer radioRenderer_;
   ConsoleScreen screen_;
   std::vector<ScreenCell> cells_;
   GpuTextGridFrame frame_;
@@ -87,6 +95,7 @@ class AudioPictureInPictureWindow {
   int artworkWidth_ = 0;
   int artworkHeight_ = 0;
   bool artworkValid_ = false;
+  bool radioVisualizationSelected_ = false;
   int hoverControlToken_ = -1;
   int cols_ = 0;
   int rows_ = 0;

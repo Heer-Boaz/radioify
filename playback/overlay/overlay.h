@@ -45,6 +45,7 @@ enum class OverlayAction : std::uint8_t {
   TogglePlayPause,
   Next,
   ToggleRadio,
+  ToggleRadioVisualization,
   Toggle50Hz,
   CycleAudioTrack,
   ToggleSubtitles,

@@ -217,6 +217,9 @@ bool executeOverlayControl(SessionPort &session,
     return requestTransport(session, PlaybackTransportCommand::Next);
   case Action::ToggleRadio:
     return cycleRadioFilter(session);
+  case Action::ToggleRadioVisualization:
+    // This control belongs to the audio PiP surface, not a video session.
+    return false;
   case Action::Toggle50Hz:
     return toggle50Hz(session);
   case Action::CycleAudioTrack:

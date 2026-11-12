@@ -134,6 +134,8 @@ OverlayControlIntent intentForOverlayControl(OverlayControlId id) {
     return OverlayAction::Next;
   case OverlayControlId::Radio:
     return OverlayAction::ToggleRadio;
+  case OverlayControlId::RadioVisualization:
+    return OverlayAction::ToggleRadioVisualization;
   case OverlayControlId::Hz50:
     return OverlayAction::Toggle50Hz;
   case OverlayControlId::AudioTrack:

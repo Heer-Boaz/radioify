@@ -37,9 +37,13 @@ int wheelDelta(const MouseEvent& mouse) {
 }  // namespace
 
 AudioPictureInPictureWindow::AudioPictureInPictureWindow(GpuRuntime& gpu)
-    : window_(gpu) {}
+    : window_(gpu), radioRenderer_(gpu) {}
 
 bool AudioPictureInPictureWindow::isOpen() const { return window_.IsOpen(); }
+
+bool AudioPictureInPictureWindow::radioVisualizationVisible() const {
+  return isOpen() && radioVisualizationSelected_;
+}
 
 NativeWaitHandle AudioPictureInPictureWindow::inputWaitHandle() const {
   return window_.InputWaitHandle();
@@ -213,8 +217,6 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
                                          const Context& context) {
   if (!ensureOpen()) return false;
   refreshGridSize();
-  refreshArtwork(context, cols_, rows_);
-  drawArtworkBackground(styles, cols_, rows_);
   controls_.clear();
   layout_ = playback_overlay::OverlayCellLayout{};
   interactions_ = {};
@@ -265,7 +267,7 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   playback_overlay::OverlayCellLayoutInput layoutInput;
   layoutInput.width = width;
   layoutInput.height = height;
-  layoutInput.title = title;
+  layoutInput.title = radioVisualizationSelected_ ? fitLine(title, width) : title;
   layoutInput.reservedRowsAboveProgress = audioReady ? 1 : 0;
 
   playback_overlay::OverlayControlSpecOptions controlOptions;
@@ -273,11 +275,26 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   controlOptions.includeSubtitles = false;
   controls_ = playback_overlay::buildOverlayControlSpecs(
       overlayState, hoverControlToken_, controlOptions);
+  const auto visualControl = playback_overlay::makeOverlayTextControlSpec(
+      playback_overlay::OverlayControlId::RadioVisualization, "Inside radio",
+      radioVisualizationSelected_);
+  controls_.insert(controls_.begin() + std::min<size_t>(3, controls_.size()),
+                   visualControl);
 
   layoutInput.controls =
       playback_overlay::buildOverlayCellControlInputs(controls_,
                                                       hoverControlToken_);
   layout_ = playback_overlay::layoutOverlayCells(layoutInput);
+  if (radioVisualizationSelected_) {
+    screen_.clear(styles.normal);
+    radioRenderer_.drawCompact(
+        screen_, 0, layout_.topY, width, cellWidth_, cellHeight_,
+        context.radioLevels ? &*context.radioLevels : nullptr, context.radioMode,
+        playback.paused || playback.holding);
+  } else {
+    refreshArtwork(context, cols_, rows_);
+    drawArtworkBackground(styles, cols_, rows_);
+  }
   for (const auto& titleLine : layout_.titleLines) {
     if (titleLine.y < 0 || titleLine.y >= height || titleLine.x >= width) {
       continue;
@@ -353,11 +370,16 @@ void AudioPictureInPictureWindow::handleInput(const InputEvent& ev) {
   if (ev.type == InputEvent::Type::Key) {
     const uint32_t shortcutContexts = kPlaybackShortcutContextShared |
                                       kPlaybackShortcutContextGlobal |
-                                      kPlaybackShortcutContextPictureInPicture;
+                                      kPlaybackShortcutContextPictureInPicture |
+                                      kPlaybackShortcutContextAudioPictureInPicture;
     if (std::optional<playback_input::Command> matchedCommand =
             playback_input::matchShortcut(ev, shortcutContexts)) {
       playback_input::Command command = std::move(*matchedCommand);
       if (const auto* action = std::get_if<PlaybackAction>(&command)) {
+        if (*action == PlaybackAction::ToggleRadioVisualization) {
+          toggleRadioVisualization();
+          return;
+        }
         if (*action == PlaybackAction::ToggleWindow ||
             *action == PlaybackAction::TogglePictureInPicture ||
             *action == PlaybackAction::DismissPictureInPicture) {
@@ -443,6 +465,9 @@ bool AudioPictureInPictureWindow::clickControl(
       return dispatch(PlaybackAction::Next);
     case playback_overlay::OverlayAction::ToggleRadio:
       return dispatch(PlaybackAction::ToggleRadio);
+    case playback_overlay::OverlayAction::ToggleRadioVisualization:
+      toggleRadioVisualization();
+      return true;
     case playback_overlay::OverlayAction::Toggle50Hz:
       return dispatch(PlaybackAction::Toggle50Hz);
     case playback_overlay::OverlayAction::TogglePictureInPicture:
@@ -452,6 +477,11 @@ bool AudioPictureInPictureWindow::clickControl(
     default:
       return false;
   }
+}
+
+void AudioPictureInPictureWindow::toggleRadioVisualization() {
+  radioVisualizationSelected_ = !radioVisualizationSelected_;
+  publish(VisualizationChanged{});
 }
 
 void AudioPictureInPictureWindow::publish(Event event) {

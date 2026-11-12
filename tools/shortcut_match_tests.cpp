@@ -283,6 +283,20 @@ int main() {
                    makeKey('P'), kPlaybackShortcutContextPictureInPicture)
                    .value() == PlaybackAction::DismissPictureInPicture,
                "Bare P must still dismiss the PiP window");
+  ok &= expect(resolvePlaybackAction(
+                   makeKey('V', 'v'),
+                   kPlaybackShortcutContextAudioPictureInPicture) ==
+                   PlaybackAction::ToggleRadioVisualization &&
+                   !resolvePlaybackAction(
+                       makeKey('V', 'v', 0, KeyPressKind::AutoRepeat),
+                       kPlaybackShortcutContextAudioPictureInPicture) &&
+                   !resolvePlaybackAction(
+                       makeKey('V', 'v', kPlaybackShortcutCtrlMask),
+                       kPlaybackShortcutContextAudioPictureInPicture) &&
+                   !resolvePlaybackAction(
+                       makeKey('V', 'v'),
+                       kPlaybackShortcutContextPictureInPicture),
+               "V must toggle audio PiP once per press without affecting video PiP");
   const std::optional<playback_input::Command> pictureInPictureMatch =
       playback_input::matchShortcut(
           makeKeyEvent('P', 'p'),

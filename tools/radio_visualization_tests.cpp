@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -399,6 +400,45 @@ void rendererEventuallyPresentsVisibleCells() {
   std::cout << (hasGpu ? "GPU" : "CPU")
             << " receiver rendering produced visible cells\n";
 }
+
+void independentSurfacesRenderAtTheirOwnSizes() {
+  GpuRuntime gpu;
+  tui_radio_visualization::FrameRenderer mainRenderer(gpu);
+  tui_radio_visualization::FrameRenderer pipRenderer(gpu);
+  tui_radio_visualization::Levels levels;
+  levels.mode = RadioFilterMode::Typical1930s;
+  levels.observed = (1u << kRadioCircuitProbeCount) - 1;
+  levels.values.fill(.7f);
+  levels.generation = 7;
+
+  // Both surfaces share a GPU runtime but own independent readback history.
+  // Resizing PiP must not invalidate the main window's frame or vice versa.
+  for (const auto& size : {std::pair{36, 11}, std::pair{22, 7}}) {
+    bool mainVisible = false;
+    bool pipVisible = false;
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline &&
+           !(mainVisible && pipVisible)) {
+      const auto visible = [](const AsciiArt* art, int width, int height) {
+        return art && art->width == width && art->height == height &&
+               std::any_of(art->cells.begin(), art->cells.end(),
+                           [](const AsciiArt::AsciiCell& cell) {
+                             return cell.ch > 0x2800 && cell.ch <= 0x28ff;
+                           });
+      };
+      mainVisible = visible(mainRenderer.render(&levels, levels.generation,
+                                               100, 31), 100, 31);
+      pipVisible = visible(pipRenderer.render(&levels, levels.generation,
+                                             size.first, size.second),
+                           size.first, size.second);
+      if (!(mainVisible && pipVisible))
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    require(mainVisible && pipVisible,
+            "independent main and PiP frames did not both become visible");
+  }
+}
 }  // namespace
 
 int main() {
@@ -412,4 +452,5 @@ int main() {
   observationPreservesAudioAndTracksSignal();
   sceneReflectsTheObservedStages();
   rendererEventuallyPresentsVisibleCells();
+  independentSurfacesRenderAtTheirOwnSizes();
 }

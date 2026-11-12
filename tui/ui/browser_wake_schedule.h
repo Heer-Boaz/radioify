@@ -6,7 +6,7 @@ namespace browser_wake_schedule {
 
 struct Activity {
   bool searchCaretVisible = false;
-  bool melodyMonitorVisible = false;
+  bool visualizationVisible = false;
   bool transportProgressVisible = false;
   bool audioPictureInPictureVisible = false;
 };

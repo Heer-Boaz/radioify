@@ -15,6 +15,7 @@ enum class PlaybackShortcutContext : uint32_t {
   VideoEditDiscardConfirmation = 1u << 9,
   MediaActionConfirmation = 1u << 10,
   VideoEditRestartConfirmation = 1u << 11,
+  AudioPictureInPicture = 1u << 12,
 };
 
 inline constexpr uint32_t kPlaybackShortcutContextGlobal =
@@ -47,6 +48,8 @@ inline constexpr uint32_t
             PlaybackShortcutContext::MediaActionConfirmation);
 inline constexpr uint32_t kPlaybackShortcutContextVideoEditRestartConfirmation =
     static_cast<uint32_t>(PlaybackShortcutContext::VideoEditRestartConfirmation);
+inline constexpr uint32_t kPlaybackShortcutContextAudioPictureInPicture =
+    static_cast<uint32_t>(PlaybackShortcutContext::AudioPictureInPicture);
 inline constexpr uint32_t kPlaybackShortcutContextAll =
     kPlaybackShortcutContextGlobal | kPlaybackShortcutContextShared |
     kPlaybackShortcutContextPlaybackSession |
@@ -58,7 +61,8 @@ inline constexpr uint32_t kPlaybackShortcutContextAll =
      kPlaybackShortcutContextVideoEditLeaveConfirmation |
      kPlaybackShortcutContextVideoEditDiscardConfirmation |
      kPlaybackShortcutContextMediaActionConfirmation |
-     kPlaybackShortcutContextVideoEditRestartConfirmation;
+     kPlaybackShortcutContextVideoEditRestartConfirmation |
+     kPlaybackShortcutContextAudioPictureInPicture;
 
 enum class PlaybackAction : uint8_t {
   Quit,

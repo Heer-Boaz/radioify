@@ -8,7 +8,7 @@ namespace {
 using namespace std::chrono_literals;
 
 constexpr auto kSearchCaretBlinkInterval = 500ms;
-constexpr auto kMelodyMonitorRefreshInterval = 50ms;
+constexpr auto kVisualizationRefreshInterval = 50ms;
 constexpr auto kTransportProgressRefreshInterval = 100ms;
 constexpr auto kAudioPictureInPictureRefreshInterval = 100ms;
 
@@ -36,9 +36,9 @@ wake_schedule::Deadline nextDeadline(
   if (activity.searchCaretVisible) {
     wake_schedule::include(deadline, nextSearchCaretPhase(now));
   }
-  if (activity.melodyMonitorVisible) {
+  if (activity.visualizationVisible) {
     wake_schedule::include(deadline,
-                           lastPresented + kMelodyMonitorRefreshInterval);
+                           lastPresented + kVisualizationRefreshInterval);
   }
   if (activity.transportProgressVisible) {
     wake_schedule::include(deadline,
