@@ -32,6 +32,10 @@ playback_overlay::PlaybackOverlayState playbackStateFor(
                      : playbackAvailable || input.playbackTargetAvailable;
   state.radioEnabled = input.audio.radioEnabled;
   state.radioLabel = input.audio.radioFilterLabel;
+  state.radioVisualizationAvailable =
+      !videoActive && (input.radioVisualizationActive || input.audio.ready ||
+                       input.audio.source.has_value());
+  state.radioVisualizationActive = input.radioVisualizationActive;
   state.hz50Enabled = input.audio.hz50Enabled;
   state.paused =
       input.playback
@@ -62,10 +66,6 @@ Model build(const Input& input) {
       !videoActive && (input.melodyVisualizationActive || input.audio.ready ||
                        audioTargetAvailable);
   actionInput.pitchMonitorActive = input.melodyVisualizationActive;
-  actionInput.radioVisualizationAvailable =
-      !videoActive && (input.radioVisualizationActive || input.audio.ready ||
-                       audioTargetAvailable);
-  actionInput.radioVisualizationActive = input.radioVisualizationActive;
   actionInput.browserControlsAvailable = browserInteractionEnabled;
   actionInput.viewMode = input.viewMode;
   actionInput.optionsAvailable =

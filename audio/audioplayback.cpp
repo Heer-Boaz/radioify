@@ -333,8 +333,6 @@ static bool audioIsFinished(const AudioPlaybackState& audio);
 static bool audioIsRadioEnabled(const AudioPlaybackState& audio);
 static RadioFilterMode audioGetRadioFilterMode(
     const AudioPlaybackState& audio);
-static std::string_view audioGetRadioFilterLabel(
-    const AudioPlaybackState& audio);
 static bool audioIsHolding(const AudioPlaybackState& audio);
 static AudioPerfStats audioGetPerfStats(AudioPlaybackState& audio);
 static void audioPause(AudioPlaybackState& audio);
@@ -688,7 +686,8 @@ static AudioPlaybackSnapshot audioGetPlaybackSnapshot(
   snapshot.streamClockReady = audioStreamClockReady(audio);
   snapshot.streamStarved = audioStreamStarved(audio);
   snapshot.holding = audioIsHolding(audio);
-  snapshot.radioEnabled = audioIsRadioEnabled(audio);
+  snapshot.radioFilterMode = audioGetRadioFilterMode(audio);
+  snapshot.radioEnabled = radioFilterModeEnabled(snapshot.radioFilterMode);
   snapshot.hz50Enabled = audioIs50HzEnabled(audio);
   snapshot.supports50HzToggle = audioSupports50HzToggle(audio);
   snapshot.positionSec = snapshot.ready ? audioGetTimeSec(audio) : 0.0;
@@ -697,7 +696,7 @@ static AudioPlaybackSnapshot audioGetPlaybackSnapshot(
       snapshot.seeking ? audioGetSeekTargetSec(audio) : -1.0;
   snapshot.volume = audioGetVolume(audio);
   snapshot.unclippedOutputPeak = audioGetUnclippedOutputPeak(audio);
-  snapshot.radioFilterLabel = audioGetRadioFilterLabel(audio);
+  snapshot.radioFilterLabel = radioFilterModeLabel(snapshot.radioFilterMode);
   return snapshot;
 }
 
@@ -773,11 +772,6 @@ static bool audioIsRadioEnabled(const AudioPlaybackState& audio) {
 static RadioFilterMode audioGetRadioFilterMode(
     const AudioPlaybackState& audio) {
   return audio.state.radioFilter.mode();
-}
-
-static std::string_view audioGetRadioFilterLabel(
-    const AudioPlaybackState& audio) {
-  return radioFilterModeLabel(audioGetRadioFilterMode(audio));
 }
 
 static bool audioIsHolding(const AudioPlaybackState& audio) {

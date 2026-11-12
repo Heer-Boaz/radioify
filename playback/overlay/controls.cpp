@@ -335,6 +335,11 @@ buildOverlayControlSpecs(const PlaybackOverlayState &state,
     add(OverlayControlId::Next, ">>", false);
   }
 
+  if (state.radioVisualizationAvailable) {
+    add(OverlayControlId::RadioVisualization, "Inside radio",
+        state.radioVisualizationActive);
+  }
+
   if (options.includeRadio) {
     add(OverlayControlId::Radio, state.radioLabel, state.radioEnabled);
   }

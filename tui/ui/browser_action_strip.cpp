@@ -20,11 +20,12 @@ std::optional<ActionStripItem> actionForControl(
       return ActionStripItem::Next;
     case playback_overlay::OverlayControlId::Radio:
       return ActionStripItem::Radio;
+    case playback_overlay::OverlayControlId::RadioVisualization:
+      return ActionStripItem::RadioVisualization;
     case playback_overlay::OverlayControlId::Hz50:
       return ActionStripItem::Hz50;
     case playback_overlay::OverlayControlId::PictureInPicture:
       return ActionStripItem::PictureInPicture;
-    case playback_overlay::OverlayControlId::RadioVisualization:
     case playback_overlay::OverlayControlId::AudioTrack:
     case playback_overlay::OverlayControlId::Subtitles:
     case playback_overlay::OverlayControlId::EditMarkIn:
@@ -114,11 +115,6 @@ std::vector<Item> build(const Input& input) {
     items.push_back(textItem(ActionStripItem::PitchMonitor, "Pitch",
                              input.pitchMonitorActive));
   }
-  if (input.radioVisualizationAvailable) {
-    items.push_back(textItem(ActionStripItem::RadioVisualization, "Inside radio",
-                             input.radioVisualizationActive));
-  }
-
   if (input.browserControlsAvailable) {
     items.push_back(
         textItem(ActionStripItem::View, viewLabel(input.viewMode), false));

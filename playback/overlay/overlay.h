@@ -76,6 +76,9 @@ struct OverlayCellLayoutInput {
   int height = 0;
   std::string title;
   std::string suffix;
+  // Zero means no explicit limit; otherwise truncate the title to this many
+  // rows before reserving space for controls and the progress bar.
+  int maximumTitleLines = 0;
   int reservedRowsAboveProgress = 0;
   std::vector<OverlayCellControlInput> controls;
 };
@@ -169,6 +172,8 @@ struct PlaybackOverlayInputs {
   bool canPlayNext = false;
   bool radioEnabled = false;
   std::string radioLabel = "Radio: Off";
+  bool radioVisualizationAvailable = false;
+  bool radioVisualizationActive = false;
   bool hz50Enabled = false;
   bool canCycleAudioTracks = false;
   std::string activeAudioTrackLabel;
@@ -204,6 +209,8 @@ struct PlaybackOverlayState {
   bool canPlayNext = false;
   bool radioEnabled = false;
   std::string radioLabel = "Radio: Off";
+  bool radioVisualizationAvailable = false;
+  bool radioVisualizationActive = false;
   bool hz50Enabled = false;
   bool canCycleAudioTracks = false;
   std::string activeAudioTrackLabel;

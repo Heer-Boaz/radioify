@@ -4,6 +4,8 @@
 #include <optional>
 #include <string_view>
 
+#include "radio_filter_mode.h"
+
 struct AudioPlaybackSource {
   std::filesystem::path file;
   std::optional<int> trackIndex;
@@ -21,6 +23,7 @@ struct AudioPlaybackSnapshot {
   bool streamClockReady = false;
   bool streamStarved = false;
   bool holding = false;
+  RadioFilterMode radioFilterMode = RadioFilterMode::Off;
   bool radioEnabled = false;
   bool hz50Enabled = false;
   bool supports50HzToggle = false;

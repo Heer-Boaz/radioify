@@ -39,8 +39,6 @@ struct Input {
   playback_overlay::PlaybackOverlayState playback;
   bool pitchMonitorAvailable = false;
   bool pitchMonitorActive = false;
-  bool radioVisualizationAvailable = false;
-  bool radioVisualizationActive = false;
   bool browserControlsAvailable = false;
   BrowserState::ViewMode viewMode = BrowserState::ViewMode::ListOnly;
   bool optionsAvailable = false;

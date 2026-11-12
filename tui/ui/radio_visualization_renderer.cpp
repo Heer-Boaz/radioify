@@ -46,13 +46,14 @@ const char* compactStatusText(Status status) {
 Renderer::Renderer(GpuRuntime& gpu) : frames_(gpu) {}
 
 void Renderer::draw(ConsoleScreen& screen, int top, int height, int width,
-                    const Levels* levels,
-                    RadioFilterMode requestedMode, bool paused) {
+                    const Snapshot& snapshot) {
   if (height <= 0 || width <= 0) return;
   const Style title{{236,191,115},{0,0,0}};
   const Style dim{{151,145,128},{0,0,0}};
   screen.writeText(0, top, fitLine(" Inside radio  /  typical 1930s", width), title);
-  const Presentation presentation = present(levels, requestedMode, paused);
+  const Levels* levels = snapshot.levels ? &*snapshot.levels : nullptr;
+  const Presentation presentation =
+      present(levels, snapshot.requestedMode, snapshot.paused);
   if (height > 1) screen.writeText(0, top+1, fitLine(statusText(presentation.status), width), dim);
   const double cellW = screen.cellPixelWidth() > 0 ? screen.cellPixelWidth() : 8.0;
   const double cellH = screen.cellPixelHeight() > 0 ? screen.cellPixelHeight() : 16.0;
@@ -67,10 +68,11 @@ void Renderer::draw(ConsoleScreen& screen, int top, int height, int width,
 
 void Renderer::drawCompact(ConsoleScreen& screen, int top, int height, int width,
                            double cellWidth, double cellHeight,
-                           const Levels* levels, RadioFilterMode requestedMode,
-                           bool paused) {
+                           const Snapshot& snapshot) {
   if (height <= 0 || width <= 0) return;
-  const Presentation presentation = present(levels, requestedMode, paused);
+  const Levels* levels = snapshot.levels ? &*snapshot.levels : nullptr;
+  const Presentation presentation =
+      present(levels, snapshot.requestedMode, snapshot.paused);
   if (presentation.status != Status::Playing &&
       presentation.status != Status::Paused) {
     const Style dim{{151,145,128},{0,0,0}};

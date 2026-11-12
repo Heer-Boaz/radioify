@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 
 #include "audio/radio_visualization.h"
 
@@ -16,6 +17,13 @@ struct Levels {
   bool has(RadioCircuitProbe probe) const {
     return (observed & radioCircuitProbeBit(probe)) != 0;
   }
+};
+
+// One presentation update shared by every visible receiver surface.
+struct Snapshot {
+  RadioFilterMode requestedMode = RadioFilterMode::Off;
+  bool paused = false;
+  std::optional<Levels> levels;
 };
 
 // Convert the independently measured physical quantities to visual intensity.

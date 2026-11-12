@@ -1116,27 +1116,18 @@ int runTui(Options o, ApplicationRuntime &runtime) {
 
   const AudioPictureInPictureWindow::Styles audioPictureInPictureStyles =
       theme.audioPictureInPictureStyles();
-  auto buildAudioPictureInPictureContext = [&]() {
-    const PlaybackPresentationModel presentation = playbackPresenter.model();
+  auto renderAudioPictureInPicture =
+      [&](const PlaybackPresentationModel &presentation,
+          const tui_radio_visualization::Snapshot &radioSnapshot) {
+    if (!audioPictureInPicture.isOpen()) {
+      return;
+    }
     AudioPictureInPictureWindow::Context context;
     context.nowPlayingTarget = presentation.audioTarget;
     context.nowPlayingLabel = buildPlaybackLabel(context.nowPlayingTarget);
     context.playback = presentation.audio;
-    if (audioPictureInPicture.radioVisualizationVisible()) {
-      context.radioMode = audioPlayback.radioFilterMode();
-      RadioPlaybackObservation observation;
-      if (audioPlayback.radioVisualization(observation)) {
-        context.radioLevels = tui_radio_visualization::project(observation);
-      }
-    }
-    return context;
-  };
-  auto renderAudioPictureInPicture = [&]() {
-    if (!audioPictureInPicture.isOpen()) {
-      return;
-    }
-    audioPictureInPicture.render(audioPictureInPictureStyles,
-                                 buildAudioPictureInPictureContext());
+    context.radioVisualization = radioSnapshot;
+    audioPictureInPicture.render(audioPictureInPictureStyles, context);
   };
   std::deque<AudioPictureInPictureWindow::OpenFiles>
       pendingAudioPictureInPictureOpens;
@@ -2018,6 +2009,16 @@ int runTui(Options o, ApplicationRuntime &runtime) {
     if (dirty) {
       const PlaybackPresentationModel presentation = playbackPresenter.model();
       const AudioPlaybackSnapshot &audio = presentation.audio;
+      tui_radio_visualization::Snapshot radioSnapshot;
+      if (radioVisualizationActive ||
+          audioPictureInPicture.radioVisualizationVisible()) {
+        radioSnapshot.requestedMode = audio.radioFilterMode;
+        radioSnapshot.paused = audio.paused || audio.holding;
+        RadioPlaybackObservation observation;
+        if (audioPlayback.radioVisualization(observation)) {
+          radioSnapshot.levels = tui_radio_visualization::project(observation);
+        }
+      }
       bool optionsMode = optionsBrowserIsActive(browser);
       bool trackMode = isTrackBrowserActive(browser);
       bool browserInteractionEnabled =
@@ -2172,15 +2173,8 @@ int runTui(Options o, ApplicationRuntime &runtime) {
         tui_melody_visualization::draw(screen, melodyVisualization,
                                        melodyBounds, melodyVisualizationStyles);
       } else {
-        RadioPlaybackObservation observation;
-        const bool haveObservation =
-            audioPlayback.radioVisualization(observation);
-        const tui_radio_visualization::Levels levels =
-            tui_radio_visualization::project(observation);
         radioVisualizationRenderer.draw(screen, listTop, listHeight, width,
-                                         haveObservation ? &levels : nullptr,
-                                         audioPlayback.radioFilterMode(),
-                                         audio.paused || audio.holding);
+                                         radioSnapshot);
       }
 
       int footerStart = listTop + listHeight;
@@ -2329,7 +2323,7 @@ int runTui(Options o, ApplicationRuntime &runtime) {
 
       presentTextGrid();
       screen.setAlwaysFullRedraw(false);
-      renderAudioPictureInPicture();
+      renderAudioPictureInPicture(presentation, radioSnapshot);
       lastDraw = now;
       dirty = false;
       dirtyFlags = UiDirtyFlags::None;

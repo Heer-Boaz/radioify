@@ -238,6 +238,13 @@ OverlayCellLayout layoutOverlayCells(const OverlayCellLayoutInput& input) {
   std::vector<std::string> titleLines =
       wrapLayoutText(input.title, layout.width);
   if (titleLines.empty()) titleLines.emplace_back();
+  if (input.maximumTitleLines > 0 &&
+      titleLines.size() > static_cast<size_t>(input.maximumTitleLines)) {
+    titleLines.resize(static_cast<size_t>(input.maximumTitleLines));
+    titleLines.back() = utf8TakeDisplayWidth(titleLines.back(),
+                                             std::max(0, layout.width - 1)) +
+                        "~";
+  }
   auto placeTitleLines = [&](int topY, int firstLine, int lineCount) {
     layout.titleLines.clear();
     layout.titleX = 0;

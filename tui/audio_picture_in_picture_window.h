@@ -38,8 +38,7 @@ class AudioPictureInPictureWindow {
     std::string nowPlayingLabel;
     std::optional<PlaybackTarget> nowPlayingTarget;
     AudioPlaybackSnapshot playback;
-    RadioFilterMode radioMode = RadioFilterMode::Off;
-    std::optional<tui_radio_visualization::Levels> radioLevels;
+    tui_radio_visualization::Snapshot radioVisualization;
   };
 
   struct PlaybackCommand {
@@ -74,7 +73,6 @@ class AudioPictureInPictureWindow {
   WindowPlacementState capturePlacement() const;
 
  private:
-  bool ensureOpen();
   void refreshGridSize();
   void refreshArtwork(const Context& context, int width, int height);
   void drawArtworkBackground(const Styles& styles, int width, int height);

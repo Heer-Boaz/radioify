@@ -1438,6 +1438,22 @@ radioify_link_repo_target(browser_action_strip_tests)
 add_test(NAME browser_action_strip_tests
          COMMAND $<TARGET_FILE:browser_action_strip_tests>)
 
+add_executable(audio_picture_in_picture_model_tests
+  ${CMAKE_SOURCE_DIR}/tools/audio_picture_in_picture_model_tests.cpp
+  ${CMAKE_SOURCE_DIR}/playback/overlay/state.cpp
+  ${CMAKE_SOURCE_DIR}/playback/overlay/controls.cpp
+  ${CMAKE_SOURCE_DIR}/playback/overlay/cell_layout.cpp
+  ${CMAKE_SOURCE_DIR}/playback/overlay/interaction.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/overlay_model.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/suggestion_panel.cpp
+  ${CMAKE_SOURCE_DIR}/playback/video/edit/scene_suggestions.cpp
+  $<TARGET_OBJECTS:radioify_text_grid_ui>
+  ${CMAKE_SOURCE_DIR}/core/unicode_display_width.cpp
+)
+radioify_link_repo_target(audio_picture_in_picture_model_tests)
+add_test(NAME audio_picture_in_picture_model_tests
+         COMMAND $<TARGET_FILE:audio_picture_in_picture_model_tests>)
+
 add_executable(browser_chrome_tests)
 target_sources(browser_chrome_tests PRIVATE
   $<TARGET_OBJECTS:radioify_tool_browser_chrome_tests>
@@ -1653,6 +1669,7 @@ add_executable(subtitle_presentation_tests
   tools/subtitle_presentation_tests.cpp
   playback/session/presentation_projector.cpp
   playback/overlay/presentation.cpp
+  playback/overlay/state.cpp
   playback/overlay/subtitle_effects.cpp
   playback/overlay/cell_layout.cpp
   playback/overlay/controls.cpp

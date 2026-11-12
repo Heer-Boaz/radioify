@@ -109,10 +109,6 @@ bool AudioPictureInPictureWindow::toggle() {
   return open();
 }
 
-bool AudioPictureInPictureWindow::ensureOpen() {
-  return window_.IsOpen() || open();
-}
-
 WindowPlacementState AudioPictureInPictureWindow::capturePlacement() const {
   WindowPlacementState placement;
   playback_window_presentation::capturePlacement(window_, placement);
@@ -215,7 +211,7 @@ AudioPictureInPictureWindow::pollEvents() {
 
 bool AudioPictureInPictureWindow::render(const Styles& styles,
                                          const Context& context) {
-  if (!ensureOpen()) return false;
+  if (!isOpen()) return false;
   refreshGridSize();
   controls_.clear();
   layout_ = playback_overlay::OverlayCellLayout{};
@@ -252,6 +248,8 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   overlayInputs.canPlayNext = true;
   overlayInputs.radioEnabled = playback.radioEnabled;
   overlayInputs.radioLabel = playback.radioFilterLabel;
+  overlayInputs.radioVisualizationAvailable = true;
+  overlayInputs.radioVisualizationActive = radioVisualizationSelected_;
   overlayInputs.hz50Enabled = playback.hz50Enabled;
   overlayInputs.displaySec = displaySec;
   overlayInputs.totalSec = totalSec;
@@ -267,7 +265,8 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   playback_overlay::OverlayCellLayoutInput layoutInput;
   layoutInput.width = width;
   layoutInput.height = height;
-  layoutInput.title = radioVisualizationSelected_ ? fitLine(title, width) : title;
+  layoutInput.title = title;
+  layoutInput.maximumTitleLines = radioVisualizationSelected_ ? 1 : 0;
   layoutInput.reservedRowsAboveProgress = audioReady ? 1 : 0;
 
   playback_overlay::OverlayControlSpecOptions controlOptions;
@@ -275,11 +274,6 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
   controlOptions.includeSubtitles = false;
   controls_ = playback_overlay::buildOverlayControlSpecs(
       overlayState, hoverControlToken_, controlOptions);
-  const auto visualControl = playback_overlay::makeOverlayTextControlSpec(
-      playback_overlay::OverlayControlId::RadioVisualization, "Inside radio",
-      radioVisualizationSelected_);
-  controls_.insert(controls_.begin() + std::min<size_t>(3, controls_.size()),
-                   visualControl);
 
   layoutInput.controls =
       playback_overlay::buildOverlayCellControlInputs(controls_,
@@ -289,8 +283,7 @@ bool AudioPictureInPictureWindow::render(const Styles& styles,
     screen_.clear(styles.normal);
     radioRenderer_.drawCompact(
         screen_, 0, layout_.topY, width, cellWidth_, cellHeight_,
-        context.radioLevels ? &*context.radioLevels : nullptr, context.radioMode,
-        playback.paused || playback.holding);
+        context.radioVisualization);
   } else {
     refreshArtwork(context, cols_, rows_);
     drawArtworkBackground(styles, cols_, rows_);
