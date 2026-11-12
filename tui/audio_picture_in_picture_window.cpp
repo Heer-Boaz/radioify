@@ -84,6 +84,7 @@ bool AudioPictureInPictureWindow::open() {
     return false;
   }
   refreshGridSize();
+  radioRenderer_.invalidate();
   return true;
 }
 
@@ -474,6 +475,7 @@ bool AudioPictureInPictureWindow::clickControl(
 
 void AudioPictureInPictureWindow::toggleRadioVisualization() {
   radioVisualizationSelected_ = !radioVisualizationSelected_;
+  if (radioVisualizationSelected_) radioRenderer_.invalidate();
   publish(VisualizationChanged{});
 }
 

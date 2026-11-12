@@ -74,9 +74,10 @@ struct RadioVisualBatch {
 // check prevents mixing fields from two different observations.
 class RadioVisualTimeline {
  public:
+  // Visibility controls collection; transport resets determine whether an
+  // observation is still valid for a particular output-frame position.
   void setEnabled(bool value) {
-    if (enabled_.exchange(value, std::memory_order_acq_rel) != value)
-      reset();
+    enabled_.store(value, std::memory_order_release);
   }
   bool enabled() const { return enabled_.load(std::memory_order_acquire); }
   uint64_t generation() const { return generation_.load(std::memory_order_acquire); }

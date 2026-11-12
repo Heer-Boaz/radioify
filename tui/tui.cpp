@@ -951,6 +951,7 @@ int runTui(Options o, ApplicationRuntime &runtime) {
     radioVisualizationActive = !radioVisualizationActive;
     synchronizeRadioVisualization();
     if (radioVisualizationActive) {
+      radioVisualizationRenderer.invalidate();
       melodyVisualization.setActive(false);
       dirty = setBrowserSearchFocus(browser, BrowserSearchFocus::None) || dirty;
       browserInteraction.breadcrumbHover = -1;

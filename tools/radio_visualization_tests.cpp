@@ -52,9 +52,17 @@ void timelineFollowsOutputAndReset() {
   timeline.publish(enabledGeneration, 10, 20, quiet);
   timeline.setEnabled(false);
   timeline.setEnabled(true);
-  require(timeline.generation() != enabledGeneration &&
-              !timeline.at(timeline.generation(), 15, found),
-          "reopening the view reused an old observation");
+  require(timeline.generation() == enabledGeneration &&
+              timeline.at(timeline.generation(), 15, found) &&
+              found.circuit.readings[0].rms == .2f,
+          "reopening at the same audio position must retain its observation");
+  require(!timeline.at(timeline.generation(), 20, found),
+          "reopening after the recorded audio must not reuse old activity");
+  timeline.setEnabled(false);
+  timeline.reset();
+  timeline.setEnabled(true);
+  require(!timeline.at(timeline.generation(), 15, found),
+          "a transport reset while hidden must invalidate earlier activity");
 }
 
 void playbackCursorDrainsDeviceTail() {
@@ -494,6 +502,20 @@ void rendererEventuallyPresentsVisibleCells() {
     }
     require(visible, "inside-radio view remained blank after its readback");
   }
+  renderer.invalidate();
+  bool reopenedVisible = false;
+  const auto reopenDeadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(5);
+  while (std::chrono::steady_clock::now() < reopenDeadline && !reopenedVisible) {
+    const AsciiArt* art = renderer.render(&levels, 2, 100, 31);
+    reopenedVisible = art && std::any_of(art->cells.begin(), art->cells.end(),
+        [](const AsciiArt::AsciiCell& cell) {
+          return cell.ch > 0x2800 && cell.ch <= 0x28ff;
+        });
+    if (!reopenedVisible)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  require(reopenedVisible, "reopening a surface must complete its new readback");
   bool unobservedVisible = false;
   const auto deadline = std::chrono::steady_clock::now() +
                         std::chrono::seconds(5);

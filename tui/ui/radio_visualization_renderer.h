@@ -10,6 +10,7 @@ namespace tui_radio_visualization {
 class Renderer {
  public:
   explicit Renderer(GpuRuntime& gpu);
+  void invalidate() { frames_.invalidate(); }
   void draw(ConsoleScreen& screen, int top, int height, int width,
             const Snapshot& snapshot);
   void drawCompact(ConsoleScreen& screen, int top, int height, int width,

@@ -13,6 +13,8 @@ namespace tui_radio_visualization {
 class FrameRenderer {
  public:
   explicit FrameRenderer(GpuRuntime& runtime);
+  // Discard pending shader output when this surface is shown again.
+  void invalidate() { hasSceneIdentity_ = false; }
   const AsciiArt* render(const Levels* levels, uint64_t generation,
                          int width, int height);
 
