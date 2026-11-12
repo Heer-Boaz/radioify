@@ -89,19 +89,19 @@ void Renderer::drawCircuit(ConsoleScreen& screen, int top, int height, int width
   const Levels* shown = showCircuit ? levels : nullptr;
   const double cellW = cellWidth > 0 ? cellWidth : 8.0;
   const double cellH = cellHeight > 0 ? cellHeight : 16.0;
-  AsciiArtLayout layout = fitAsciiArtLayout(kWidth, kHeight,
-                                             std::min(width, 160), height,
-                                             cellW, cellH);
+  AsciiArtLayout layout = fitAsciiArtLayout(kWidth, kHeight, width, height,
+                                            cellW, cellH);
   layout.width = std::clamp(layout.width, 1, width);
   layout.height = std::clamp(layout.height, 1, height);
   const uint64_t generation = levels ? levels->generation : 0;
   if (const AsciiArt* art = frames_.render(shown, generation,
                                            layout.width, layout.height)) {
     const int left = (width - art->width) / 2;
+    const int pictureTop = top + (height - art->height) / 2;
     for (int y=0; y<art->height; ++y) {
       for (int x=0; x<art->width; ++x) {
         const auto& cell = art->cells[static_cast<size_t>(y)*art->width+x];
-        screen.writeChar(left+x, top+y, cell.ch,
+        screen.writeChar(left+x, pictureTop+y, cell.ch,
                          {cell.fg, cell.hasBg ? cell.bg : Color{0,0,0}});
       }
     }
